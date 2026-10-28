@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"tailscale.com/envknob"
@@ -42,6 +43,8 @@ type policyFlipper struct {
 
 	mu   sync.Mutex
 	rule *tailcfg.SSHRule
+	// rules, when non-nil, is served by NetMap in place of rule.
+	rules []*tailcfg.SSHRule
 
 	onNoise func()
 }
@@ -55,7 +58,9 @@ func (p *policyFlipper) setRule(r *tailcfg.SSHRule) {
 func (p *policyFlipper) NetMap() *netmap.NetworkMap {
 	p.mu.Lock()
 	var policy *tailcfg.SSHPolicy
-	if p.rule != nil {
+	if p.rules != nil {
+		policy = &tailcfg.SSHPolicy{Rules: p.rules}
+	} else if p.rule != nil {
 		policy = &tailcfg.SSHPolicy{Rules: []*tailcfg.SSHRule{p.rule}}
 	}
 	p.mu.Unlock()
@@ -688,6 +693,58 @@ func TestSSHRuleExpiryRearmsOnFreshMatch(t *testing.T) {
 	// It must also close at the rearmed rule's expiry.
 	eventually(t, 15*time.Second, "conn stayed up past the rearmed rule's expiry", func() bool {
 		return sessionFails(client)
+	})
+}
+
+// TestSSHRuleExpiryFallbackKeepsConn covers expiry of the
+// prompt-free Accept rules that check mode grants. They carry a short
+// RuleExpires, with a base hold rule behind them. Expiration affects
+// only new connections. When the accept rule lapses, evaluation falls
+// back to the hold rule. The conn keeps its grant. The rule timer
+// stays unarmed. New session channels still open.
+//
+// The test runs in a synctest bubble, so the expiry cannot race the
+// handshake on a slow runner. A bubble cannot hold child processes.
+// The empty PATH keeps the conn lifecycle free of subprocesses. The
+// session channel opens without running a command. The session-kill
+// side of expiry is pinned on the real clock.
+func TestSSHRuleExpiryFallbackKeepsConn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+
+		lu := sessionTestUser(t)
+		exp := time.Now().Add(2 * time.Second)
+		acceptRule := newPolicyRule(&tailcfg.SSHAction{Accept: true}, lu)
+		acceptRule.RuleExpires = &exp
+		holdRule := newPolicyRule(&tailcfg.SSHAction{HoldAndDelegate: "https://unused/hold"}, lu)
+		p := &policyFlipper{
+			localState: &localState{sshEnabled: true, varRoot: t.TempDir()},
+			rules:      []*tailcfg.SSHRule{acceptRule, holdRule},
+		}
+		s, client, _ := dialPolicyConn(t, p)
+
+		s.mu.Lock()
+		var c *conn
+		for c = range s.activeConns {
+		}
+		s.mu.Unlock()
+		if c == nil {
+			t.Fatal("connection disappeared after authentication")
+		}
+
+		// Sleep past the expiry. The bubble jumps straight to the
+		// timer. The recheck falls back to the hold rule, which has no
+		// expiry, and leaves the timer unarmed.
+		time.Sleep(3 * time.Second)
+		c.mu.Lock()
+		armed := c.ruleTimer != nil
+		c.mu.Unlock()
+		if armed {
+			t.Fatal("rule timer still armed after the latched accept rule expired")
+		}
+		if sessionFails(client) {
+			t.Fatal("conn closed when the latched accept rule expired")
+		}
 	})
 }
 

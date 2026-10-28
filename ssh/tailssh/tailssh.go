@@ -290,6 +290,7 @@ type conn struct {
 
 	action0     *tailcfg.SSHAction // set by clientAuth
 	finalAction *tailcfg.SSHAction // set by clientAuth
+	latchedRule *tailcfg.SSHRule   // rule matched at auth; rechecks use it to tell rule expiry from a policy edit
 
 	info            *sshConnInfo // set by setInfo (during clientAuth)
 	localUser       *userMeta    // set by clientAuth
@@ -425,7 +426,7 @@ func (c *conn) clientAuth(cm ssh.ConnMetadata) (perms *ssh.Permissions, retErr e
 		return nil, c.errBanner("failed to get connection info", err)
 	}
 
-	action, localUser, acceptEnv, _, result := c.evaluatePolicy()
+	action, localUser, acceptEnv, rule, result := c.evaluatePolicy()
 	switch result {
 	case accepted:
 		// do nothing
@@ -444,6 +445,7 @@ func (c *conn) clientAuth(cm ssh.ConnMetadata) (perms *ssh.Permissions, retErr e
 	}
 
 	c.action0 = action
+	c.latchedRule = rule
 
 	if action.Accept || action.HoldAndDelegate != "" {
 		// Immediately look up user information for purposes of generating
@@ -991,8 +993,13 @@ func (c *conn) armRuleExpiryLocked(r *tailcfg.SSHRule) {
 		return
 	}
 	d := r.RuleExpires.Sub(c.srv.now())
-	if d < 0 {
-		d = 0
+	if d <= 0 {
+		// The deadline has passed, or is exactly now. Fire strictly
+		// after it. A zero-delay refire lands at the deadline, before
+		// the rule expires, and re-arms with another zero delay. A
+		// stopped clock never moves past the deadline. The real clock
+		// does.
+		d = time.Millisecond
 	}
 	c.ruleTimer = time.AfterFunc(d, func() { go c.recheckPolicy() })
 }
@@ -1163,7 +1170,11 @@ func (c *conn) materialPolicyChangeWithUserLookup(lookup func(string) (*userMeta
 	freshRecorders, freshFailure := recordingConfig(a, a)
 	if !a.Accept {
 		if c.action0.Accept {
-			return true, "rule changed from Accept to HoldAndDelegate", nil
+			if c.latchedRule == nil || !c.ruleExpired(c.latchedRule) {
+				return true, "rule changed from Accept to HoldAndDelegate", nil
+			}
+			// Rule expiry, not a policy edit. The grant lasts for
+			// the life of the conn. Only new connections re-authenticate.
 		}
 		// Keep the delegated grant, but compare any recording requirements
 		// inherited from the hold rule as well as its AcceptEnv above.
