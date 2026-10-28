@@ -53,6 +53,7 @@ import (
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netns"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/ping"
 	"tailscale.com/net/routemanager"
@@ -857,6 +858,18 @@ func (localhostListener) ListenPacket(ctx context.Context, network, address stri
 	return conf.ListenPacket(ctx, network, net.JoinHostPort(host, port))
 }
 
+// wildcardListener listens on the wildcard address with listenPacket's port sharing, as a real magicsock does. On darwin and the BSDs, connected sockets bind the shared port on a specific address, which a socket already bound to that address would block.
+type wildcardListener struct{}
+
+func (wildcardListener) ListenPacket(ctx context.Context, network, address string) (net.PacketConn, error) {
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	conf := net.ListenConfig{Control: reusePortControl(nil)}
+	return conf.ListenPacket(ctx, network, net.JoinHostPort("", port))
+}
+
 func TestTwoDevicePing(t *testing.T) {
 	ln, ip := localhostListener{}, netaddr.IPv4(127, 0, 0, 1)
 	n := &devices{
@@ -868,6 +881,87 @@ func TestTwoDevicePing(t *testing.T) {
 		stunIP: ip,
 	}
 	testTwoDevicePing(t, n)
+}
+
+/*
+With connected sockets on, two devices find a direct path and ping each other normally, and their traffic goes through connected sockets in both directions.
+
+It runs twice. With a test listener, as the other two-device tests use. And through the OS listener, the path a real magicsock takes, where listenPacket composes the port sharing with netns's Control and the connected sockets are dialled with netns's Control too; netns does not pin sockets to an interface for the run, since that would take loopback traffic off loopback on darwin.
+*/
+func TestTwoDevicePingConnectedSockets(t *testing.T) {
+	envknob.Setenv("TS_DEBUG_MAGICSOCK_CONNECTED_SOCKETS", "1")
+	t.Cleanup(func() { envknob.Setenv("TS_DEBUG_MAGICSOCK_CONNECTED_SOCKETS", "") })
+	// A few pings are far below the default threshold for opening a pair.
+	testConnectedOpenAfter = 1
+	t.Cleanup(func() { testConnectedOpenAfter = 0 })
+
+	t.Run("TestListener", func(t *testing.T) { testTwoDevicePingConnectedSockets(t, wildcardListener{}) })
+	t.Run("OSListener", func(t *testing.T) {
+		netns.SetDisableBindConnToInterface(t.Logf, true)
+		t.Cleanup(func() { netns.SetDisableBindConnToInterface(t.Logf, false) })
+		testTwoDevicePingConnectedSockets(t, nil)
+	})
+}
+
+func testTwoDevicePingConnectedSockets(t *testing.T, ln nettype.PacketListener) {
+	tstest.ResourceCheck(t)
+
+	derpMap, cleanup := runDERPAndStun(t, t.Logf, localhostListener{}, netaddr.IPv4(127, 0, 0, 1))
+	defer cleanup()
+	m1 := newMagicStack(t, t.Logf, ln, derpMap)
+	defer m1.Close()
+	m2 := newMagicStack(t, t.Logf, ln, derpMap)
+	defer m2.Close()
+	defer meshStacks(t.Logf, nil, m1, m2)()
+
+	ping := func(from, to *magicStack, src, dst string) {
+		t.Helper()
+		msg := tuntest.Ping(netip.MustParseAddr(dst), netip.MustParseAddr(src))
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
+			from.tun.Outbound <- msg
+			select {
+			case got := <-to.tun.Inbound:
+				if !bytes.Equal(got, msg) {
+					t.Fatal("ping did not transit correctly")
+				}
+				return
+			case <-time.After(time.Second):
+			}
+		}
+		t.Fatalf("ping %s -> %s timed out", src, dst)
+	}
+	// The first pings may go over DERP; connected sockets serve direct paths only, so wait for one before counting.
+	ping(m1, m2, "1.0.0.1", "1.0.0.2")
+	ping(m2, m1, "1.0.0.2", "1.0.0.1")
+	mustDirect(t, t.Logf, m1, m2)
+	mustDirect(t, t.Logf, m2, m1)
+
+	sent, recv := metricSendUDPConnected.Value(), metricRecvUDPConnected.Value()
+	for range 5 {
+		ping(m1, m2, "1.0.0.1", "1.0.0.2")
+		ping(m2, m1, "1.0.0.2", "1.0.0.1")
+	}
+	if metricSendUDPConnected.Value() == sent {
+		t.Error("no packets were sent on connected sockets")
+	}
+	if metricRecvUDPConnected.Value() == recv {
+		t.Error("no packets were received on connected sockets")
+	}
+
+	// A rebind reopens the shared socket on the same port while connected sockets hold it, and must keep that port, or the peer's NAT mapping is lost. Connected sockets then carry traffic again.
+	port := m1.conn.LocalPort()
+	m1.conn.Rebind()
+	if got := m1.conn.LocalPort(); got != port {
+		t.Fatalf("after Rebind the local port moved from %d to %d", port, got)
+	}
+	sent, recv = metricSendUDPConnected.Value(), metricRecvUDPConnected.Value()
+	for range 5 {
+		ping(m1, m2, "1.0.0.1", "1.0.0.2")
+		ping(m2, m1, "1.0.0.2", "1.0.0.1")
+	}
+	if metricSendUDPConnected.Value() == sent || metricRecvUDPConnected.Value() == recv {
+		t.Error("connected sockets carried nothing after Rebind")
+	}
 }
 
 func TestDiscokeyChange(t *testing.T) {

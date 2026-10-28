@@ -14,10 +14,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 	"unsafe"
 
 	qt "github.com/frankban/quicktest"
 	"github.com/tailscale/wireguard-go/conn"
+	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 	"golang.org/x/sys/unix"
 	"tailscale.com/net/neterror"
@@ -152,6 +154,7 @@ func Test_fillReceivedPackets(t *testing.T) {
 				maxDatagramSize,
 				packets,
 				true,
+				false,
 			)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err: %v, wantErr: %v", err, tt.wantErr)
@@ -854,4 +857,80 @@ func Test_linuxBatchingConn_handleRXQOverflowCounter(t *testing.T) {
 		NN:  len(control),
 	}}, nil)
 	c.Assert(conn.rxqOverflowsMetric.Value(), qt.Equals, int64(1+math.MaxUint32))
+}
+
+// A socket that asks for IP_PKTINFO reports the local address each datagram was sent to, which is how a host with several addresses learns which one a peer uses.
+func TestReadBatchReportsLocalAddr(t *testing.T) {
+	pc, err := net.ListenUDP("udp4", &net.UDPAddr{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	if err := ipv4.NewPacketConn(pc).SetControlMessage(ipv4.FlagDst, true); err != nil {
+		t.Fatal(err)
+	}
+	c := TryUpgradeToConn(pc, "udp4", "", nil)
+	bc, ok := c.(Conn)
+	if !ok {
+		t.Skip("no batching conn on this kernel")
+	}
+	port := pc.LocalAddr().(*net.UDPAddr).Port
+	sender, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sender.Close()
+	for _, to := range []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("127.0.0.2")} {
+		if _, err := sender.WriteToUDPAddrPort([]byte("x"), netip.AddrPortFrom(to, uint16(port))); err != nil {
+			t.Fatal(err)
+		}
+		slab := make([]byte, ReadSlabMultiple*MinimumReadBatchSize)
+		packets := make([]ReceivedPacket, MinimumReadBatchSize*udpGROCountMax)
+		pc.SetReadDeadline(time.Now().Add(2 * time.Second))
+		n, err := bc.ReadBatch(slab, packets)
+		if err != nil || n != 1 {
+			t.Fatalf("ReadBatch = %d, %v", n, err)
+		}
+		if packets[0].Local != to {
+			t.Errorf("datagram to %v reported Local %v", to, packets[0].Local)
+		}
+	}
+}
+
+// A socket that did not ask for the local address pays nothing for it: no room for the control message in any message, and no parsing.
+func TestReadBatchWithoutLocalAddr(t *testing.T) {
+	pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	bc, ok := TryUpgradeToConn(pc, "udp4", "", nil).(*linuxBatchingConn)
+	if !ok {
+		t.Skip("no batching conn on this kernel")
+	}
+	if bc.reportsLocal {
+		t.Fatal("reportsLocal set on a socket that did not ask for IP_PKTINFO")
+	}
+	batch := bc.getMsgsBatch()
+	defer bc.putMsgsBatch(batch, 0)
+	if got := cap(batch.msgs[0].OOB); got != controlMessageSize {
+		t.Errorf("control message room %d, want %d", got, controlMessageSize)
+	}
+	sender, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sender.Close()
+	if _, err := sender.WriteToUDPAddrPort([]byte("x"), pc.LocalAddr().(*net.UDPAddr).AddrPort()); err != nil {
+		t.Fatal(err)
+	}
+	slab := make([]byte, ReadSlabMultiple*MinimumReadBatchSize)
+	packets := make([]ReceivedPacket, MinimumReadBatchSize*udpGROCountMax)
+	pc.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if n, err := bc.ReadBatch(slab, packets); err != nil || n != 1 {
+		t.Fatalf("ReadBatch = %d, %v", n, err)
+	}
+	if packets[0].Local.IsValid() {
+		t.Errorf("reported Local %v without asking for it", packets[0].Local)
+	}
 }
