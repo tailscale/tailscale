@@ -131,6 +131,14 @@
 // Dials of addresses outside the tailnet then go through the exit node.
 // Dials within the tailnet are unaffected.
 //
+// # DNS resolution
+//
+// [Server.Dial] and [Server.HTTPClient] resolve names using the tailnet's DNS
+// configuration first, falling back to the host resolver for names without a
+// configured upstream or local answer. [Server.LookupIP] provides direct lookups:
+//
+//	ips, err := srv.LookupIP(ctx, "ip", "db")
+//
 // # Running multiple nodes in one process
 //
 // Each [Server] instance is an independent node. Give each a unique
@@ -178,6 +186,7 @@ import (
 	"tailscale.com/client/local"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	_ "tailscale.com/feature/c2n"
 	_ "tailscale.com/feature/condregister/netlog"
 	_ "tailscale.com/feature/condregister/oauthkey"
@@ -205,6 +214,7 @@ import (
 	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tsd"
 	"tailscale.com/types/bools"
+	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/nettype"
@@ -340,7 +350,8 @@ type Server struct {
 	sys                 *tsd.System
 	netstack            *netstack.Impl
 	netMon              *netmon.Monitor
-	rootPath            string // the state directory
+	dnsRes              lazy.SyncValue[*dnsResolver] // lazily created by dnsResolver
+	rootPath            string                       // the state directory
 	hostname            string
 	shutdownCtx         context.Context
 	shutdownCancel      context.CancelFunc
@@ -893,6 +904,10 @@ func (s *Server) start() (reterr error) {
 
 	s.dialer = &tsdial.Dialer{Logf: tsLogf} // mutated below (before used)
 	s.dialer.SetBus(sys.Bus.Get())
+	// LookupIP handles names not resolved by the MagicDNS hook.
+	if buildfeatures.HasDNS {
+		s.dialer.SetUserDialResolver(s.userDialResolve)
+	}
 	eng, err := wgengine.NewUserspaceEngine(tsLogf, wgengine.Config{
 		Tun:           s.Tun,
 		EventBus:      sys.Bus.Get(),
