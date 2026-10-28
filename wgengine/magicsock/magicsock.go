@@ -1516,7 +1516,12 @@ func (c *Conn) Send(buffs [][]byte, ep conn.Endpoint, offset int) error {
 }
 
 // SendTo implements [conn.MultiSocketBind].
-// If [Options.UDPSockets] is exercised, flow pins to a single socket per group.
+//
+// Data sent with the same flow id leaves ordered, from the same socket.
+// The number is arbitrary and unbounded, as long as it is stable per
+// serialized flow (usually the 5-tuple).
+// Zero is a safe placeholder, and usually translates into the first socket
+// of the group.
 func (c *Conn) SendTo(flow int, buffs [][]byte, ep conn.Endpoint, offset int) (err error) {
 	n := int64(len(buffs))
 	defer func() {
