@@ -17,7 +17,15 @@ import (
 // ApplyProxyClass overlays the settings in pc onto ss. It's the generic slice of ProxyClass application used by
 // any reconciler that produces a tailscaled StatefulSet (peer relay, connector, proxy group, etc.).
 func ApplyProxyClass(ss *appsv1.StatefulSet, pc *tsapi.ProxyClass, managedLabels, managedAnnotations []string) *appsv1.StatefulSet {
-	if pc == nil || ss == nil || pc.Spec.StatefulSet == nil {
+	if pc == nil || ss == nil {
+		return ss
+	}
+
+	if pc.Spec.Metrics != nil && pc.Spec.Metrics.Enable {
+		enableMetrics(ss)
+	}
+
+	if pc.Spec.StatefulSet == nil {
 		return ss
 	}
 
@@ -72,6 +80,19 @@ func ApplyProxyClass(ss *appsv1.StatefulSet, pc *tsapi.ProxyClass, managedLabels
 	}
 
 	return ss
+}
+
+// enableMetrics makes containerboot serve /metrics alongside /healthz on HealthCheckPort.
+func enableMetrics(ss *appsv1.StatefulSet) {
+	for i := range ss.Spec.Template.Spec.Containers {
+		c := &ss.Spec.Template.Spec.Containers[i]
+		if c.Name != containerName {
+			continue
+		}
+
+		c.Env = append(c.Env, corev1.EnvVar{Name: "TS_ENABLE_METRICS", Value: "true"})
+		break
+	}
 }
 
 func mergeProtected(current, custom map[string]string, protected []string) map[string]string {
