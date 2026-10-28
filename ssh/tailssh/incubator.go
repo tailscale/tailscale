@@ -92,6 +92,10 @@ func tryExecInDir(ctx context.Context, dir string) error {
 	run := func(path string) error {
 		cmd := exec.CommandContext(ctx, path)
 		cmd.Dir = dir
+		// The probe runs in the daemon's environment. Strip the systemd
+		// service-instance variables; see
+		// hostinfo.EnvironWithoutSystemdServiceVars.
+		cmd.Env = hostinfo.EnvironWithoutSystemdServiceVars(nil)
 		return cmd.Run()
 	}
 

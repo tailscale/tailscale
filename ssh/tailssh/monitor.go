@@ -197,11 +197,12 @@ func beMonitor(args []string) error {
 // Both raw socketpair ends are close-on-exec at creation, as is the
 // parent end's wrapUnixConn dup.
 //
-// env is used exactly as given: a nil env gives the child an empty
-// environment, never the spawner's. Callers spawn the privileged
-// monitor with the daemon's environment and user-identity children with
-// none, so the daemon's environment never reaches a child running as
-// the connection's user.
+// env is used exactly as given. A nil env gives the child an empty
+// environment, never the spawner's. Callers give the privileged
+// monitor the daemon's environment without the systemd service
+// variables, and give user-identity children an empty environment.
+// The daemon's environment never reaches a child running as the
+// connection's user.
 func spawnRPCChild(prefix, exe string, argv, env []string, attr *syscall.SysProcAttr) (*exec.Cmd, *net.UnixConn, error) {
 	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
 	if err != nil {
