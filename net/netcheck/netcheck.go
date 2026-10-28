@@ -1004,7 +1004,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 		var wg sync.WaitGroup
 		var need []*tailcfg.DERPRegion
 		for rid, reg := range dm.Regions {
-			if !rs.haveRegionLatency(tailcfg.DERPRegionID(rid)) && regionHasDERPNode(reg) && !reg.Avoid && !reg.NoMeasureNoHome {
+			if !rs.haveRegionLatency(tailcfg.DERPRegionID(rid)) && reg.CanServeDERP() && !reg.Avoid && !reg.NoMeasureNoHome {
 				need = append(need, reg)
 			}
 		}
@@ -1468,10 +1468,9 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(rs *reportState, r *Report,
 
 		// A STUN-only region has no DERP server to relay through, so it must
 		// never become the preferred DERP even though its STUN probe gives it
-		// a RegionLatency entry. Regions missing from the map, or present
-		// without any nodes (latency-only test fixtures), keep the old
-		// behavior.
-		if reg, ok := dm.Regions().GetOk(regionID); ok && reg.Nodes().Len() > 0 && !regionHasDERPNodeView(reg) {
+		// a RegionLatency entry. Regions missing from the map or without any
+		// DERP server are equally unable to serve as a home.
+		if !dm.Regions().Get(regionID).CanServeDERP() {
 			continue
 		}
 
@@ -1762,26 +1761,6 @@ func (c *Client) nodeAddrPort(ctx context.Context, n *tailcfg.DERPNode, port int
 		c.logf("netcheck: DNS lookup error for %q (node %q region %v): %v", n.HostName, n.Name, n.RegionID, err)
 	}
 	return zero, false
-}
-
-func regionHasDERPNode(r *tailcfg.DERPRegion) bool {
-	for _, n := range r.Nodes {
-		if !n.STUNOnly {
-			return true
-		}
-	}
-	return false
-}
-
-// regionHasDERPNodeView is regionHasDERPNode for tailcfg.DERPRegionView.
-func regionHasDERPNodeView(v tailcfg.DERPRegionView) bool {
-	nodes := v.Nodes()
-	for i := range nodes.Len() {
-		if !nodes.At(i).STUNOnly() {
-			return true
-		}
-	}
-	return false
 }
 
 func maxDurationValue(m map[tailcfg.DERPRegionID]time.Duration) (max time.Duration) {
