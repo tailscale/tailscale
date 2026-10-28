@@ -467,6 +467,16 @@ func (r *Resolver) GetUpstreamResolvers(name dnsname.FQDN) []*dnstype.Resolver {
 	return r.forwarder.GetUpstreamResolvers(name)
 }
 
+// HasConfiguredRouteFor reports whether a configured split or global (".")
+// DNS route matches name. Ambient cloud-host fallback resolvers are
+// excluded. See [forwarder.HasConfiguredRouteFor].
+func (r *Resolver) HasConfiguredRouteFor(name dnsname.FQDN) bool {
+	if !buildfeatures.HasDNS {
+		return false
+	}
+	return r.forwarder.HasConfiguredRouteFor(name)
+}
+
 // parseExitNodeQuery parses a DNS request packet.
 // It returns nil if it's malformed or lacking a question.
 func parseExitNodeQuery(q []byte) *response {

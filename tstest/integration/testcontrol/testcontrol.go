@@ -684,6 +684,20 @@ func (s *Server) SetSubnetRoutes(nodeKey key.NodePublic, routes []netip.Prefix) 
 	}
 }
 
+// SetDNSConfig sets the DNS configuration and notifies all nodes.
+// If dns is nil, it sends an empty DNSConfig to clear the configuration.
+func (s *Server) SetDNSConfig(dns *tailcfg.DNSConfig) {
+	if dns == nil {
+		dns = new(tailcfg.DNSConfig)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.DNSConfig = dns
+	for _, n := range s.nodes {
+		sendUpdate(s.updates[n.ID], updateSelfChanged)
+	}
+}
+
 // MasqueradePair is a pair of nodes and the IP address that the
 // Node masquerades as for the Peer.
 //
