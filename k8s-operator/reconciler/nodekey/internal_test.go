@@ -73,7 +73,7 @@ func TestReconciler_signNodeKey(t *testing.T) {
 		expectedLogs  []string
 	}{
 		{
-			name: "network unlocked",
+			name: "network_unlocked",
 			mutationFn: func(lc *fakeLocalClient, _ *corev1.Secret) {
 				lc.networkLockStatus.Enabled = false
 			},
@@ -82,7 +82,7 @@ func TestReconciler_signNodeKey(t *testing.T) {
 			expectedLogs:  []string{"Tailnet is not locked, skipping node key signing"},
 		},
 		{
-			name: "device is visible peer",
+			name: "device_is_visible_peer",
 			mutationFn: func(lc *fakeLocalClient, _ *corev1.Secret) {
 				lc.networkLockStatus.VisiblePeers = []*ipnstate.TKAPeer{nodeTKAPeer}
 			},
@@ -91,7 +91,7 @@ func TestReconciler_signNodeKey(t *testing.T) {
 			expectedLogs:  []string{},
 		},
 		{
-			name: "operator key not trusted",
+			name: "operator_key_not_trusted",
 			mutationFn: func(lc *fakeLocalClient, _ *corev1.Secret) {
 				lc.networkLockStatus.TrustedKeys = nil
 			},
@@ -102,7 +102,7 @@ func TestReconciler_signNodeKey(t *testing.T) {
 			},
 		},
 		{
-			name: "device not ready",
+			name: "device_not_ready",
 			mutationFn: func(_ *fakeLocalClient, sec *corev1.Secret) {
 				delete(sec.Data, kubetypes.KeyDeviceID)
 			},
@@ -111,7 +111,7 @@ func TestReconciler_signNodeKey(t *testing.T) {
 			expectedLogs:  []string{"NodeID is empty. It may not be populated yet"},
 		},
 		{
-			name:          "device not filtered peer",
+			name:          "device_not_filtered_peer",
 			mutationFn:    func(_ *fakeLocalClient, _ *corev1.Secret) {},
 			expectedDone:  false,
 			expectedError: nil,
@@ -120,7 +120,7 @@ func TestReconciler_signNodeKey(t *testing.T) {
 			},
 		},
 		{
-			name: "successful signing",
+			name: "successful_signing",
 			mutationFn: func(lc *fakeLocalClient, _ *corev1.Secret) {
 				lc.networkLockStatus.FilteredPeers = []*ipnstate.TKAPeer{nodeTKAPeer}
 			},
@@ -131,7 +131,7 @@ func TestReconciler_signNodeKey(t *testing.T) {
 			},
 		},
 		{
-			name: "signing error",
+			name: "signing_error",
 			mutationFn: func(lc *fakeLocalClient, _ *corev1.Secret) {
 				lc.networkLockStatus.FilteredPeers = []*ipnstate.TKAPeer{nodeTKAPeer}
 				lc.signResult = signingError
@@ -188,19 +188,19 @@ func TestManagedSecretHandler(t *testing.T) {
 		wantQueue bool
 	}{
 		{
-			name:      "managed secret in operator namespace",
+			name:      "managed_secret_in_operator_namespace",
 			namespace: ns,
 			labels:    map[string]string{kubetypes.LabelManaged: "true"},
 			wantQueue: true,
 		},
 		{
-			name:      "managed secret in other namespace",
+			name:      "managed_secret_in_other_namespace",
 			namespace: "other",
 			labels:    map[string]string{kubetypes.LabelManaged: "true"},
 			wantQueue: false,
 		},
 		{
-			name:      "unmanaged secret in operator namespace",
+			name:      "unmanaged_secret_in_operator_namespace",
 			namespace: ns,
 			labels:    nil,
 			wantQueue: false,

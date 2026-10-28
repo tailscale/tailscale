@@ -54,19 +54,19 @@ func TestReconciler_Reconcile(t *testing.T) {
 		expectedResult reconcile.Result
 	}{
 		{
-			name:           "no error",
+			name:           "no_error",
 			mutateFn:       func(sec *corev1.Secret) {},
 			expectedResult: reconcile.Result{},
 		},
 		{
-			name: "missing device id",
+			name: "missing_device_id",
 			mutateFn: func(sec *corev1.Secret) {
 				delete(sec.Data, kubetypes.KeyDeviceID)
 			},
 			expectedResult: reconcile.Result{RequeueAfter: 5 * time.Second},
 		},
 		{
-			name: "missing secret",
+			name: "missing_secret",
 			mutateFn: func(sec *corev1.Secret) {
 				// change the name to not match the request
 				sec.ObjectMeta.Name = "different-name"
@@ -74,7 +74,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			expectedResult: reconcile.Result{},
 		},
 		{
-			name: "deleting secret",
+			name: "deleting_secret",
 			mutateFn: func(sec *corev1.Secret) {
 				sec.ObjectMeta.DeletionTimestamp = &metav1.Time{
 					Time: time.Now(),
@@ -84,7 +84,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			expectedResult: reconcile.Result{},
 		},
 		{
-			name: "unmanaged secret",
+			name: "unmanaged_secret",
 			mutateFn: func(sec *corev1.Secret) {
 				delete(sec.Labels, kubetypes.LabelManaged)
 			},
