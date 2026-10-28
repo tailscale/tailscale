@@ -271,6 +271,120 @@ func TestIngressPGReconciler(t *testing.T) {
 	expectMissing[networkingv1.Ingress](t, fc, ing3.Namespace, ing3.Name)
 }
 
+func TestIngressPGReconciler_CleanupOnAnnotationRemoved(t *testing.T) {
+	ingPGR, fc, ft := setupIngressTest(t)
+
+	ing := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingress",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+			Annotations: map[string]string{
+				AnnotationProxyGroup: "test-pg",
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: new("tailscale"),
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "test",
+					Port: networkingv1.ServiceBackendPort{Number: 8080},
+				},
+			},
+			TLS: []networkingv1.IngressTLS{{Hosts: []string{"my-svc"}}},
+		},
+	}
+	mustCreate(t, fc, ing)
+	expectReconciled(t, ingPGR, ing.Namespace, ing.Name)
+	populateTLSSecret(t, fc, "test-pg", "my-svc.ts.net")
+	expectReconciled(t, ingPGR, ing.Namespace, ing.Name)
+	verifyServeConfig(t, fc, "svc:my-svc", false)
+	verifyTailscaleService(t, ft, "svc:my-svc", []string{"tcp:443"})
+
+	got := new(networkingv1.Ingress)
+	if err := fc.Get(t.Context(), client.ObjectKeyFromObject(ing), got); err != nil {
+		t.Fatalf("getting Ingress: %v", err)
+	}
+	wantFinalizer := "test-pg.tailscale.com/ingress-pg-finalizer"
+	if !slices.Contains(got.Finalizers, wantFinalizer) {
+		t.Fatalf("finalizers = %v, want to contain %q", got.Finalizers, wantFinalizer)
+	}
+
+	mustUpdate(t, fc, ing.Namespace, ing.Name, func(ing *networkingv1.Ingress) {
+		delete(ing.Annotations, AnnotationProxyGroup)
+	})
+	expectReconciled(t, ingPGR, ing.Namespace, ing.Name)
+
+	if _, err := ft.VIPServices().Get(t.Context(), "svc:my-svc"); err == nil {
+		t.Fatal("Tailscale Service svc:my-svc not cleaned up after annotation removal")
+	} else if !tailscale.IsNotFound(err) {
+		t.Fatalf("unexpected error getting Tailscale Service: %v", err)
+	}
+	cm := new(corev1.ConfigMap)
+	if err := fc.Get(t.Context(), types.NamespacedName{Namespace: "operator-ns", Name: "test-pg-ingress-config"}, cm); err != nil {
+		t.Fatalf("getting ProxyGroup serve config: %v", err)
+	}
+	cfg := new(ipn.ServeConfig)
+	if err := json.Unmarshal(cm.BinaryData[serveConfigKey], cfg); err != nil {
+		t.Fatalf("unmarshaling ProxyGroup serve config: %v", err)
+	}
+	if cfg.Services["svc:my-svc"] != nil {
+		t.Fatal("serve config still contains svc:my-svc after annotation removal")
+	}
+	verifyTailscaledConfig(t, fc, "test-pg", nil)
+	expectMissing[corev1.Secret](t, fc, "operator-ns", "my-svc.ts.net")
+	expectMissing[rbacv1.Role](t, fc, "operator-ns", "my-svc.ts.net")
+	expectMissing[rbacv1.RoleBinding](t, fc, "operator-ns", "my-svc.ts.net")
+
+	if err := fc.Get(t.Context(), client.ObjectKeyFromObject(ing), got); err != nil {
+		t.Fatalf("getting Ingress: %v", err)
+	}
+	if slices.ContainsFunc(got.Finalizers, func(f string) bool {
+		return f == FinalizerNamePG || strings.HasSuffix(f, "."+FinalizerNamePG)
+	}) {
+		t.Fatalf("ingress-pg finalizer not removed after annotation removal, finalizers = %v", got.Finalizers)
+	}
+}
+
+func TestIngressPGReconciler_MigratesLegacyFinalizer(t *testing.T) {
+	ingPGR, fc, _ := setupIngressTest(t)
+
+	ing := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "test-ingress",
+			Namespace:   "default",
+			UID:         types.UID("1234-UID"),
+			Finalizers:  []string{FinalizerNamePG},
+			Annotations: map[string]string{AnnotationProxyGroup: "test-pg"},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: new("tailscale"),
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "test",
+					Port: networkingv1.ServiceBackendPort{Number: 8080},
+				},
+			},
+			TLS: []networkingv1.IngressTLS{{Hosts: []string{"my-svc"}}},
+		},
+	}
+	mustCreate(t, fc, ing)
+	expectReconciled(t, ingPGR, ing.Namespace, ing.Name)
+
+	got := new(networkingv1.Ingress)
+	if err := fc.Get(t.Context(), client.ObjectKeyFromObject(ing), got); err != nil {
+		t.Fatalf("getting Ingress: %v", err)
+	}
+	if slices.Contains(got.Finalizers, FinalizerNamePG) {
+		t.Fatalf("bare legacy finalizer not migrated, finalizers = %v", got.Finalizers)
+	}
+	wantFinalizer := ingressFinalizerForProxyGroup("test-pg")
+	if !slices.Contains(got.Finalizers, wantFinalizer) {
+		t.Fatalf("finalizers = %v, want to contain %q", got.Finalizers, wantFinalizer)
+	}
+}
+
 func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
 	ingPGR, fc, ft := setupIngressTest(t)
 
