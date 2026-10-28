@@ -192,6 +192,10 @@ type Conn struct {
 	pconn4 RebindingUDPConn
 	pconn6 RebindingUDPConn
 
+	// udpSockets is how many sockets to bind per address family.
+	// See [Options.UDPSockets].
+	udpSockets int
+
 	// closeDisco4 and closeDisco6 are io.Closers to shut down the raw
 	// disco packet receivers. If nil, no raw disco receiver is
 	// running for the given family.
@@ -460,6 +464,13 @@ type Options struct {
 	// Zero means to pick one automatically.
 	Port uint16
 
+	// UDPSockets is how many UDP sockets to open per address family.
+	// Sockets will share one local port.
+	//
+	// Ignored when UDP transport is disabled. Zero or less means one.
+	// Currently only Linux opens more than one.
+	UDPSockets int
+
 	// EndpointsFunc optionally provides a func to be called when
 	// endpoints change. The called func does not own the slice.
 	EndpointsFunc func([]tailcfg.Endpoint)
@@ -587,6 +598,7 @@ func newConn(logf logger.Logf) *Conn {
 		discoInfo:     make(map[key.DiscoPublic]*discoInfo),
 		cloudInfo:     cloudinfo.New(logf),
 		initializedAt: mono.Now(),
+		udpSockets:    1,
 	}
 	c.discoAtomic.Set(discoPrivate)
 	c.bind = &connBind{Conn: c, closed: true}
@@ -643,6 +655,9 @@ func NewConn(opts Options) (*Conn, error) {
 	}
 	c.eventBus = opts.EventBus
 	c.port.Store(uint32(opts.Port))
+	if canShareUDPPort && hasUDPTransport && opts.TestOnlyPacketListener == nil && !debugAlwaysDERP() {
+		c.udpSockets = max(opts.UDPSockets, 1)
+	}
 	c.controlKnobs = opts.ControlKnobs
 	if runtime.GOOS == "linux" && c.controlKnobs != nil {
 		// Seed the cached "last applied" UDP offload knob values so the first
@@ -1496,7 +1511,18 @@ func (c *Conn) networkDown() bool {
 // Send implements conn.Bind.
 //
 // See https://pkg.go.dev/github.com/tailscale/wireguard-go/conn#Bind.Send
-func (c *Conn) Send(buffs [][]byte, ep conn.Endpoint, offset int) (err error) {
+func (c *Conn) Send(buffs [][]byte, ep conn.Endpoint, offset int) error {
+	return c.SendTo(0, buffs, ep, offset)
+}
+
+// SendTo implements [conn.MultiSocketBind].
+//
+// Data sent with the same flow id leaves ordered, from the same socket.
+// The number is arbitrary and unbounded, as long as it is stable per
+// serialized flow (usually the 5-tuple).
+// Zero is a safe placeholder, and usually translates into the first socket
+// of the group.
+func (c *Conn) SendTo(flow int, buffs [][]byte, ep conn.Endpoint, offset int) (err error) {
 	n := int64(len(buffs))
 	defer func() {
 		if err != nil {
@@ -1510,7 +1536,7 @@ func (c *Conn) Send(buffs [][]byte, ep conn.Endpoint, offset int) (err error) {
 	}
 	switch ep := ep.(type) {
 	case *endpoint:
-		return ep.send(buffs, offset)
+		return ep.send(flow, buffs, offset)
 	case *lazyEndpoint:
 		// A [*lazyEndpoint] may end up on this TX codepath when wireguard-go is
 		// deemed "under handshake load" and ends up transmitting a cookie reply
@@ -1519,9 +1545,9 @@ func (c *Conn) Send(buffs [][]byte, ep conn.Endpoint, offset int) (err error) {
 			return errNoUDP
 		}
 		if ep.src.ap.Addr().Is6() {
-			return c.pconn6.WriteWireGuardBatchTo(buffs, ep.src, offset)
+			return c.pconn6.WriteWireGuardBatchTo(flow, buffs, ep.src, offset)
 		}
-		return c.pconn4.WriteWireGuardBatchTo(buffs, ep.src, offset)
+		return c.pconn4.WriteWireGuardBatchTo(flow, buffs, ep.src, offset)
 	}
 	return nil
 }
@@ -1538,9 +1564,7 @@ var errNoUDP = errors.New("no UDP available on platform")
 // peer traffic is relayed over DERP.
 const hasUDPTransport = buildfeatures.HasUDPTransport && runtime.GOOS != "js"
 
-var errUnsupportedConnType = errors.New("unsupported connection type")
-
-func (c *Conn) sendUDPBatch(addr epAddr, buffs [][]byte, offset int) (sent bool, err error) {
+func (c *Conn) sendUDPBatch(flow int, addr epAddr, buffs [][]byte, offset int) (sent bool, err error) {
 	if !hasUDPTransport {
 		return false, errNoUDP
 	}
@@ -1553,9 +1577,9 @@ func (c *Conn) sendUDPBatch(addr epAddr, buffs [][]byte, offset int) (sent bool,
 		panic("bogus sendUDPBatch addr type")
 	}
 	if isIPv6 {
-		err = c.pconn6.WriteWireGuardBatchTo(buffs, addr, offset)
+		err = c.pconn6.WriteWireGuardBatchTo(flow, buffs, addr, offset)
 	} else {
-		err = c.pconn4.WriteWireGuardBatchTo(buffs, addr, offset)
+		err = c.pconn4.WriteWireGuardBatchTo(flow, buffs, addr, offset)
 	}
 	if err != nil {
 		if errGSO, ok := errors.AsType[neterror.ErrUDPGSODisabled](err); ok {
@@ -1718,28 +1742,22 @@ func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte, is
 	return false, errDropDerpPacket
 }
 
-func (c *Conn) receiveIPv4() conn.ReceiveFunc {
-	return c.mkReceiveFunc(&c.pconn4, c.health.ReceiveFuncStats(receiveIPv4Name),
-		&c.metrics.inboundPacketsIPv4Total,
-		&c.metrics.inboundPacketsPeerRelayIPv4Total,
-		&c.metrics.inboundBytesIPv4Total,
-		&c.metrics.inboundBytesPeerRelayIPv4Total,
-	)
+// udpReceiveConfig tracks per-[conn.ReceiveFunc] configuration.
+type udpReceiveConfig struct {
+	ruc    *RebindingUDPConn // must be non-nil
+	family string
+	socket int
+
+	// The metrics may be nil.
+	directPackets, peerRelayPackets *expvar.Int
+	directBytes, peerRelayBytes     *expvar.Int
 }
 
-// receiveIPv6 creates an IPv6 ReceiveFunc reading from c.pconn6.
-func (c *Conn) receiveIPv6() conn.ReceiveFunc {
-	return c.mkReceiveFunc(&c.pconn6, c.health.ReceiveFuncStats(receiveIPv6Name),
-		&c.metrics.inboundPacketsIPv6Total,
-		&c.metrics.inboundPacketsPeerRelayIPv6Total,
-		&c.metrics.inboundBytesIPv6Total,
-		&c.metrics.inboundBytesPeerRelayIPv6Total,
-	)
-}
-
-// mkReceiveFunc creates a ReceiveFunc reading from ruc.
-// The provided healthItem and metrics are updated if non-nil.
-func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFuncStats, directPacketMetric, peerRelayPacketMetric, directBytesMetric, peerRelayBytesMetric *expvar.Int) conn.ReceiveFunc {
+func (c *Conn) mkReceiveFunc(cfg udpReceiveConfig) conn.ReceiveFunc {
+	ruc := cfg.ruc
+	directPacketMetric, peerRelayPacketMetric := cfg.directPackets, cfg.peerRelayPackets
+	directBytesMetric, peerRelayBytesMetric := cfg.directBytes, cfg.peerRelayBytes
+	healthItem := c.health.ReceiveFuncStats(c.receiveName(cfg.family, cfg.socket))
 	// epCache caches an epAddr->endpoint for hot flows.
 	var epCache epAddrEndpointCache
 	var batchingPackets []batching.ReceivedPacket
@@ -1762,7 +1780,7 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 		}
 
 		for {
-			numMsgs, err := ruc.ReadBatch(slab, batchingPackets)
+			numMsgs, err := ruc.ReadBatch(cfg.socket, slab, batchingPackets)
 			if err != nil {
 				if neterror.PacketWasTruncated(err) {
 					continue
@@ -3496,9 +3514,13 @@ type connBind struct {
 	closed bool
 }
 
-// This is a compile-time assertion that connBind implements the wireguard-go
-// conn.Bind interface.
-var _ conn.Bind = (*connBind)(nil)
+// These are compile-time assertions that connBind implements the wireguard-go
+// conn.Bind interface and its optional extensions.
+var (
+	_ conn.Bind            = (*connBind)(nil)
+	_ conn.NamedBind       = (*connBind)(nil)
+	_ conn.MultiSocketBind = (*connBind)(nil)
+)
 
 // BatchSize returns the number of buffers expected to be passed to
 // the ReceiveFuncs, and the maximum expected to be passed to SendBatch.
@@ -3527,12 +3549,10 @@ func (c *connBind) Open(ignoredPort uint16) ([]conn.ReceiveFunc, uint16, error) 
 	}
 	c.closed = false
 	var fns []conn.ReceiveFunc
-	if hasUDPTransport {
-		fns = append(fns, c.receiveIPv4(), c.receiveIPv6())
+	for _, cfg := range c.udpReceiveConfigs() {
+		fns = append(fns, c.mkReceiveFunc(cfg))
 	}
 	fns = append(fns, c.mkReceiveDERPFunc())
-	// TODO: Combine receiveIPv4 and receiveIPv6 and receiveIP into a single
-	// closure that closes over a *RebindingUDPConn?
 	return fns, c.LocalPort(), nil
 }
 
@@ -3542,6 +3562,61 @@ const (
 	receiveIPv6Name = "ReceiveIPv6"
 	receiveDERPName = "ReceiveDERP"
 )
+
+// udpReceiveConfigs returns the [conn.ReceiveFunc] configs in the order they are
+// opened within [Conn.Open].
+// It is empty when there is no UDP transport.
+func (c *Conn) udpReceiveConfigs() []udpReceiveConfig {
+	if !hasUDPTransport {
+		return nil
+	}
+	var cs []udpReceiveConfig
+	for i := range c.udpSockets {
+		cs = append(cs, udpReceiveConfig{
+			ruc:              &c.pconn4,
+			family:           receiveIPv4Name,
+			socket:           i,
+			directPackets:    &c.metrics.inboundPacketsIPv4Total,
+			directBytes:      &c.metrics.inboundBytesIPv4Total,
+			peerRelayPackets: &c.metrics.inboundPacketsPeerRelayIPv4Total,
+			peerRelayBytes:   &c.metrics.inboundBytesPeerRelayIPv4Total,
+		})
+	}
+	for i := range c.udpSockets {
+		cs = append(cs, udpReceiveConfig{
+			ruc:              &c.pconn6,
+			family:           receiveIPv6Name,
+			socket:           i,
+			directPackets:    &c.metrics.inboundPacketsIPv6Total,
+			directBytes:      &c.metrics.inboundBytesIPv6Total,
+			peerRelayPackets: &c.metrics.inboundPacketsPeerRelayIPv6Total,
+			peerRelayBytes:   &c.metrics.inboundBytesPeerRelayIPv6Total,
+		})
+	}
+	return cs
+}
+
+// ReceiveNames implements [conn.NamedBind], returning one name per ReceiveFunc
+// in the order they were opened.
+func (c *connBind) ReceiveNames() []string {
+	if c.isClosed() {
+		return nil
+	}
+	var names []string
+	for _, cfg := range c.udpReceiveConfigs() {
+		names = append(names, c.receiveName(cfg.family, cfg.socket))
+	}
+	return append(names, receiveDERPName)
+}
+
+// receiveName returns the name of the ReceiveFunc reading from socket sock of
+// the given address family.
+func (c *Conn) receiveName(family string, sock int) string {
+	if c.udpSockets == 1 {
+		return family
+	}
+	return family + ":" + strconv.Itoa(sock)
+}
 
 // SetMark is used by wireguard-go to set a mark bit for packets to avoid routing loops.
 // We handle that ourselves elsewhere.
@@ -3616,8 +3691,6 @@ func (c *Conn) Close() error {
 	c.closed = true
 	c.connCtxCancel()
 	c.closeAllDerpLocked("conn-close")
-	// Ignore errors from c.pconnN.Close.
-	// They will frequently have been closed already by a call to connBind.Close.
 	c.pconn6.Close()
 	c.pconn4.Close()
 	if c.closeDisco4 != nil {
@@ -3737,25 +3810,58 @@ func (c *Conn) ReSTUN(why string) {
 	}
 }
 
-// listenPacket opens a packet listener.
+// canShareUDPPort reports whether magicsock supports per-family UDP port sharing.
+// See [Options.UDPSockets].
+var canShareUDPPort = sockopts.CanShareUDPPort && runtime.GOOS != "android"
+
+// listenGroup opens up to [Conn.udpSockets] sockets sharing one local port,
+// returning the [nettype.PacketConn]s and the bound port.
+//
+// Incomplete group is returned without error.
 // The network must be "udp4" or "udp6".
-func (c *Conn) listenPacket(network string, port uint16) (nettype.PacketConn, error) {
+func (c *Conn) listenGroup(network string, port uint16) (_ []nettype.PacketConn, boundPort uint16, _ error) {
 	ctx := context.Background() // unused without DNS name to resolve
 	if network == "udp4" {
 		ctx = sockstats.WithSockStats(ctx, sockstats.LabelMagicsockConnUDP4, c.logf)
 	} else {
 		ctx = sockstats.WithSockStats(ctx, sockstats.LabelMagicsockConnUDP6, c.logf)
 	}
-	addr := net.JoinHostPort("", fmt.Sprint(port))
 	if c.testOnlyPacketListener != nil {
-		return nettype.MakePacketListenerWithNetIP(c.testOnlyPacketListener).ListenPacket(ctx, network, addr)
+		addr := net.JoinHostPort("", fmt.Sprint(port))
+		pconn, err := nettype.MakePacketListenerWithNetIP(c.testOnlyPacketListener).ListenPacket(ctx, network, addr)
+		if err != nil {
+			return nil, 0, err
+		}
+		addrStr := pconn.LocalAddr().String()
+		ap, err := netip.ParseAddrPort(addrStr)
+		if err == nil {
+			return []nettype.PacketConn{pconn}, ap.Port(), nil
+		}
+		if debugBindSocket() {
+			c.logf("[unexpected] magicsock: unparseable local address (from %T): %s", pconn, addrStr)
+		}
+		return []nettype.PacketConn{pconn}, port, nil
 	}
-	return nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf, c.netMon)).ListenPacket(ctx, network, addr)
+	pconns, boundPort, err := sockopts.BindUDPGroup(
+		ctx,
+		logger.WithPrefix(c.logf, "magicsock: "+network+": "),
+		c.udpSockets,
+		netns.Listener(c.logf, c.netMon).Control,
+		network,
+		port,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	for _, pconn := range pconns {
+		trySetUDPSocketOptions(pconn, c.logf)
+	}
+	return pconns, boundPort, nil
 }
 
-// bindSocket binds a UDP socket to ruc.
+// bindSocket binds UDP sockets to ruc.
 // Network indicates the UDP socket type; it must be "udp4" or "udp6".
-// If ruc had an existing UDP socket bound, it closes that socket.
+// If ruc had existing UDP sockets bound, it closes those sockets.
 // The caller is responsible for informing the portMapper of any changes.
 // If curPortFate is set to dropCurrentPort, no attempt is made to reuse
 // the current port.
@@ -3770,13 +3876,13 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 	defer ruc.mu.Unlock()
 
 	if !hasUDPTransport {
-		ruc.setConnLocked(newBlockForeverConn(), "", c.controlKnobs)
+		ruc.setConnLocked(nil, c.udpSockets, "", c.controlKnobs)
 		return nil
 	}
 
 	if debugAlwaysDERP() {
 		c.logf("disabled %v per TS_DEBUG_ALWAYS_USE_DERP", network)
-		ruc.setConnLocked(newBlockForeverConn(), "", c.controlKnobs)
+		ruc.setConnLocked(nil, c.udpSockets, "", c.controlKnobs)
 		return nil
 	}
 
@@ -3788,7 +3894,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 	if port := uint16(c.port.Load()); port != 0 {
 		ports = append(ports, port)
 	}
-	if ruc.pconn != nil && curPortFate == keepCurrentPort {
+	if ruc.group.bound > 0 && curPortFate == keepCurrentPort {
 		curPort := uint16(ruc.localAddrLocked().Port)
 		ports = append(ports, curPort)
 	}
@@ -3800,42 +3906,30 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 		c.logf("magicsock: bindSocket: candidate ports: %+v", ports)
 	}
 
-	var pconn nettype.PacketConn
 	for _, port := range ports {
-		// Close the existing conn, in case it is sitting on the port we want.
+		// Close the existing conns, in case they are sitting on the port we want.
 		err := ruc.closeLocked()
-		if err != nil && !errors.Is(err, net.ErrClosed) && !errors.Is(err, errNilPConn) {
+		if err != nil {
 			c.logf("magicsock: bindSocket %v close failed: %v", network, err)
 		}
-		// Open a new one with the desired port.
-		pconn, err = c.listenPacket(network, port)
+		// Open new ones with the desired port.
+		pconns, boundPort, err := c.listenGroup(network, port)
 		if err != nil {
 			c.logf("magicsock: unable to bind %v port %d: %v", network, port, err)
 			continue
 		}
 		if c.portUpdatePub.ShouldPublish() {
-			_, gotPortStr, err := net.SplitHostPort(pconn.LocalAddr().String())
-			if err != nil {
-				c.logf("could not parse port from %s: %w", pconn.LocalAddr().String(), err)
-			} else {
-				gotPort, err := strconv.ParseUint(gotPortStr, 10, 16)
-				if err != nil {
-					c.logf("could not parse port from %s: %w", gotPort, err)
-				} else {
-					c.portUpdatePub.Publish(router.PortUpdate{
-						UDPPort:         uint16(gotPort),
-						EndpointNetwork: network,
-					})
-				}
-			}
+			c.portUpdatePub.Publish(router.PortUpdate{
+				UDPPort:         boundPort,
+				EndpointNetwork: network,
+			})
 		}
-		trySetUDPSocketOptions(pconn, c.logf)
 
 		// Success.
 		if debugBindSocket() {
 			c.logf("magicsock: bindSocket: successfully listened %v port %d", network, port)
 		}
-		ruc.setConnLocked(pconn, network, c.controlKnobs)
+		ruc.setConnLocked(pconns, c.udpSockets, network, c.controlKnobs)
 		if network == "udp4" {
 			c.health.SetUDP4Unbound(false)
 		}
@@ -3843,10 +3937,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 	}
 
 	// Failed to bind, including on port 0 (!).
-	// Set pconn to a dummy conn whose reads block until closed.
-	// This keeps the receive funcs alive for a future in which
-	// we get a link change and we can try binding again.
-	ruc.setConnLocked(newBlockForeverConn(), "", c.controlKnobs)
+	ruc.setConnLocked(nil, c.udpSockets, "", c.controlKnobs)
 	if network == "udp4" {
 		c.health.SetUDP4Unbound(true)
 	}

@@ -56,6 +56,7 @@ import (
 	"tailscale.com/net/packet"
 	"tailscale.com/net/ping"
 	"tailscale.com/net/routemanager"
+	"tailscale.com/net/sockopts"
 	"tailscale.com/net/stun"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/net/tsaddr"
@@ -514,7 +515,7 @@ func TestNewConn(t *testing.T) {
 	go func() {
 		slab := make([]byte, batching.ReadSlabMultiple)
 		packets := make([]wgconn.ReceivedPacket, batching.MinimumReadBatchSize)
-		receiveIPv4 := conn.receiveIPv4()
+		receiveIPv4 := conn.mkReceiveFunc(conn.udpReceiveConfigs()[0])
 		for {
 			_, err := receiveIPv4(slab, packets)
 			if err != nil {
@@ -1684,7 +1685,7 @@ func setUpReceiveFrom(tb testing.TB) (roundTrip func()) {
 	}
 	slab := make([]byte, batching.ReadSlabMultiple)
 	packets := make([]wgconn.ReceivedPacket, batching.MinimumReadBatchSize)
-	receiveIPv4 := conn.receiveIPv4()
+	receiveIPv4 := conn.mkReceiveFunc(conn.udpReceiveConfigs()[0])
 	return func() {
 		if _, err := sendConn.WriteTo(sendBuf, dstAddr); err != nil {
 			tb.Fatalf("WriteTo: %v", err)
@@ -1918,7 +1919,7 @@ func TestRebindStress(t *testing.T) {
 	go func() {
 		slab := make([]byte, batching.ReadSlabMultiple)
 		packets := make([]wgconn.ReceivedPacket, batching.MinimumReadBatchSize)
-		receiveIPv4 := conn.receiveIPv4()
+		receiveIPv4 := conn.mkReceiveFunc(conn.udpReceiveConfigs()[0])
 		for {
 			_, err := receiveIPv4(slab, packets)
 			if ctx.Err() != nil {
@@ -2300,6 +2301,12 @@ func (m *peerMap) validate() error {
 	return nil
 }
 
+func TestBlockForeverConnNoSocket(t *testing.T) {
+	if _, err := sockopts.RawConn(newBlockForeverConn()); !errors.Is(err, sockopts.ErrNoSocket) {
+		t.Errorf("RawConn err = %v, want it to wrap %v", err, sockopts.ErrNoSocket)
+	}
+}
+
 func TestBlockForeverConnUnblocks(t *testing.T) {
 	c := newBlockForeverConn()
 	done := make(chan error, 1)
@@ -2351,8 +2358,117 @@ func TestRebindingUDPConn(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer realConn.Close()
-	c.setConnLocked(realConn.(nettype.PacketConn), "udp4", nil)
-	c.setConnLocked(newBlockForeverConn(), "", nil)
+	c.setConnLocked([]nettype.PacketConn{realConn.(nettype.PacketConn)}, 1, "udp4", nil)
+	c.setConnLocked(nil, 1, "", nil)
+}
+
+func TestRebindingUDPConnPadding(t *testing.T) {
+	const sockets = 4
+	for _, bound := range []int{sockets, 1, 0} {
+		t.Run(fmt.Sprint(bound), func(t *testing.T) {
+			var ruc RebindingUDPConn
+			pconns := make([]nettype.PacketConn, bound)
+			for i := range pconns {
+				pconns[i] = must.Get(net.ListenPacket("udp4", "127.0.0.1:0")).(nettype.PacketConn)
+			}
+			ruc.mu.Lock()
+			ruc.setConnLocked(pconns, sockets, "udp4", nil)
+			ruc.mu.Unlock()
+			defer ruc.Close()
+
+			// Every socket index resolves, bound or padded.
+			for i := range sockets {
+				if ruc.connAt(i) == nil {
+					t.Errorf("connAt(%d) = nil", i)
+				}
+			}
+			if bound == 0 {
+				if _, pconn := ruc.sendConn(1); pconn == nil {
+					t.Error("sendConn returned no conn")
+				}
+				return
+			}
+			for flow := range 2 * sockets {
+				sock, pconn := ruc.sendConn(flow)
+				if sock >= bound {
+					t.Errorf("flow %d picked socket %d, want < %d", flow, sock, bound)
+				}
+				if !slices.Contains(pconns, pconn) {
+					t.Errorf("flow %d picked a conn that is not bound", flow)
+				}
+			}
+		})
+	}
+}
+
+func TestReceiveNamesClosed(t *testing.T) {
+	c, _ := newTestConnAndRegistry(t)
+
+	if got := c.bind.ReceiveNames(); len(got) != 0 {
+		t.Errorf("ReceiveNames before Open = %q, want none", got)
+	}
+	if _, _, err := c.bind.Open(0); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.bind.ReceiveNames(); len(got) == 0 {
+		t.Error("ReceiveNames while open = none")
+	}
+	if err := c.bind.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.bind.ReceiveNames(); len(got) != 0 {
+		t.Errorf("ReceiveNames after Close = %q, want none", got)
+	}
+}
+
+// closeErrConn is a nettype.PacketConn whose Close returns a fixed error.
+type closeErrConn struct {
+	nettype.PacketConn
+	err error
+}
+
+func (c closeErrConn) Close() error        { return c.err }
+func (c closeErrConn) LocalAddr() net.Addr { return new(net.UDPAddr) }
+
+func TestRebindingUDPConnCloseErrors(t *testing.T) {
+	sockErr := errors.New("boom")
+	tests := []struct {
+		name        string
+		errs        []error
+		wantSockErr bool
+	}{
+		{name: "no-sockets"},
+		{name: "all-closed-cleanly", errs: []error{nil, nil, nil}},
+		{name: "all-already-closed", errs: []error{net.ErrClosed, net.ErrClosed}},
+		{name: "one-real-failure", errs: []error{nil, sockErr}, wantSockErr: true},
+		{name: "real-failure-behind-already-closed", errs: []error{nil, net.ErrClosed, sockErr}, wantSockErr: true},
+		{name: "every-socket-fails", errs: []error{sockErr, sockErr}, wantSockErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var pconns []nettype.PacketConn
+			for _, err := range tt.errs {
+				pconns = append(pconns, closeErrConn{err: err})
+			}
+			var c RebindingUDPConn
+			if len(pconns) > 0 {
+				c.setConnLocked(pconns, len(pconns), "udp4", nil)
+			}
+			err := c.closeLocked()
+
+			switch {
+			case tt.wantSockErr:
+				if !errors.Is(err, sockErr) {
+					t.Errorf("closeLocked() = %v, want it to wrap %v", err, sockErr)
+				}
+				if errors.Is(err, net.ErrClosed) {
+					t.Errorf("closeLocked() = %v, want it not to match net.ErrClosed", err)
+				}
+			case err != nil:
+				t.Errorf("closeLocked() = %v, want nil", err)
+			}
+		})
+	}
 }
 
 // https://github.com/tailscale/tailscale/issues/6680: don't ignore
@@ -3496,7 +3612,7 @@ func TestMaybeRebindOnError(t *testing.T) {
 	})
 }
 
-func newTestConnAndRegistry(t *testing.T) (*Conn, *usermetric.Registry) {
+func newTestConnAndRegistry(t *testing.T, mod ...func(*Options)) (*Conn, *usermetric.Registry) {
 	t.Helper()
 	bus := eventbus.New()
 	t.Cleanup(bus.Close)
@@ -3506,14 +3622,19 @@ func newTestConnAndRegistry(t *testing.T) (*Conn, *usermetric.Registry) {
 
 	reg := new(usermetric.Registry)
 
-	conn := must.Get(NewConn(Options{
+	opts := Options{
 		DisablePortMapper: true,
 		Logf:              t.Logf,
 		NetMon:            netMon,
 		EventBus:          bus,
 		HealthTracker:     health.NewTracker(bus),
 		Metrics:           reg,
-	}))
+	}
+	for _, f := range mod {
+		f(&opts)
+	}
+
+	conn := must.Get(NewConn(opts))
 	t.Cleanup(func() { conn.Close() })
 
 	return conn, reg

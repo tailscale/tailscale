@@ -9,80 +9,122 @@ import (
 	"net"
 	"net/netip"
 	"sync/atomic"
-	"syscall"
 
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/net/batching"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/sockopts"
 	"tailscale.com/syncs"
 	"tailscale.com/types/nettype"
 )
 
+// socketGroup contains sockets sharing one port.
+type socketGroup struct {
+	// conns hold the group members.
+	// Consumers expect at least one, and will panic otherwise.
+	conns []nettype.PacketConn
+
+	// bound tracks the number of live conns to manage their lifecycle.
+	//
+	// Subject to OS capabilities and state, conns[bound:] connections may
+	// be backed by a [blockForeverConn].
+	bound int
+}
+
 // RebindingUDPConn is a UDP socket that can be re-bound.
 // Unix has no notion of re-binding a socket, so we swap it out for a new one.
 type RebindingUDPConn struct {
-	// pconnAtomic is a pointer to the value stored in pconn, but doesn't
+	// groupAtomic is a pointer to the value stored in group, but doesn't
 	// require acquiring mu. It's used for reads/writes and only upon failure
-	// do the reads/writes then check pconn (after acquiring mu) to see if
+	// do the reads/writes then check pconn sockets (after acquiring mu) to see if
 	// there's been a rebind meanwhile.
-	// pconn isn't really needed, but makes some of the code simpler
+	// group isn't really needed, but makes some of the code simpler
 	// to keep it distinct.
-	// Neither is expected to be nil, sockets are bound on creation.
-	pconnAtomic atomic.Pointer[nettype.PacketConn]
+	// Neither is expected to be less than one member, sockets are bound on creation.
+	groupAtomic atomic.Pointer[socketGroup]
 
-	mu    syncs.Mutex // held while changing pconn (and pconnAtomic)
-	pconn nettype.PacketConn
+	mu    syncs.Mutex // held while changing group (and groupAtomic)
+	group socketGroup
 	port  uint16
 }
 
-// setConnLocked sets the provided nettype.PacketConn. It should be called only
+// setConnLocked sets the provided [nettype.PacketConn]s. It should be called only
 // after acquiring RebindingUDPConn.mu. It upgrades the provided
-// nettype.PacketConn to a batchingConn when appropriate. This upgrade is
+// [nettype.PacketConn]s to [batching.Conn]s when appropriate. This upgrade is
 // intentionally pushed closest to where read/write ops occur in order to avoid
 // disrupting surrounding code that assumes nettype.PacketConn is a
 // *net.UDPConn. knobs may be nil.
-func (c *RebindingUDPConn) setConnLocked(p nettype.PacketConn, network string, knobs *controlknobs.Knobs) {
+//
+// If less than n conns are provided, ps is padded out with [blockForeverConn]s.
+func (c *RebindingUDPConn) setConnLocked(ps []nettype.PacketConn, n int, network string, knobs *controlknobs.Knobs) {
 	if hasUDPTransport {
-		p = batching.TryUpgradeToConn(p, network, "magicsock_udp_rxq_overflows", knobs)
+		for i := range ps {
+			ps[i] = batching.TryUpgradeToConn(ps[i], network, "magicsock_udp_rxq_overflows", knobs)
+		}
 	}
-	c.pconn = p
-	c.pconnAtomic.Store(&p)
+	g := socketGroup{conns: ps, bound: len(ps)}
+	for len(g.conns) < n {
+		g.conns = append(g.conns, newBlockForeverConn())
+	}
+	c.group = g
+	c.groupAtomic.Store(&g)
 	c.port = uint16(c.localAddrLocked().Port)
 }
 
-// currentConn returns c's current pconn, acquiring c.mu in the process.
-func (c *RebindingUDPConn) currentConn() nettype.PacketConn {
+// currentConn returns c's current socket i, acquiring c.mu in the process.
+func (c *RebindingUDPConn) currentConn(i int) nettype.PacketConn {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.pconn
+	return c.group.conns[i]
 }
 
-func (c *RebindingUDPConn) readFromWithInitPconn(pconn nettype.PacketConn, b []byte) (int, netip.AddrPort, error) {
+// connAt returns socket i without acquiring c.mu.
+func (c *RebindingUDPConn) connAt(i int) nettype.PacketConn {
+	return c.groupAtomic.Load().conns[i]
+}
+
+// controlEach applies fn on the currently bound sockets.
+func (c *RebindingUDPConn) controlEach(fn func(fd uintptr) error) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return sockopts.ControlEach(c.group.conns[:c.group.bound], fn)
+}
+
+// sendConn returns the socket that flow's packets leave from, and its index.
+// A blocking conn is returned if no conns are bound.
+func (c *RebindingUDPConn) sendConn(flow int) (int, nettype.PacketConn) {
+	g := c.groupAtomic.Load()
+	if g.bound <= 1 {
+		return 0, g.conns[0]
+	}
+	i := int(uint(flow) % uint(g.bound))
+	return i, g.conns[i]
+}
+
+func (c *RebindingUDPConn) readFromWithInitPconn(i int, pconn nettype.PacketConn, b []byte) (int, netip.AddrPort, error) {
 	for {
 		n, addr, err := pconn.ReadFromUDPAddrPort(b)
-		if err != nil && pconn != c.currentConn() {
-			pconn = *c.pconnAtomic.Load()
-			continue
+		if err != nil {
+			if cur := c.currentConn(i); cur != pconn {
+				pconn = cur
+				continue
+			}
 		}
 		return n, addr, err
 	}
-}
-
-// ReadFromUDPAddrPort reads a packet from c into b.
-// It returns the number of bytes copied and the source address.
-func (c *RebindingUDPConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error) {
-	return c.readFromWithInitPconn(*c.pconnAtomic.Load(), b)
 }
 
 // WriteWireGuardBatchTo writes buffs to addr. It serves primarily as an alias
 // for [batching.Conn.WriteBatchTo], with fallback to single packet operations
 // if c.pconn is not a [batching.Conn].
 //
+// Flow pins the write to one of c's sockets; see [Conn.SendTo].
+//
 // WriteWireGuardBatchTo assumes buffs are WireGuard packets, which is notable
 // for Geneve encapsulation: Geneve protocol is set to [packet.GeneveProtocolWireGuard],
 // and the control bit is left unset.
-func (c *RebindingUDPConn) WriteWireGuardBatchTo(buffs [][]byte, addr epAddr, offset int) error {
+func (c *RebindingUDPConn) WriteWireGuardBatchTo(flow int, buffs [][]byte, addr epAddr, offset int) error {
 	if offset != packet.GeneveFixedHeaderLength {
 		return fmt.Errorf("RebindingUDPConn.WriteWireGuardBatchTo: [unexpected] offset (%d) != Geneve header length (%d)", offset, packet.GeneveFixedHeaderLength)
 	}
@@ -91,7 +133,7 @@ func (c *RebindingUDPConn) WriteWireGuardBatchTo(buffs [][]byte, addr epAddr, of
 		VNI:      addr.vni,
 	}
 	for {
-		pconn := *c.pconnAtomic.Load()
+		i, pconn := c.sendConn(flow)
 		b, ok := pconn.(batching.Conn)
 		if !ok {
 			for _, buf := range buffs {
@@ -100,7 +142,7 @@ func (c *RebindingUDPConn) WriteWireGuardBatchTo(buffs [][]byte, addr epAddr, of
 				} else {
 					buf = buf[offset:]
 				}
-				_, err := c.writeToUDPAddrPortWithInitPconn(pconn, buf, addr.ap)
+				_, err := c.writeToUDPAddrPortWithInitPconn(i, pconn, buf, addr.ap)
 				if err != nil {
 					return err
 				}
@@ -109,7 +151,7 @@ func (c *RebindingUDPConn) WriteWireGuardBatchTo(buffs [][]byte, addr epAddr, of
 		}
 		err := b.WriteBatchTo(buffs, addr.ap, gh, offset)
 		if err != nil {
-			if pconn != c.currentConn() {
+			if pconn != c.currentConn(i) {
 				continue
 			}
 			return err
@@ -120,12 +162,13 @@ func (c *RebindingUDPConn) WriteWireGuardBatchTo(buffs [][]byte, addr epAddr, of
 
 // ReadBatch is an alias for [batching.Conn.ReadBatch] with fallback to single
 // packet operations if c.pconn is not a [batching.Conn].
-func (c *RebindingUDPConn) ReadBatch(slab []byte, batchingPackets []batching.ReceivedPacket) (int, error) {
+// It reads from socket i.
+func (c *RebindingUDPConn) ReadBatch(i int, slab []byte, batchingPackets []batching.ReceivedPacket) (int, error) {
 	for {
-		pconn := *c.pconnAtomic.Load()
+		pconn := c.connAt(i)
 		b, ok := pconn.(batching.Conn)
 		if !ok {
-			n, ap, err := c.readFromWithInitPconn(pconn, slab)
+			n, ap, err := c.readFromWithInitPconn(i, pconn, slab)
 			if err == nil {
 				batchingPackets[0].Offset = 0
 				batchingPackets[0].Size = n
@@ -135,7 +178,7 @@ func (c *RebindingUDPConn) ReadBatch(slab []byte, batchingPackets []batching.Rec
 			return 0, err
 		}
 		n, err := b.ReadBatch(slab, batchingPackets)
-		if err != nil && pconn != c.currentConn() {
+		if err != nil && pconn != c.currentConn(i) {
 			continue
 		}
 		return n, err
@@ -155,12 +198,8 @@ func (c *RebindingUDPConn) LocalAddr() *net.UDPAddr {
 }
 
 func (c *RebindingUDPConn) localAddrLocked() *net.UDPAddr {
-	return c.pconn.LocalAddr().(*net.UDPAddr)
+	return c.group.conns[0].LocalAddr().(*net.UDPAddr)
 }
-
-// errNilPConn is returned by RebindingUDPConn.Close when there is no current pconn.
-// It is for internal use only and should not be returned to users.
-var errNilPConn = errors.New("nil pconn")
 
 func (c *RebindingUDPConn) Close() error {
 	c.mu.Lock()
@@ -169,34 +208,31 @@ func (c *RebindingUDPConn) Close() error {
 }
 
 func (c *RebindingUDPConn) closeLocked() error {
-	if c.pconn == nil {
-		return errNilPConn
-	}
 	c.port = 0
-	return c.pconn.Close()
+	var errs []error
+	for sock, pconn := range c.group.conns {
+		if err := pconn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			errs = append(errs, fmt.Errorf("socket %d (%v): %w", sock, pconn.LocalAddr(), err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
-func (c *RebindingUDPConn) writeToUDPAddrPortWithInitPconn(pconn nettype.PacketConn, b []byte, addr netip.AddrPort) (int, error) {
+func (c *RebindingUDPConn) writeToUDPAddrPortWithInitPconn(i int, pconn nettype.PacketConn, b []byte, addr netip.AddrPort) (int, error) {
 	for {
 		n, err := pconn.WriteToUDPAddrPort(b, addr)
-		if err != nil && pconn != c.currentConn() {
-			pconn = *c.pconnAtomic.Load()
-			continue
+		if err != nil {
+			if cur := c.currentConn(i); cur != pconn {
+				pconn = cur
+				continue
+			}
 		}
 		return n, err
 	}
 }
 
+// WriteToUDPAddrPort writes b to addr from c's first socket.
+// Intended for the locally initiated traffic.
 func (c *RebindingUDPConn) WriteToUDPAddrPort(b []byte, addr netip.AddrPort) (int, error) {
-	return c.writeToUDPAddrPortWithInitPconn(*c.pconnAtomic.Load(), b, addr)
-}
-
-func (c *RebindingUDPConn) SyscallConn() (syscall.RawConn, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	sc, ok := c.pconn.(syscall.Conn)
-	if !ok {
-		return nil, errUnsupportedConnType
-	}
-	return sc.SyscallConn()
+	return c.writeToUDPAddrPortWithInitPconn(0, c.connAt(0), b, addr)
 }
