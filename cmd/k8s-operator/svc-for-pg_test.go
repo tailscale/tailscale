@@ -80,6 +80,41 @@ func TestServicePGReconciler(t *testing.T) {
 	}
 }
 
+func TestServicePGReconciler_ClusterIPStatus(t *testing.T) {
+	svcPGR, stateSecret, fc, _, _ := setupServiceTest(t)
+	svc, _ := setupTestService(t, "test-service", "", "4.1.6.7", fc, stateSecret)
+	mustUpdate(t, fc, svc.Namespace, svc.Name, func(s *corev1.Service) {
+		s.Spec.Type = corev1.ServiceTypeClusterIP
+		s.Spec.LoadBalancerClass = nil
+		s.Annotations[AnnotationExpose] = "true"
+	})
+	mustUpdate(t, fc, stateSecret.Namespace, stateSecret.Name, func(s *corev1.Secret) {
+		s.Labels = pgSecretLabels("test-pg", kubetypes.LabelSecretTypeState)
+		s.Data[currentProfileKey] = []byte("test")
+		s.Data["test"] = []byte(`{"AdvertiseServices":["svc:default-test-service"],"Config":{"NodeID":"node-test","UserProfile":{"LoginName":"test-pg.tailnet.ts.net"}}}`)
+	})
+
+	expectReconciled(t, svcPGR, svc.Namespace, svc.Name)
+	expectReconciled(t, svcPGR, svc.Namespace, svc.Name)
+
+	got := &corev1.Service{}
+	if err := fc.Get(t.Context(), client.ObjectKeyFromObject(svc), got); err != nil {
+		t.Fatalf("get Service: %v", err)
+	}
+	if len(got.Status.LoadBalancer.Ingress) != 0 {
+		t.Errorf("ClusterIP Service load balancer ingress = %v, want empty", got.Status.LoadBalancer.Ingress)
+	}
+	for _, condition := range got.Status.Conditions {
+		if condition.Type == string(tsapi.IngressSvcConfigured) {
+			if condition.Status != metav1.ConditionTrue {
+				t.Errorf("IngressSvcConfigured status = %v, want True", condition.Status)
+			}
+			return
+		}
+	}
+	t.Error("IngressSvcConfigured condition not found")
+}
+
 func TestServicePGReconciler_UpdateHostname(t *testing.T) {
 	svcPGR, stateSecret, fc, ft, _ := setupServiceTest(t)
 
