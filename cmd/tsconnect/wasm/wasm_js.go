@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"tailscale.com/cmd/tsconnect/termwriter"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
@@ -465,8 +466,9 @@ func (s *jsSSHSession) Run() {
 		return
 	}
 
-	session.Stdout = termWriter{writeFn}
-	session.Stderr = termWriter{writeFn}
+	write := func(s string) { writeFn.Invoke(s) }
+	session.Stdout = termwriter.New(write)
+	session.Stderr = termwriter.New(write)
 
 	setReadFn.Invoke(js.FuncOf(func(this js.Value, args []js.Value) any {
 		input := args[0].String()
@@ -550,16 +552,6 @@ func (i *jsIPN) fetch(url string) js.Value {
 			// TODO: populate a more complete JS Response object
 		}, nil
 	})
-}
-
-type termWriter struct {
-	f js.Value
-}
-
-func (w termWriter) Write(p []byte) (n int, err error) {
-	r := bytes.Replace(p, []byte("\n"), []byte("\n\r"), -1)
-	w.f.Invoke(string(r))
-	return len(p), nil
 }
 
 type jsNetMap struct {
