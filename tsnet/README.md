@@ -106,6 +106,14 @@ A tsnet node can route its [Server.Dial](https://pkg.go.dev/tailscale.com/tsnet#
 
 Dials of addresses outside the tailnet then go through the exit node. Dials within the tailnet are unaffected.
 
+## DNS resolution
+
+[Server.Dial](https://pkg.go.dev/tailscale.com/tsnet#Server.Dial) and [Server.HTTPClient](https://pkg.go.dev/tailscale.com/tsnet#Server.HTTPClient) resolve names using the tailnet's DNS configuration: MagicDNS, search domains, split DNS routes, and global resolvers. Short peer names resolve through the MagicDNS search domain. Names with no configured upstream fall back to the host resolver. [Server.LookupIP](https://pkg.go.dev/tailscale.com/tsnet#Server.LookupIP) exposes the same resolution, returning [netip.Addr](https://pkg.go.dev/net/netip#Addr) results:
+
+	ips, err := srv.LookupIP(ctx, "ip", "db")
+
+The host's hosts file is consulted only during host fallback. [net.Resolver](https://pkg.go.dev/net#Resolver) sees only the host's DNS configuration; use [Server.LookupIP](https://pkg.go.dev/tailscale.com/tsnet#Server.LookupIP) for direct tailnet-aware lookups.
+
 ## Running multiple nodes in one process
 
 Each [Server](https://pkg.go.dev/tailscale.com/tsnet#Server) instance is an independent node. Give each a unique [Server.Dir](https://pkg.go.dev/tailscale.com/tsnet#Server.Dir) and [Server.Hostname](https://pkg.go.dev/tailscale.com/tsnet#Server.Hostname):

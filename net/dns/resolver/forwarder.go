@@ -290,6 +290,9 @@ var dnsForwarderFailing = health.Register(&health.Warnable{
 type route struct {
 	Suffix    dnsname.FQDN
 	Resolvers []resolverAndDelay
+	// ambient marks cloud-host resolvers not configured by tailnet policy.
+	// See [forwarder.HasConfiguredRouteFor].
+	ambient bool
 }
 
 // resolverAndDelay is an upstream DNS resolver and a delay for how
@@ -480,6 +483,7 @@ func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]*dnstype.Resolve
 			routes = append(routes, route{
 				Suffix:    suffix,
 				Resolvers: cloudHostFallback,
+				ambient:   true,
 			})
 		} else {
 			routes = append(routes, route{
@@ -494,6 +498,7 @@ func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]*dnstype.Resolve
 			routes = append(routes, route{
 				Suffix:    "internal.",
 				Resolvers: cloudHostFallback,
+				ambient:   true,
 			})
 		}
 	}
@@ -1245,6 +1250,24 @@ func (f *forwarder) resolvers(domain dnsname.FQDN) []resolverAndDelay {
 		}
 	}
 	return cloudHostFallback // or nil if no fallback
+}
+
+// HasConfiguredRouteFor reports whether a configured split or global (".")
+// DNS route matches name. Ambient cloud-host fallback resolvers are
+// excluded.
+func (f *forwarder) HasConfiguredRouteFor(name dnsname.FQDN) bool {
+	f.mu.Lock()
+	routes := f.routes
+	f.mu.Unlock()
+	for _, route := range routes {
+		if route.ambient {
+			continue
+		}
+		if route.Suffix == "." || route.Suffix.Contains(name) {
+			return true
+		}
+	}
+	return false
 }
 
 // GetUpstreamResolvers returns the resolvers that would be used to resolve

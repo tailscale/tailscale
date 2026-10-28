@@ -98,6 +98,10 @@ type Dialer struct {
 	// installed at construction time. It is read without holding mu.
 	resolveMagicDNS atomic.Pointer[func(hostname, network string) (_ netip.Addr, ok bool)]
 
+	// userDialResolver resolves UserDial names not answered by MagicDNS.
+	// A nil value uses the default resolver. See [Dialer.SetUserDialResolver].
+	userDialResolver atomic.Pointer[func(ctx context.Context, network, host string, port uint16) (_ []netip.AddrPort, err error)]
+
 	mu               syncs.Mutex
 	closed           bool
 	tunName          string // tun device name
@@ -394,6 +398,24 @@ func (d *Dialer) SetResolveMagicDNS(fn func(hostname, network string) (_ netip.A
 	d.resolveMagicDNS.Store(&fn)
 }
 
+// SetUserDialResolver sets fn to resolve [Dialer.UserDial] names not answered
+// by [Dialer.SetResolveMagicDNS]. fn must return candidate addresses for
+// Happy Eyeballs dialing.
+//
+// Only userspace (netstack-only) backends may set fn. It should apply tailnet
+// DNS policy because their host DNS is not tailnet-managed.
+// Backends with tailnet-managed host DNS, such as tailscaled with a TUN,
+// must not set fn.
+//
+// A nil fn restores the host resolver or an active exit node's DoH proxy.
+func (d *Dialer) SetUserDialResolver(fn func(ctx context.Context, network, host string, port uint16) (_ []netip.AddrPort, err error)) {
+	if fn == nil {
+		d.userDialResolver.Store(nil)
+		return
+	}
+	d.userDialResolver.Store(&fn)
+}
+
 // resolveAddr tries to resolve addr (a "host:port" string) via MagicDNS.
 // The network parameter ("tcp", "tcp4", "tcp6", etc.) constrains the
 // address family. It returns errUnresolved if the hostname is not a
@@ -437,38 +459,48 @@ func (d *Dialer) userDialResolveAll(ctx context.Context, network, addr string) (
 
 	// Otherwise, hit the network.
 
-	// TODO(bradfitz): wire up net/dnscache too.
-
 	host, port, err := splitHostPort(addr)
 	if err != nil {
 		// addr is malformed.
 		return nil, err
 	}
 
-	var r net.Resolver
-	if buildfeatures.HasUseExitNode && buildfeatures.HasPeerAPIClient && exitDNSDoH != "" {
-		r.PreferGo = true
-		r.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
-			return &dohConn{
-				ctx:      ctx,
-				baseURL:  exitDNSDoH,
-				hc:       d.PeerAPIHTTPClient(),
-				dnsCache: d.dnsCache,
-			}, nil
+	var out []netip.AddrPort
+	if fn := d.userDialResolver.Load(); fn != nil {
+		// Userspace backends need tailnet DNS policy, not host DNS.
+		// See [Dialer.SetUserDialResolver].
+		out, err = (*fn)(ctx, network, host, port)
+		if err != nil {
+			return nil, err
 		}
-	}
+	} else {
+		// TODO(bradfitz): wire up net/dnscache too.
 
-	ips, err := r.LookupIP(ctx, ipNetOfNetwork(network), host)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]netip.AddrPort, 0, len(ips))
-	for _, stdIP := range ips {
-		ip, ok := netip.AddrFromSlice(stdIP)
-		if !ok {
-			continue
+		var r net.Resolver
+		if buildfeatures.HasUseExitNode && buildfeatures.HasPeerAPIClient && exitDNSDoH != "" {
+			r.PreferGo = true
+			r.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+				return &dohConn{
+					ctx:      ctx,
+					baseURL:  exitDNSDoH,
+					hc:       d.PeerAPIHTTPClient(),
+					dnsCache: d.dnsCache,
+				}, nil
+			}
 		}
-		out = append(out, netip.AddrPortFrom(ip.Unmap(), port))
+
+		ips, err := r.LookupIP(ctx, ipNetOfNetwork(network), host)
+		if err != nil {
+			return nil, err
+		}
+		out = make([]netip.AddrPort, 0, len(ips))
+		for _, stdIP := range ips {
+			ip, ok := netip.AddrFromSlice(stdIP)
+			if !ok {
+				continue
+			}
+			out = append(out, netip.AddrPortFrom(ip.Unmap(), port))
+		}
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("DNS lookup returned no results for %q", host)

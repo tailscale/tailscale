@@ -2512,3 +2512,38 @@ func TestDoHMeta(t *testing.T) {
 		t.Errorf("DoHMeta.RequestURL = %q, want %q", got, want)
 	}
 }
+
+// TestHasConfiguredRouteFor checks that configured split routes match names
+// in their domain and global routes match all names. Ambient routes do not match.
+func TestHasConfiguredRouteFor(t *testing.T) {
+	fwd := newTestForwarder(t, func(f *forwarder) {
+		f.setRoutes(map[dnsname.FQDN][]*dnstype.Resolver{
+			"corp.example.com.": {{Addr: "192.0.2.53"}},
+		}, true)
+	})
+	if !fwd.HasConfiguredRouteFor("db.corp.example.com.") {
+		t.Error("HasConfiguredRouteFor(db.corp.example.com.) = false; want true")
+	}
+	if fwd.HasConfiguredRouteFor("db.other.example.com.") {
+		t.Error("HasConfiguredRouteFor(db.other.example.com.) = true; want false")
+	}
+
+	// A global (".") route makes every name routed.
+	fwd.setRoutes(map[dnsname.FQDN][]*dnstype.Resolver{
+		"corp.example.com.": {{Addr: "192.0.2.53"}},
+		".":                 {{Addr: "192.0.2.1"}},
+	}, true)
+	if !fwd.HasConfiguredRouteFor("db.other.example.com.") {
+		t.Error("HasConfiguredRouteFor(db.other.example.com.) = false with a global route; want true")
+	}
+
+	// An ambient route alone (as synthesized on cloud hosts) must not
+	// count as configured.
+	fwd.mu.Lock()
+	fwd.routes = append(fwd.routes, route{Suffix: ".", Resolvers: []resolverAndDelay{{name: &dnstype.Resolver{Addr: "169.254.169.254"}}}, ambient: true})
+	fwd.mu.Unlock()
+	fwd.setRoutes(map[dnsname.FQDN][]*dnstype.Resolver{}, true)
+	if fwd.HasConfiguredRouteFor("db.any.example.com.") {
+		t.Error("HasConfiguredRouteFor with only an ambient route = true; want false")
+	}
+}
