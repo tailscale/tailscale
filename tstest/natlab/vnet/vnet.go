@@ -548,6 +548,17 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 
+	if destPort == upnpHTTPPort && destIP == n.lanIP4.Addr() && n.svcs.Contains(UPnP) {
+		r.Complete(false)
+		tc := gonet.NewTCPConn(&wq, ep)
+		context.AfterFunc(n.s.shutdownCtx, func() { tc.Close() })
+		hs := &http.Server{Handler: n.upnpHandler()}
+		n.s.wg.Go(func() {
+			hs.Serve(netutil.NewOneConnListener(tc, nil))
+		})
+		return
+	}
+
 	var targetDial string
 	if n.s.derpIPs.Contains(destIP) {
 		targetDial = destIP.String() + ":" + strconv.Itoa(int(destPort))
@@ -1046,8 +1057,9 @@ func New(c *Config) (*Server, error) {
 		shutdownCancel: cancel,
 
 		control: &testcontrol.Server{
-			DERPMap:         derpMap,
-			ExplicitBaseURL: "http://" + controlHostname,
+			DERPMap:             derpMap,
+			ExplicitBaseURL:     "http://" + controlHostname,
+			OverrideDisableUPnP: true,
 		},
 		fakeACME: acmetest.New("http://acme.example"),
 
@@ -1904,8 +1916,8 @@ func (n *network) HandleEthernetPacketForRouter(ep EthernetPacket) {
 		return
 	}
 
-	if toForward && n.s.shouldInterceptTCP(packet) {
-		if (flow.dst.Is4() && n.breakWAN4) ||
+	if n.shouldInterceptTCP(packet) {
+		if (toForward && flow.dst.Is4() && n.breakWAN4) ||
 			(n.blackholeControl && fakeControl.Match(flow.dst)) {
 			// Blackhole the packet.
 			return
@@ -2123,10 +2135,12 @@ func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, t
 		return
 	}
 
-	if udp.DstPort == ssdpPort {
-		// We handle NAT-PMP and PCP, but not UPnP yet.
-		// TODO(bradfitz): handle? marginal utility so far.
-		// Don't log about it being unknown.
+	if dstIP == n.lanIP4.Addr() && udp.DstPort == ssdpPort {
+		n.handleSSDPRequest(UDPPacket{
+			Src:     netip.AddrPortFrom(srcIP, uint16(udp.SrcPort)),
+			Dst:     netip.AddrPortFrom(dstIP, uint16(udp.DstPort)),
+			Payload: udp.Payload,
+		})
 		return
 	}
 
@@ -2454,7 +2468,7 @@ func isMDNSQuery(pkt gopacket.Packet) bool {
 	return ok && udp.SrcPort == 5353 && udp.DstPort == 5353
 }
 
-func (s *Server) shouldInterceptTCP(pkt gopacket.Packet) bool {
+func (n *network) shouldInterceptTCP(pkt gopacket.Packet) bool {
 	tcp, ok := pkt.Layer(layers.LayerTypeTCP).(*layers.TCP)
 	if !ok {
 		return false
@@ -2479,14 +2493,17 @@ func (s *Server) shouldInterceptTCP(pkt gopacket.Packet) bool {
 			}
 		}
 		if fakeProxyControlplane.Match(flow.dst) {
-			return s.blendReality
+			return n.s.blendReality
 		}
-		if s.derpIPs.Contains(flow.dst) {
+		if n.s.derpIPs.Contains(flow.dst) {
 			return true
 		}
 	}
 	if tcp.DstPort == TestDriverPort && fakeTestAgent.Match(flow.dst) {
 		// Connection from cmd/tta.
+		return true
+	}
+	if tcp.DstPort == upnpHTTPPort && flow.dst == n.lanIP4.Addr() {
 		return true
 	}
 	return false
@@ -2939,6 +2956,7 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 		lifetimeSec := binary.BigEndian.Uint32(req.Payload[8:12])
 		gotPort, ok := n.doPortMap(req.Src.Addr(), internalPort, wantExtPort, int(lifetimeSec), NATPMP)
 		if !ok {
+			// TODO(fmarier): handle portmap releases properly
 			n.logf("NAT-PMP map request for %v:%d failed", req.Src.Addr(), internalPort)
 			return
 		}
@@ -3034,6 +3052,7 @@ func (n *network) handlePCPRequest(req UDPPacket) {
 		// TODO(fmarier): pass the nonce into doPortmap so that it can be checked on renewals/deletions
 		gotPort, ok := n.doPortMap(req.Src.Addr(), internalPort, wantExtPort, int(lifetimeSec), PCP)
 		if !ok {
+			// TODO(fmarier): handle portmap releases
 			n.logf("PCP map request for %v:%d failed", req.Src.Addr(), internalPort)
 			return
 		}
