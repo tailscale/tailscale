@@ -53,6 +53,10 @@ type OSImage struct {
 	gokrazyKeep []featuretags.FeatureTag
 }
 
+// OSImageLinux is a type alias used by tests to signal to the the matrix text
+// code generator (natlab-test-matrix) that Linux variants should be generated.
+type OSImageLinux = OSImage
+
 // gokrazyMakeArgs returns the arguments to make in the gokrazy directory
 // that build the gokrazy image img, and the name of the qcow2 file that
 // writes there.
@@ -144,6 +148,14 @@ var (
 	Debian12 = OSImage{
 		Name:     "debian-12",
 		URL:      "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2",
+		MemoryMB: 1024,
+		Family:   LinuxDebian,
+	}
+
+	// Debian13 is Debian 13 (Trixie) generic cloud image.
+	Debian13 = OSImage{
+		Name:     "debian-13",
+		URL:      "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2",
 		MemoryMB: 1024,
 		Family:   LinuxDebian,
 	}

@@ -1,0 +1,213 @@
+// Copyright (c) Tailscale Inc & contributors
+// SPDX-License-Identifier: BSD-3-Clause
+
+// The natlab-matrix-generator command is an experimental package for
+// iterating over existing tests for natlab/vmtest, and creating a list of
+// test runs based on a set of variations for each test parameter.
+package main
+
+import (
+	"bytes"
+	"fmt"
+	"go/ast"
+	"go/types"
+	"html/template"
+	"log"
+	"maps"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+
+	"golang.org/x/tools/go/packages"
+)
+
+type candidate struct {
+	name   string
+	params []string
+}
+
+// testVariation is the input given to the generator template
+// for each test variation found in the package.
+type testVariation struct {
+	FuncName     string // test function name
+	TestName     string // name given to t.Run
+	JoinedParams string // variant parameters (eg. vmtest.Ubuntu2404) join with ", "
+}
+
+// VariationMap is a map from base variation to a list of variations that should
+// be applied to that test.
+var VariationMap = map[string][]string{
+	"vmtest.OSImageLinux": {
+		"vmtest.Ubuntu2404",
+		"vmtest.Fedora43",
+		"vmtest.Debian13", // debian12 takes 10x the time as debian13
+	},
+}
+
+// main parses all packages in the natlab test dir and finds candidates that
+// can be used for matrix testing. See the README.md in tstest/natlab for more.
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Printf("usage: %s [path/to/vmtest/package]\n", os.Args[0])
+		return
+	}
+
+	cfg := &packages.Config{
+		Mode:  packages.NeedName | packages.NeedFiles | packages.NeedSyntax,
+		Dir:   "", // $PWD
+		Tests: true,
+	}
+	pkgs, err := packages.Load(cfg, os.Args[1])
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+	packages.PrintErrors(pkgs)
+	candidates := []candidate{}
+	for _, pkg := range pkgs {
+		if strings.HasSuffix(pkg.ID, ".test") {
+			continue
+		}
+		for _, f := range pkg.Syntax {
+			for _, decl := range f.Decls {
+				// Select top-level functions starting with "test".
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok {
+					continue
+				}
+				if !strings.HasPrefix(strings.ToLower(fn.Name.Name), "test") {
+					continue
+				}
+				// We only care about functions, not methods.
+				if fn.Recv != nil {
+					continue
+				}
+
+				var params []string
+				for _, arg := range fn.Type.Params.List {
+					typ := types.ExprString(arg.Type)
+					for range len(arg.Names) {
+						params = append(params, typ)
+					}
+				}
+				candidates = append(candidates, candidate{
+					name:   fn.Name.Name,
+					params: params,
+				})
+			}
+		}
+	}
+
+	keys := slices.Collect(maps.Keys(VariationMap))
+
+	// Filter out candidates that are not relevant, having an unrecognizable
+	// signature.
+	candidates = slices.DeleteFunc(candidates, func(c candidate) bool {
+		if len(c.params) < 2 {
+			return true
+		}
+		// First param should be "*testing.T".
+		if !strings.Contains(c.params[0], "testing.T") {
+			return true
+		}
+
+		for _, param := range c.params[1:] {
+			if !slices.Contains(keys, param) {
+				return true
+			}
+		}
+		return false
+	})
+
+	if len(candidates) < 1 {
+		log.Fatal("no candidates found")
+	}
+	log.Println("====== CANDIDATES FOUND ======")
+	for _, c := range candidates {
+		log.Printf("func %s(%v)\n", c.name, c.params)
+	}
+
+	var variations []testVariation
+
+	for _, candidate := range candidates {
+		results := generateTree(nil, candidate.params[1:])
+		for _, res := range results {
+
+			strippedParams := make([]string, len(res))
+			// Clean up names for the test name.
+			for i, par := range res {
+				strippedParams[i] = strings.TrimPrefix(par, "vmtest.")
+			}
+			variations = append(variations, testVariation{
+				FuncName:     candidate.name,
+				JoinedParams: strings.Join(res, ", "),
+				TestName:     fmt.Sprintf("%s_%s", candidate.name, strings.Join(strippedParams, "_")),
+			})
+		}
+	}
+
+	log.Println("====== VARIATIONS FOUND ======")
+
+	for _, variation := range variations {
+		log.Printf("%s: func %s(t, %s)\n", variation.TestName, variation.FuncName, variation.JoinedParams)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, struct {
+		Package string
+		Tests   []testVariation
+	}{"vmtest_test", variations}); err != nil {
+		log.Fatalf("Generate output: %s", err.Error())
+	}
+
+	if err := os.WriteFile(filepath.Join(os.Args[1], "matrix_generated_test.go"),
+		buf.Bytes(), 0o644); err != nil {
+		log.Fatalf("Failed writing result to disk: %s", err.Error())
+	}
+}
+
+func generateTree(selected, params []string) [][]string {
+	if len(params) == 0 {
+		return [][]string{selected}
+	}
+
+	variations, ok := VariationMap[params[0]]
+	if !ok {
+		panic(fmt.Sprintf("variation for %s not found", params[0]))
+	}
+
+	var result [][]string
+	for _, variation := range variations {
+		withVariation := append(slices.Clip(selected), variation)
+		result = append(result, generateTree(withVariation, params[1:])...)
+	}
+	return result
+}
+
+var tmpl = template.Must(template.New("matrix").Parse(`// Code generated by cmd/natlab-test-matrix. DO NOT EDIT.
+// Copyright (c) Tailscale Inc & contributors
+// SPDX-License-Identifier: BSD-3-Clause
+
+package {{.Package}}
+
+import (
+	"testing"
+
+	"tailscale.com/tstest/natlab/vmtest"
+)
+
+var testMatrix = []struct {
+	name string
+	fn   func(t *testing.T)
+}{
+{{- range .Tests}}
+	{name: "{{.TestName}}", fn: func(t *testing.T) { {{.FuncName}}(t, {{.JoinedParams}}) }},
+{{- end}}
+}
+
+func TestMatrix(t *testing.T) {
+	for _, tt := range testMatrix {
+		t.Run(tt.name, tt.fn)
+	}
+}
+`))

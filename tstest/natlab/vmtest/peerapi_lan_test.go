@@ -55,7 +55,7 @@ func TestPeerAPINotReachableFromLAN_FreeBSD(t *testing.T) {
 	testPeerAPINotReachableFromLAN(t, vmtest.FreeBSD150)
 }
 
-func testPeerAPINotReachableFromLAN(t *testing.T, targetOS vmtest.OSImage) {
+func testPeerAPINotReachableFromLAN(t *testing.T, targetOS vmtest.OSImageLinux) {
 	env := vmtest.New(t, vmtest.SameTailnetUser(), vmtest.AllOnline())
 
 	// The shared LAN. It needs a WAN IP so the target can reach the

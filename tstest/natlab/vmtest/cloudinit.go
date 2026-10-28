@@ -39,6 +39,8 @@ func (e *Env) createCloudInitISO(n *Node) (string, error) {
 
 	// Linux cloud-init needs network-config to configure interfaces before
 	// systemd-networkd-wait-online blocks boot.
+	// TODO(cmol): Disable DNS on the SLIRP interface as older debian versions
+	// does not handle this correctly.
 	if n.os.GOOS() == "linux" {
 		files["network-config"] = `version: 2
 ethernets:
