@@ -42,6 +42,8 @@ type policyFlipper struct {
 
 	mu   sync.Mutex
 	rule *tailcfg.SSHRule
+	// rules, when non-nil, is served by NetMap in place of rule.
+	rules []*tailcfg.SSHRule
 
 	onNoise func()
 }
@@ -55,7 +57,9 @@ func (p *policyFlipper) setRule(r *tailcfg.SSHRule) {
 func (p *policyFlipper) NetMap() *netmap.NetworkMap {
 	p.mu.Lock()
 	var policy *tailcfg.SSHPolicy
-	if p.rule != nil {
+	if p.rules != nil {
+		policy = &tailcfg.SSHPolicy{Rules: p.rules}
+	} else if p.rule != nil {
 		policy = &tailcfg.SSHPolicy{Rules: []*tailcfg.SSHRule{p.rule}}
 	}
 	p.mu.Unlock()
@@ -689,6 +693,41 @@ func TestSSHRuleExpiryRearmsOnFreshMatch(t *testing.T) {
 	eventually(t, 15*time.Second, "conn stayed up past the rearmed rule's expiry", func() bool {
 		return sessionFails(client)
 	})
+}
+
+// TestSSHRuleExpiryFallbackKeepsSession: prompt-free check-mode rules
+// often have a short RuleExpires, with a base rule that requires a fresh
+// check behind them. Expiration must only affect new sessions; an
+// existing session keeps running when the accept rule lapses and
+// evaluation falls back to the hold rule.
+func TestSSHRuleExpiryFallbackKeepsSession(t *testing.T) {
+	lu := sessionTestUser(t)
+	exp := time.Now().Add(2 * time.Second)
+	acceptRule := newPolicyRule(&tailcfg.SSHAction{Accept: true}, lu)
+	acceptRule.RuleExpires = &exp
+	holdRule := newPolicyRule(&tailcfg.SSHAction{HoldAndDelegate: "https://unused/hold"}, lu)
+	p := &policyFlipper{
+		localState: &localState{sshEnabled: true, varRoot: t.TempDir()},
+		rules:      []*tailcfg.SSHRule{acceptRule, holdRule},
+	}
+	_, client, _ := dialPolicyConn(t, p)
+
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	t.Cleanup(func() { sess.Close() })
+	if err := sess.Start("sleep 30"); err != nil {
+		t.Fatalf("session start: %v", err)
+	}
+
+	// The expiry timer fires 2s in. Wait past it: the conn must survive,
+	// and the hold rule has no expiry, so the recheck must not re-arm the
+	// timer either.
+	time.Sleep(6 * time.Second)
+	if sessionFails(client) {
+		t.Fatal("conn closed when the latched accept rule expired")
+	}
 }
 
 // TestSSHLoginGraceTimeExpires pins the pre-auth grace timer, in parity
