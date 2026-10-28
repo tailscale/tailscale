@@ -558,7 +558,11 @@ func (r *ProxyGroupReconciler) cleanupDanglingResources(ctx context.Context, tsC
 
 		// Dangling resource, delete the config + state Secrets, as well as
 		// deleting the device from the tailnet.
-		if err := tailscaled.EnsureDeviceDeleted(ctx, tsClient, logger, m.tsID); err != nil {
+		if m.tsID == "" {
+			if err := tailscaled.EnsureUnreportedDeviceDeleted(ctx, tsClient, logger, m.stateSecret); err != nil {
+				return err
+			}
+		} else if err := tailscaled.EnsureDeviceDeleted(ctx, tsClient, logger, m.tsID); err != nil {
 			return err
 		}
 		if err := r.Delete(ctx, m.stateSecret); err != nil && !apierrors.IsNotFound(err) {
@@ -610,7 +614,11 @@ func (r *ProxyGroupReconciler) maybeCleanup(ctx context.Context, tsClient tsclie
 	}
 
 	for _, m := range metadata {
-		if err := tailscaled.EnsureDeviceDeleted(ctx, tsClient, logger, m.tsID); err != nil {
+		if m.tsID == "" {
+			if err := tailscaled.EnsureUnreportedDeviceDeleted(ctx, tsClient, logger, m.stateSecret); err != nil {
+				return false, err
+			}
+		} else if err := tailscaled.EnsureDeviceDeleted(ctx, tsClient, logger, m.tsID); err != nil {
 			return false, err
 		}
 	}
