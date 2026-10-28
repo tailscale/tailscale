@@ -25,6 +25,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"tailscale.com/hostinfo"
 )
 
 // monitorSpawnPrefix is the argv prefix following the executable path,
@@ -48,8 +50,13 @@ func spawnMonitor(exe string, uid, gid uint32, groups []uint32, localUser string
 		"--local-user="+localUser,
 		"--rpc-fd=3",
 	)
-	// The monitor is its own session leader.
-	cmd, parentConn, err := spawnRPCChild("ssh-monitor", exe, argv, os.Environ(), &syscall.SysProcAttr{Setsid: true})
+	// The monitor is its own session leader. It is a tailscaled
+	// re-exec, not a service instance. Give it the daemon's environment
+	// without the systemd service variables, so neither the monitor
+	// nor any helper it execs can notify the tailscaled unit. See
+	// [hostinfo.EnvironWithoutSystemdServiceVars].
+	cmd, parentConn, err := spawnRPCChild("ssh-monitor", exe, argv,
+		hostinfo.EnvironWithoutSystemdServiceVars(nil), &syscall.SysProcAttr{Setsid: true})
 	if err != nil {
 		return nil, err
 	}

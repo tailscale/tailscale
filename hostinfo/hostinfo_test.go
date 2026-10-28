@@ -6,6 +6,7 @@ package hostinfo
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -75,5 +76,47 @@ func TestCustomHostnameFunc(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestEnvironWithoutSystemdServiceVars(t *testing.T) {
+	got := EnvironWithoutSystemdServiceVars([]string{
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"NOTIFY_SOCKET=/run/systemd/notify",
+		"HOME=/home/user",
+		"WATCHDOG_PID=1234",
+		"WATCHDOG_USEC=60000000",
+		"LISTEN_FDS=2",
+		"LISTEN_PID=1",
+		"LISTEN_FDNAMES=tailscaled.socket",
+		"INVOCATION_ID=57fad4dc31874d3882b8907c50d167a2",
+		"JOURNAL_STREAM=9:1234567",
+		"USER=ubuntu",
+	})
+	want := []string{
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"HOME=/home/user",
+		"USER=ubuntu",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q; want %q", got, want)
+	}
+
+	// A nil env means the current environment.
+	t.Setenv("NOTIFY_SOCKET", "/fake/systemd/notify")
+	got = EnvironWithoutSystemdServiceVars(nil)
+	for _, kv := range got {
+		if strings.HasPrefix(kv, "NOTIFY_SOCKET=") {
+			t.Errorf("current-environment form leaked %q", kv)
+		}
+	}
+	found := false
+	for _, kv := range os.Environ() {
+		if kv == "NOTIFY_SOCKET=/fake/systemd/notify" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("test setup: NOTIFY_SOCKET not in os.Environ()")
 	}
 }
