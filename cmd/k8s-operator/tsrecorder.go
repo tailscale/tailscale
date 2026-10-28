@@ -399,11 +399,7 @@ func (r *RecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.Record
 		}
 		if !ok {
 			logger.Debugf("state Secret %s-%d not found or does not contain node ID, continuing cleanup", tsr.Name, replica)
-			r.mu.Lock()
-			r.recorders.Remove(tsr.UID)
-			gaugeRecorderResources.Set(int64(r.recorders.Len()))
-			r.mu.Unlock()
-			return true, nil
+			continue
 		}
 
 		nodeID := string(devicePrefs.Config.NodeID)
