@@ -54,6 +54,9 @@ func (r *Reconciler) deleteDevicesFrom(ctx context.Context, logger *zap.SugaredL
 				errs = append(errs, fmt.Errorf("failed to delete tailnet device %q: %w", deviceID, err))
 				continue
 			}
+		} else if err = tailscaled.EnsureUnreportedDeviceDeleted(ctx, tsc, logger, s); err != nil {
+			errs = append(errs, err)
+			continue
 		}
 
 		logger.Debugf("deleting state Secret %q", s.Name)

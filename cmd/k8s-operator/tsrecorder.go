@@ -371,6 +371,8 @@ func (r *RecorderReconciler) maybeCleanupSecrets(ctx context.Context, tsClient t
 			case err != nil:
 				return err
 			}
+		} else if err = tailscaled.EnsureUnreportedDeviceDeleted(ctx, tsClient, r.log, &secret); err != nil {
+			return err
 		}
 
 		if err = r.Delete(ctx, &secret); err != nil {
@@ -393,12 +395,23 @@ func (r *RecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.Record
 	}
 
 	for replica := range replicas {
-		devicePrefs, ok, err := r.getDevicePrefs(ctx, tsr.Name, replica)
+		secret, err := r.getStateSecret(ctx, tsr.Name, replica)
+		if err != nil {
+			return false, err
+		}
+		if secret == nil {
+			logger.Debugf("state Secret %s-%d not found, continuing cleanup", tsr.Name, replica)
+			continue
+		}
+
+		devicePrefs, ok, err := getDevicePrefs(secret)
 		if err != nil {
 			return false, err
 		}
 		if !ok {
-			logger.Debugf("state Secret %s-%d not found or does not contain node ID, continuing cleanup", tsr.Name, replica)
+			if err := tailscaled.EnsureUnreportedDeviceDeleted(ctx, tsClient, logger, secret); err != nil {
+				return false, err
+			}
 			continue
 		}
 
@@ -555,15 +568,6 @@ func (r *RecorderReconciler) getStateSecret(ctx context.Context, tsrName string,
 	}
 
 	return secret, nil
-}
-
-func (r *RecorderReconciler) getDevicePrefs(ctx context.Context, tsrName string, replica int32) (prefs prefs, ok bool, err error) {
-	secret, err := r.getStateSecret(ctx, tsrName, replica)
-	if err != nil || secret == nil {
-		return prefs, false, err
-	}
-
-	return getDevicePrefs(secret)
 }
 
 // getDevicePrefs returns 'ok == true' iff the node ID is found. The dnsName
