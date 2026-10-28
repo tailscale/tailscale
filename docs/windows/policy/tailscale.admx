@@ -74,6 +74,10 @@
                   displayName="$(string.SINCE_V1_90)">
         <and><reference ref="TAILSCALE_PRODUCT"/></and>
       </definition>
+      <definition name="SINCE_V1_106"
+                  displayName="$(string.SINCE_V1_106)">
+        <and><reference ref="TAILSCALE_PRODUCT"/></and>
+      </definition>
     </definitions>
   </supportedOn>
   <categories>
@@ -328,6 +332,24 @@
       <disabledValue>
         <string>hide</string>
       </disabledValue>
+    </policy>
+    <policy name="HiddenNetworkDevices" class="Machine" displayName="$(string.HiddenNetworkDevices)" explainText="$(string.HiddenNetworkDevices_Help)" presentation="$(presentation.HiddenNetworkDevices)" key="Software\Policies\Tailscale\HiddenNetworkDevices">
+      <parentCategory ref="UI_Category" />
+      <supportedOn ref="SINCE_V1_106" />
+      <elements>
+        <boolean id="HideCurrentUser" valueName="current-user">
+          <trueValue><decimal value="1" /></trueValue>
+          <falseValue><decimal value="0" /></falseValue>
+        </boolean>
+        <boolean id="HideOtherUsers" valueName="other-users">
+          <trueValue><decimal value="1" /></trueValue>
+          <falseValue><decimal value="0" /></falseValue>
+        </boolean>
+        <boolean id="HideTaggedDevices" valueName="tagged-devices">
+          <trueValue><decimal value="1" /></trueValue>
+          <falseValue><decimal value="0" /></falseValue>
+        </boolean>
+      </elements>
     </policy>
     <policy name="TestMenu" class="Both" displayName="$(string.TestMenu)" explainText="$(string.TestMenu_Help)" key="Software\Policies\Tailscale" valueName="TestMenu">
       <parentCategory ref="UI_Category" />

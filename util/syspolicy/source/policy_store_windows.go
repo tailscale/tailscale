@@ -304,19 +304,30 @@ func (ps *PlatformPolicyStore) ReadStringArray(key pkey.Key) ([]string, error) {
 			if err != nil {
 				return nil, err
 			}
+			defer valKey.Close()
 			valNames, err := valKey.ReadValueNames(0)
 			if err != nil {
 				return nil, err
 			}
 			val = make([]string, 0, len(valNames))
 			for _, name := range valNames {
-				switch item, _, err := valKey.GetStringValue(name); {
+				switch item, itemType, err := valKey.GetStringValue(name); {
+				case err == nil:
+					val = append(val, item)
 				case err == registry.ErrNotExist:
 					continue
-				case err != nil:
-					return nil, err
+				case itemType == windows.REG_DWORD || itemType == windows.REG_QWORD:
+					// If the item is a REG_DWORD/REG_QWORD, treat it
+					// as an enabled/disabled flag
+					enabled, _, err := valKey.GetIntegerValue(name)
+					if err != nil {
+						return nil, err
+					}
+					if enabled != 0 {
+						val = append(val, name)
+					}
 				default:
-					val = append(val, item)
+					return nil, err
 				}
 			}
 			return val, nil
