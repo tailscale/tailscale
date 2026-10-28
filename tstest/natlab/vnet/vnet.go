@@ -1057,9 +1057,9 @@ func New(c *Config) (*Server, error) {
 		shutdownCancel: cancel,
 
 		control: &testcontrol.Server{
-			DERPMap:         derpMap,
-			ExplicitBaseURL: "http://" + controlHostname,
-			AllowUPnP:       true,
+			DERPMap:             derpMap,
+			ExplicitBaseURL:     "http://" + controlHostname,
+			OverrideDisableUPnP: true,
 		},
 		fakeACME: acmetest.New("http://acme.example"),
 
