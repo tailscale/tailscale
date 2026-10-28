@@ -40,6 +40,9 @@
       url = "github:edolstra/flake-compat";
       flake = false;
     };
+    # Control server for the NixOS VM tests via its test kit. Doesn't follow
+    # our nixpkgs: headscale builds with the Go its go.mod requires.
+    headscale.url = "github:juanfont/headscale";
   };
 
   outputs = {
@@ -47,6 +50,7 @@
     nixpkgs,
     systems,
     flake-compat,
+    headscale,
   }: let
     goVersion = nixpkgs.lib.fileContents ./go.toolchain.version;
     toolChainRev = nixpkgs.lib.fileContents ./go.toolchain.rev;
