@@ -30,12 +30,13 @@ func TestPolicyRecheckRestrictions(t *testing.T) {
 	src := netip.MustParseAddrPort("1.2.3.4:1234")
 	dst := netip.MustParseAddrPort("100.100.100.102:22")
 	tests := []struct {
-		name    string
-		initial *tailcfg.SSHAction
-		old     *tailcfg.SSHAction
-		fresh   *tailcfg.SSHAction
-		oldEnv  []string
-		want    bool
+		name         string
+		initial      *tailcfg.SSHAction
+		old          *tailcfg.SSHAction
+		fresh        *tailcfg.SSHAction
+		oldEnv       []string
+		latchExpired bool
+		want         bool
 	}{
 		{
 			name: "duplicate-recorder-replaced",
@@ -138,6 +139,15 @@ func TestPolicyRecheckRestrictions(t *testing.T) {
 			want:  true,
 		},
 		{
+			// The latched accept rule expired. The hold rule matched
+			// instead. This is not a revocation. Established sessions keep
+			// the grant. Only new connections re-authenticate.
+			name:         "accept-to-hold-on-rule-expiry",
+			old:          &tailcfg.SSHAction{Accept: true},
+			fresh:        hold,
+			latchExpired: true,
+		},
+		{
 			name:  "unchanged",
 			old:   &tailcfg.SSHAction{Accept: true},
 			fresh: &tailcfg.SSHAction{Accept: true},
@@ -155,6 +165,12 @@ func TestPolicyRecheckRestrictions(t *testing.T) {
 					localState: &localState{sshEnabled: true},
 					rule:       newPolicyRule(tt.fresh, lu),
 				}
+				latched := newPolicyRule(tt.old, lu)
+				exp := time.Now().Add(time.Hour)
+				if tt.latchExpired {
+					exp = time.Now().Add(-time.Hour)
+				}
+				latched.RuleExpires = &exp
 				c := &conn{
 					srv: &server{
 						logf: t.Logf,
@@ -164,6 +180,7 @@ func TestPolicyRecheckRestrictions(t *testing.T) {
 					mappedLocalUser: lu.Username,
 					action0:         initial,
 					finalAction:     tt.old,
+					latchedRule:     latched,
 					acceptEnv:       tt.oldEnv,
 					info: &sshConnInfo{
 						sshUser: "alice",
