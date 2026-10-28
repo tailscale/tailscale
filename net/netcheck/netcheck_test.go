@@ -580,7 +580,10 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			Regions:    map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{},
 		}
 		for _, id := range regions {
-			dm.Regions[id] = &tailcfg.DERPRegion{RegionID: id}
+			dm.Regions[id] = &tailcfg.DERPRegion{
+				RegionID: id,
+				Nodes:    []*tailcfg.DERPNode{{RegionID: id, Name: fmt.Sprintf("%da", id), HostName: fmt.Sprintf("derp%d.invalid", id)}},
+			}
 		}
 		return dm
 	}
