@@ -44,7 +44,7 @@ func (n *network) handleSSDPRequest(req UDPPacket) {
 		n.logf("vnet: ignoring SSDP packet that isn't an M-SEARCH % 02x", req.Payload)
 		return
 	}
-	res := fmt.Sprintf("HTTP/1.1 200 OK\r\n"+
+	res := fmt.Appendf(nil, "HTTP/1.1 200 OK\r\n"+
 		"CACHE-CONTROL: max-age=1800\r\n"+
 		"EXT:\r\n"+
 		"LOCATION: http://%v/rootDesc.xml\r\n"+
@@ -57,7 +57,7 @@ func (n *network) handleSSDPRequest(req UDPPacket) {
 	n.WriteUDPPacketNoNAT(UDPPacket{
 		Src:     req.Dst,
 		Dst:     req.Src,
-		Payload: []byte(res),
+		Payload: res,
 	})
 }
 

@@ -551,7 +551,7 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 	if destPort == upnpHTTPPort && destIP == n.lanIP4.Addr() && n.svcs.Contains(UPnP) {
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
-		context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
+		context.AfterFunc(n.s.shutdownCtx, func() { tc.Close() })
 		hs := &http.Server{Handler: n.upnpHandler()}
 		n.s.wg.Go(func() {
 			hs.Serve(netutil.NewOneConnListener(tc, nil))
