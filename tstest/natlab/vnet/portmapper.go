@@ -107,6 +107,13 @@ func (n *network) handleUPnPControl(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "missing NewInternalClient", http.StatusBadRequest)
 			return
 		}
+		if action.InternalPort == 0 {
+			n.logf("UPnP map request for %v without a NewInternalPort", action.InternalClient)
+			http.Error(w, "missing NewInternalPort", http.StatusBadRequest)
+			return
+		}
+		// TODO(fmarier): reject wildcard value (0) in ExternalPort
+		// TODO(fmarier): spec says NewLeaseDuration of 0 needs to be treated as 604800 seconds
 		gotPort, ok := n.doPortMap(action.InternalClient, action.InternalPort, action.ExternalPort, int(action.LeaseDuration), UPnP)
 		if !ok {
 			n.logf("UPnP map request for %v:%d failed", action.InternalClient, action.InternalPort)

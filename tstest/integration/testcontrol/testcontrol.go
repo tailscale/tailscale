@@ -125,8 +125,7 @@ type Server struct {
 	CollectServices opt.Bool
 
 	// AllowUPnP, if true, stops the server from sending the
-	// [nodecap.DisableUPnP] capability to every node. Only set it when
-	// clients can't reach a real UPnP router.
+	// [nodecap.DisableUPnP] capability to every node.
 	AllowUPnP bool
 
 	// ExplicitBaseURL or HTTPTestServer must be set.
