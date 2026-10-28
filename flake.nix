@@ -187,11 +187,11 @@
 
     checks = eachSystem (pkgs: {
       single = import ./nix/nixos/tests/single.nix {
-        inherit self pkgs;
+        inherit self pkgs headscale;
         inherit (pkgs) lib;
       };
       multi = import ./nix/nixos/tests/multi.nix {
-        inherit self pkgs;
+        inherit self pkgs headscale;
         inherit (pkgs) lib;
       };
       shared-services = import ./nix/nixos/tests/shared-services.nix {
@@ -199,7 +199,7 @@
         inherit (pkgs) lib;
       };
       proxy = import ./nix/nixos/tests/proxy.nix {
-        inherit self pkgs;
+        inherit self pkgs headscale;
         inherit (pkgs) lib;
       };
       # Eval-only test for the darwin module; runs on every system so we
