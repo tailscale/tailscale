@@ -1842,6 +1842,47 @@ func TestIsLegacyInvocation(t *testing.T) {
 			args:     []string{"localhost:3000"},
 			expected: false,
 		},
+		{
+			// Issue #14863: tcp:// or http:// target destination with "off" is not a legacy source
+			subcmd:   serve,
+			args:     []string{"tcp://localhost:3000", "off"},
+			expected: false,
+		},
+		{
+			subcmd:   serve,
+			args:     []string{"http://localhost:3000", "off"},
+			expected: false,
+		},
+		{
+			subcmd:   serve,
+			args:     []string{"https://localhost:3000", "off"},
+			expected: false,
+		},
+		{
+			// Valid legacy TCP invocation with off
+			subcmd:      serve,
+			args:        []string{"tcp:2222", "off"},
+			expected:    true,
+			translation: "tailscale serve --bg --tcp 2222 off",
+		},
+		{
+			// Invalid port number for TCP source
+			subcmd:   serve,
+			args:     []string{"tcp:notaport", "off"},
+			expected: false,
+		},
+		{
+			// Invalid port 0
+			subcmd:   serve,
+			args:     []string{"tcp:0", "off"},
+			expected: false,
+		},
+		{
+			// Port overflow
+			subcmd:   serve,
+			args:     []string{"tcp:99999", "off"},
+			expected: false,
+		},
 	}
 
 	for idx, tt := range tests {
