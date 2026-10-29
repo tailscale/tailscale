@@ -798,6 +798,133 @@ func Test_endpoint_handlePongConnLocked(t *testing.T) {
 	}
 }
 
+func Test_endpoint_handlePongConnLocked_fullSizeProbe(t *testing.T) {
+	envknob.SetenvForTest(t, "TS_DEBUG_DISCO_FULL_SIZE_PROBE", "true")
+	addr := epAddr{ap: netip.MustParseAddrPort("[2001:db8::1]:41641")}
+	synctest.Test(t, func(t *testing.T) {
+		c := &Conn{logf: t.Logf, peerMap: newPeerMap()}
+		c.discoAtomic.Set(key.NewDisco())
+		de := &endpoint{
+			c:             c,
+			sentPing:      make(map[stun.TxID]sentPing),
+			endpointState: map[netip.AddrPort]*endpointState{addr.ap: {}},
+			debugUpdates:  ringlog.New[EndpointChange](10),
+		}
+		de.updateDiscoKey(key.NewDisco().Public())
+		di := &discoInfo{discoKey: key.NewDisco().Public(), discoShort: "test"}
+		smallPong := func() {
+			txid := stun.NewTxID()
+			timer := time.NewTimer(time.Hour)
+			timer.Stop()
+			de.mu.Lock()
+			de.sentPing[txid] = sentPing{to: addr, at: mono.Now(), timer: timer, purpose: pingDiscovery}
+			de.mu.Unlock()
+			de.handlePongConnLocked(&disco.Pong{TxID: txid, Src: addr.ap}, di, addr)
+		}
+		probes := func() (txids []stun.TxID) {
+			de.mu.Lock()
+			defer de.mu.Unlock()
+			for txid, sp := range de.sentPing {
+				if sp.isFullSizeProbe() {
+					txids = append(txids, txid)
+				}
+			}
+			return txids
+		}
+
+		func() {
+			// Hold c.mu as callers of handlePongConnLocked do. It also keeps the probe's send (there's no socket) from failing and forgetting it.
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			smallPong()
+			smallPong()
+			probe := probes()
+			if len(probe) != 1 {
+				t.Fatalf("small pongs sent %d full-size pings, want 1", len(probe))
+			}
+			if de.bestAddr.epAddr == addr {
+				t.Fatal("small pong promoted an unverified path")
+			}
+			de.handlePongConnLocked(&disco.Pong{TxID: probe[0], Src: addr.ap}, di, addr)
+			if de.bestAddr.epAddr != addr {
+				t.Fatal("full-size pong did not promote the path")
+			}
+			smallPong()
+			if de.bestAddr.epAddr != addr {
+				t.Fatal("small pong dropped a verified path")
+			}
+		}()
+		synctest.Wait()
+
+		de.mu.Lock()
+		de.endpointState[addr.ap].clear() // a network change
+		de.mu.Unlock()
+		time.Sleep(time.Second)
+		trust := de.trustBestAddrUntil
+		smallPong()
+		if de.trustBestAddrUntil != trust {
+			t.Fatal("small pong extended trust after the path's state was cleared")
+		}
+	})
+}
+
+func TestNoteRecvActivityFullSizeProbe(t *testing.T) {
+	envknob.SetenvForTest(t, "TS_DEBUG_DISCO_FULL_SIZE_PROBE", "true")
+	addr := epAddr{ap: netip.MustParseAddrPort("[2001:db8::1]:41641")}
+	de := &endpoint{
+		c:                 &Conn{logf: t.Logf},
+		heartbeatDisabled: true,
+		bestAddr:          addrQuality{epAddr: addr},
+		endpointState:     map[netip.AddrPort]*endpointState{addr.ap: {}},
+	}
+	now := mono.Now()
+	de.noteRecvActivity(addr, now)
+	if de.trustBestAddrUntil != 0 {
+		t.Fatal("received data trusted an unverified path with heartbeats disabled")
+	}
+	de.endpointState[addr.ap].fullSize.verified = true
+	de.noteRecvActivity(addr, now)
+	if de.trustBestAddrUntil != now.Add(trustUDPAddrDuration) {
+		t.Fatal("received data didn't trust a verified path with heartbeats disabled")
+	}
+}
+
+func TestFullSizeProbeDue(t *testing.T) {
+	var p fullSizeProbe
+	start := mono.Now()
+	for i := range fullSizeProbeTries {
+		at := start.Add(time.Duration(i) * discoPingInterval)
+		if !p.due(at) {
+			t.Fatalf("try %d not due", i+1)
+		}
+		p.sent(at)
+		if p.due(at.Add(discoPingInterval - time.Millisecond)) {
+			t.Fatalf("try %d retried before discoPingInterval", i+1)
+		}
+	}
+	last := p.sentAt
+	if p.due(last.Add(discoPingInterval)) {
+		t.Error("retried quickly after fullSizeProbeTries unanswered tries")
+	}
+	if !p.due(last.Add(fullSizeProbeInterval)) {
+		t.Error("not retried after fullSizeProbeInterval")
+	}
+	p.verified = true
+	if p.due(last.Add(fullSizeProbeInterval)) {
+		t.Error("verified path probed again")
+	}
+
+	var q fullSizeProbe
+	for i := range fullSizeProbeTries {
+		q.sent(start.Add(time.Duration(i) * discoPingInterval))
+	}
+	next := q.sentAt.Add(fullSizeProbeInterval)
+	q.sent(next)
+	if !q.due(next.Add(discoPingInterval)) {
+		t.Error("a new round after backing off got no retries")
+	}
+}
+
 // TestUpdateFromNodeUsesControlKeyForComparison verifies that updateFromNode
 // compares the netmap-provided disco key against the endpoint's control-learned
 // key (keyFromControl), not the currently active key (key()).
@@ -1314,6 +1441,25 @@ func TestChangedActiveDiscoLocked(t *testing.T) {
 		de.mu.Unlock()
 		if de.trustBestAddrUntil != 0 {
 			t.Errorf("trustBestAddrUntil not reset to zero, got %v", de.trustBestAddrUntil)
+		}
+	})
+
+	t.Run("re-probes-full-size", func(t *testing.T) {
+		good := netip.MustParseAddrPort("192.0.2.1:7")
+		bad := netip.MustParseAddrPort("192.0.2.2:7")
+		failing := fullSizeProbe{sentAt: mono.Now(), tries: fullSizeProbeTries}
+		de := &endpoint{endpointState: map[netip.AddrPort]*endpointState{
+			good: {fullSize: fullSizeProbe{verified: true}},
+			bad:  {fullSize: failing},
+		}}
+		de.mu.Lock()
+		de.changedActiveDiscoLocked()
+		de.mu.Unlock()
+		if got := de.endpointState[good].fullSize; got != (fullSizeProbe{}) {
+			t.Errorf("verified path not re-probed after a disco key change: %+v", got)
+		}
+		if got := de.endpointState[bad].fullSize; got != failing {
+			t.Errorf("failing path lost its backoff after a disco key change: %+v", got)
 		}
 	})
 
