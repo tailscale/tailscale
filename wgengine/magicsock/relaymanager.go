@@ -883,6 +883,17 @@ func (r *relayManager) sendCallMeMaybeVia(ep *endpoint, se udprelay.ServerEndpoi
 	ep.c.sendDiscoMessage(epAddr{ap: derpAddr}, ep.publicKey, epDisco.key(), callMeMaybeVia, discoVerboseLog)
 }
 
+// discoBindSize is the size of a complete [disco.BindUDPRelayEndpoint] packet, without any padding.
+const discoBindSize = len(disco.Magic) + key.DiscoPublicRawLen + disco.NonceLen + poly1305AuthenticatorSize + disco.MessageHeaderLen + disco.BindUDPRelayEndpointLen
+
+// relayFullSizePadding returns the padding that makes relay binds and the handshake's relayed pings full-size, or zeros unless [Conn.fullSizeProbeEnabled].
+func (c *Conn) relayFullSizePadding() (bind, ping int) {
+	if !c.fullSizeProbeEnabled() {
+		return 0, 0
+	}
+	return max(fullSizePingSize()-discoBindSize, 0), max(fullSizePingSize()-discoPingSize, 0)
+}
+
 func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 	done := relayEndpointHandshakeWorkDoneEvent{work: work}
 	r.ensureDiscoInfoFor(work)
@@ -910,8 +921,11 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 		work.se.AddrPorts,
 	)
 	sentBindAny := false
+	// The path uses the address that answers first, so with padding one that drops full-size packets can't win, see [endpoint.fullSizeOKLocked].
+	bindPadding, pingPadding := ep.c.relayFullSizePadding()
 	bind := &disco.BindUDPRelayEndpoint{
 		BindUDPRelayEndpointCommon: common,
+		Padding:                    bindPadding,
 	}
 	vni := packet.VirtualNetworkID{}
 	vni.Set(work.se.VNI)
@@ -950,6 +964,7 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 		ping := &disco.Ping{
 			TxID:    txid,
 			NodeKey: ep.c.publicKeyAtomic.Load(),
+			Padding: pingPadding, // only use the path if the relay also carries full-size packets on to the peer
 		}
 		go func() {
 			if withAnswer != nil {
