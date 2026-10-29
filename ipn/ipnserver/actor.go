@@ -262,7 +262,7 @@ func connIsLocalAdmin(logf logger.Logf, ci *ipnauth.ConnIdentity, operatorUID st
 		// Short timeout just in case sudo hangs for some reason.
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		if err := exec.CommandContext(ctx, "sudo", "--other-user="+u.Name, "--list", "tailscale").Run(); err != nil {
+		if err := sudoCheckCmd(ctx, u.Username).Run(); err != nil {
 			return false
 		}
 		return true
@@ -270,4 +270,9 @@ func connIsLocalAdmin(logf logger.Logf, ci *ipnauth.ConnIdentity, operatorUID st
 	default:
 		return false
 	}
+}
+
+// sudoCheckCmd constructs the command that checks whether userName can run sudo tailscale.
+func sudoCheckCmd(ctx context.Context, userName string) *exec.Cmd {
+	return exec.CommandContext(ctx, "sudo", "--other-user="+userName, "--list", "tailscale")
 }
