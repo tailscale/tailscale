@@ -8,5 +8,6 @@ self: {
   imports = [
     (import ./options.nix self)
     (import ./service.nix self)
+    (import ./derper.nix self)
   ];
 }

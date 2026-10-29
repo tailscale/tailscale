@@ -154,6 +154,14 @@
           '';
       };
       tailscale = default;
+      # For the NixOS module's services.tailscale.derper.
+      derper = default.overrideAttrs {
+        name = "derper";
+        pname = "derper";
+        subPackages = ["cmd/derper"];
+        postInstall = "";
+        meta.mainProgram = "derper";
+      };
     });
 
     overlays.default = final: prev: {
@@ -203,6 +211,10 @@
       };
       proxy = import ./nix/nixos/tests/proxy.nix {
         inherit self pkgs headscale;
+        inherit (pkgs) lib;
+      };
+      derper = import ./nix/nixos/tests/derper.nix {
+        inherit self pkgs;
         inherit (pkgs) lib;
       };
       # Eval-only test for the darwin module; runs on every system so we
