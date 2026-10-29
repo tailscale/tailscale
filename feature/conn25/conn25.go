@@ -547,6 +547,7 @@ func newConn25(logf logger.Logf) *Conn25 {
 		getIPSets:   getIPSets,
 		clock:       tstime.StdClock{},
 		expiryQueue: list.New(),
+		tokenSecret: newTokenSecret(),
 	}
 	return c
 }
