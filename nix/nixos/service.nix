@@ -561,7 +561,7 @@ in {
             && config.networking.useNetworkd
             && singularCfg.networkingMode == "tun")
           {
-            "50-tailscale-default" = {
+            "50-tailscale" = {
               matchConfig.Name = singularCfg.interfaceName;
               linkConfig = {
                 Unmanaged = true;
