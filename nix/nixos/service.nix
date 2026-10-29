@@ -297,6 +297,7 @@ self: {
         after = [
           "${meta.svcName}.service"
           "${meta.svcName}-autoconnect.service"
+          "${meta.svcName}-set.service"
         ];
         wants = ["${meta.svcName}.service"];
         wantedBy = ["${meta.svcName}.service"];
