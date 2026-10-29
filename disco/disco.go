@@ -400,10 +400,17 @@ func (m *BindUDPRelayEndpointCommon) decode(b []byte) error {
 // towards UDP relay server as part of the 3-way bind handshake.
 type BindUDPRelayEndpoint struct {
 	BindUDPRelayEndpointCommon
+
+	// Padding is the number of 0 bytes at the end of the message, used to check that the path to the server carries large packets.
+	// Servers ignore it.
+	Padding int
 }
 
+// BindUDPRelayEndpointLen is the length of a marshalled [BindUDPRelayEndpoint] without its message header or Padding.
+const BindUDPRelayEndpointLen = bindUDPRelayEndpointCommonLen
+
 func (m *BindUDPRelayEndpoint) AppendMarshal(b []byte) []byte {
-	ret, d := appendMsgHeader(b, TypeBindUDPRelayEndpoint, v0, bindUDPRelayEndpointCommonLen)
+	ret, d := appendMsgHeader(b, TypeBindUDPRelayEndpoint, v0, bindUDPRelayEndpointCommonLen+m.Padding)
 	m.BindUDPRelayEndpointCommon.encode(d)
 	return ret
 }
@@ -414,6 +421,7 @@ func parseBindUDPRelayEndpoint(ver uint8, p []byte) (m *BindUDPRelayEndpoint, er
 	if err != nil {
 		return nil, err
 	}
+	m.Padding = len(p) - bindUDPRelayEndpointCommonLen
 	return m, nil
 }
 

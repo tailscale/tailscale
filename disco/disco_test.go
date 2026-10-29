@@ -109,9 +109,17 @@ func TestMarshalAndParse(t *testing.T) {
 		{
 			name: "bind_udp_relay_endpoint",
 			m: &BindUDPRelayEndpoint{
-				relayHandshakeCommon,
+				BindUDPRelayEndpointCommon: relayHandshakeCommon,
 			},
 			want: "04 00 00 00 00 01 00 00 00 02 00 01 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1e 1f 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f",
+		},
+		{
+			name: "bind_udp_relay_endpoint_with_padding",
+			m: &BindUDPRelayEndpoint{
+				BindUDPRelayEndpointCommon: relayHandshakeCommon,
+				Padding:                    3,
+			},
+			want: "04 00 00 00 00 01 00 00 00 02 00 01 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1e 1f 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f 00 00 00",
 		},
 		{
 			name: "bind_udp_relay_endpoint_challenge",
