@@ -629,13 +629,18 @@ func (de *endpoint) DstToBytes() []byte  { return packIPPort(de.fakeWGAddr) }
 // latency information, a bool is returned to indicate that the
 // WireGuard latency discovery pings should be sent.
 //
+// wantMirror, if true, indicates that the caller wants to send over both UDP
+// and DERP if both are available, even if the UDP path is considered trusted.
+// This is used to mirror packets that are critical to connectivity, when the
+// caller is willing to pay the additional sending cost.
+//
 // de.mu must be held.
 //
 // TODO(val): Rewrite the addrFor*Locked() variations to share code.
-func (de *endpoint) addrForSendLocked(now mono.Time) (udpAddr epAddr, derpAddr netip.AddrPort, sendWGPing bool) {
+func (de *endpoint) addrForSendLocked(now mono.Time, wantMirror bool) (udpAddr epAddr, derpAddr netip.AddrPort, sendWGPing bool) {
 	udpAddr = de.bestAddr.epAddr
 
-	if udpAddr.ap.IsValid() && !now.After(de.trustBestAddrUntil) {
+	if udpAddr.ap.IsValid() && !now.After(de.trustBestAddrUntil) && !wantMirror {
 		return udpAddr, netip.AddrPort{}, false
 	}
 
@@ -718,7 +723,7 @@ func (de *endpoint) addrForWireGuardSendLocked(now mono.Time) (udpAddr epAddr, s
 // de.mu must be held.
 func (de *endpoint) addrForPingSizeLocked(now mono.Time, size int) (udpAddr epAddr, derpAddr netip.AddrPort) {
 	if size == 0 {
-		udpAddr, derpAddr, _ = de.addrForSendLocked(now)
+		udpAddr, derpAddr, _ = de.addrForSendLocked(now, false)
 		return
 	}
 
@@ -928,7 +933,7 @@ func (de *endpoint) heartbeat() {
 		return
 	}
 
-	udpAddr, _, _ := de.addrForSendLocked(now)
+	udpAddr, _, _ := de.addrForSendLocked(now, false)
 	if udpAddr.ap.IsValid() {
 		// We have a preferred path. Ping that every 'heartbeatInterval'.
 		de.startDiscoPingLocked(udpAddr, now, pingHeartbeat, 0, nil)
@@ -1109,7 +1114,7 @@ var (
 	errPingTooBig  = errors.New("ping size too big")
 )
 
-func (de *endpoint) send(flow int, buffs [][]byte, offset int) error {
+func (de *endpoint) send(flow int, buffs [][]byte, offset int, mirrorToDERP bool) error {
 	de.mu.Lock()
 	if de.expired {
 		de.mu.Unlock()
@@ -1117,7 +1122,7 @@ func (de *endpoint) send(flow int, buffs [][]byte, offset int) error {
 	}
 
 	now := mono.Now()
-	udpAddr, derpAddr, startWGPing := de.addrForSendLocked(now)
+	udpAddr, derpAddr, startWGPing := de.addrForSendLocked(now, mirrorToDERP)
 
 	if !hasUDPTransport {
 		// There are no UDP paths to discover; everything goes over DERP.
@@ -2249,7 +2254,7 @@ func (de *endpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
 	ps.LastWrite = de.lastSendExt.WallTime()
 	ps.Active = now.Sub(de.lastSendExt) < sessionActiveTimeout
 
-	if udpAddr, derpAddr, _ := de.addrForSendLocked(now); udpAddr.ap.IsValid() && !derpAddr.IsValid() {
+	if udpAddr, derpAddr, _ := de.addrForSendLocked(now, false); udpAddr.ap.IsValid() && !derpAddr.IsValid() {
 		if udpAddr.vni.IsSet() {
 			ps.PeerRelay = udpAddr.String()
 		} else {

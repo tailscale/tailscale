@@ -6400,7 +6400,7 @@ func TestSuggestExitNode(t *testing.T) {
 				allowList = set.SetOf(tt.allowPolicy)
 			}
 
-			nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+			nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New(), &controlknobs.Knobs{})
 			defer nb.shutdown(errShutdown)
 			nb.SetNetMap(tt.netMap)
 
@@ -6966,7 +6966,7 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 				tt.netMap.AllCaps = set.SetOf(slices.Collect(caps))
 			}
 
-			nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+			nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New(), &controlknobs.Knobs{})
 			defer nb.shutdown(errShutdown)
 			nb.SetNetMap(tt.netMap)
 

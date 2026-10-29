@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/net/routecheck/peernode"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/nodecap"
@@ -27,7 +28,7 @@ import (
 )
 
 func TestNodeBackendReadiness(t *testing.T) {
-	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New(), &controlknobs.Knobs{})
 
 	// The node backend is not ready until [nodeBackend.ready] is called,
 	// and [nodeBackend.Wait] should fail with [context.DeadlineExceeded].
@@ -58,7 +59,7 @@ func TestNodeBackendReadiness(t *testing.T) {
 }
 
 func TestNodeBackendShutdown(t *testing.T) {
-	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New(), &controlknobs.Knobs{})
 
 	shutdownCause := errors.New("test shutdown")
 
@@ -96,7 +97,7 @@ func TestNodeBackendShutdown(t *testing.T) {
 }
 
 func TestNodeBackendReadyAfterShutdown(t *testing.T) {
-	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New(), &controlknobs.Knobs{})
 
 	shutdownCause := errors.New("test shutdown")
 	nb.shutdown(shutdownCause)
@@ -108,7 +109,7 @@ func TestNodeBackendReadyAfterShutdown(t *testing.T) {
 
 func TestNodeBackendParentContextCancellation(t *testing.T) {
 	ctx, cancelCtx := context.WithCancel(context.Background())
-	nb := newNodeBackend(ctx, tstest.WhileTestRunningLogger(t), eventbus.New())
+	nb := newNodeBackend(ctx, tstest.WhileTestRunningLogger(t), eventbus.New(), &controlknobs.Knobs{})
 
 	cancelCtx()
 
@@ -125,7 +126,7 @@ func TestNodeBackendParentContextCancellation(t *testing.T) {
 }
 
 func TestNodeBackendConcurrentReadyAndShutdown(t *testing.T) {
-	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New(), &controlknobs.Knobs{})
 
 	// Calling [nodeBackend.ready] and [nodeBackend.shutdown] concurrently
 	// should not cause issues, and [nodeBackend.Wait] should unblock,
@@ -254,7 +255,7 @@ func TestNodeBackendReachability(t *testing.T) {
 				Online:   &tc.online,
 			}
 
-			nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+			nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New(), &controlknobs.Knobs{})
 			nb.netMap = &netmap.NetworkMap{
 				SelfNode: self.View(),
 				Peers:    []tailcfg.NodeView{peer.View()},
@@ -279,7 +280,7 @@ func (rp routecheckReport) IsReachable(_ tailcfg.NodeID) peernode.Reachability {
 }
 
 func TestNodeBackendRouteManager(t *testing.T) {
-	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New(), &controlknobs.Knobs{})
 
 	mkPeer := func(id tailcfg.NodeID, stableID tailcfg.StableNodeID, addr4 string, extra ...string) tailcfg.NodeView {
 		n := &tailcfg.Node{
@@ -375,7 +376,7 @@ func TestNodeBackendRouteManager(t *testing.T) {
 // detection: a peer whose disco key changes has restarted and needs its
 // WireGuard session to send an opportunistic handshake.
 func TestNodeBackendDiscoChanged(t *testing.T) {
-	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New(), &controlknobs.Knobs{})
 
 	nk := key.NewNode().Public()
 	mkNetMap := func(disco key.DiscoPublic) *netmap.NetworkMap {
@@ -391,26 +392,26 @@ func TestNodeBackendDiscoChanged(t *testing.T) {
 
 	// A brand-new peer is not a disco change.
 	d1 := newDisco()
-	if got, _ := nb.SetNetMap(mkNetMap(d1)); len(got) != 0 {
+	if got, _, _ := nb.SetNetMap(mkNetMap(d1)); len(got) != 0 {
 		t.Errorf("SetNetMap(new peer) discoChanged = %v; want none", got)
 	}
 
 	// A changed disco key requires a session reset.
 	d2 := newDisco()
-	if got, _ := nb.SetNetMap(mkNetMap(d2)); !slices.Contains(got, nk) {
+	if got, _, _ := nb.SetNetMap(mkNetMap(d2)); !slices.Contains(got, nk) {
 		t.Errorf("SetNetMap(changed disco) discoChanged = %v; want %v", got, nk)
 	}
 
 	// An unchanged disco key does not.
-	if got, _ := nb.SetNetMap(mkNetMap(d2)); len(got) != 0 {
+	if got, _, _ := nb.SetNetMap(mkNetMap(d2)); len(got) != 0 {
 		t.Errorf("SetNetMap(same disco) discoChanged = %v; want none", got)
 	}
 
 	// Transitions to or from a zero disco key never reset.
-	if got, _ := nb.SetNetMap(mkNetMap(key.DiscoPublic{})); len(got) != 0 {
+	if got, _, _ := nb.SetNetMap(mkNetMap(key.DiscoPublic{})); len(got) != 0 {
 		t.Errorf("SetNetMap(to zero disco) discoChanged = %v; want none", got)
 	}
-	if got, _ := nb.SetNetMap(mkNetMap(d1)); len(got) != 0 {
+	if got, _, _ := nb.SetNetMap(mkNetMap(d1)); len(got) != 0 {
 		t.Errorf("SetNetMap(from zero disco) discoChanged = %v; want none", got)
 	}
 }
@@ -419,7 +420,7 @@ func TestNodeBackendDiscoChanged(t *testing.T) {
 // but for the incremental path: disco changes arriving as
 // [netmap.NodeMutationUpsert] deltas.
 func TestNodeBackendDiscoChangedDelta(t *testing.T) {
-	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New(), &controlknobs.Knobs{})
 
 	mkNode := func(k key.NodePublic, disco key.DiscoPublic) tailcfg.NodeView {
 		return (&tailcfg.Node{ID: 1, Key: k, DiscoKey: disco, HomeDERP: 1}).View()
@@ -458,7 +459,7 @@ func TestNodeBackendDiscoChangedDelta(t *testing.T) {
 }
 
 func TestNodeBackendRouteManagerExtras(t *testing.T) {
-	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New(), &controlknobs.Knobs{})
 
 	n := &tailcfg.Node{
 		ID:       1,
@@ -523,7 +524,7 @@ func TestNodeBackendMagicDNSHosts(t *testing.T) {
 }
 
 func testNodeBackendMagicDNSHosts(t *testing.T, magicDNSEnabled bool) {
-	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New(), &controlknobs.Knobs{})
 
 	self := &tailcfg.Node{
 		ID:        1,
@@ -646,7 +647,7 @@ func TestNodeBackendIndexReuseEviction(t *testing.T) {
 		}).View()
 	}
 	newBackend := func(t *testing.T, initial ...tailcfg.NodeView) *nodeBackend {
-		nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+		nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New(), &controlknobs.Knobs{})
 		nb.SetNetMap(&netmap.NetworkMap{Peers: initial})
 		return nb
 	}
