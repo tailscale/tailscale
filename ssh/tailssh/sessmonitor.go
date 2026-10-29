@@ -118,8 +118,8 @@ func (ss *sshSession) waitMonitorProcess() (code int, ok bool, err error) {
 	}
 }
 
-// hangupMonitorProcess sends SIGHUP, then SIGKILL after hangupEscalation if the
-// child has not exited. It returns false for directly launched sessions.
+// hangupMonitorProcess sends SIGHUP for non-PTY sessions and schedules SIGKILL
+// if the child has not exited. It returns false for directly launched sessions.
 func (ss *sshSession) hangupMonitorProcess() bool {
 	if ss.monChild.PID == 0 {
 		return false
@@ -130,12 +130,14 @@ func (ss *sshSession) hangupMonitorProcess() bool {
 		// been reused, so tailscaled must not signal them directly.
 		return true
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := mc.Signal(ctx, ss.monChild, "SIGHUP"); err != nil {
-		ss.logf("ssh: SIGHUP session process group: %v", err)
+	if ss.ptyReq == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := mc.Signal(ctx, ss.monChild, "SIGHUP"); err != nil {
+			ss.logf("ssh: SIGHUP session process group: %v", err)
+		}
 	}
-	time.AfterFunc(hangupEscalation, func() { ss.escalateMonitorProcess(mc) })
+	time.AfterFunc(knobDuration(sshHupEscalation(), hangupEscalation), func() { ss.escalateMonitorProcess(mc) })
 	return true
 }
 

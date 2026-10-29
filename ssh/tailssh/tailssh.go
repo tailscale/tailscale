@@ -60,6 +60,11 @@ var (
 	sshForwardGatewayPorts = envknob.RegisterBool("TS_SSH_FORWARD_GATEWAY_PORTS")
 	sshDisablePTY          = envknob.RegisterBool("TS_SSH_DISABLE_PTY")
 
+	// Session teardown timeouts. Unset or non-positive values use the defaults.
+	sshShutdownTimeout = envknob.RegisterDuration("TS_SSH_SHUTDOWN_TIMEOUT")
+	sshIODrainTimeout  = envknob.RegisterDuration("TS_SSH_IO_DRAIN_TIMEOUT")
+	sshHupEscalation   = envknob.RegisterDuration("TS_SSH_HUP_ESCALATION")
+
 	// sshLoginGraceTime is the TS_SSH_LOGIN_GRACE_TIME knob. It is
 	// the maximum allowed duration between accepting a connection and
 	// completing authentication, like sshd's LoginGraceTime. It defaults
@@ -75,6 +80,20 @@ var (
 	// It is set by platform-specific code (e.g., auditd_linux.go).
 	hookSSHLoginSuccess feature.Hook[func(logf logger.Logf, c *conn)]
 )
+
+const (
+	defaultShutdownTimeout = 10 * time.Second
+	defaultIODrainTimeout  = 30 * time.Second
+	defaultHupEscalation   = 5 * time.Second
+)
+
+// knobDuration returns v if positive, or def otherwise.
+func knobDuration(v, def time.Duration) time.Duration {
+	if v <= 0 {
+		return def
+	}
+	return v
+}
 
 const (
 	// forcePasswordSuffix is the suffix at the end of a username that forces
@@ -216,9 +235,8 @@ func (srv *server) HandleSSHConn(nc net.Conn) error {
 	return nil
 }
 
-// Shutdown closes all active connections and waits for their sessions to exit.
-// Closing the raw transport also interrupts authentication and cancels pending
-// HoldAndDelegate requests.
+// Shutdown closes active connections and waits up to sshShutdownTimeout for
+// sessions to finish. Session goroutines may remain running after it returns.
 func (srv *server) Shutdown() {
 	srv.mu.Lock()
 	srv.shutdownCalled = true
@@ -226,7 +244,26 @@ func (srv *server) Shutdown() {
 		c.closeConn()
 	}
 	srv.mu.Unlock()
-	srv.sessionWaitGroup.Wait()
+	srv.awaitSessionsDone()
+}
+
+// awaitSessionsDone waits up to sshShutdownTimeout for attached sessions to
+// finish. It reports whether all sessions finished before the timeout.
+func (srv *server) awaitSessionsDone() bool {
+	done := make(chan struct{})
+	go func() {
+		// Wait continues after the timeout until all sessions detach.
+		srv.sessionWaitGroup.Wait()
+		close(done)
+	}()
+	timeout := knobDuration(sshShutdownTimeout(), defaultShutdownTimeout)
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		srv.logf("ssh: sessions did not finish within %v of shutdown; abandoning them", timeout)
+		return false
+	}
 }
 
 // OnPolicyChange terminates any active connections and sessions that no
@@ -883,21 +920,12 @@ type sshSession struct {
 	rdStdout       io.ReadCloser
 	rdStderr       io.ReadCloser  // rdStderr is nil for pty sessions
 	ptyReq         *gliderssh.Pty // non-nil for pty sessions
+	ptyResize      io.Closer      // PTY master descriptor used for window changes
 
 	// childPipes is a list of pipes that need to be closed when the process exits.
 	// For pty sessions, this is the tty fd.
 	// For non-pty sessions, this is the stdin, stdout, stderr fds.
 	childPipes []io.Closer
-
-	// We use this sync.Once to ensure that we only terminate the process once,
-	// either it exits itself or is terminated
-	exitOnce sync.Once
-
-	// exitHandled is closed when killProcessOnContextDone finishes writing any
-	// termination message to the client. run() waits on this before calling
-	// ss.Exit to ensure the message is flushed before the SSH channel is torn
-	// down. It is initialized by run() before starting killProcessOnContextDone.
-	exitHandled chan struct{}
 }
 
 func (ss *sshSession) vlogf(format string, args ...any) {
@@ -1325,26 +1353,29 @@ func (c *conn) fetchSSHAction(ctx context.Context, url string) (*tailcfg.SSHActi
 	}
 }
 
-// killProcessOnContextDone waits for ss.ctx to be done and kills the process,
-// unless the process has already exited.
-func (ss *sshSession) killProcessOnContextDone() {
-	defer close(ss.exitHandled)
-	<-ss.ctx.Done()
-	// Either the process has already exited, in which case this does nothing.
-	// Or, the process is still running in which case this will kill it.
-	ss.exitOnce.Do(func() {
-		err := context.Cause(ss.ctx)
-		if serr, ok := err.(SSHTerminationError); ok {
-			msg := serr.SSHTerminationMessage()
-			if msg != "" {
-				io.WriteString(ss.Stderr(), "\r\n\r\n"+msg+"\r\n\r\n")
-			}
+// killProcessOnContextDone reports cancellation and terminates the session
+// process. processDone stops it when the process exits normally.
+func (ss *sshSession) killProcessOnContextDone(processDone <-chan struct{}) {
+	select {
+	case <-ss.ctx.Done():
+	case <-processDone:
+		if ss.ctx.Err() == nil {
+			return
 		}
+	}
+	err := context.Cause(ss.ctx)
+	if serr, ok := err.(SSHTerminationError); ok {
+		if msg := serr.SSHTerminationMessage(); msg != "" {
+			io.WriteString(ss.Stderr(), "\r\n\r\n"+msg+"\r\n\r\n")
+		}
+	}
+	select {
+	case <-processDone:
+		return
+	default:
 		ss.logf("terminating SSH session from %v: %v", ss.conn.info.src.Addr(), err)
-		// We don't need to wait for the process here, sshSession.run()
-		// does the waiting regardless of termination reason.
 		ss.hangupProcess()
-	})
+	}
 }
 
 // isNotFoundOrExecutable reports whether err is a launchProcess
@@ -1481,8 +1512,12 @@ func (ss *sshSession) run() {
 		ss.Exit(exitCode)
 		return
 	}
-	ss.exitHandled = make(chan struct{})
-	go ss.killProcessOnContextDone()
+	processDone := make(chan struct{})
+	terminationDone := make(chan struct{})
+	go func() {
+		defer close(terminationDone)
+		ss.killProcessOnContextDone(processDone)
+	}()
 
 	// Wait for both output streams before sending CHANNEL_EOF.
 	// Do not wait for stdin: clients may keep it open until CHANNEL_CLOSE.
@@ -1518,17 +1553,9 @@ func (ss *sshSession) run() {
 
 	exitCode, err := ss.waitProcess()
 
-	if ss.ctx.Err() != nil {
-		// Cancellation (e.g. recording upload failure) wrote a
-		// termination message via killProcessOnContextDone; wait
-		// for it before Exit closes the channel for writes.
-		<-ss.exitHandled
-	}
-
-	// This will either make the SSH Termination goroutine be a no-op,
-	// or itself will be a no-op because the process was killed by the
-	// aforementioned goroutine.
-	ss.exitOnce.Do(func() {})
+	close(processDone)
+	// Finish any cancellation message before sending exit-status or EOF.
+	<-terminationDone
 
 	switch {
 	case err != nil:
@@ -1547,7 +1574,22 @@ func (ss *sshSession) run() {
 	// stream's tail.
 	ss.Exit(exitCode)
 	closeAll(ss.childPipes...)
-	wg.Wait()
+	// Bound the I/O drain because descendants may keep stdio open after
+	// the session process exits.
+	ioDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(ioDone)
+	}()
+	drainTimeout := knobDuration(sshIODrainTimeout(), defaultIODrainTimeout)
+	select {
+	case <-ioDone:
+	case <-time.After(drainTimeout):
+		ss.logf("ssh: session I/O did not drain within %v; closing channel", drainTimeout)
+		ss.Close()
+		closeAll(ss.wrStdin, ss.rdStdout, ss.rdStderr, ss.ptyResize)
+		return
+	}
 	ss.CloseWrite()
 }
 
