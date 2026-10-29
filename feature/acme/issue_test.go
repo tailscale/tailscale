@@ -11,6 +11,8 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -108,5 +110,82 @@ func TestIssueACMECertValidAuthorization(t *testing.T) {
 	}
 	if _, err := cs.Read(domain, time.Now()); err != nil {
 		t.Errorf("stored certificate does not read back: %v", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestAuthorizeOrderRetriesWithoutReplacesAfterClientError(t *testing.T) {
+	s := acmetest.Start(t)
+	ac := newTestACMEClient(t, s)
+	var newOrders atomic.Int32
+	ac.HTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/new-order" && newOrders.Add(1) == 1 {
+			return acmeProblemResponse(r, http.StatusForbidden, "unauthorized", "requester account did not request the certificate being replaced by this order"), nil
+		}
+		return http.DefaultTransport.RoundTrip(r)
+	})}
+
+	order, err := authorizeOrderWithReplacesFallback(
+		context.Background(),
+		ac,
+		[]xacme.AuthzID{{Type: "dns", Value: "example.com"}},
+		[]xacme.OrderOption{xacme.WithOrderNotBefore(time.Now())},
+		logger.Logf(t.Logf),
+	)
+	if err != nil {
+		t.Fatalf("authorizeOrderWithReplacesFallback: %v", err)
+	}
+	if order == nil {
+		t.Fatal("authorizeOrderWithReplacesFallback returned a nil order")
+	}
+	if got := newOrders.Load(); got != 2 {
+		t.Fatalf("new-order requests = %d, want 2", got)
+	}
+}
+
+func TestAuthorizeOrderDoesNotRetryWithoutReplacesAfterRateLimit(t *testing.T) {
+	s := acmetest.Start(t)
+	ac := newTestACMEClient(t, s)
+	var newOrders atomic.Int32
+	ac.HTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/new-order" {
+			newOrders.Add(1)
+			return acmeProblemResponse(r, http.StatusTooManyRequests, "rateLimited", "too many requests"), nil
+		}
+		return http.DefaultTransport.RoundTrip(r)
+	})}
+	ac.RetryBackoff = func(int, *http.Request, *http.Response) time.Duration { return -1 }
+
+	_, err := authorizeOrderWithReplacesFallback(
+		context.Background(),
+		ac,
+		[]xacme.AuthzID{{Type: "dns", Value: "example.com"}},
+		[]xacme.OrderOption{xacme.WithOrderNotBefore(time.Now())},
+		logger.Logf(t.Logf),
+	)
+	if err == nil {
+		t.Fatal("authorizeOrderWithReplacesFallback succeeded after a rate limit")
+	}
+	if got := newOrders.Load(); got != 1 {
+		t.Fatalf("new-order requests = %d, want 1", got)
+	}
+}
+
+func acmeProblemResponse(r *http.Request, status int, problemType, detail string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
+		Header: http.Header{
+			"Content-Type": {"application/problem+json"},
+			"Replay-Nonce": {"retry-nonce"},
+		},
+		Body: io.NopCloser(strings.NewReader(fmt.Sprintf(
+			`{"type":"urn:ietf:params:acme:error:%s","detail":%q,"status":%d}`,
+			problemType, detail, status,
+		))),
+		Request: r,
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"log"
 	randv2 "math/rand/v2"
 	"net"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -484,6 +485,24 @@ type acmeCertIssueArgs struct {
 func (args acmeCertIssueArgs) baseDomain() string { return strings.TrimPrefix(args.domain, "*.") }
 func (args acmeCertIssueArgs) isWildcard() bool   { return isWildcardDomain(args.domain) }
 
+// authorizeOrderWithReplacesFallback retries once without order options when
+// the CA rejects an ARI "replaces" order with a client error. This can happen
+// when the local ACME account key was recreated after the cached certificate
+// was issued. Rate limits are excluded because retrying without "replaces"
+// would not avoid them.
+func authorizeOrderWithReplacesFallback(ctx context.Context, ac *xacme.Client, authzIDs []xacme.AuthzID, opts []xacme.OrderOption, logf logger.Logf) (*xacme.Order, error) {
+	order, err := ac.AuthorizeOrder(ctx, authzIDs, opts...)
+	if err == nil || len(opts) == 0 {
+		return order, err
+	}
+	var acmeErr *xacme.Error
+	if !errors.As(err, &acmeErr) || acmeErr.StatusCode < 400 || acmeErr.StatusCode >= 500 || acmeErr.StatusCode == http.StatusTooManyRequests {
+		return nil, err
+	}
+	logf("acme: order with ARI 'replaces' rejected with HTTP %d; retrying without 'replaces'", acmeErr.StatusCode)
+	return ac.AuthorizeOrder(ctx, authzIDs)
+}
+
 func (e *extension) issueACMECert(ctx context.Context, b *ipnlocal.LocalBackend, ac *xacme.Client, args acmeCertIssueArgs) (ret *ipnlocal.TLSCertKeyPair, err error) {
 	if args.traceACME == nil {
 		args.traceACME = func(any) {}
@@ -522,7 +541,7 @@ func (e *extension) issueACMECert(ctx context.Context, b *ipnlocal.LocalBackend,
 	} else {
 		authzIDs = []xacme.AuthzID{{Type: "dns", Value: args.domain}}
 	}
-	order, err := ac.AuthorizeOrder(ctx, authzIDs, args.opts...)
+	order, err := authorizeOrderWithReplacesFallback(ctx, ac, authzIDs, args.opts, args.logf)
 	if err != nil {
 		return nil, err
 	}
