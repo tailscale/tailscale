@@ -1008,37 +1008,64 @@ func (ss *sshSession) launchProcess() error {
 		return err
 	}
 
-	// We need to be able to close stdin and stdout separately later so make
-	// dups. Use F_DUPFD_CLOEXEC rather than dup(2): a plain dup does not set
-	// FD_CLOEXEC, so the pty master would be inherited by every other SSH
-	// session's child process started while this session is alive. A leaked
-	// master keeps the pty open after this session ends, so its slave never
-	// hangs up and processes writing to it (e.g. a tmux server) block forever.
-	//
-	// The resize goroutine owns the second dup, so a window-change
-	// request acts on a descriptor held open for its goroutine's
-	// lifetime.
-	outDup, err := unix.FcntlInt(pty.Fd(), unix.F_DUPFD_CLOEXEC, 0)
-	if err != nil {
-		pty.Close()
-		tty.Close()
-		return err
+	defer pty.Close()
+	// Use independently closeable, pollable master descriptors for stdin,
+	// stdout, and window changes. The original master is not used for I/O.
+	var masters [3]*os.File
+	for i := range masters {
+		masters[i], err = dupPTYMaster(pty)
+		if err != nil {
+			for _, f := range masters {
+				if f != nil {
+					f.Close()
+				}
+			}
+			tty.Close()
+			return err
+		}
 	}
-	resizeDup, err := unix.FcntlInt(pty.Fd(), unix.F_DUPFD_CLOEXEC, 0)
-	if err != nil {
-		unix.Close(outDup)
-		pty.Close()
-		tty.Close()
-		return err
-	}
-	go resizeWindow(os.NewFile(uintptr(resizeDup), pty.Name()), winCh)
+	ss.ptyResize = masters[2]
+	go resizeWindow(ss.ctx, masters[2], winCh)
 
-	ss.wrStdin = pty
-	ss.rdStdout = os.NewFile(uintptr(outDup), pty.Name())
+	ss.wrStdin = masters[0]
+	ss.rdStdout = masters[1]
 	ss.rdStderr = nil // not available for pty
 	ss.childPipes = []io.Closer{tty}
 
 	return nil
+}
+
+// dupPTYMaster duplicates a PTY master with CLOEXEC and O_NONBLOCK set before
+// os.NewFile registers it with the runtime poller. Descriptor operations on the
+// returned file must use SyscallConn to synchronize with Close.
+func dupPTYMaster(f *os.File) (*os.File, error) {
+	raw, err := f.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	fd := -1
+	var dupErr error
+	if err := raw.Control(func(src uintptr) {
+		fd, dupErr = unix.FcntlInt(src, unix.F_DUPFD_CLOEXEC, 0)
+		if dupErr == nil {
+			dupErr = unix.SetNonblock(fd, true)
+		}
+	}); err != nil {
+		return nil, err
+	}
+	if dupErr != nil {
+		if fd != -1 {
+			unix.Close(fd)
+		}
+		return nil, dupErr
+	}
+	dup := os.NewFile(uintptr(fd), f.Name())
+	// Reject descriptors that the runtime cannot poll: Close must interrupt I/O.
+	if err := dup.SetReadDeadline(time.Time{}); err != nil {
+		dup.Close()
+		return nil, fmt.Errorf("PTY master is not pollable: %w", err)
+	}
+	return dup, nil
 }
 
 // sessionViaMonitor reports whether this session's child is exec'd by
@@ -1049,20 +1076,40 @@ func (ss *sshSession) sessionViaMonitor() bool {
 	return ss.conn.srv.tailscaledPath != ""
 }
 
-// resizeWindow applies window-change requests to the session's pty
-// master. It stops when the SSH channel closes its window channel or
-// when the ioctl on the master fails. f is this goroutine's own
-// descriptor of the master, held open for the goroutine's lifetime.
-func resizeWindow(f *os.File, winCh <-chan gliderssh.Window) {
+// resizeWindow applies window changes until cancellation, channel closure,
+// or a non-EINTR ioctl error. It closes its PTY master descriptor on return.
+func resizeWindow(ctx context.Context, f *os.File, winCh <-chan gliderssh.Window) {
 	defer f.Close()
-	for win := range winCh {
-		if err := unix.IoctlSetWinsize(int(f.Fd()), syscall.TIOCSWINSZ, &unix.Winsize{
-			Row:    uint16(win.Height),
-			Col:    uint16(win.Width),
-			Xpixel: uint16(win.WidthPixels),
-			Ypixel: uint16(win.HeightPixels),
-		}); err != nil {
+	raw, err := f.SyscallConn()
+	if err != nil {
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
 			return
+		case win, ok := <-winCh:
+			if !ok {
+				return
+			}
+			var ioctlErr error
+			// Control prevents concurrent Close from releasing the descriptor
+			// while the ioctl is using it.
+			if err := raw.Control(func(fd uintptr) {
+				for {
+					ioctlErr = unix.IoctlSetWinsize(int(fd), syscall.TIOCSWINSZ, &unix.Winsize{
+						Row:    uint16(win.Height),
+						Col:    uint16(win.Width),
+						Xpixel: uint16(win.WidthPixels),
+						Ypixel: uint16(win.HeightPixels),
+					})
+					if !errors.Is(ioctlErr, unix.EINTR) || ctx.Err() != nil {
+						break
+					}
+				}
+			}); err != nil || ioctlErr != nil {
+				return
+			}
 		}
 	}
 }
@@ -1130,7 +1177,7 @@ var opcodeShortName = map[uint8]string{
 }
 
 // startWithPTY starts the session with a pseudo-terminal as its stdio.
-// On the monitor path, the slave descriptors are passed via SCM_RIGHTS.
+// On the monitor path, the PTY child descriptors are passed via SCM_RIGHTS.
 func (ss *sshSession) startWithPTY(envFile *os.File) (ptyFile, tty *os.File, err error) {
 	ptyReq := ss.ptyReq
 	cmd := ss.cmd
