@@ -1234,6 +1234,63 @@ func TestContainerBoot(t *testing.T) {
 				},
 			}
 		},
+		"kube_shutdown_while_starting_tailscaled": func(env *testEnv) testCase {
+			return testCase{
+				Env: map[string]string{
+					"KUBERNETES_SERVICE_HOST":       env.kube.Host,
+					"KUBERNETES_SERVICE_PORT_HTTPS": env.kube.Port,
+					"TS_TEST_DELAY_SOCKET":          filepath.Join(env.d, "release-tailscaled-socket"),
+				},
+				KubeSecret: map[string]string{
+					"authkey": "tskey-key",
+				},
+				Phases: []phase{
+					{
+						// Wait until tailscaled has started, but keep its socket unavailable
+						// so containerboot remains inside startTailscaled.
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=kube:tailscale --statedir=/tmp --tun=userspace-networking",
+						},
+						WantKubeSecret: map[string]string{
+							"authkey":           "tskey-key",
+							kubetypes.KeyCapVer: capver,
+						},
+					},
+					{
+						// A shutdown while startTailscaled is waiting for its socket must
+						// still wait for the in-progress state write.
+						Signal: new(unix.SIGTERM),
+						UpdateKubeSecret: map[string]string{
+							"_machinekey":  "foo",
+							"_profiles":    "foo",
+							"profile-baff": "foo",
+						},
+						WantKubeSecret: map[string]string{
+							"authkey":           "tskey-key",
+							"_machinekey":       "foo",
+							"_profiles":         "foo",
+							"profile-baff":      "foo",
+							kubetypes.KeyCapVer: capver,
+						},
+						WantLog: "Waiting for tailscaled to finish writing state to Secret \"tailscale\"",
+					},
+					{
+						UpdateKubeSecret: map[string]string{
+							"_current-profile": "foo",
+						},
+						WantKubeSecret: map[string]string{
+							"authkey":           "tskey-key",
+							"_machinekey":       "foo",
+							"_profiles":         "foo",
+							"profile-baff":      "foo",
+							"_current-profile":  "foo",
+							kubetypes.KeyCapVer: capver,
+						},
+						WantExitCode: new(0),
+					},
+				},
+			}
+		},
 	}
 
 	for name, test := range tests {
