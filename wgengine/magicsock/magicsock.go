@@ -4215,6 +4215,12 @@ const (
 	// path (without using DERP) without having heard a Pong reply.
 	trustUDPAddrDuration = 6500 * time.Millisecond
 
+	// fullSizeProbeInterval is how often an unverified path starts a new round of full-size probes, see [fullSizeProbe.due].
+	fullSizeProbeInterval = 5 * time.Minute
+
+	// fullSizeProbeTries is how many full-size probes a round sends, discoPingInterval apart, while they go unanswered.
+	fullSizeProbeTries = 3
+
 	// goodEnoughLatency is the latency at or under which we don't
 	// try to upgrade to a better path.
 	goodEnoughLatency = 5 * time.Millisecond
@@ -4224,6 +4230,14 @@ const (
 	// expire at 30 seconds, so this is a few seconds shy of that.
 	endpointsFreshEnoughDuration = 27 * time.Second
 )
+
+// fullSizeProbeEnabled reports whether direct paths must answer a full-size disco ping before being used, see [endpoint.fullSizeOKLocked].
+func (c *Conn) fullSizeProbeEnabled() bool {
+	if v, ok := debugFullSizeProbe().Get(); ok {
+		return v
+	}
+	return c.controlKnobs != nil && c.controlKnobs.DiscoFullSizeProbe.Load()
+}
 
 // Constants that are variable for testing.
 var (
@@ -4426,6 +4440,7 @@ var (
 	metricSentDiscoPong                          = clientmetric.NewCounter("magicsock_disco_sent_pong")
 	metricSentDiscoPeerMTUProbes                 = clientmetric.NewCounter("magicsock_disco_sent_peer_mtu_probes")
 	metricSentDiscoPeerMTUProbeBytes             = clientmetric.NewCounter("magicsock_disco_sent_peer_mtu_probe_bytes")
+	metricDiscoFullSizeProbeLost                 = clientmetric.NewCounter("magicsock_disco_full_size_probe_lost")
 	metricSentDiscoCallMeMaybe                   = clientmetric.NewCounter("magicsock_disco_sent_callmemaybe")
 	metricSentDiscoCallMeMaybeVia                = clientmetric.NewCounter("magicsock_disco_sent_callmemaybevia")
 	metricSentDiscoBindUDPRelayEndpoint          = clientmetric.NewCounter("magicsock_disco_sent_bind_udp_relay_endpoint")
