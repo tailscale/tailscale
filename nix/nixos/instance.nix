@@ -294,5 +294,19 @@ in {
         }
       '';
     };
+
+    servicesFile = mkOption {
+      type = types.nullOr types.path;
+      default = null;
+      example = "/run/secrets/tailscale-services.json";
+      description = ''
+        Tailscale Services configuration file in JSON, applied with
+        `tailscale serve set-config --all`. Takes precedence over
+        `services`, including shared ones. Useful when the file holds
+        secrets or is generated outside Nix.
+
+        See <https://tailscale.com/kb/1589/tailscale-services-configuration-file>
+      '';
+    };
   };
 }

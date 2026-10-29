@@ -73,6 +73,26 @@ pkgs.testers.runNixOSTest {
         };
       };
     };
+
+    # Node 5: upstream nixpkgs serve.* spellings on the singular instance,
+    # and a raw servicesFile on a plural one, which wins over shared services.
+    compat = {
+      imports = [self.nixosModules.override];
+      services.tailscale = {
+        enable = true;
+        serve = {
+          enable = true;
+          services.prometheus.endpoints."tcp:443" = "http://localhost:9090";
+        };
+      };
+      services.tailscales.net1 = {
+        enable = true;
+        servicesFile = pkgs.writeText "services.json" (builtins.toJSON {
+          version = "0.0.1";
+          services."svc:raw".endpoints."tcp:80" = "http://localhost:8080";
+        });
+      };
+    };
   };
 
   testScript = ''
@@ -180,5 +200,21 @@ pkgs.testers.runNixOSTest {
         assert "svc:prometheus" in cfg["services"], f"missing svc:prometheus: {cfg}"
         assert cfg["services"]["svc:prometheus"]["endpoints"]["tcp:443"] == "http://localhost:9090", \
             f"wrong endpoint: {cfg}"
+
+    #
+    # Node 5: compat — upstream serve.* spellings and servicesFile.
+    #
+    with subtest("upstream serve.* spellings and servicesFile"):
+        compat.wait_for_unit("tailscaled.service")
+        compat.wait_for_unit("tailscaled-net1.service")
+
+        # Upstream tailscale-serve.nix is disabled; ours handles serve.*.
+        compat.fail("systemctl cat tailscale-serve.service")
+
+        cfg = get_serve_config(compat, "tailscaled-serve-config.service")
+        assert "svc:prometheus" in cfg["services"], f"serve.services alias not applied: {cfg}"
+
+        cfg1 = get_serve_config(compat, "tailscaled-net1-serve-config.service")
+        assert list(cfg1["services"]) == ["svc:raw"], f"servicesFile should win over shared: {cfg1}"
   '';
 }

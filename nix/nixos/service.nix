@@ -267,8 +267,11 @@ self: {
       };
     }
     # ── Serve config service (when services are defined) ──
-    // optionalAttrs (effServices != {}) (let
-      configFile = mkServeConfigFile name effServices;
+    // optionalAttrs (effServices != {} || cfg.servicesFile != null) (let
+      configFile =
+        if cfg.servicesFile != null
+        then cfg.servicesFile
+        else mkServeConfigFile name effServices;
       socket = escapeShellArg meta.socketPath;
     in {
       "${meta.svcName}-serve-config" = {

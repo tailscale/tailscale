@@ -15,7 +15,21 @@ in {
   options = {
     services.tailscale = mkOption {
       type = types.submodule {
-        imports = [instanceModule];
+        imports = [
+          instanceModule
+          # Spellings of upstream nixpkgs' tailscale-serve.nix, so its
+          # configs carry over.
+          (lib.mkAliasOptionModule ["serve" "services"] ["services"])
+          (lib.mkAliasOptionModule ["serve" "configFile"] ["servicesFile"])
+        ];
+        options.serve.enable = mkOption {
+          type = types.bool;
+          default = false;
+          description = ''
+            Accepted for compatibility with upstream nixpkgs and ignored:
+            services apply whenever `services` or `servicesFile` is set.
+          '';
+        };
       };
       default = {};
       description = ''
