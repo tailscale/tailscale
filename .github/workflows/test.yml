@@ -578,6 +578,71 @@ jobs:
       env:
         GOOS: android
         GOARCH: arm64
+  
+android-downstream-compat:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout OSS
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: src
+          fetch-depth: 0
+
+      - name: Check whether wireguard-go changed
+        id: wireguard-go
+        working-directory: src
+        shell: bash
+        run: |
+          if git diff \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}" \
+            -- go.mod \
+            | grep -q 'github.com/tailscale/wireguard-go'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout tailscale-android
+        if: steps.wireguard-go.outputs.changed == 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: tailscale/tailscale-android
+          path: tailscale-android
+          ref: a36a59d367bbfbfe29b65891edbdc90d3599e1c7
+
+      - name: Set up Go
+        if: steps.wireguard-go.outputs.changed == 'true'
+        uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5.4.0
+        with:
+          go-version-file: tailscale-android/go.mod
+
+      - name: Set up Java
+        if: steps.wireguard-go.outputs.changed == 'true'
+        uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12 # v4.7.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Use OSS PR dependencies
+        if: steps.wireguard-go.outputs.changed == 'true'
+        working-directory: tailscale-android
+        shell: bash
+        run: |
+          WG_VERSION="$(
+            cd ../src
+            ./tool/go list -m -f '{{.Version}}' github.com/tailscale/wireguard-go
+          )"
+
+          go mod edit -replace=tailscale.com="$GITHUB_WORKSPACE/src"
+          go mod edit \
+            -replace=github.com/tailscale/wireguard-go=github.com/tailscale/wireguard-go@"$WG_VERSION"
+
+      - name: Build libtailscale
+        if: steps.wireguard-go.outputs.changed == 'true'
+        working-directory: tailscale-android
+        run: make libtailscale
 
   wasm: # builds tsconnect, which is the only wasm build we support
     runs-on: ubuntu-24.04
