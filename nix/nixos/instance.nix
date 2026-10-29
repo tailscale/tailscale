@@ -12,7 +12,7 @@
   self,
   lib,
   pkgs,
-}: let
+}: {config, ...}: let
   inherit (lib)
     literalExpression
     mkEnableOption
@@ -47,12 +47,18 @@ in {
         Name of the TUN network interface.
         Only used when `networkingMode` is `"tun"`.
         Each TUN-mode instance must have a unique interface name.
+        `"userspace-networking"`, the upstream nixpkgs way to skip TUN,
+        defaults `networkingMode` to `"userspace"`.
       '';
     };
 
     networkingMode = mkOption {
       type = types.enum ["tun" "userspace"];
-      default = "tun";
+      default =
+        if config.interfaceName == "userspace-networking"
+        then "userspace"
+        else "tun";
+      defaultText = literalExpression ''if interfaceName == "userspace-networking" then "userspace" else "tun"'';
       description = ''
         Networking mode for this Tailscale instance.
 
