@@ -790,6 +790,14 @@ type GetReportOpts struct {
 	// If no communication with that region has occurred, or it occurred
 	// too far in the past, this function should return the zero time.
 	GetLastDERPActivity func(tailcfg.DERPRegionID) time.Time
+	// GetDERPRegionConnected is a callback that, if provided, should return
+	// whether the calling code currently has an established DERP connection
+	// to the given region. This is used alongside GetLastDERPActivity to
+	// assist in avoiding PreferredDERP ("home DERP") flaps: a region that is
+	// still connected but has simply been quiet (e.g. no recent frames,
+	// within the DERP keep-alive cadence) shouldn't be treated as
+	// unreachable just because GetLastDERPActivity looks stale.
+	GetDERPRegionConnected func(tailcfg.DERPRegionID) bool
 	// OnlyTCP443 constrains netcheck reporting to measurements over TCP port
 	// 443.
 	OnlyTCP443 bool
@@ -804,6 +812,15 @@ func (o *GetReportOpts) getLastDERPActivity(region tailcfg.DERPRegionID) time.Ti
 		return time.Time{}
 	}
 	return o.GetLastDERPActivity(region)
+}
+
+// getDERPRegionConnected calls o.GetDERPRegionConnected if both o and
+// o.GetDERPRegionConnected are non-nil; otherwise it returns false.
+func (o *GetReportOpts) getDERPRegionConnected(region tailcfg.DERPRegionID) bool {
+	if o == nil || o.GetDERPRegionConnected == nil {
+		return false
+	}
+	return o.GetDERPRegionConnected(region)
 }
 
 func (c *Client) SetForcePreferredDERP(region tailcfg.DERPRegionID) {
@@ -1492,9 +1509,19 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(rs *reportState, r *Report,
 		heardFromOldRegionRecently = heardFromOldRegionRecently || prevRegionLastHeard.After(now.Add(-PreferredDERPFrameTime))
 	}
 
+	// A region that's still connected but has simply been quiet (no new
+	// frames within PreferredDERPFrameTime) shouldn't look unreachable just
+	// because it has no recent traffic. If the DERP connection to it is
+	// still established, and we've had some proof of life from it within
+	// the DERP keep-alive cadence, treat it as still accessible.
+	oldRegionConnectedRecently := false
+	if changingPreferred && rs.opts.getDERPRegionConnected(prevDERP) {
+		oldRegionConnectedRecently = prevRegionLastHeard.After(now.Add(-PreferredDERPKeepAliveTimeout))
+	}
+
 	// The old region is accessible if we've heard from it via a non-STUN
 	// mechanism, or have a latency (and thus heard back via STUN).
-	oldRegionIsAccessible := oldRegionCurLatency != 0 || heardFromOldRegionRecently
+	oldRegionIsAccessible := oldRegionCurLatency != 0 || heardFromOldRegionRecently || oldRegionConnectedRecently
 	if changingPreferred && oldRegionIsAccessible {
 		// bestAny < any other value, so oldRegionCurLatency - bestAny >= 0
 		if oldRegionCurLatency-bestAny < preferredDERPAbsoluteDiff {
