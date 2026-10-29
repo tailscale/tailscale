@@ -16,30 +16,40 @@ fi
     repo_root="${BASH_SOURCE%/*}/../"
     cd "$repo_root"
 
+    # shellcheck source=lib/download.sh
+    . tool/lib/download.sh
+
     cachedir="$HOME/.cache/tailscale-helm"
-    tarball="${cachedir}.tar.gz"
 
     read -r want_rev < "$(dirname "$0")/helm.rev"
+
+    # Hashes are the sha256sum of the release tarballs published at
+    # https://get.helm.sh/helm-v${want_rev}-${OS}-${ARCH}.tar.gz.sha256sum.
+    # Update these when bumping helm.rev.
+    want_shas=(
+        darwin-amd64=e207e009b931162b0383b463c333a2792355200e91dbcf167c97c150e9f5fedb
+        darwin-arm64=46596d6d2d9aa545eb74f40684858fac0841df373ca760af1259d3493161d8c9
+        linux-amd64=98c363564d00afd0cc3088e8f830f2a0eeb5f28755b3d8c48df89866374a1ed0
+        linux-arm64=8c4a0777218b266a7b977394aaf0e9cef30ed2df6e742d683e523d75508d6efe
+    )
 
     got_rev=""
     if [[ -x "${cachedir}/helm" ]]; then
         got_rev=$("${cachedir}/helm" version --short)
         got_rev="${got_rev#v}" # trim the leading 'v'
         got_rev="${got_rev%+*}" # trim the trailing '+" followed by a commit SHA'
-
-
     fi
 
     if [[ "$want_rev" != "$got_rev" ]]; then
-        rm -rf "$cachedir" "$tarball"
         if [[ -n "${IN_NIX_SHELL:-}" ]]; then
             nix_helm="$(which -a helm | grep /nix/store | head -1)"
             nix_helm="${nix_helm%/helm}"
             nix_helm_rev="${nix_helm##*-}"
             if [[ "$nix_helm_rev" != "$want_rev" ]]; then
                 echo "Wrong helm version in Nix, got $nix_helm_rev want $want_rev" >&2
-		        exit 1
+                exit 1
             fi
+            rm -rf "$cachedir"
             ln -sf "$nix_helm" "$cachedir"
         else
             # works for linux and darwin
@@ -52,15 +62,10 @@ fi
             if [ "$ARCH" = "aarch64" ]; then
                 ARCH="arm64"
             fi
-            mkdir -p "$cachedir"
-            # When running on GitHub in CI, the below curl sometimes fails with
-            # INTERNAL_ERROR after finishing the download. The most common cause
-            # of INTERNAL_ERROR is glitches in intermediate hosts handling of
-            # HTTP/2 forwarding, so forcing HTTP 1.1 often fixes the issue. See
-            # https://github.com/tailscale/tailscale/issues/8988
-	        curl -f -L --http1.1 -o "$tarball" -sSL "https://get.helm.sh/helm-v${want_rev}-${OS}-${ARCH}.tar.gz"
-            (cd "$cachedir" && tar --strip-components=1 -xf "$tarball")
-            rm -f "$tarball"
+
+            want_hash=$(select_sha256 "${OS}-${ARCH}" "${want_shas[@]}")
+
+            download_tool --args=--strip-components=1 --verify-sha256="$want_hash" "https://get.helm.sh/helm-v${want_rev}-${OS}-${ARCH}.tar.gz" "$cachedir"
         fi
     fi
 )
