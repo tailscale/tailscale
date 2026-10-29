@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go4.org/mem"
@@ -38,6 +40,14 @@ type Client struct {
 	wmu  sync.Mutex // hold while writing to bw
 	bw   *bufio.Writer
 	rate *rate.Limiter // if non-nil, rate limiter to use
+
+	// forwardFlushPending is whether a flush of forwarded packets
+	// is scheduled or in progress; see [Client.ForwardPacket].
+	forwardFlushPending atomic.Bool
+	// forwardErr is the first error from a deferred flush of
+	// forwarded packets, if any. It is sticky: once set, every
+	// ForwardPacket call returns it so the owner reconnects.
+	forwardErr syncs.AtomicValue[error]
 
 	// Owned by Recv:
 	peeked  int                      // bytes to discard on next Recv
@@ -287,9 +297,26 @@ func (c *Client) send(dstKey key.NodePublic, pkt []byte) (ret error) {
 	return c.bw.Flush()
 }
 
+// forwardWriteTimeout is how long a flush of forwarded packets may
+// take before the connection is closed as stuck.
+const forwardWriteTimeout = 5 * time.Second
+
 // ForwardPacket sends a forward packet frame carrying pkt from srcKey
-// to dstKey. It writes and flushes pkt before returning and does not
-// retain it.
+// to dstKey. It does not retain pkt: the frame is copied to the
+// client's write buffer before it returns. The buffer is flushed
+// shortly afterwards by a goroutine ForwardPacket starts if one isn't
+// already scheduled, so frames forwarded by many goroutines at once,
+// as a DERP server's reader goroutines do for a busy mesh peer, share
+// a flush and thus a TLS record and a write syscall, instead of each
+// paying for its own.
+//
+// A frame that doesn't fit in the remaining buffer space flushes the
+// buffered frames first, synchronously, so a slow connection still
+// applies backpressure to callers.
+//
+// If a deferred flush fails, the connection is closed and the error
+// is returned by every subsequent call, so the owner reconnects as it
+// would for a synchronous write error.
 func (c *Client) ForwardPacket(srcKey, dstKey key.NodePublic, pkt LoanedBytes) (err error) {
 	defer func() {
 		if err != nil {
@@ -300,26 +327,94 @@ func (c *Client) ForwardPacket(srcKey, dstKey key.NodePublic, pkt LoanedBytes) (
 	if pkt.Len() > MaxPacketSize {
 		return fmt.Errorf("packet too big: %d", pkt.Len())
 	}
+	if err := c.forwardErr.Load(); err != nil {
+		return err
+	}
 
 	c.wmu.Lock()
-	defer c.wmu.Unlock()
+	err = c.writeForwardPacketLocked(srcKey, dstKey, pkt)
+	c.wmu.Unlock()
+	if err != nil {
+		return err
+	}
+	c.scheduleForwardFlush()
+	return nil
+}
 
-	timer := c.clock.AfterFunc(5*time.Second, c.writeTimeoutFired)
-	defer timer.Stop()
-
+// writeForwardPacketLocked writes a forward packet frame to c.bw,
+// flushing what's already buffered first if the frame wouldn't fit.
+// c.wmu must be held.
+func (c *Client) writeForwardPacketLocked(srcKey, dstKey key.NodePublic, pkt LoanedBytes) error {
+	frameLen := FrameHeaderLen + KeyLen*2 + pkt.Len()
+	if c.bw.Available() < frameLen {
+		// Either the buffered frames go out now to make room, or
+		// the frame is bigger than the whole buffer and bufio
+		// writes it through. Both are a blocking write, so arm the
+		// watchdog that scheduleForwardFlush's flush gets.
+		timer := c.clock.AfterFunc(forwardWriteTimeout, c.writeTimeoutFired)
+		defer timer.Stop()
+		if c.bw.Buffered() > 0 {
+			if err := c.bw.Flush(); err != nil {
+				return err
+			}
+		}
+	}
 	if err := WriteFrameHeader(c.bw, FrameForwardPacket, uint32(KeyLen*2+pkt.Len())); err != nil {
 		return err
 	}
-	if _, err := c.bw.Write(srcKey.AppendTo(nil)); err != nil {
+	if err := srcKey.WriteRawWithoutAllocating(c.bw); err != nil {
 		return err
 	}
-	if _, err := c.bw.Write(dstKey.AppendTo(nil)); err != nil {
+	if err := dstKey.WriteRawWithoutAllocating(c.bw); err != nil {
 		return err
 	}
-	if _, err := pkt.WriteTo(c.bw); err != nil {
-		return err
+	_, err := pkt.WriteTo(c.bw)
+	return err
+}
+
+// scheduleForwardFlush makes sure the frames ForwardPacket has
+// buffered get flushed. It starts a flush goroutine unless one is
+// already pending, in which case that one will flush them: it clears
+// forwardFlushPending only after flushing, while still holding wmu,
+// so a frame is either buffered before that flush and goes out with
+// it, or is written after the flag is clear and schedules its own.
+func (c *Client) scheduleForwardFlush() {
+	if c.forwardFlushPending.CompareAndSwap(false, true) {
+		go c.flushForwarded()
 	}
-	return c.bw.Flush()
+}
+
+// flushForwarded is the goroutine started by scheduleForwardFlush.
+func (c *Client) flushForwarded() {
+	// Let goroutines that are ready to forward go first, so their
+	// frames join this flush. Without this, batching depends on the
+	// scheduler: a new goroutine runs ahead of goroutines woken from
+	// the lock queue, so with few Ps the flusher would reach the
+	// lock between every two producers and flush one frame at a
+	// time. Measured in BenchmarkForwardPacket, the yield costs a
+	// few percent at GOMAXPROCS=8 and nothing at 1.
+	runtime.Gosched()
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	var err error
+	buffered := c.bw.Buffered()
+	if buffered > 0 {
+		timer := c.clock.AfterFunc(forwardWriteTimeout, c.writeTimeoutFired)
+		err = c.bw.Flush()
+		timer.Stop()
+	}
+	c.forwardFlushPending.Store(false)
+	if err != nil {
+		// The ForwardPacket calls that buffered these frames have
+		// already returned nil, so the frames are lost with no
+		// caller to tell; log how much went with them. Make the
+		// error sticky for the next ForwardPacket call and close
+		// the connection so the reader fails too; either way the
+		// owner (derphttp.Client) reconnects.
+		c.logf("derp.ForwardPacket: flush failed, dropping %d buffered bytes: %v", buffered, err)
+		c.forwardErr.CompareAndSwap(nil, err)
+		c.nc.Close()
+	}
 }
 
 func (c *Client) writeTimeoutFired() { c.nc.Close() }

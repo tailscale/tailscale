@@ -505,7 +505,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		httpConn = tcpConn
 	}
 
-	brw := bufio.NewReadWriter(bufio.NewReader(httpConn), bufio.NewWriter(httpConn))
+	brw := bufio.NewReadWriter(bufio.NewReader(httpConn), c.newWriter(httpConn))
 	var derpClient *derp.Client
 
 	req, err := http.NewRequest("GET", c.urlString(node), nil)
@@ -1168,6 +1168,25 @@ func (c *Client) Close() error {
 	}
 	c.atomicState.Store(ConnectedState{Closed: true})
 	return nil
+}
+
+// meshWriteBufferSize is the bufio.Writer size for mesh connections.
+// A DERP server forwards packets to its mesh peers with
+// [derp.Client.ForwardPacket], which batches the frames of concurrent
+// calls into one flush, so the buffer bounds how many frames share a
+// TLS record and a write syscall. It is the TLS maximum plaintext
+// record size, so a full buffer flushes as exactly one record.
+const meshWriteBufferSize = 16 << 10
+
+// newWriter returns the bufio.Writer for a new connection to w: one of
+// bufio's default size for ordinary clients, which send one packet at
+// a time and gain nothing from a larger buffer, and one of
+// [meshWriteBufferSize] for mesh peers.
+func (c *Client) newWriter(w io.Writer) *bufio.Writer {
+	if !c.MeshKey.IsZero() {
+		return bufio.NewWriterSize(w, meshWriteBufferSize)
+	}
+	return bufio.NewWriter(w)
 }
 
 // closeForReconnect closes the underlying network connection and

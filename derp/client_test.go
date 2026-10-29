@@ -6,16 +6,23 @@ package derp
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
+	"errors"
+	"io"
 	"net"
 	"net/netip"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"go4.org/mem"
 	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
 )
 
 type dummyNetConn struct {
@@ -297,3 +304,251 @@ func TestClientSendRateLimiting(t *testing.T) {
 		t.Errorf("limited conn's bytes count = %v; want >=%v, <%v", bytesLimited, bytes1K*2, bytes1K)
 	}
 }
+
+// fwdTestConn is a derp.Conn for ForwardPacket tests. Writes go to w,
+// and Close is counted.
+type fwdTestConn struct {
+	dummyNetConn
+	w      io.Writer
+	closes atomic.Int32
+}
+
+func (c *fwdTestConn) Write(p []byte) (int, error)      { return c.w.Write(p) }
+func (c *fwdTestConn) Close() error                     { c.closes.Add(1); return nil }
+func (c *fwdTestConn) SetWriteDeadline(time.Time) error { return nil }
+
+// newForwardTestClient returns a Client whose writes go to w through
+// a bufio.Writer of bufSize bytes, along with its connection.
+func newForwardTestClient(w io.Writer, bufSize int) (*Client, *fwdTestConn) {
+	nc := &fwdTestConn{w: w}
+	c := &Client{
+		nc:    nc,
+		bw:    bufio.NewWriterSize(nc, bufSize),
+		clock: tstime.StdClock{},
+		logf:  logger.Discard,
+	}
+	return c, nc
+}
+
+// forwardFrame is the wire encoding of a forward packet frame.
+func forwardFrame(src, dst key.NodePublic, payload []byte) []byte {
+	var b []byte
+	b = append(b, byte(FrameForwardPacket))
+	b = binary.BigEndian.AppendUint32(b, uint32(KeyLen*2+len(payload)))
+	b = src.AppendTo(b)
+	b = dst.AppendTo(b)
+	return append(b, payload...)
+}
+
+// TestClientForwardPacketDeferredFlush checks that a single
+// ForwardPacket's frame reaches the connection intact without any
+// further call: the deferred flush runs on its own. In the synctest
+// bubble, synctest.Wait returns once the flush goroutine has exited.
+func TestClientForwardPacketDeferredFlush(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var out bytes.Buffer
+		c, nc := newForwardTestClient(&out, 16<<10)
+		src, dst := key.NewNode().Public(), key.NewNode().Public()
+
+		payload := []byte("hello")
+		if err := c.ForwardPacket(src, dst, LoanBytes(payload)); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if want := forwardFrame(src, dst, payload); !bytes.Equal(out.Bytes(), want) {
+			t.Errorf("single frame\n got: % 02x\nwant: % 02x", out.Bytes(), want)
+		}
+		if nc.closes.Load() != 0 {
+			t.Errorf("connection closed %d times", nc.closes.Load())
+		}
+	})
+}
+
+// TestClientForwardPacketBatching checks that frames forwarded by many
+// goroutines while a flush is in progress share the next flush, and
+// all arrive intact.
+//
+// It can't use synctest: the point is to have goroutines queue on the
+// write mutex, and a goroutine blocked on a mutex isn't durably
+// blocked, so a bubble would never settle. Instead the connection's
+// Write is held open mid-flush, so the flush goroutine sits in it
+// holding the lock while n goroutines each forward a frame. They
+// report in just before calling ForwardPacket, and once all have, the
+// held write is released: they then write their frames ahead of the
+// next flush, which therefore carries many of them. The frames that
+// don't fit in the buffer flush it as they go, so the floor is about
+// n*frameLen/bufSize writes, not 1. A goroutine that reported in but
+// hadn't reached the lock yet when the write was released just
+// contends normally, costing at most a write each, which the bound
+// below has ample slack for.
+func TestClientForwardPacketBatching(t *testing.T) {
+	src, dst := key.NewNode().Public(), key.NewNode().Public()
+	const n = 1000
+	held := forwardFrame(src, dst, []byte("held"))
+	frameLen := len(forwardFrame(src, dst, make([]byte, 4)))
+	wantLen := len(held) + n*frameLen
+
+	var mu sync.Mutex
+	var out bytes.Buffer
+	cw := new(countWriter)
+	// When holdNextWrite is set, the next write to the connection
+	// signals writeHeld and then blocks until releaseWrite is closed.
+	// allWritten is closed once wantLen bytes have been written.
+	var holdNextWrite atomic.Bool
+	writeHeld := make(chan struct{})
+	releaseWrite := make(chan struct{})
+	allWritten := make(chan struct{})
+	var allWrittenOnce sync.Once
+	w := writerFunc(func(p []byte) (int, error) {
+		if holdNextWrite.CompareAndSwap(true, false) {
+			close(writeHeld)
+			<-releaseWrite
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		out.Write(p)
+		if out.Len() >= wantLen {
+			allWrittenOnce.Do(func() { close(allWritten) })
+		}
+		return cw.Write(p)
+	})
+	c, nc := newForwardTestClient(w, 16<<10)
+
+	holdNextWrite.Store(true)
+	if err := c.ForwardPacket(src, dst, LoanBytes([]byte("held"))); err != nil {
+		t.Fatal(err)
+	}
+	<-writeHeld
+
+	var reached, done sync.WaitGroup
+	reached.Add(n)
+	done.Add(n)
+	for i := range n {
+		go func() {
+			defer done.Done()
+			p := binary.BigEndian.AppendUint32(nil, uint32(i))
+			reached.Done()
+			if err := c.ForwardPacket(src, dst, LoanBytes(p)); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	reached.Wait()
+	close(releaseWrite)
+	done.Wait()
+
+	select {
+	case <-allWritten:
+	case <-time.After(10 * time.Second):
+		mu.Lock()
+		defer mu.Unlock()
+		t.Fatalf("timed out with %d of %d bytes written", out.Len(), wantLen)
+	}
+	mu.Lock()
+	got := bytes.Clone(out.Bytes())
+	mu.Unlock()
+	if len(got) != wantLen {
+		t.Fatalf("got %d bytes; want %d", len(got), wantLen)
+	}
+
+	br := bufio.NewReader(bytes.NewReader(got))
+	readFrame := func() (fl uint32, body []byte) {
+		t.Helper()
+		ft, fl, err := ReadFrameHeader(br)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ft != FrameForwardPacket {
+			t.Fatalf("frame type %d; want %d", ft, FrameForwardPacket)
+		}
+		body = make([]byte, fl)
+		if _, err := io.ReadFull(br, body); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(body[:KeyLen], src.AppendTo(nil)) || !bytes.Equal(body[KeyLen:2*KeyLen], dst.AppendTo(nil)) {
+			t.Fatal("wrong keys in frame")
+		}
+		return fl, body
+	}
+	if _, body := readFrame(); string(body[2*KeyLen:]) != "held" {
+		t.Fatalf("first frame payload %q; want %q", body[2*KeyLen:], "held")
+	}
+	seen := make([]bool, n)
+	for range n {
+		fl, body := readFrame()
+		if fl != uint32(KeyLen*2+4) {
+			t.Fatalf("frame len %d; want %d", fl, KeyLen*2+4)
+		}
+		i := binary.BigEndian.Uint32(body[2*KeyLen:])
+		if seen[i] {
+			t.Fatalf("frame %d seen twice", i)
+		}
+		seen[i] = true
+	}
+	writes, _ := cw.Stats()
+	t.Logf("%d frames in %d writes", n+1, writes)
+	if writes > n/10 {
+		t.Errorf("%d writes for %d frames; want batching", writes, n+1)
+	}
+	if nc.closes.Load() != 0 {
+		t.Errorf("connection closed %d times", nc.closes.Load())
+	}
+}
+
+// TestClientForwardPacketFillsBuffer checks the path where a frame
+// doesn't fit in the remaining buffer space: what's buffered is
+// flushed first, and then frames bigger than the whole buffer still
+// get through whole.
+func TestClientForwardPacketFillsBuffer(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var out bytes.Buffer
+		const bufSize = 256
+		c, _ := newForwardTestClient(&out, bufSize)
+		src, dst := key.NewNode().Public(), key.NewNode().Public()
+
+		var want []byte
+		for _, size := range []int{100, 100, 100, bufSize * 3, 1} {
+			p := bytes.Repeat([]byte{byte(size)}, size)
+			if err := c.ForwardPacket(src, dst, LoanBytes(p)); err != nil {
+				t.Fatal(err)
+			}
+			want = append(want, forwardFrame(src, dst, p)...)
+		}
+		synctest.Wait()
+		if !bytes.Equal(out.Bytes(), want) {
+			t.Errorf("output mismatch:\n got %d bytes\nwant %d bytes", out.Len(), len(want))
+		}
+	})
+}
+
+// TestClientForwardPacketFlushError checks that an error from the
+// deferred flush closes the connection and is returned by the next
+// ForwardPacket call, so a derphttp.Client owner reconnects.
+func TestClientForwardPacketFlushError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		wantErr := errors.New("boom")
+		w := writerFunc(func(p []byte) (int, error) { return 0, wantErr })
+		c, nc := newForwardTestClient(w, 16<<10)
+		src, dst := key.NewNode().Public(), key.NewNode().Public()
+
+		if err := c.ForwardPacket(src, dst, LoanBytes([]byte("x"))); err != nil {
+			t.Fatalf("first call: %v", err) // buffered; the flush hasn't run yet
+		}
+		synctest.Wait() // the deferred flush has failed by now
+		if got := nc.closes.Load(); got != 1 {
+			t.Fatalf("connection closed %d times; want 1", got)
+		}
+		err := c.ForwardPacket(src, dst, LoanBytes([]byte("y")))
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("second call err = %v; want %v", err, wantErr)
+		}
+		// And it stays that way.
+		if err := c.ForwardPacket(src, dst, LoanBytes([]byte("z"))); !errors.Is(err, wantErr) {
+			t.Fatalf("third call err = %v; want %v", err, wantErr)
+		}
+	})
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
