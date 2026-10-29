@@ -446,41 +446,6 @@ in {
             '';
           }
         ]
-        ++ (
-          if singularCfg.enable
-          then [
-            {
-              assertion =
-                singularCfg.networkingMode == "tun"
-                || singularCfg.useRoutingFeatures == "none";
-              message = ''
-                services.tailscale: `useRoutingFeatures` requires
-                `networkingMode = "tun"`. Userspace networking does not
-                support IP forwarding or subnet routing.
-              '';
-            }
-          ]
-          else []
-        )
-        ++ concatMap (
-          name: let
-            cfg = pluralCfg.${name};
-          in
-            if cfg.enable
-            then [
-              {
-                assertion =
-                  cfg.networkingMode == "tun"
-                  || cfg.useRoutingFeatures == "none";
-                message = ''
-                  services.tailscales.${name}: `useRoutingFeatures` requires
-                  `networkingMode = "tun"`. Userspace networking does not
-                  support IP forwarding or subnet routing.
-                '';
-              }
-            ]
-            else []
-        ) (builtins.attrNames pluralCfg)
         ++ (let
           addrOf = enabled: c:
             optional

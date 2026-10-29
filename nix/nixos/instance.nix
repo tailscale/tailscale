@@ -163,7 +163,8 @@ in {
 
         When set to `"server"` or `"both"`, IP forwarding will be enabled.
 
-        Only effective when `networkingMode` is `"tun"`.
+        Userspace instances route through netstack and don't need these
+        kernel settings, but they are harmless there.
 
         See <https://tailscale.com/kb/1019/subnets#enable-ip-forwarding>
         See <https://github.com/tailscale/tailscale/issues/3310>
