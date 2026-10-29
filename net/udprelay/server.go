@@ -1068,6 +1068,11 @@ func (e *serverEndpoint) extractClientInfo() [2]status.ClientInfo {
 	return ret
 }
 
+// Port returns the UDP port bound by the server's IPv4 sockets.
+func (s *Server) Port() uint16 {
+	return s.uc4Port
+}
+
 // GetSessions returns a slice of peer relay session statuses, with each
 // entry containing detailed info about the server and clients involved in
 // each session. This information is intended for debugging/status UX, and

@@ -90,6 +90,7 @@ type relayServer interface {
 	GetSessions() []status.ServerSession
 	SetDERPMapView(tailcfg.DERPMapView)
 	SetStaticAddrPorts(addrPorts views.Slice[netip.AddrPort])
+	Port() uint16
 }
 
 // extension is an [ipnext.Extension] managing the relay server on platforms
@@ -266,7 +267,7 @@ func (e *extension) serverStatus() status.ServerStatus {
 	if e.rs == nil {
 		return st
 	}
-	st.UDPPort = new(*e.port)
+	st.UDPPort = new(e.rs.Port())
 	st.Sessions = e.rs.GetSessions()
 	return st
 }
