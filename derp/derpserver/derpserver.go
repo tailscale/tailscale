@@ -166,6 +166,7 @@ type Server struct {
 	_                          align64
 	packetsForwardedOut        expvar.Int
 	packetsForwardedIn         expvar.Int
+	onForwardedInForTest       func()     // if non-nil, called after each forwarded packet is read; see BenchmarkForwardPacketSerial
 	peerGoneDisconnectedFrames expvar.Int // number of peer disconnected frames sent
 	peerGoneNotHereFrames      expvar.Int // number of peer not here frames sent
 	gotPing                    expvar.Int // number of ping frames from client
@@ -570,6 +571,7 @@ func genDroppedCounters() {
 		dropReasonQueueTail,
 		dropReasonWriteError,
 		dropReasonDupClient,
+		dropReasonForwardError,
 	}
 
 	for _, dr := range dropReasons {
@@ -1423,6 +1425,9 @@ func (c *sclient) handleFrameForwardPacket(_ derp.FrameType, fl uint32) error {
 	}
 	contents := *buf
 	s.packetsForwardedIn.Add(1)
+	if f := s.onForwardedInForTest; f != nil {
+		f()
+	}
 	c.packetsRecv.Add(1)
 	c.bytesRecv.Add(uint64(len(contents)))
 
@@ -1512,8 +1517,12 @@ func (c *sclient) handleFrameSendPacket(_ derp.FrameType, fl uint32) error {
 				c.debugLogf("SendPacket for %s, forwarding via %s: %v", dstKey.ShortString(), fwd, err)
 			}
 			if err != nil {
-				// TODO:
-				return nil
+				// The forwarder reconnects on its own; the packet
+				// is lost. Frames the forwarder had accepted and
+				// then failed to write are counted separately, by
+				// derp.ForwardWriteDrops (counter_forward_write_dropped_frames here),
+				// as this path only sees the packet it was handed.
+				s.recordDrop(contents, c.key, dstKey, dropReasonForwardError)
 			}
 			return nil
 		}
@@ -1641,6 +1650,7 @@ const (
 	dropReasonQueueTail        dropReason = "queue_tail"          // destination queue is full, dropped packet at queue tail
 	dropReasonWriteError       dropReason = "write_error"         // OS write() failed
 	dropReasonDupClient        dropReason = "dup_client"          // the public key is connected 2+ times (active/active, fighting)
+	dropReasonForwardError     dropReason = "fwd_error"           // the mesh forwarder to the destination's node returned an error
 )
 
 func (s *Server) recordDrop(packetBytes []byte, srcKey, dstKey key.NodePublic, reason dropReason) {
@@ -3127,6 +3137,11 @@ func (s *Server) ExpVar(rateLimitEnabled bool) expvar.Var {
 	m.Set("peer_gone_not_here_frames", &s.peerGoneNotHereFrames)
 	m.Set("packets_forwarded_out", &s.packetsForwardedOut)
 	m.Set("packets_forwarded_in", &s.packetsForwardedIn)
+	// Forwarded packets the mesh clients accepted, and so were counted
+	// in packets_forwarded_out, but then failed to write. Process-wide,
+	// across all this process's derp.Clients.
+	m.Set("counter_forward_write_dropped_frames", expvar.Func(func() any { return derp.ForwardDroppedFrames.Load() }))
+	m.Set("counter_forward_write_dropped_bytes", expvar.Func(func() any { return derp.ForwardDroppedBytes.Load() }))
 	m.Set("multiforwarder_created", &s.multiForwarderCreated)
 	m.Set("multiforwarder_deleted", &s.multiForwarderDeleted)
 	m.Set("packet_forwarder_delete_other_value", &s.removePktForwardOther)

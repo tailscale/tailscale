@@ -13,6 +13,7 @@ import (
 	"encoding/asn1"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"expvar"
 	"fmt"
 	"io"
@@ -956,6 +957,383 @@ func benchmarkSendRecvSize(b *testing.B, packetSize int) {
 			b.Fatal(err)
 		}
 	}
+}
+
+// writeCountingConn wraps a net.Conn and counts Write calls, which on
+// an unwrapped TCP connection is the number of write(2) syscalls.
+type writeCountingConn struct {
+	net.Conn
+	writes atomic.Int64
+}
+
+func (c *writeCountingConn) Write(p []byte) (int, error) {
+	c.writes.Add(1)
+	return c.Conn.Write(p)
+}
+
+// BenchmarkForwardPacket measures a mesh peer forwarding packets into a
+// Server with derp.Client.ForwardPacket from many goroutines at once,
+// as derper's reader goroutines do for every packet whose destination
+// is on another node in the region. An op is complete once the Server
+// has read the forwarded frame, so ns/op is end-to-end throughput
+// rather than just the caller's cost. writes/op is the number of
+// write(2) calls on the mesh connection per forwarded packet; the
+// closer to zero, the more frames are being batched per syscall. The
+// call-* metrics are percentiles of how long ForwardPacket itself
+// takes, which is how long a derper reader goroutine stalls per
+// forward.
+//
+// Packets are spread over several destination clients so that
+// delivering them isn't the bottleneck; dstdrops/op reports how many
+// the Server still dropped at a destination's queue, which should be
+// zero, since a dropped packet skips the delivery work and would make
+// a run that drops more look cheaper. allocs/op counts the whole
+// process, mesh client and Server, so it's a bound on the forward
+// path's own allocations rather than a measure of them.
+func BenchmarkForwardPacket(b *testing.B) {
+	for _, size := range []int{100, 700, 1300, derp.MaxPacketSize} {
+		b.Run(fmt.Sprintf("msgsize=%d", size), func(b *testing.B) { benchmarkForwardPacketSize(b, size) })
+	}
+}
+
+func benchmarkForwardPacketSize(b *testing.B, packetSize int) {
+	env := newForwardTestEnv(b, runtime.GOMAXPROCS(0), false)
+	srcKey := key.NewNode().Public()
+
+	msg := make([]byte, packetSize)
+	b.SetBytes(int64(len(msg)))
+	b.ReportAllocs()
+	env.meshConn.writes.Store(0)
+	before := env.s.packetsForwardedIn.Value()
+	dropsBefore := queueHeadDrops()
+	b.ResetTimer()
+
+	// Per-call latency of ForwardPacket as its callers see it, which
+	// is how long a derper reader goroutine would stall per forward.
+	var latMu sync.Mutex
+	var lats []time.Duration
+	var next atomic.Int64
+	b.RunParallel(func(pb *testing.PB) {
+		mine := make([]time.Duration, 0, 1024)
+		dstKey := env.dstKeys[int(next.Add(1))%len(env.dstKeys)]
+		for pb.Next() {
+			t0 := time.Now()
+			err := env.mesh.ForwardPacket(srcKey, dstKey, derp.LoanBytes(msg))
+			mine = append(mine, time.Since(t0))
+			if err != nil {
+				b.Error(err)
+				return
+			}
+		}
+		latMu.Lock()
+		lats = append(lats, mine...)
+		latMu.Unlock()
+	})
+
+	// The op isn't done until the server has read the frame.
+	want := before + int64(b.N)
+	deadline := time.Now().Add(30 * time.Second)
+	for env.s.packetsForwardedIn.Value() < want {
+		if time.Now().After(deadline) {
+			b.Fatalf("server read %d of %d forwarded packets", env.s.packetsForwardedIn.Value()-before, b.N)
+		}
+		time.Sleep(50 * time.Microsecond)
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(env.meshConn.writes.Load())/float64(b.N), "writes/op")
+	b.ReportMetric(float64(queueHeadDrops()-dropsBefore)/float64(b.N), "dstdrops/op")
+	slices.Sort(lats)
+	b.ReportMetric(float64(lats[len(lats)/2]), "call-p50-ns")
+	b.ReportMetric(float64(lats[len(lats)*99/100]), "call-p99-ns")
+	b.ReportMetric(float64(lats[len(lats)-1]), "call-max-ns")
+}
+
+// BenchmarkForwardPacketSerial measures a lone forward: one goroutine
+// forwards a packet and blocks until the Server has read it before
+// the next, so nothing is ever in flight alongside it and no batching
+// is possible. ns/op is the latency from the call to the frame being
+// read; call-ns/op is how long the call itself took. The waiter
+// blocks on a channel the Server signals, as a derper reader blocks
+// on its next read, so the flusher goroutine can run on the same P
+// right away rather than after another P steals it.
+func BenchmarkForwardPacketSerial(b *testing.B) {
+	env := newForwardTestEnv(b, 1, false)
+	srcKey := key.NewNode().Public()
+	msg := make([]byte, 700)
+	read := make(chan struct{}, 1)
+	env.s.onForwardedInForTest = func() { read <- struct{}{} }
+	env.meshConn.writes.Store(0)
+	var callTotal time.Duration
+	b.SetBytes(int64(len(msg)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		t0 := time.Now()
+		if err := env.mesh.ForwardPacket(srcKey, env.dstKeys[0], derp.LoanBytes(msg)); err != nil {
+			b.Fatal(err)
+		}
+		callTotal += time.Since(t0)
+		<-read
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(callTotal.Nanoseconds())/float64(b.N), "call-ns/op")
+	b.ReportMetric(float64(env.meshConn.writes.Load())/float64(b.N), "writes/op")
+}
+
+// queueHeadDrops returns the process-wide count of non-disco packets
+// the Server dropped from the head of a full destination queue.
+func queueHeadDrops() int64 {
+	return dropCount(dropReasonQueueHead)
+}
+
+// dropCount returns the process-wide count of non-disco packets the
+// Server dropped for reason.
+func dropCount(reason dropReason) int64 {
+	v := packetsDropped.Get(dropReasonKindLabels{Reason: string(reason), Kind: string(packetKindOther)})
+	if v == nil {
+		return 0
+	}
+	var n int64
+	fmt.Sscan(v.String(), &n)
+	return n
+}
+
+// errFwd is a PacketForwarder whose ForwardPacket always fails.
+type errFwd struct{ err error }
+
+func (f errFwd) String() string { return "errFwd" }
+func (f errFwd) ForwardPacket(key.NodePublic, key.NodePublic, derp.LoanedBytes) error {
+	return f.err
+}
+
+// TestForwardPacketErrorRecordsDrop checks that a packet the mesh
+// forwarder fails to accept is counted as dropped with the fwd_error
+// reason, rather than vanishing after being counted as forwarded.
+func TestForwardPacketErrorRecordsDrop(t *testing.T) {
+	s := New(key.NewNode(), logger.Discard)
+	defer s.Close()
+	if err := s.SetMeshKey(testMeshKey); err != nil {
+		t.Fatal(err)
+	}
+	dst := key.NewNode().Public()
+	s.AddPacketForwarder(dst, errFwd{errors.New("peer gone")})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		for {
+			connIn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			brw := bufio.NewReadWriter(bufio.NewReader(connIn), bufio.NewWriter(connIn))
+			go s.Accept(ctx, connIn, brw, connIn.RemoteAddr().String())
+		}
+	}()
+	nc, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	brw := bufio.NewReadWriter(bufio.NewReader(nc), bufio.NewWriter(nc))
+	c, err := derp.NewClient(key.NewNode(), nc, brw, logger.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Recv(); err != nil { // ServerInfo: registered
+		t.Fatal(err)
+	}
+
+	drops0, fwdOut0 := dropCount(dropReasonForwardError), s.packetsForwardedOut.Value()
+	const n = 5
+	for range n {
+		if err := c.Send(dst, []byte("to a dead peer")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for s.packetsForwardedOut.Value() < fwdOut0+n {
+		if time.Now().After(deadline) {
+			t.Fatalf("server forwarded %d of %d packets", s.packetsForwardedOut.Value()-fwdOut0, n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := dropCount(dropReasonForwardError) - drops0; got != n {
+		t.Errorf("fwd_error drops = %d; want %d", got, n)
+	}
+}
+
+// forwardTestEnv is a Server with a mesh peer connected to it, as a
+// derper in a meshed region has, and destination clients for the mesh
+// peer to forward packets to.
+type forwardTestEnv struct {
+	s        *Server
+	mesh     *derp.Client             // connected with the mesh key
+	meshConn *writeCountingConn       // mesh's connection to s
+	dsts     []*derp.Client           // ordinary clients
+	dstKeys  []key.NodePublic         // their keys
+	dstRecv  chan derp.ReceivedPacket // packets the dsts received, with payloads cloned, if deliver was set
+}
+
+// newForwardTestEnv starts a Server and connects a mesh client and
+// numDsts destination clients to it. Every client's incoming frames
+// are drained; if deliver is set, packets the destinations receive are
+// also copied onto dstRecv. The mesh client's connection counts its
+// writes.
+func newForwardTestEnv(tb testing.TB, numDsts int, deliver bool) *forwardTestEnv {
+	tb.Helper()
+	s := New(key.NewNode(), logger.Discard)
+	tb.Cleanup(func() { s.Close() })
+	if err := s.SetMeshKey(testMeshKey); err != nil {
+		tb.Fatal(err)
+	}
+	// This exercises the mesh path, not the destination's overload
+	// policy: a burst of forwards arrives at the server faster than
+	// one destination's writer drains, and with the default depth
+	// of 32 the server would drop the oldest queued packets.
+	s.perClientSendQueueDepth = 4096
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tb.Cleanup(func() { ln.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	tb.Cleanup(cancel)
+	go func() {
+		for {
+			connIn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			brw := bufio.NewReadWriter(bufio.NewReader(connIn), bufio.NewWriter(connIn))
+			go s.Accept(ctx, connIn, brw, connIn.RemoteAddr().String())
+		}
+	}()
+
+	env := &forwardTestEnv{s: s}
+	if deliver {
+		env.dstRecv = make(chan derp.ReceivedPacket, 1024)
+	}
+	dial := func(opts ...derp.ClientOpt) (*derp.Client, *writeCountingConn) {
+		tb.Helper()
+		nc, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			tb.Fatal(err)
+		}
+		tb.Cleanup(func() { nc.Close() })
+		cc := &writeCountingConn{Conn: nc}
+		brw := bufio.NewReadWriter(bufio.NewReader(cc), bufio.NewWriter(cc))
+		c, err := derp.NewClient(key.NewNode(), cc, brw, logger.Discard, opts...)
+		if err != nil {
+			tb.Fatal(err)
+		}
+		// The server sends ServerInfo only after registering the
+		// client, so once it arrives the client can be a
+		// destination; before that, packets for it would be dropped
+		// as unknown and provoke peer gone frames to the sender.
+		m, err := c.Recv()
+		if err != nil {
+			tb.Fatal(err)
+		}
+		if _, ok := m.(derp.ServerInfoMessage); !ok {
+			tb.Fatalf("first message is %T; want ServerInfoMessage", m)
+		}
+		// Drain whatever the server sends (keepalives, peer gone
+		// frames, packets) so its writer to this client never
+		// stalls, delivering packets if asked.
+		go func() {
+			for {
+				m, err := c.Recv()
+				if err != nil {
+					return
+				}
+				if p, ok := m.(derp.ReceivedPacket); ok && env.dstRecv != nil {
+					p.Data = bytes.Clone(p.Data)
+					env.dstRecv <- p
+				}
+			}
+		}()
+		return c, cc
+	}
+
+	meshKey, err := key.ParseDERPMesh(testMeshKey)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	env.mesh, env.meshConn = dial(derp.MeshKey(meshKey))
+	for range numDsts {
+		c, _ := dial()
+		env.dsts = append(env.dsts, c)
+		env.dstKeys = append(env.dstKeys, c.PublicKey())
+	}
+	return env
+}
+
+// TestForwardPacketViaMesh checks that packets a mesh peer forwards
+// with derp.Client.ForwardPacket, from many goroutines at once, all
+// reach the destination client intact and attributed to their source,
+// without any later call on the mesh client to flush them.
+func TestForwardPacketViaMesh(t *testing.T) {
+	env := newForwardTestEnv(t, 1, true)
+	dstKey := env.dstKeys[0]
+	srcKey := key.NewNode().Public()
+
+	const n = 500
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// A payload bigger than the destination's disco
+			// sniffing could mistake, varying per packet.
+			payload := binary.BigEndian.AppendUint32(bytes.Repeat([]byte{0xAB}, 100), uint32(i))
+			if err := env.mesh.ForwardPacket(srcKey, dstKey, derp.LoanBytes(payload)); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	seen := make([]bool, n)
+	timeout := time.After(10 * time.Second)
+	for got := 0; got < n; got++ {
+		select {
+		case p := <-env.dstRecv:
+			if p.Source != srcKey {
+				t.Fatalf("packet from %v; want %v", p.Source.ShortString(), srcKey.ShortString())
+			}
+			if len(p.Data) != 104 {
+				t.Fatalf("payload len %d; want 104", len(p.Data))
+			}
+			i := binary.BigEndian.Uint32(p.Data[100:])
+			if int(i) >= n || seen[i] {
+				t.Fatalf("bad or duplicate packet index %d", i)
+			}
+			seen[i] = true
+		case <-timeout:
+			t.Fatalf("received %d of %d forwarded packets; server drops by reason: %s", got, n, dropsByReason())
+		}
+	}
+	t.Logf("%d packets forwarded in %d writes on the mesh connection", n, env.meshConn.writes.Load())
+}
+
+// dropsByReason returns the process-wide derp_packets_dropped counters
+// for non-disco packets, for test diagnostics.
+func dropsByReason() string {
+	var sb strings.Builder
+	for _, r := range []dropReason{dropReasonUnknownDest, dropReasonUnknownDestOnFwd, dropReasonGoneDisconnected, dropReasonQueueHead, dropReasonQueueTail, dropReasonWriteError, dropReasonDupClient} {
+		if v := packetsDropped.Get(dropReasonKindLabels{Reason: string(r), Kind: string(packetKindOther)}); v != nil {
+			fmt.Fprintf(&sb, "%s=%s ", r, v.String())
+		}
+	}
+	return sb.String()
 }
 
 func TestParseSSOutput(t *testing.T) {
