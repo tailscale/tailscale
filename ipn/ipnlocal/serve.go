@@ -1330,22 +1330,33 @@ func (b *LocalBackend) serveFileOrDirectory(w http.ResponseWriter, r *http.Reque
 	fs.ServeHTTP(&fixLocationHeaderResponseWriter{
 		ResponseWriter: w,
 		mountPoint:     mountPoint,
+		reqPath:        r.URL.Path,
 	}, r)
 }
 
 // fixLocationHeaderResponseWriter is an http.ResponseWriter wrapper that, upon
-// flushing HTTP headers, prefixes any Location header with the mount point.
+// flushing HTTP headers, makes any Location header absolute under the mount
+// point.
 type fixLocationHeaderResponseWriter struct {
 	http.ResponseWriter
 	mountPoint string
+	reqPath    string    // request path before the mount point was stripped
 	fixOnce    sync.Once // guards call to fix
 }
 
 func (w *fixLocationHeaderResponseWriter) fix() {
 	h := w.ResponseWriter.Header()
-	if v := h.Get("Location"); v != "" {
-		h.Set("Location", w.mountPoint+v)
+	v := h.Get("Location")
+	if v == "" {
+		return
 	}
+	// http.FileServer redirects relative to the request ("nested/" for
+	// /subdir/nested), so resolve those against the full request path.
+	if u, err := url.Parse(v); err == nil && !strings.HasPrefix(u.Path, "/") {
+		h.Set("Location", (&url.URL{Path: w.reqPath}).ResolveReference(u).String())
+		return
+	}
+	h.Set("Location", w.mountPoint+v)
 }
 
 func (w *fixLocationHeaderResponseWriter) WriteHeader(code int) {

@@ -1387,6 +1387,7 @@ func TestServeFileOrDirectory(t *testing.T) {
 	writeFile("subdir/file-a", "this is A")
 	writeFile("subdir/file-b", "this is B")
 	writeFile("subdir/file-c", "this is C")
+	os.MkdirAll(filepath.Join(td, "subdir", "nested"), 0o700)
 
 	contains := func(subs ...string) func([]byte, *http.Response) error {
 		return func(resBody []byte, res *http.Response) error {
@@ -1440,6 +1441,7 @@ func TestServeFileOrDirectory(t *testing.T) {
 		{"/subdir/", "/", contains("file-a", "file-b", "file-c")},
 		{"/subdir/file-a", "/", contains("this is A")},
 		{"/subdir/file-z", "/", isStatus(404)},
+		{"/subdir/nested", "/", isRedirect("/subdir/nested/")},
 
 		{"/doc", "/doc/", isRedirect("/doc/")},
 		{"/doc/", "/doc/", contains("foo", "bar", "subdir")},
@@ -1451,6 +1453,7 @@ func TestServeFileOrDirectory(t *testing.T) {
 		{"/doc/subdir/", "/doc/", contains("file-a", "file-b", "file-c")},
 		{"/doc/subdir/file-a", "/doc/", contains("this is A")},
 		{"/doc/subdir/file-z", "/doc/", isStatus(404)},
+		{"/doc/subdir/nested", "/doc/", isRedirect("/doc/subdir/nested/")},
 	}
 	for _, tt := range tests {
 		rec := httptest.NewRecorder()
