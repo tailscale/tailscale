@@ -1133,10 +1133,11 @@ func (b *LocalBackend) Shutdown() {
 		b.mu.Lock()
 	}
 	cc := b.cc
-	if b.sshServer != nil {
-		b.sshServer.Shutdown()
-		b.sshServer = nil
-	}
+	// The SSH server's Shutdown waits for its sessions to finish. Session
+	// teardown calls back into the backend (WhoIs, DoNoiseRequest), which
+	// acquires b.mu, so it must run after b.mu is released, not under it.
+	sshServer := b.sshServer
+	b.sshServer = nil
 	b.closePeerAPIListenersLocked()
 	if b.debugSink != nil {
 		b.e.InstallCaptureHook(nil)
@@ -1148,6 +1149,11 @@ func (b *LocalBackend) Shutdown() {
 	}
 	b.appConnector.Close()
 	b.mu.Unlock()
+
+	if sshServer != nil {
+		sshServer.Shutdown()
+	}
+
 	b.webClientShutdown()
 
 	if b.sockstatLogger != nil {

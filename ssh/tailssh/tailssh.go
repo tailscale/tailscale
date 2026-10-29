@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -51,11 +52,37 @@ var (
 	sshDisableForwarding = envknob.RegisterBool("TS_SSH_DISABLE_FORWARDING")
 	sshDisablePTY        = envknob.RegisterBool("TS_SSH_DISABLE_PTY")
 
+	// Teardown timeouts. A session whose process has exited can still have
+	// descendants holding the process's stdio open; every wait below is
+	// bounded so that a wedged session can never block daemon shutdown
+	// (tailscaled/tailscale: SIGTERM was observed ignored for systemd's
+	// whole stop timeout, 90s, whenever an SSH session was live).
+	// Each is a duration ("10s"); unset or non-positive means the default.
+	sshShutdownTimeout = envknob.RegisterDuration("TS_SSH_SHUTDOWN_TIMEOUT")
+	sshIODrainTimeout  = envknob.RegisterDuration("TS_SSH_IO_DRAIN_TIMEOUT")
+	sshHupEscalation   = envknob.RegisterDuration("TS_SSH_HUP_ESCALATION")
+
 	// errTerminal is an empty gossh.PartialSuccessError (with no 'Next'
 	// authentication methods that may proceed), which results in the SSH
 	// server immediately disconnecting the client.
 	errTerminal = &gossh.PartialSuccessError{}
 )
+
+const (
+	// Defaults for the teardown timeouts above.
+	defaultShutdownTimeout = 10 * time.Second
+	defaultIODrainTimeout  = 30 * time.Second
+	defaultHupEscalation   = 5 * time.Second
+)
+
+// knobDuration returns the current value of a duration knob registered with
+// envknob, or def when the knob is unset or non-positive.
+func knobDuration(v, def time.Duration) time.Duration {
+	if v <= 0 {
+		return def
+	}
+	return v
+}
 
 const (
 	// forcePasswordSuffix is the suffix at the end of a username that forces
@@ -170,6 +197,18 @@ func (srv *server) HandleSSHConn(nc net.Conn) error {
 }
 
 // Shutdown terminates all active sessions.
+//
+// Closing each active conn tears down that conn's sessions: the session
+// processes are signaled (see killProcessOnContextDone) and each session's
+// run returns once its process has exited and its I/O has drained. Some
+// sessions never finish on their own: a descendant of the session process
+// can hold the process's stdio open past its death (an interactive shell's
+// foreground job, a process that started its own session, or anything that
+// ignores SIGHUP), and during a daemon stop the process monitor children
+// are killed outright before their own teardown runs. To keep one wedged
+// session from wedging the daemon, Shutdown waits for the sessions for at
+// most sshShutdownTimeout and then abandons the wait; the sessions'
+// goroutines keep running and are cleaned up at process exit.
 func (srv *server) Shutdown() {
 	srv.mu.Lock()
 	srv.shutdownCalled = true
@@ -177,7 +216,28 @@ func (srv *server) Shutdown() {
 		c.Close()
 	}
 	srv.mu.Unlock()
-	srv.sessionWaitGroup.Wait()
+	srv.awaitSessionsDone()
+}
+
+// awaitSessionsDone waits for every attached session to finish, for at most
+// the sshShutdownTimeout grace. It reports whether all sessions finished.
+func (srv *server) awaitSessionsDone() bool {
+	done := make(chan struct{})
+	go func() {
+		// This goroutine can outlive the timeout below when a session
+		// never finishes; it holds only the WaitGroup and exits (or is
+		// reaped at process exit) whenever the sessions eventually do.
+		srv.sessionWaitGroup.Wait()
+		close(done)
+	}()
+	timeout := knobDuration(sshShutdownTimeout(), defaultShutdownTimeout)
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		srv.logf("ssh: sessions did not finish within %v of shutdown; abandoning them", timeout)
+		return false
+	}
 }
 
 // OnPolicyChange terminates any active sessions that no longer match
@@ -693,6 +753,11 @@ type sshSession struct {
 	// We use this sync.Once to ensure that we only terminate the process once,
 	// either it exits itself or is terminated
 	exitOnce sync.Once
+
+	// processExited is set once run() has waited on the session process.
+	// Signal escalation stops once it is set: the pid, and with it the
+	// process group id, may already have been reused by then.
+	processExited atomic.Bool
 }
 
 func (ss *sshSession) vlogf(format string, args ...any) {
@@ -803,10 +868,36 @@ func (ss *sshSession) killProcessOnContextDone() {
 		// We don't need to Process.Wait here, sshSession.run() does
 		// the waiting regardless of termination reason.
 
-		// Send SIGHUP like a real terminal disconnect would.
-		// The process may ignore it or exit cleanly.
-		ss.cmd.Process.Signal(syscall.SIGHUP)
+		// Send SIGHUP like a real terminal disconnect would. The process
+		// may ignore it or exit cleanly.
+		ss.signalSessionProcess(syscall.SIGHUP)
+
+		// A process that is still alive after the HUP grace is SIGKILLed,
+		// process group included, so that a session process which ignores
+		// or misses the HUP cannot hold up teardown. run() stops signaling
+		// once the process has been waited on, so a pid that was reused in
+		// the meantime is never signaled.
+		time.AfterFunc(knobDuration(sshHupEscalation(), defaultHupEscalation), func() {
+			ss.signalSessionProcess(syscall.SIGKILL)
+		})
 	})
+}
+
+// signalSessionProcess sends sig to the session process, and to its whole
+// process group when the process is the group's leader. The incubator starts
+// session processes with Setsid, so the group is the process's own, and
+// addressing it by -pid reaches the descendants that did not start their own
+// session or process group (a plain `git fetch` under a shell, say).
+// Descendants that escaped the group are not reached here; the bounded I/O
+// drain in run() keeps them from wedging teardown instead.
+//
+// It is a no-op once the session process has been waited on: its pid, and so
+// its group id, may already have been reused.
+func (ss *sshSession) signalSessionProcess(sig os.Signal) {
+	if ss.cmd == nil || ss.cmd.Process == nil || ss.processExited.Load() {
+		return
+	}
+	signalProcessGroup(ss.cmd.Process, sig)
 }
 
 // isNotFoundOrExecutable reports whether err is an error indicating
@@ -1028,6 +1119,10 @@ func (ss *sshSession) run() {
 	}
 
 	err = ss.cmd.Wait()
+	// Mark the process as waited on before anything else can run, so signal
+	// escalation (see killProcessOnContextDone) stops targeting a pid that
+	// may already have been reused.
+	ss.processExited.Store(true)
 
 	// This will either make the SSH Termination goroutine be a no-op,
 	// or itself will be a no-op because the process was killed by the
@@ -1055,8 +1150,41 @@ func (ss *sshSession) run() {
 	// Close process-side of pipes to signal io.Copy goroutines to finish.
 	closeAll(ss.childPipes...)
 
-	// Wait for all IO to complete.
-	wg.Wait()
+	// Wait for all IO to complete, but do not wait forever. The copy
+	// goroutines finish when they see EOF on the child's stdio, which
+	// requires every process holding those descriptors to exit. The
+	// session's own process is dead by now, but a descendant that survived
+	// teardown (a job in its own process group under an interactive shell,
+	// a process that started its own session, or anything ignoring SIGHUP)
+	// can hold stdio open indefinitely.
+	//
+	// When the wait expires, close our ends of the child's stdio - which
+	// also HUPs the foreground processes of a PTY session's terminal -
+	// and abandon any copy goroutine still blocked in the kernel. Its
+	// blocked read never returns; the goroutine, holding only its file
+	// reference, is left to be cleaned up at process exit. Shutdown's own
+	// wait is bounded too (see server.Shutdown), so neither can wedge the
+	// daemon.
+	ioDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(ioDone)
+	}()
+	drainTimeout := knobDuration(sshIODrainTimeout(), defaultIODrainTimeout)
+	select {
+	case <-ioDone:
+	case <-time.After(drainTimeout):
+		ss.logf("ssh: session I/O did not drain within %v; abandoning it (a descendant of the session process still holds its stdio open)", drainTimeout)
+		// Best effort; a goroutine already blocked in a read or write
+		// keeps its own reference and stays blocked. Closing here is
+		// safe: this os.File is the only handle, and the kernel keeps
+		// the in-flight syscall's file alive until it returns.
+		ss.wrStdin.Close()
+		ss.rdStdout.Close()
+		if ss.rdStderr != nil {
+			ss.rdStderr.Close()
+		}
+	}
 }
 
 // recordSSHToLocalDisk is a deprecated dev knob to allow recording SSH sessions
