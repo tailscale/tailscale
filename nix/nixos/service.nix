@@ -203,7 +203,9 @@ self: {
           + optionalString (!meta.isDefault) " (${name})";
         after = ["${meta.svcName}.service"];
         wants = ["${meta.svcName}.service"];
-        wantedBy = ["multi-user.target"];
+        # Not multi-user.target: this and serve-config block until
+        # connected, stalling offline boots.
+        wantedBy = ["${meta.svcName}.service"];
 
         serviceConfig = {
           Type = "notify";
@@ -259,7 +261,7 @@ self: {
           "${meta.svcName}-autoconnect.service"
         ];
         wants = ["${meta.svcName}.service"];
-        wantedBy = ["multi-user.target"];
+        wantedBy = ["${meta.svcName}.service"];
 
         serviceConfig.Type = "oneshot";
         path = [cfg.package];
@@ -286,7 +288,7 @@ self: {
           "${meta.svcName}-autoconnect.service"
         ];
         wants = ["${meta.svcName}.service"];
-        wantedBy = ["multi-user.target"];
+        wantedBy = ["${meta.svcName}.service"];
 
         serviceConfig = {
           Type = "oneshot";
