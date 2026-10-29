@@ -1107,6 +1107,7 @@ func TestShouldUseARIReplacesForRenewal(t *testing.T) {
 	tests := []struct {
 		name          string
 		certShareMode string
+		sharedSecret  string
 		acmeInMemory  []byte // per-pod ACME key present in memory
 		preAdopted    []byte // sha256 of pre-adoption local key (foreign-key path)
 		certSecret    map[string][]byte
@@ -1173,6 +1174,30 @@ func TestShouldUseARIReplacesForRenewal(t *testing.T) {
 			certSecret:    map[string][]byte{}, // no fingerprint field
 			want:          false,
 		},
+		{
+			name:          "legacy_cert_with_shared_account_returns_false",
+			certShareMode: "rw",
+			sharedSecret:  "tailscale-acme-accounts",
+			acmeInMemory:  acmeKey,
+			certSecret:    map[string][]byte{},
+			want:          false,
+		},
+		{
+			name:          "shared_account_fingerprint_matches",
+			certShareMode: "rw",
+			sharedSecret:  "tailscale-acme-accounts",
+			acmeInMemory:  acmeKey,
+			certSecret:    map[string][]byte{keyACMEAcctFP: curFP},
+			want:          true,
+		},
+		{
+			name:          "shared_account_fingerprint_differs",
+			certShareMode: "rw",
+			sharedSecret:  "tailscale-acme-accounts",
+			acmeInMemory:  acmeKey,
+			certSecret:    map[string][]byte{keyACMEAcctFP: otherFP},
+			want:          false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1186,11 +1211,12 @@ func TestShouldUseARIReplacesForRenewal(t *testing.T) {
 				},
 			}
 			s := &Store{
-				client:             client,
-				certShareMode:      tt.certShareMode,
-				memory:             mem.Store{},
-				preAdoptedLocalKey: tt.preAdopted,
-				logf:               t.Logf,
+				client:                 client,
+				certShareMode:          tt.certShareMode,
+				acmeAccountsSecretName: tt.sharedSecret,
+				memory:                 mem.Store{},
+				preAdoptedLocalKey:     tt.preAdopted,
+				logf:                   t.Logf,
 			}
 			if len(tt.acmeInMemory) > 0 {
 				s.memory.WriteState(ipn.StateKey(acmeAccountStateKey), tt.acmeInMemory)
