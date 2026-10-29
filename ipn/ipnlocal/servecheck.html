@@ -3,22 +3,43 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tailscale check</title>
+<title>Tailscale: {{if .Enrol}}Security key required{{else}}Confirm it's you{{end}}</title>
 <style>
-body { font: 16px/1.5 system-ui, sans-serif; background: #f7f5f4; color: #1f1e1e; margin: 0; }
-main { max-width: 28rem; margin: 12vh auto; background: #fff; border-radius: 12px; padding: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
-h1 { font-size: 1.25rem; margin: 0 0 1rem; }
-dl { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; margin: 0 0 1.5rem; }
-dt { color: #706e6d; }
-dd { margin: 0; font-family: ui-monospace, monospace; font-size: .9rem; word-break: break-all; }
-button { font: inherit; background: #1f1e1e; color: #fff; border: 0; border-radius: 8px; padding: .6rem 1.2rem; cursor: pointer; }
-button:disabled { opacity: .5; }
-#status { margin-top: 1rem; min-height: 1.5em; }
+* { box-sizing: border-box; }
+body { font: 15px/1.5 Inter, system-ui, sans-serif; background: #f4f5f7; color: #1f1e1e; margin: 0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 1.5rem; }
+main { width: 100%; max-width: 32.5rem; background: #fff; border-radius: 12px; padding: 3rem 2.5rem 2.5rem; box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.06); text-align: center; }
+.brand { display: flex; justify-content: center; align-items: center; gap: .55rem; font-size: 1.45rem; font-weight: 600; letter-spacing: -.02em; margin-bottom: 2.25rem; }
+.brand svg { width: 26px; height: 26px; }
+.icon { width: 44px; height: 44px; border-radius: 50%; background: #eef1f5; color: #1f1e1e; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 1rem; }
+.icon.warn { background: #fdf1e7; color: #b25a12; }
+h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 .5rem; letter-spacing: -.01em; }
+p { color: #6b7280; margin: 0 0 1.5rem; }
+p b { color: #1f1e1e; font-weight: 500; word-break: break-all; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: .4rem 1rem; margin: 0 0 1.75rem; padding: .9rem 1rem; background: #f7f8fa; border-radius: 8px; text-align: left; font-size: .875rem; }
+dt { color: #6b7280; }
+dd { margin: 0; word-break: break-all; }
+.btn { display: flex; align-items: center; justify-content: center; width: 100%; font: inherit; font-weight: 500; border: 0; border-radius: 8px; padding: .7rem 1rem; cursor: pointer; text-decoration: none; background: #2e2d2d; color: #fff; }
+.btn:hover { background: #1f1e1e; }
+.btn:disabled { opacity: .5; cursor: default; }
+#status { margin-top: 1rem; min-height: 1.5em; color: #6b7280; font-size: .875rem; }
 .err { color: #b3261e; }
+footer { margin-top: 1.5rem; color: #8b8f97; font-size: .75rem; }
 </style>
 </head>
 <body>
 <main>
+<div class="brand"><svg viewBox="0 0 23 23" fill="none" aria-hidden="true"><circle opacity=".2" cx="3.4" cy="3.25" r="2.7" fill="currentColor"/><circle cx="3.4" cy="11.3" r="2.7" fill="currentColor"/><circle opacity=".2" cx="3.4" cy="19.5" r="2.7" fill="currentColor"/><circle cx="11.5" cy="11.3" r="2.7" fill="currentColor"/><circle cx="11.5" cy="19.5" r="2.7" fill="currentColor"/><circle opacity=".2" cx="11.5" cy="3.25" r="2.7" fill="currentColor"/><circle opacity=".2" cx="19.5" cy="3.25" r="2.7" fill="currentColor"/><circle cx="19.5" cy="11.3" r="2.7" fill="currentColor"/><circle opacity=".2" cx="19.5" cy="19.5" r="2.7" fill="currentColor"/></svg>tailscale</div>
+{{if .Enrol}}
+<div class="icon warn"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>
+<h1>Security key required</h1>
+<p>You can't access <b>{{.Target}}</b> until you set up a security key. Add one in your Tailscale settings, then you'll come straight back here.</p>
+<dl>
+<dt>Device</dt><dd>{{.Device}}</dd>
+<dt>User</dt><dd>{{.User}}</dd>
+</dl>
+<a class="btn" href="{{.Enrol}}">Set up a security key</a>
+{{else}}
+<div class="icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
 <h1>Confirm it's you</h1>
 <p>This page needs a fresh security key check from this device.</p>
 <dl>
@@ -27,9 +48,11 @@ button:disabled { opacity: .5; }
 <dt>Page</dt><dd id="target">{{.Target}}</dd>
 <dt>Valid for</dt><dd>{{.Period}}</dd>
 </dl>
-<button id="go">Use security key</button>
+<button class="btn" id="go">Use security key</button>
+{{end}}
 <div id="status"></div>
 </main>
+<footer>Protected by Tailscale</footer>
 <script>
 const q = new URLSearchParams(location.search);
 const api = op => location.pathname + op + "?m=" + encodeURIComponent(q.get("m"));
@@ -93,7 +116,7 @@ async function check() {
     btn.disabled = false;
   }
 }
-btn.addEventListener("click", check);
+if (btn) btn.addEventListener("click", check);
 </script>
 </body>
 </html>

@@ -51,6 +51,22 @@ const serveCheckCredsKey ipn.StateKey = "_serve-check-credentials"
 // page, and this node only asks control whether the check passed.
 const serveCheckDelegateCap nodecap.Cap = "tailscale.com/cap/serve-check-delegate"
 
+// serveCheckKeysCap is the node attribute by which control publishes the
+// security keys users enrol on control. This node checks taps against them
+// itself, so checks keep working while control is down.
+const serveCheckKeysCap nodecap.Cap = "tailscale.com/cap/serve-check-keys"
+
+// serveCheckPublishedKey is the state store key caching the keys control
+// published, by user.
+const serveCheckPublishedKey ipn.StateKey = "_serve-check-published-keys"
+
+// serveCheckKeysResponse is the security keys control publishes for a user.
+type serveCheckKeysResponse struct {
+	RPID     string // relying party ID the keys were enrolled for
+	EnrolURL string // control's page for adding a key
+	Keys     []*serveCheckCred
+}
+
 // serveCheckInitRequest starts a delegated check of a peer on control.
 type serveCheckInitRequest struct {
 	Target    string        // serveCheckKey.target
@@ -76,10 +92,12 @@ type serveCheckKey struct {
 }
 
 type serveCheckChallenge struct {
-	key      serveCheckKey
-	user     tailcfg.UserID
-	register bool
-	expires  time.Time
+	key       serveCheckKey
+	user      tailcfg.UserID
+	register  bool
+	published bool   // against the keys control published
+	rpID      string // relying party ID the key must be for
+	expires   time.Time
 }
 
 // serveCheckCred is an enrolled WebAuthn credential.
@@ -96,7 +114,8 @@ type serveCheckState struct {
 	mu         sync.Mutex
 	checked    map[serveCheckKey]time.Time // last successful check
 	challenges map[string]*serveCheckChallenge
-	creds      map[tailcfg.UserID][]*serveCheckCred // nil until loaded from the store
+	creds      map[tailcfg.UserID][]*serveCheckCred       // nil until loaded from the store
+	published  map[tailcfg.UserID]*serveCheckKeysResponse // nil until loaded from the store
 
 	doNoise func(*http.Request) (*http.Response, error) // if non-nil, replaces DoNoiseRequest in tests
 }
@@ -194,6 +213,7 @@ func (b *LocalBackend) serveCheckEndpoint(w http.ResponseWriter, r *http.Request
 		return true
 	}
 	delegate := b.currentNode().SelfHasCap(serveCheckDelegateCap)
+	published := !delegate && b.currentNode().SelfHasCap(serveCheckKeysCap)
 	switch op := strings.TrimPrefix(r.URL.Path, serveCheckPathPrefix); {
 	case delegate && op == "" && r.Method == "GET":
 		b.serveCheckDelegateInit(w, r, key, node, h, mount)
@@ -203,16 +223,27 @@ func (b *LocalBackend) serveCheckEndpoint(w http.ResponseWriter, r *http.Request
 		// Keys enrolled on this node mustn't pass a check control owns.
 		http.Error(w, "not found", http.StatusNotFound)
 	case op == "" && r.Method == "GET":
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		serveCheckPage.Execute(w, map[string]any{
+		data := map[string]any{
 			"Device": node.ComputedName(),
 			"User":   user.LoginName,
 			"Target": key.target,
 			"Period": serveCheckPeriod(h).String(),
-		})
+		}
+		if published {
+			pk := b.serveCheckRefreshKeys(r.Context(), node, user)
+			switch {
+			case pk == nil:
+				http.Error(w, "couldn't get your security keys from control", http.StatusBadGateway)
+				return true
+			case len(pk.Keys) == 0:
+				data["Enrol"] = serveCheckEnrolURL(r, pk.EnrolURL)
+			}
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		serveCheckPage.Execute(w, data)
 	case op == "begin" && r.Method == "POST":
-		b.serveCheckBegin(w, r, key, user)
+		b.serveCheckBegin(w, r, key, user, published)
 	case op == "finish" && r.Method == "POST":
 		b.serveCheckFinish(w, r, key, user)
 	default:
@@ -229,11 +260,28 @@ func (b *LocalBackend) serveCheckRPID(r *http.Request) string {
 	return strings.TrimSuffix(b.serveRequestHostname(r), ".")
 }
 
-func (b *LocalBackend) serveCheckBegin(w http.ResponseWriter, r *http.Request, key serveCheckKey, user tailcfg.UserProfile) {
-	creds, err := b.serveCheckCreds(user.ID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+func (b *LocalBackend) serveCheckBegin(w http.ResponseWriter, r *http.Request, key serveCheckKey, user tailcfg.UserProfile, published bool) {
+	rpID := b.serveCheckRPID(r)
+	var creds []*serveCheckCred
+	if published {
+		// Keys are only ever enrolled on control, so never register here.
+		pk, err := b.serveCheckPublishedKeys(user.ID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if pk == nil || len(pk.Keys) == 0 {
+			http.Error(w, "no security key; add one in your Tailscale settings", http.StatusForbidden)
+			return
+		}
+		creds, rpID = pk.Keys, pk.RPID
+	} else {
+		var err error
+		creds, err = b.serveCheckCreds(user.ID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	ch := make([]byte, 32)
 	rand.Read(ch)
@@ -251,10 +299,12 @@ func (b *LocalBackend) serveCheckBegin(w http.ResponseWriter, r *http.Request, k
 		s.challenges = make(map[string]*serveCheckChallenge)
 	}
 	s.challenges[chs] = &serveCheckChallenge{
-		key:      key,
-		user:     user.ID,
-		register: len(creds) == 0,
-		expires:  now.Add(serveCheckChallengeTTL),
+		key:       key,
+		user:      user.ID,
+		register:  len(creds) == 0,
+		published: published,
+		rpID:      rpID,
+		expires:   now.Add(serveCheckChallengeTTL),
 	}
 	s.mu.Unlock()
 
@@ -266,7 +316,7 @@ func (b *LocalBackend) serveCheckBegin(w http.ResponseWriter, r *http.Request, k
 	json.NewEncoder(w).Encode(map[string]any{
 		"register":    len(creds) == 0,
 		"challenge":   chs,
-		"rpId":        b.serveCheckRPID(r),
+		"rpId":        rpID,
 		"userId":      b64.EncodeToString(strconv.AppendInt(nil, int64(user.ID), 10)),
 		"userName":    user.LoginName,
 		"displayName": user.DisplayName,
@@ -451,12 +501,12 @@ func (b *LocalBackend) serveCheckVerify(r *http.Request, ch *serveCheckChallenge
 	if ch.register {
 		wantType = "webauthn.create"
 	}
-	rpID := b.serveCheckRPID(r)
+	host, rpID := b.serveCheckRPID(r), ch.rpID
 	if cd.Type != wantType || cd.Challenge != req.Challenge || cd.CrossOrigin {
 		return errors.New("client data mismatch")
 	}
-	if u, err := url.Parse(cd.Origin); err != nil || u.Scheme != "https" || u.Hostname() != rpID {
-		return fmt.Errorf("origin %q is not for %q", cd.Origin, rpID)
+	if u, err := url.Parse(cd.Origin); err != nil || u.Scheme != "https" || u.Hostname() != host {
+		return fmt.Errorf("origin %q is not for %q", cd.Origin, host)
 	}
 	// authenticatorData: rpIdHash[32] flags[1] signCount[4] ...
 	if len(ad) < 37 {
@@ -501,8 +551,15 @@ func (b *LocalBackend) serveCheckVerify(r *http.Request, ch *serveCheckChallenge
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	creds, save := s.creds[ch.user], b.saveServeCheckCredsLocked
+	if ch.published {
+		creds, save = nil, b.saveServeCheckPublishedLocked
+		if pk := s.published[ch.user]; pk != nil && pk.RPID == ch.rpID {
+			creds = pk.Keys
+		}
+	}
 	var cred *serveCheckCred
-	for _, c := range s.creds[ch.user] {
+	for _, c := range creds {
 		if bytes.Equal(c.ID, credID) {
 			cred = c
 		}
@@ -534,7 +591,7 @@ func (b *LocalBackend) serveCheckVerify(r *http.Request, ch *serveCheckChallenge
 		return nil
 	}
 	cred.SignCount = signCount
-	return b.saveServeCheckCredsLocked()
+	return save()
 }
 
 // parseServeCheckKey parses a credential public key, accepting the ES256
@@ -586,4 +643,89 @@ func (b *LocalBackend) saveServeCheckCredsLocked() error {
 		return err
 	}
 	return b.store.WriteState(serveCheckCredsKey, bs)
+}
+
+// serveCheckEnrolURL returns control's add-a-key page enrol, with a next
+// parameter bringing the browser back to r's step-up page.
+func serveCheckEnrolURL(r *http.Request, enrol string) string {
+	u, err := url.Parse(enrol)
+	if err != nil || u.Scheme != "https" {
+		return ""
+	}
+	q := u.Query()
+	q.Set("next", (&url.URL{Scheme: "https", Host: r.Host, Path: r.URL.Path, RawQuery: r.URL.RawQuery}).String())
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// serveCheckRefreshKeys fetches the keys control publishes for src's user and
+// caches them. If control can't be reached, it returns the cached keys, or
+// nil if there are none.
+func (b *LocalBackend) serveCheckRefreshKeys(ctx context.Context, src tailcfg.NodeView, user tailcfg.UserProfile) *serveCheckKeysResponse {
+	cached, err := b.serveCheckPublishedKeys(user.ID)
+	if err != nil {
+		b.logf("serve: reading cached security keys: %v", err)
+		return nil
+	}
+	// Don't hold the page up for long when control is down; the cache will do.
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var res serveCheckKeysResponse
+	if err := b.serveCheckNoise(ctx, "keys", src.ID(), "", nil, &res); err != nil {
+		b.logf("serve: fetching security keys for %s, using the cache: %v", user.LoginName, err)
+		return cached
+	}
+	if res.RPID == "" {
+		b.logf("serve: control published security keys for %s without a relying party", user.LoginName)
+		return cached
+	}
+	s := &b.serveCheck
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Keep the sign counts seen here, so a cloned key can't replay older ones.
+	if old := s.published[user.ID]; old != nil && old.RPID == res.RPID {
+		for _, k := range res.Keys {
+			for _, o := range old.Keys {
+				if bytes.Equal(k.ID, o.ID) && o.SignCount > k.SignCount {
+					k.SignCount = o.SignCount
+				}
+			}
+		}
+	}
+	s.published[user.ID] = &res
+	if err := b.saveServeCheckPublishedLocked(); err != nil {
+		b.logf("serve: caching security keys: %v", err)
+	}
+	return &res
+}
+
+// serveCheckPublishedKeys returns the keys control last published for uid,
+// loading them from the state store on first use.
+func (b *LocalBackend) serveCheckPublishedKeys(uid tailcfg.UserID) (*serveCheckKeysResponse, error) {
+	s := &b.serveCheck
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.published == nil {
+		m := make(map[tailcfg.UserID]*serveCheckKeysResponse)
+		bs, err := b.store.ReadState(serveCheckPublishedKey)
+		if err != nil && !errors.Is(err, ipn.ErrStateNotExist) {
+			return nil, err
+		}
+		if len(bs) > 0 {
+			if err := json.Unmarshal(bs, &m); err != nil {
+				return nil, err
+			}
+		}
+		s.published = m
+	}
+	return s.published[uid], nil
+}
+
+// s.mu must be held.
+func (b *LocalBackend) saveServeCheckPublishedLocked() error {
+	bs, err := json.Marshal(b.serveCheck.published)
+	if err != nil {
+		return err
+	}
+	return b.store.WriteState(serveCheckPublishedKey, bs)
 }
