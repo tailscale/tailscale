@@ -38,11 +38,13 @@ import (
 	"tailscale.com/drive/driveimpl"
 	"tailscale.com/feature"
 	_ "tailscale.com/feature/condregister/portmapper"
+	_ "tailscale.com/feature/guivisibility"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnauth"
+	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal/netmapcache"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netcheck"
@@ -9174,7 +9176,7 @@ func TestHiddenNetworkDevicesNotifyPerUser(t *testing.T) {
 	userStoreA.SetStringLists(
 		source.TestSettingOf(
 			pkey.HiddenNetworkDevices,
-			[]string{hiddenNetworkDevicesOtherUsers},
+			[]string{"other-users"},
 		),
 	)
 	rsop.RegisterStoreForTest(t, "UserStoreA", setting.UserScopeOf(uidA), userStoreA)
@@ -9185,6 +9187,12 @@ func TestHiddenNetworkDevicesNotifyPerUser(t *testing.T) {
 	sys := tsd.NewSystem()
 	sys.PolicyClient.Set(testPolicyClient{})
 	lb := newTestLocalBackendWithSys(t, sys)
+	lb.extHost.Init()
+
+	var provider ipnext.GUIVisibilityProvider
+	if !lb.FindMatchingExtension(&provider) {
+		t.Fatal("GUI visibility extension not registered or initialized")
+	}
 
 	lb.currentNode().SetNetMap(&netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{
@@ -9212,12 +9220,7 @@ func TestHiddenNetworkDevicesNotifyPerUser(t *testing.T) {
 					return false
 				}
 
-				got, ok := n.NodeGUIVisibility["peer-10"]
-				if !ok {
-					t.Errorf("NodeGUIVisibility missing peer-10")
-					return true
-				}
-
+				got := n.NodeGUIVisibility["peer-10"]
 				if got.HideInGUI != wantHidden {
 					t.Errorf(
 						"NodeGUIVisibility[peer-10].HideInGUI = %v; want %v",
@@ -9260,6 +9263,7 @@ func TestHiddenNetworkDevicesPolicyChangeUpdatesVisibility(t *testing.T) {
 	sys := tsd.NewSystem()
 	sys.PolicyClient.Set(testPolicyClient{})
 	lb := newTestLocalBackendWithSys(t, sys)
+	lb.extHost.Init()
 
 	lb.currentNode().SetNetMap(&netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{
@@ -9286,8 +9290,7 @@ func TestHiddenNetworkDevicesPolicyChangeUpdatesVisibility(t *testing.T) {
 				if n.NodeGUIVisibility == nil {
 					return false
 				}
-				got, ok := n.NodeGUIVisibility["peer-10"]
-				return ok && !got.HideInGUI
+				return !n.NodeGUIVisibility["peer-10"].HideInGUI
 			},
 		},
 		{
@@ -9320,9 +9323,164 @@ func TestHiddenNetworkDevicesPolicyChangeUpdatesVisibility(t *testing.T) {
 	userStore.SetStringLists(
 		source.TestSettingOf(
 			pkey.HiddenNetworkDevices,
-			[]string{hiddenNetworkDevicesOtherUsers},
+			[]string{"other-users"},
 		),
 	)
+
+	nw.check()
+}
+
+func TestHiddenNetworkDevicesIncrementalPeerUpdates(t *testing.T) {
+	setting.SetDefinitionsForTest(t,
+		setting.NewDefinition(
+			pkey.HiddenNetworkDevices,
+			setting.UserSetting,
+			setting.StringListValue,
+		),
+	)
+
+	uid := "S-1-5-21-1001"
+	userStore := source.NewTestStore(t)
+	userStore.SetStringLists(
+		source.TestSettingOf(
+			pkey.HiddenNetworkDevices,
+			[]string{"other-users"},
+		),
+	)
+	rsop.RegisterStoreForTest(t, "UserStore", setting.UserScopeOf(uid), userStore)
+
+	sys := tsd.NewSystem()
+	sys.PolicyClient.Set(testPolicyClient{})
+	lb := newTestLocalBackendWithSys(t, sys)
+	lb.extHost.Init()
+
+	lb.currentNode().SetNetMap(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			ID:       1,
+			StableID: "self",
+			User:     1,
+		}).View(),
+		Peers: []tailcfg.NodeView{
+			(&tailcfg.Node{
+				ID:       10,
+				StableID: "peer-10",
+				User:     2,
+			}).View(),
+		},
+	})
+
+	actor := &ipnauth.TestActor{UID: ipn.WindowsUserID(uid)}
+	nw := newNotificationWatcher(t, lb, actor)
+
+	nw.watch(ipn.NotifySysPolicyChanges, []wantedNotification{
+		{
+			name: "initial visibility snapshot",
+			cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+				if n.NodeGUIVisibility == nil {
+					return false
+				}
+				if len(n.NodeGUIVisibility) != 1 ||
+					!n.NodeGUIVisibility["peer-10"].HideInGUI {
+					t.Errorf("unexpected initial visibility: %v", n.NodeGUIVisibility)
+				}
+				return true
+			},
+		},
+		{
+			name: "hidden peer added",
+			cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+				if len(n.NodeGUIVisibilityChanges) == 0 {
+					return false
+				}
+				if n.NodeGUIVisibility != nil {
+					t.Error("peer update sent a full visibility snapshot")
+				}
+				if len(n.NodeGUIVisibilityChanges) != 1 ||
+					!n.NodeGUIVisibilityChanges["peer-20"].HideInGUI {
+					t.Errorf("unexpected visibility changes: %v",
+						n.NodeGUIVisibilityChanges)
+				}
+				if len(n.NodeGUIVisibilityRemoved) != 0 {
+					t.Errorf("unexpected visibility removals: %v",
+						n.NodeGUIVisibilityRemoved)
+				}
+				if len(n.PeersChanged) != 0 {
+					t.Error("policy-only watcher received PeersChanged")
+				}
+				return true
+			},
+		},
+		{
+			name: "hidden peer becomes visible",
+			cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+				if len(n.NodeGUIVisibilityRemoved) == 0 {
+					return false
+				}
+				if n.NodeGUIVisibility != nil {
+					t.Error("peer update sent a full visibility snapshot")
+				}
+				if len(n.NodeGUIVisibilityChanges) != 0 {
+					t.Errorf("unexpected visibility changes: %v",
+						n.NodeGUIVisibilityChanges)
+				}
+				if len(n.NodeGUIVisibilityRemoved) != 1 ||
+					n.NodeGUIVisibilityRemoved[0] != "peer-20" {
+					t.Errorf("unexpected visibility removals: %v",
+						n.NodeGUIVisibilityRemoved)
+				}
+				if len(n.PeersChanged) != 0 {
+					t.Error("policy-only watcher received PeersChanged")
+				}
+				return true
+			},
+		},
+		{
+			name: "hidden peer removed",
+			cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+				if len(n.NodeGUIVisibilityRemoved) == 0 {
+					return false
+				}
+				if len(n.NodeGUIVisibilityRemoved) != 1 ||
+					n.NodeGUIVisibilityRemoved[0] != "peer-10" {
+					t.Errorf("unexpected visibility removals: %v",
+						n.NodeGUIVisibilityRemoved)
+				}
+				if n.NodeGUIVisibility != nil {
+					t.Error("peer removal sent a full visibility snapshot")
+				}
+				if len(n.NodeGUIVisibilityChanges) != 0 {
+					t.Errorf("unexpected visibility changes: %v",
+						n.NodeGUIVisibilityChanges)
+				}
+				if len(n.PeersRemoved) != 0 {
+					t.Error("policy-only watcher received PeersRemoved")
+				}
+				return true
+			},
+		},
+	}, func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+		if n.NodeGUIVisibility != nil {
+			t.Errorf("unexpected full visibility snapshot: %v",
+				n.NodeGUIVisibility)
+		}
+		return false
+	})
+
+	lb.SendNotify(ipn.Notify{
+		PeersChanged: []*tailcfg.Node{
+			{ID: 20, StableID: "peer-20", User: 2},
+		},
+	})
+
+	lb.SendNotify(ipn.Notify{
+		PeersChanged: []*tailcfg.Node{
+			{ID: 20, StableID: "peer-20", User: 1},
+		},
+	})
+
+	lb.SendNotify(ipn.Notify{
+		PeersRemoved: []tailcfg.NodeID{10},
+	})
 
 	nw.check()
 }

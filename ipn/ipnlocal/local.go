@@ -212,9 +212,11 @@ type watchSession struct {
 	// Empty string means default/device scope.
 	policyUID string
 
-	// hiddenNetworkDevices is the parsed GUI visibility policy from the
-	// most recent effective policy snapshot for this session.
-	hiddenNetworkDevices hiddenNetworkDevices
+	// GUI visibility is optional; nil if the extension isn't linked.
+	guiVisibility ipnext.GUIVisibilityFilter
+	// Track hidden peers by NodeID so removals can be delivered even after
+	// they disappear from NodeBackend.
+	hiddenPeers map[tailcfg.NodeID]tailcfg.StableNodeID
 }
 
 var (
@@ -2494,10 +2496,12 @@ func (b *LocalBackend) sysPolicyChangedForSession(sess *watchSession) {
 		return
 	}
 
-	sess.hiddenNetworkDevices = hiddenNetworkDevicesFromPolicy(snapshot)
+	sess.guiVisibility = b.guiVisibilityFilterLocked(snapshot)
+	visibility, hidden := b.nodeGUIVisibilityLocked(sess.guiVisibility)
+	sess.hiddenPeers = hidden
 	n := ipn.Notify{
 		Policy:            snapshot,
-		NodeGUIVisibility: b.nodeGUIVisibilityLocked(sess.hiddenNetworkDevices),
+		NodeGUIVisibility: visibility,
 		Version:           version.Long(),
 	}
 	for _, f := range b.extHost.Hooks().MutateNotifyLocked {
@@ -3878,7 +3882,8 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	b.mu.Lock()
 
 	var policyUID string
-	var hiddenNetworkDevices hiddenNetworkDevices
+	var guiVisibility ipnext.GUIVisibilityFilter
+	var hiddenPeers map[tailcfg.NodeID]tailcfg.StableNodeID
 	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs |
 		ipn.NotifyInitialStatus |
 		ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode |
@@ -3924,8 +3929,8 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 			if err != nil {
 				b.logf("syspolicy: GetPolicySnapshot(%q): %v", policyUID, err)
 			} else if ini.Policy != nil {
-				hiddenNetworkDevices = hiddenNetworkDevicesFromPolicy(ini.Policy)
-				ini.NodeGUIVisibility = b.nodeGUIVisibilityLocked(hiddenNetworkDevices)
+				guiVisibility = b.guiVisibilityFilterLocked(ini.Policy)
+				ini.NodeGUIVisibility, hiddenPeers = b.nodeGUIVisibilityLocked(guiVisibility)
 			}
 		}
 	}
@@ -3941,7 +3946,8 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 		cancel:               cancel,
 		mask:                 mask,
 		policyUID:            policyUID,
-		hiddenNetworkDevices: hiddenNetworkDevices,
+		guiVisibility: guiVisibility,
+		hiddenPeers:   hiddenPeers,
 	}
 	mak.Set(&b.notifyWatchers, sessionID, session)
 	if mask&ipn.NotifyPeerWireGuardState != 0 {
@@ -4268,11 +4274,9 @@ func (b *LocalBackend) notifyForSessionLocked(sess *watchSession, n *ipn.Notify)
 	stripPatches := len(n.PeerChangedPatch) > 0 && !wantsPeerPatches
 	stripPeerState := len(n.PeerState) > 0 && sess.mask&ipn.NotifyPeerWireGuardState == 0
 	promotePatches := len(n.PeerChangedPatch) > 0 && wantsPeerChanges && !wantsPeerPatches
-	refreshNodeGUIVisibility :=
-		sess.mask&ipn.NotifySysPolicyChanges != 0 &&
-			(n.SelfChange != nil ||
-				len(n.PeersChanged) != 0 ||
-				len(n.PeersRemoved) != 0)
+	refreshNodeGUIVisibility := sess.guiVisibility != nil && n.SelfChange != nil
+	updateNodeGUIVisibility := sess.guiVisibility != nil &&
+		(len(n.PeersChanged) != 0 || len(n.PeersRemoved) != 0)
 
 	if sess.selfChangeResetsImplicitState(n.SelfChange.View()) {
 		sess.lastSentUserProfile = nil
@@ -4302,12 +4306,15 @@ func (b *LocalBackend) notifyForSessionLocked(sess *watchSession, n *ipn.Notify)
 	}
 	replaceUserProfiles := !stripUserProfiles && len(sessUserProfiles) != len(n.UserProfiles)
 
-	if !stripPeersChanged && !stripPeersRemoved && !stripPatches && !stripPeerState && !stripUserProfiles && !replaceUserProfiles && !promotePatches && !refreshNodeGUIVisibility {
+	if !stripPeersChanged && !stripPeersRemoved && !stripPatches && !stripPeerState && !stripUserProfiles && !replaceUserProfiles && !promotePatches && !refreshNodeGUIVisibility && !updateNodeGUIVisibility {
 		return n
 	}
 	nCopy := *n
 	if refreshNodeGUIVisibility {
-		nCopy.NodeGUIVisibility = b.nodeGUIVisibilityLocked(sess.hiddenNetworkDevices)
+		nCopy.NodeGUIVisibility, sess.hiddenPeers = b.nodeGUIVisibilityLocked(sess.guiVisibility)
+	} else if updateNodeGUIVisibility {
+		nCopy.NodeGUIVisibilityChanges, nCopy.NodeGUIVisibilityRemoved =
+			b.nodeGUIVisibilityDeltaLocked(sess, n)
 	}
 	if stripPeersChanged {
 		nCopy.PeersChanged = nil
