@@ -132,10 +132,13 @@ self: {
           "Tailscale node agent"
           + optionalString (!meta.isDefault) " (${name})";
         wantedBy = ["multi-user.target"];
-        wants = ["network-pre.target"];
+        # network-online: MagicDNS must not claim DNS before control and
+        # upstream resolvers are reachable. `wants` makes `after` bite.
+        wants = ["network-pre.target" "network-online.target"];
         after =
           [
             "network-pre.target"
+            "network-online.target"
             "NetworkManager.service"
             "systemd-resolved.service"
           ]
