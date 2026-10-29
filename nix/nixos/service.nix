@@ -24,7 +24,6 @@ self: {
     attrValues
     boolToString
     concatMap
-    concatMapStringsSep
     concatStringsSep
     escapeShellArg
     escapeShellArgs
@@ -271,7 +270,6 @@ self: {
     // optionalAttrs (effServices != {}) (let
       configFile = mkServeConfigFile name effServices;
       socket = escapeShellArg meta.socketPath;
-      svcNames = attrNames effServices;
     in {
       "${meta.svcName}-serve-config" = {
         description =
@@ -300,11 +298,8 @@ self: {
             sleep 1
           done
 
+          # --all also (un)advertises each service per its `advertised`.
           tailscale --socket=${socket} serve set-config --all ${configFile}
-
-          ${concatMapStringsSep "\n" (svcName:
-            "tailscale --socket=${socket} serve advertise svc:${escapeShellArg svcName}")
-          svcNames}
         '';
       };
     });
