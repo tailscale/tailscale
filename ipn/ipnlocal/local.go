@@ -988,7 +988,9 @@ func (b *LocalBackend) QueryDNS(ctx context.Context, name string, queryType dnsm
 	db := dnsmessage.NewBuilder(nil, dnsmessage.Header{
 		OpCode:           0,
 		RecursionDesired: true,
-		ID:               1,
+		// Unpredictable IDs resist off-path spoofing.
+		// Replies are matched by ID on each socket.
+		ID: uint16(rand.IntN(1 << 16)),
 	})
 	db.StartQuestions()
 	db.Question(dnsmessage.Question{
