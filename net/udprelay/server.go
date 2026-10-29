@@ -991,12 +991,21 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.Serv
 
 	pair := key.NewSortedPairOfDiscoPublic(discoA, discoB)
 	e, ok := s.serverEndpointByDisco[pair]
+	now := mono.Now()
+	if ok && e.maybeExpire(now, s.bindLifetime, s.steadyStateLifetime, s.metrics) {
+		// Expire stale allocations without waiting for periodic GC.
+		delete(s.serverEndpointByDisco, pair)
+		s.serverEndpointByVNI.Delete(e.vni)
+		ok = false
+	}
 	if ok {
-		// Return the existing allocation. Clients can resolve duplicate
-		// [endpoint.ServerEndpoint]'s via [endpoint.ServerEndpoint.LamportID].
-		//
-		// TODO: consider ServerEndpoint.BindLifetime -= time.Now()-e.allocatedAt
-		// to give the client a more accurate picture of the bind window.
+		// Reuse the allocation without extending its bind deadline.
+		e.mu.Lock()
+		bindLifetime := s.bindLifetime
+		if !e.isBoundLocked() {
+			bindLifetime = max(0, s.bindLifetime-now.Sub(e.allocatedAt))
+		}
+		e.mu.Unlock()
 		return endpoint.ServerEndpoint{
 			ServerDisco: s.discoPublic,
 			// Returning the "latest" addrPorts for an existing allocation is
@@ -1008,7 +1017,7 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.Serv
 			AddrPorts:           s.getAllAddrPortsCopyLocked(),
 			VNI:                 e.vni,
 			LamportID:           e.lamportID,
-			BindLifetime:        tstime.GoDuration{Duration: s.bindLifetime},
+			BindLifetime:        tstime.GoDuration{Duration: bindLifetime},
 			SteadyStateLifetime: tstime.GoDuration{Duration: s.steadyStateLifetime},
 		}, nil
 	}
