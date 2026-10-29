@@ -259,10 +259,7 @@ func WriteFrameHeader(bw *bufio.Writer, t FrameType, frameLen uint32) error {
 	// Fast path: enough space in the buffer to append the header
 	// directly without allocation via AvailableBuffer.
 	if bw.Available() >= FrameHeaderLen {
-		buf := bw.AvailableBuffer()
-		buf = append(buf, byte(t))
-		buf = bin.AppendUint32(buf, frameLen)
-		_, err := bw.Write(buf)
+		_, err := bw.Write(AppendFrameHeader(bw.AvailableBuffer(), t, frameLen))
 		return err
 	}
 	// Slow path: buffer nearly full. Write byte-at-a-time to let
@@ -272,6 +269,13 @@ func WriteFrameHeader(bw *bufio.Writer, t FrameType, frameLen uint32) error {
 		return err
 	}
 	return writeUint32(bw, frameLen)
+}
+
+// AppendFrameHeader appends the header of a frame of type t with a
+// body of frameLen bytes to b and returns the extended slice.
+func AppendFrameHeader(b []byte, t FrameType, frameLen uint32) []byte {
+	b = append(b, byte(t))
+	return bin.AppendUint32(b, frameLen)
 }
 
 // WriteFrame writes a complete frame & flushes it.
