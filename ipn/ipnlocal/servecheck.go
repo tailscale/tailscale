@@ -7,6 +7,7 @@ package ipnlocal
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -19,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -28,6 +30,7 @@ import (
 
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 )
 
 // serveCheckPathPrefix is where tailscaled serves its own step-up page and
@@ -42,6 +45,28 @@ const serveCheckChallengeTTL = 2 * time.Minute
 // serveCheckCredsKey is the state store key holding the enrolled WebAuthn
 // credentials, by user.
 const serveCheckCredsKey ipn.StateKey = "_serve-check-credentials"
+
+// serveCheckDelegateCap is the node attribute by which control takes over
+// serve checks: the user taps a key enrolled on control, on control's own
+// page, and this node only asks control whether the check passed.
+const serveCheckDelegateCap nodecap.Cap = "tailscale.com/cap/serve-check-delegate"
+
+// serveCheckInitRequest starts a delegated check of a peer on control.
+type serveCheckInitRequest struct {
+	Target    string        // serveCheckKey.target
+	Period    time.Duration // how long a pass lasts, for control's page
+	ReturnURL string        // where control sends the browser, with an id parameter added
+}
+
+type serveCheckInitResponse struct {
+	ID  string
+	URL string // control's check page
+}
+
+type serveCheckStatusResponse struct {
+	Complete bool
+	Target   string
+}
 
 // serveCheckKey identifies one (peer node, handler) pair. Each pair has its
 // own check timer.
@@ -72,6 +97,8 @@ type serveCheckState struct {
 	checked    map[serveCheckKey]time.Time // last successful check
 	challenges map[string]*serveCheckChallenge
 	creds      map[tailcfg.UserID][]*serveCheckCred // nil until loaded from the store
+
+	doNoise func(*http.Request) (*http.Response, error) // if non-nil, replaces DoNoiseRequest in tests
 }
 
 // serveCheckPeer returns the peer key for a checked handler at mount, or an
@@ -166,7 +193,15 @@ func (b *LocalBackend) serveCheckEndpoint(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return true
 	}
+	delegate := b.currentNode().SelfHasCap(serveCheckDelegateCap)
 	switch op := strings.TrimPrefix(r.URL.Path, serveCheckPathPrefix); {
+	case delegate && op == "" && r.Method == "GET":
+		b.serveCheckDelegateInit(w, r, key, node, h, mount)
+	case delegate && op == "return" && r.Method == "GET":
+		b.serveCheckDelegateReturn(w, r, key, node, user)
+	case delegate:
+		// Keys enrolled on this node mustn't pass a check control owns.
+		http.Error(w, "not found", http.StatusNotFound)
 	case op == "" && r.Method == "GET":
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
@@ -271,6 +306,13 @@ func (b *LocalBackend) serveCheckFinish(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "check failed: "+err.Error(), http.StatusForbidden)
 		return
 	}
+	b.serveCheckMarkPassed(key, user, now)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
+func (b *LocalBackend) serveCheckMarkPassed(key serveCheckKey, user tailcfg.UserProfile, now time.Time) {
+	s := &b.serveCheck
 	s.mu.Lock()
 	if s.checked == nil {
 		s.checked = make(map[serveCheckKey]time.Time)
@@ -278,8 +320,110 @@ func (b *LocalBackend) serveCheckFinish(w http.ResponseWriter, r *http.Request, 
 	s.checked[key] = now
 	s.mu.Unlock()
 	b.logf("serve: check passed for %v (%s) on %q", key.node, user.LoginName, key.target)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
+// serveCheckNext returns the local path to send the browser to after a check.
+func serveCheckNext(r *http.Request) string {
+	next := r.URL.Query().Get("next")
+	// "//host" and "/\host" are both other hosts to a browser.
+	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.HasPrefix(next, "/\\") {
+		return "/"
+	}
+	return next
+}
+
+// serveCheckDelegateInit starts a check of src on control and sends the
+// browser there. Errors fail closed: there's no fallback to a local check.
+func (b *LocalBackend) serveCheckDelegateInit(w http.ResponseWriter, r *http.Request, key serveCheckKey, src tailcfg.NodeView, h ipn.HTTPHandlerView, mount string) {
+	ret := url.URL{
+		Scheme:   "http",
+		Host:     r.Host,
+		Path:     serveCheckPathPrefix + "return",
+		RawQuery: url.Values{"m": {mount}, "next": {serveCheckNext(r)}}.Encode(),
+	}
+	if r.TLS != nil {
+		ret.Scheme = "https"
+	}
+	var res serveCheckInitResponse
+	err := b.serveCheckNoise(r.Context(), "init", src.ID(), "", serveCheckInitRequest{
+		Target:    key.target,
+		Period:    serveCheckPeriod(h),
+		ReturnURL: ret.String(),
+	}, &res)
+	if err == nil {
+		if u, perr := url.Parse(res.URL); perr != nil || u.Scheme != "https" {
+			err = fmt.Errorf("bad check URL %q", res.URL)
+		}
+	}
+	if err != nil {
+		b.logf("serve: starting check for %v on %q: %v", key.node, key.target, err)
+		http.Error(w, "couldn't start the security key check: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	http.Redirect(w, r, res.URL, http.StatusSeeOther)
+}
+
+// serveCheckDelegateReturn handles the browser coming back from control's
+// check page, asking control whether src passed the check for key.
+func (b *LocalBackend) serveCheckDelegateReturn(w http.ResponseWriter, r *http.Request, key serveCheckKey, src tailcfg.NodeView, user tailcfg.UserProfile) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "missing check id", http.StatusBadRequest)
+		return
+	}
+	var st serveCheckStatusResponse
+	if err := b.serveCheckNoise(r.Context(), "status", src.ID(), id, nil, &st); err != nil {
+		b.logf("serve: check status for %v on %q: %v", key.node, key.target, err)
+		http.Error(w, "couldn't get the security key check result: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	if !st.Complete || st.Target != key.target {
+		http.Error(w, "the security key check isn't complete", http.StatusForbidden)
+		return
+	}
+	b.serveCheckMarkPassed(key, user, b.clock.Now())
+	http.Redirect(w, r, serveCheckNext(r), http.StatusSeeOther)
+}
+
+// serveCheckNoise sends a serve check request for a check of src on this node
+// to control, and decodes its JSON response into res. A nil body sends none.
+func (b *LocalBackend) serveCheckNoise(ctx context.Context, op string, src tailcfg.NodeID, id string, body, res any) error {
+	nm := b.NetMapNoPeers()
+	if nm == nil || !nm.SelfNode.Valid() {
+		return errors.New("[unexpected] no self node")
+	}
+	u := fmt.Sprintf("https://unused/machine/serve-check/%s/%d/to/%d", op, src, nm.SelfNode.ID())
+	if id != "" {
+		u += "/" + url.PathEscape(id)
+	}
+	var rb io.Reader
+	if body != nil {
+		bs, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		rb = bytes.NewReader(bs)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "POST", u, rb)
+	if err != nil {
+		return err
+	}
+	do := b.DoNoiseRequest
+	if b.serveCheck.doNoise != nil {
+		do = b.serveCheck.doNoise
+	}
+	resp, err := do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	bs, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("control: %s: %s", resp.Status, bytes.TrimSpace(bs))
+	}
+	return json.Unmarshal(bs, res)
 }
 
 // clientData is the part of WebAuthn's CollectedClientData we check.
