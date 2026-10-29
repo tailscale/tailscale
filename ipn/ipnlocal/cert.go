@@ -49,7 +49,8 @@ var (
 	HookUpdateCertRefreshLoop feature.Hook[func(b *LocalBackend, state ipn.State, sc ipn.ServeConfigView)]
 
 	// HookShutdownCertRefreshLoop is called from
-	// [LocalBackend.Shutdown] to cancel the cert refresh loop.
+	// [LocalBackend.Shutdown] to stop the cert refresh loop and any
+	// certificate issuance in flight.
 	HookShutdownCertRefreshLoop feature.Hook[func(b *LocalBackend)]
 
 	// HookConfigureCertsForTest implements
@@ -133,9 +134,10 @@ func (b *LocalBackend) updateCertRefreshLoopLocked() {
 	}
 }
 
-// shutdownCertRefreshLoop is called from [LocalBackend.Shutdown] to cancel the
-// cert refresh loop. It must be called without b.mu held because it waits for
-// the loop, which can be blocked acquiring b.mu.
+// shutdownCertRefreshLoop is called from [LocalBackend.Shutdown] to stop the
+// cert refresh loop and any certificate issuance in flight. It must be called
+// without b.mu held because it waits for the loop, which can be blocked
+// acquiring b.mu.
 func (b *LocalBackend) shutdownCertRefreshLoop() {
 	if f, ok := HookShutdownCertRefreshLoop.GetOk(); ok {
 		f(b)
