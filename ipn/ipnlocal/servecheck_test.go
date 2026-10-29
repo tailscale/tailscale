@@ -15,6 +15,7 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -28,6 +29,8 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/mak"
+	"tailscale.com/util/set"
 )
 
 // softKey is a software WebAuthn authenticator for one relying party.
@@ -317,4 +320,128 @@ func TestServeCheckRejects(t *testing.T) {
 	// The step-up endpoints are only for checked handlers; otherwise the
 	// path reaches the app as usual.
 	wantBody(t, serveCheckDo(t, b, laptopIP, "POST", serveCheckPathPrefix+"begin?m=%2Fopen%2F", nil), "app a")
+}
+
+// fakeServeCheckControl answers delegated serve check requests in place of
+// control's Noise endpoints.
+type fakeServeCheckControl struct {
+	fail   bool
+	checks map[string]*fakeServeCheck
+}
+
+type fakeServeCheck struct {
+	src      string // node ID from the init path
+	req      serveCheckInitRequest
+	complete bool
+}
+
+func (c *fakeServeCheckControl) do(r *http.Request) (*http.Response, error) {
+	w := httptest.NewRecorder()
+	op, rest, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/machine/serve-check/"), "/")
+	src, rest, _ := strings.Cut(rest, "/to/")
+	switch {
+	case c.fail:
+		http.Error(w, "control is down", http.StatusInternalServerError)
+	case op == "init":
+		var req serveCheckInitRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			break
+		}
+		id := fmt.Sprintf("c%d", len(c.checks))
+		mak.Set(&c.checks, id, &fakeServeCheck{src: src, req: req})
+		json.NewEncoder(w).Encode(serveCheckInitResponse{ID: id, URL: "https://control.example/c/" + id})
+	case op == "status":
+		_, id, _ := strings.Cut(rest, "/")
+		ch, ok := c.checks[id]
+		if !ok || ch.src != src {
+			http.Error(w, "unknown check", http.StatusNotFound)
+			break
+		}
+		json.NewEncoder(w).Encode(serveCheckStatusResponse{Complete: ch.complete, Target: ch.req.Target})
+	default:
+		http.Error(w, "not found", http.StatusNotFound)
+	}
+	return w.Result(), nil
+}
+
+// startDelegatedCheck opens the step-up page for mount on srcIP and returns
+// the check control was asked to run, and the path control returns the
+// browser to.
+func startDelegatedCheck(t *testing.T, b *LocalBackend, ctl *fakeServeCheckControl, srcIP, mount, next string) (*fakeServeCheck, string) {
+	t.Helper()
+	w := serveCheckDo(t, b, srcIP, "GET", serveCheckPathPrefix+"?"+url.Values{"m": {mount}, "next": {next}}.Encode(), nil)
+	id := fmt.Sprintf("c%d", len(ctl.checks)-1)
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "https://control.example/c/"+id {
+		t.Fatalf("step-up: got %d %q, want redirect to control's check %s", w.Code, w.Header().Get("Location"), id)
+	}
+	ch := ctl.checks[id]
+	u, err := url.Parse(ch.req.ReturnURL)
+	if err != nil || u.Scheme != "https" || u.Host != checkHost || u.Path != serveCheckPathPrefix+"return" {
+		t.Fatalf("ReturnURL = %q", ch.req.ReturnURL)
+	}
+	return ch, u.RequestURI() + "&id=" + id
+}
+
+func TestServeCheckDelegate(t *testing.T) {
+	b, clock := newServeCheckBackend(t)
+	ctl := &fakeServeCheckControl{}
+	b.serveCheck.doNoise = ctl.do
+	nm := *b.currentNode().NetMap()
+	self := nm.SelfNode.AsStruct()
+	mak.Set(&self.CapMap, tailcfg.NodeCapability(serveCheckDelegateCap), nil)
+	nm.SelfNode = self.View()
+	nm.AllCaps = set.Of(serveCheckDelegateCap)
+	b.currentNode().SetNetMap(&nm)
+
+	wantRedirectToCheck(t, serveCheckDo(t, b, laptopIP, "GET", "/", nil), "/")
+	ch, ret := startDelegatedCheck(t, b, ctl, laptopIP, "/", "/x?y=1")
+	if ch.src != "152" || ch.req.Target != checkHost+":443/" || ch.req.Period != 5*time.Minute {
+		t.Fatalf("init = src %s, %+v", ch.src, ch.req)
+	}
+
+	// Keys enrolled on this node can't stand in for control's check.
+	if w := serveCheckDo(t, b, laptopIP, "POST", serveCheckPathPrefix+"begin?m=%2F", nil); w.Code != http.StatusNotFound {
+		t.Fatalf("local begin: got %d, want 404", w.Code)
+	}
+	// Coming back before the check passed on control doesn't pass.
+	if w := serveCheckDo(t, b, laptopIP, "GET", ret, nil); w.Code != http.StatusForbidden {
+		t.Fatalf("return before check: got %d, want 403", w.Code)
+	}
+	ch.complete = true
+	// Another device can't use the laptop's check id.
+	if w := serveCheckDo(t, b, phoneIP, "GET", ret, nil); w.Code != http.StatusBadGateway {
+		t.Fatalf("other device: got %d, want 502", w.Code)
+	}
+	wantRedirectToCheck(t, serveCheckDo(t, b, phoneIP, "GET", "/", nil), "/")
+
+	w := serveCheckDo(t, b, laptopIP, "GET", ret, nil)
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/x?y=1" {
+		t.Fatalf("return: got %d %q, want redirect to next", w.Code, w.Header().Get("Location"))
+	}
+	wantBody(t, serveCheckDo(t, b, laptopIP, "GET", "/", nil), "app a")
+	wantRedirectToCheck(t, serveCheckDo(t, b, laptopIP, "GET", "/b/", nil), "/b/")
+
+	// A check control ran for one handler doesn't pass another.
+	chB, retB := startDelegatedCheck(t, b, ctl, laptopIP, "/b/", "//evil.example/")
+	chB.complete = true
+	if w := serveCheckDo(t, b, laptopIP, "GET", strings.Replace(retB, "m=%2Fb%2F", "m=%2F", 1), nil); w.Code != http.StatusForbidden {
+		t.Fatalf("other handler's check: got %d, want 403", w.Code)
+	}
+	// next is only ever a path on this host.
+	if w := serveCheckDo(t, b, laptopIP, "GET", retB, nil); w.Header().Get("Location") != "/" {
+		t.Fatalf("return with off-host next: Location %q, want /", w.Header().Get("Location"))
+	}
+	wantBody(t, serveCheckDo(t, b, laptopIP, "GET", "/b/", nil), "app b")
+
+	// The check lapses after the handler's period, as for local checks.
+	clock.Advance(6 * time.Minute)
+	wantRedirectToCheck(t, serveCheckDo(t, b, laptopIP, "GET", "/", nil), "/")
+
+	// If control can't be reached, the check fails closed.
+	ctl.fail = true
+	w = serveCheckDo(t, b, laptopIP, "GET", serveCheckPathPrefix+"?m=%2F&next=%2F", nil)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("control down: got %d %q, want 502", w.Code, w.Body)
+	}
 }
