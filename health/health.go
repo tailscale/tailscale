@@ -1302,6 +1302,8 @@ type ReceiveFuncStats struct {
 	prevNumCalls uint64
 	// inCall indicates whether the receive func is currently running.
 	inCall atomic.Bool
+	// broken is set by the receive func itself while it cannot read.
+	broken atomic.Bool
 	// missing indicates whether the receive func is not running.
 	missing bool
 }
@@ -1324,6 +1326,17 @@ func (s *ReceiveFuncStats) Exit() {
 		return
 	}
 	s.inCall.Store(false)
+}
+
+// SetBroken records whether the receive func is running but unable to read.
+// A broken func is reported like a missing one.
+//
+// s may be nil.
+func (s *ReceiveFuncStats) SetBroken(broken bool) {
+	if !buildfeatures.HasHealth || s == nil {
+		return
+	}
+	s.broken.Store(broken)
 }
 
 // ReceiveFuncStats returns the ReceiveFuncStats tracker for the given func
@@ -1353,6 +1366,11 @@ func (t *Tracker) checkReceiveFuncsLocked() {
 		prev := f.prevNumCalls
 		numCalls := f.numCalls.Load()
 		f.prevNumCalls = numCalls
+		if f.broken.Load() {
+			// Not OK: the function is running, but not reading.
+			f.missing = true
+			continue
+		}
 		if numCalls > prev {
 			// OK: the function has gotten called since last we checked
 			continue

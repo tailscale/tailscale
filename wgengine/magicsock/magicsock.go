@@ -62,6 +62,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/views"
+	"tailscale.com/util/backoff"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cloudinfo"
 	"tailscale.com/util/eventbus"
@@ -602,6 +603,7 @@ func newConn(logf logger.Logf) *Conn {
 	}
 	c.discoAtomic.Set(discoPrivate)
 	c.bind = &connBind{Conn: c, closed: true}
+	c.bind.ctx, c.bind.ctxCancel = context.WithCancel(context.Background())
 	c.muCond = sync.NewCond(&c.mu)
 	c.networkUp.Store(true) // assume up until told otherwise
 	return c
@@ -1634,11 +1636,14 @@ func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte, isDisco bool, isGeneveEncap
 // maybeRebindOnError performs a rebind and restun if the error is one that is
 // known to be healed by a rebind, and the rebind is not throttled.
 func (c *Conn) maybeRebindOnError(err error) {
-	ok, reason := shouldRebind(err)
-	if !ok {
-		return
+	if ok, reason := shouldRebind(err); ok {
+		c.rebindThrottled(reason)
 	}
+}
 
+// rebindThrottled rebinds and restuns unless another error-driven rebind
+// happened within the last 5 seconds.
+func (c *Conn) rebindThrottled(reason string) {
 	if c.lastErrRebind.Load().Before(time.Now().Add(-5 * time.Second)) {
 		c.logf("magicsock: performing rebind due to %q", reason)
 		c.lastErrRebind.Store(time.Now())
@@ -1753,24 +1758,36 @@ type udpReceiveConfig struct {
 	directBytes, peerRelayBytes     *expvar.Int
 }
 
+const (
+	// readErrBackoffMax caps the pacing of a [conn.ReceiveFunc]'s read errors.
+	readErrBackoffMax = 30 * time.Second
+
+	// readErrBrokenAfter is how long a [conn.ReceiveFunc] must be failing
+	// before it reports itself broken to [health.Tracker].
+	readErrBrokenAfter = 30 * time.Second
+)
+
 func (c *Conn) mkReceiveFunc(cfg udpReceiveConfig) conn.ReceiveFunc {
 	ruc := cfg.ruc
 	directPacketMetric, peerRelayPacketMetric := cfg.directPackets, cfg.peerRelayPackets
 	directBytesMetric, peerRelayBytesMetric := cfg.directBytes, cfg.peerRelayBytes
-	healthItem := c.health.ReceiveFuncStats(c.receiveName(cfg.family, cfg.socket))
+
+	var name = c.receiveName(cfg.family, cfg.socket)
+	var healthItem = c.health.ReceiveFuncStats(name)
+	healthItem.SetBroken(false) // in case we inherited health item from a gone Conn
+
+	var readErrsSince time.Time
+	var readErrBackoff = backoff.NewBackoff(name, c.logf, readErrBackoffMax)
+	readErrBackoff.LogLongerThan = readErrBrokenAfter // log if we're stuck
+
 	// epCache caches an epAddr->endpoint for hot flows.
 	var epCache epAddrEndpointCache
 	var batchingPackets []batching.ReceivedPacket
 
-	return func(slab []byte, packets []conn.ReceivedPacket) (_ int, retErr error) {
+	return func(slab []byte, packets []conn.ReceivedPacket) (int, error) {
 		if buildfeatures.HasHealth && healthItem != nil {
 			healthItem.Enter()
 			defer healthItem.Exit()
-			defer func() {
-				if retErr != nil && !c.closing.Load() {
-					c.logf("Receive func %s exiting with error: %T, %v", healthItem.Name(), retErr, retErr)
-				}
-			}()
 		}
 		if ruc == nil {
 			panic("nil RebindingUDPConn")
@@ -1785,7 +1802,30 @@ func (c *Conn) mkReceiveFunc(cfg udpReceiveConfig) conn.ReceiveFunc {
 				if neterror.PacketWasTruncated(err) {
 					continue
 				}
-				return 0, err
+				if errors.Is(err, net.ErrClosed) {
+					return 0, err
+				}
+				if c.bind.ctx.Err() != nil {
+					return 0, fmt.Errorf("%w: %w", net.ErrClosed, err)
+				}
+				metricRecvUDPError.Add(1)
+				if readErrsSince.IsZero() {
+					readErrsSince = time.Now()
+					if shouldRebindRead(err) {
+						c.logf("magicsock: %s: socket destroyed: %v", name, err)
+						c.rebindThrottled("socket-destroyed")
+					}
+				}
+				if time.Since(readErrsSince) >= readErrBrokenAfter {
+					healthItem.SetBroken(true)
+				}
+				readErrBackoff.BackOff(c.bind.ctx, err)
+				continue
+			}
+			if !readErrsSince.IsZero() {
+				readErrsSince = time.Time{}
+				readErrBackoff.Reset()
+				healthItem.SetBroken(false)
 			}
 
 			reportToCaller := false
@@ -3512,6 +3552,10 @@ type connBind struct {
 	*Conn
 	mu     sync.Mutex
 	closed bool
+	// ctx is cancelled by [connBind.Close], bounding the sleeps of the
+	// receive funcs opened by [connBind.Open].
+	ctx       context.Context
+	ctxCancel func()
 }
 
 // These are compile-time assertions that connBind implements the wireguard-go
@@ -3548,6 +3592,7 @@ func (c *connBind) Open(ignoredPort uint16) ([]conn.ReceiveFunc, uint16, error) 
 		return nil, 0, errors.New("magicsock: connBind already open")
 	}
 	c.closed = false
+	c.ctx, c.ctxCancel = context.WithCancel(c.connCtx)
 	var fns []conn.ReceiveFunc
 	for _, cfg := range c.udpReceiveConfigs() {
 		fns = append(fns, c.mkReceiveFunc(cfg))
@@ -3636,6 +3681,7 @@ func (c *connBind) Close() error {
 		return nil
 	}
 	c.closed = true
+	c.ctxCancel() // stop pending backoff timers
 	// Unblock all outstanding receives.
 	c.pconn4.Close()
 	c.pconn6.Close()
@@ -4340,6 +4386,8 @@ var (
 	metricSendUDPError        = clientmetric.NewCounter("magicsock_send_udp_error")
 	metricSendPeerRelayError  = clientmetric.NewCounter("magicsock_send_peer_relay_error")
 	metricSendDERPError       = clientmetric.NewCounter("magicsock_send_derp_error")
+
+	metricRecvUDPError = clientmetric.NewCounter("magicsock_recv_udp_error")
 
 	// Sends (data)
 	//

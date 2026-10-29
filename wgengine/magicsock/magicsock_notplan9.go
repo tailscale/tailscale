@@ -7,6 +7,7 @@ package magicsock
 
 import (
 	"errors"
+	"runtime"
 	"syscall"
 
 	"tailscale.com/net/neterror"
@@ -30,4 +31,22 @@ func shouldRebind(err error) (ok bool, reason string) {
 		return true, "operation-not-permitted"
 	}
 	return false, ""
+}
+
+// shouldRebindRead reports whether err from a read is known to be healed by a
+// rebind.
+//
+// Some of these errors are known to be used by EDR software to shut down conns.
+func shouldRebindRead(err error) bool {
+	var errno syscall.Errno
+	if !errors.As(err, &errno) {
+		return false
+	}
+	switch errno {
+	case syscall.EBADF, syscall.ENOTSOCK:
+		return true
+	}
+	// WSAEBADF and WSAENOTSOCK. On Windows the constants above are
+	// APPLICATION_ERROR pseudo-errnos, which a read never returns.
+	return runtime.GOOS == "windows" && (errno == 10009 || errno == 10038)
 }

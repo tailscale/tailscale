@@ -10,3 +10,9 @@ package magicsock
 func shouldRebind(err error) (ok bool, reason string) {
 	return false, ""
 }
+
+// shouldRebindRead reports whether err from a read is known to be healed by a
+// rebind.
+func shouldRebindRead(err error) bool {
+	return false
+}
