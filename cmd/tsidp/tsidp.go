@@ -763,6 +763,21 @@ func flattenExtraClaims(rules []capRule) map[string]any {
 	return result
 }
 
+func scalarClaimString(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(x)
+	case int64:
+		return strconv.FormatInt(x, 10)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
 // addClaimValue adds a claim value to the deduplication set for a given claim key.
 // It accepts scalars (string, int, float64), slices of strings or interfaces,
 // and recursively handles nested slices. Unsupported types are ignored with a log message.
@@ -774,7 +789,7 @@ func addClaimValue(sets map[string]map[string]struct{}, claim string, val any) {
 			sets[claim] = make(map[string]struct{})
 		}
 		// Add the stringified scalar to the set
-		sets[claim][fmt.Sprintf("%v", v)] = struct{}{}
+		sets[claim][scalarClaimString(v)] = struct{}{}
 
 	case []string:
 		// Ensure the claim set is initialized
