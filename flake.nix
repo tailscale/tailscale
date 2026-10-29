@@ -166,13 +166,16 @@
       # This is the recommended import for most users.
       override = {
         imports = [(import ./nix/nixos/default.nix self)];
-        # Disable both upstream modules: tailscale.nix defines individual
+        # Disable the upstream modules: tailscale.nix defines individual
         # options under services.tailscale.* that conflict with our submodule,
-        # and tailscale-derper.nix nests its options under services.tailscale.derper
-        # which forces evaluation of our submodule and causes infinite recursion.
+        # tailscale-derper.nix nests its options under services.tailscale.derper
+        # which forces evaluation of our submodule and causes infinite recursion,
+        # and tailscale-serve.nix would merge services.tailscale.serve into our
+        # submodule with a unit that runs getExe (tailscaled) as the CLI.
         disabledModules = [
           "services/networking/tailscale.nix"
           "services/networking/tailscale-derper.nix"
+          "services/networking/tailscale-serve.nix"
         ];
       };
       default = self.nixosModules.override;
