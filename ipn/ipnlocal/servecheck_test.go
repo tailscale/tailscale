@@ -327,6 +327,7 @@ func TestServeCheckRejects(t *testing.T) {
 type fakeServeCheckControl struct {
 	fail   bool
 	checks map[string]*fakeServeCheck
+	keys   map[string]*serveCheckKeysResponse // by src node ID
 }
 
 type fakeServeCheck struct {
@@ -359,6 +360,13 @@ func (c *fakeServeCheckControl) do(r *http.Request) (*http.Response, error) {
 			break
 		}
 		json.NewEncoder(w).Encode(serveCheckStatusResponse{Complete: ch.complete, Target: ch.req.Target})
+	case op == "keys":
+		res, ok := c.keys[src]
+		if !ok {
+			http.Error(w, "unknown node", http.StatusForbidden)
+			break
+		}
+		json.NewEncoder(w).Encode(res)
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
@@ -443,5 +451,82 @@ func TestServeCheckDelegate(t *testing.T) {
 	w = serveCheckDo(t, b, laptopIP, "GET", serveCheckPathPrefix+"?m=%2F&next=%2F", nil)
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("control down: got %d %q, want 502", w.Code, w.Body)
+	}
+}
+
+func TestServeCheckPublishedKeys(t *testing.T) {
+	b, _ := newServeCheckBackend(t)
+	const rpID = "tailnet.example" // control's, not the serve host
+	ctl := &fakeServeCheckControl{}
+	mak.Set(&ctl.keys, "152", &serveCheckKeysResponse{RPID: rpID, EnrolURL: "https://control.example/keys"})
+	b.serveCheck.doNoise = ctl.do
+	nm := *b.currentNode().NetMap()
+	self := nm.SelfNode.AsStruct()
+	mak.Set(&self.CapMap, tailcfg.NodeCapability(serveCheckKeysCap), nil)
+	nm.SelfNode = self.View()
+	nm.AllCaps = set.Of(serveCheckKeysCap)
+	b.currentNode().SetNetMap(&nm)
+	page := func(mount string) string {
+		t.Helper()
+		w := serveCheckDo(t, b, laptopIP, "GET", serveCheckPathPrefix+"?"+url.Values{"m": {mount}, "next": {mount}}.Encode(), nil)
+		if w.Code != 200 {
+			t.Fatalf("step-up page: got %d %q", w.Code, w.Body)
+		}
+		return w.Body.String()
+	}
+
+	// With no key on control, the page sends the user there, and this node
+	// won't enrol one itself.
+	if body := page("/"); !strings.Contains(body, "Security key required") || !strings.Contains(body, `href="https://control.example/keys?next=https%3A%2F%2Fexample.ts.net%2F.tailscale%2Fcheck%2F%3Fm%3D%252F`) {
+		t.Fatalf("no-key page doesn't link to control's enrolment:\n%s", body)
+	}
+	if w := serveCheckDo(t, b, laptopIP, "POST", serveCheckPathPrefix+"begin?m=%2F", nil); w.Code != http.StatusForbidden {
+		t.Fatalf("begin with no key: got %d, want 403", w.Code)
+	}
+
+	k := newSoftKey(t)
+	pub, err := x509.MarshalPKIXPublicKey(&k.priv.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctl.keys["152"].Keys = []*serveCheckCred{{ID: k.id, PublicKey: pub}}
+	if body := page("/"); !strings.Contains(body, "Use security key") {
+		t.Fatalf("page with a key on control:\n%s", body)
+	}
+	br := serveCheckBegin(t, b, laptopIP, "/")
+	if br.Register || br.RPID != rpID || len(br.Allow) != 1 {
+		t.Fatalf("begin = %+v, want an assertion for %q", br, rpID)
+	}
+	// The key must be for control's relying party, used from this host.
+	if code := serveCheckFinish(t, b, laptopIP, "/", k.assert(br.Challenge, checkHost, checkOrigin)); code != http.StatusForbidden {
+		t.Fatalf("assertion for the serve host's rpID: got %d, want 403", code)
+	}
+	br = serveCheckBegin(t, b, laptopIP, "/")
+	if code := serveCheckFinish(t, b, laptopIP, "/", k.assert(br.Challenge, rpID, "https://other.ts.net")); code != http.StatusForbidden {
+		t.Fatalf("assertion from another origin: got %d, want 403", code)
+	}
+	br = serveCheckBegin(t, b, laptopIP, "/")
+	if code := serveCheckFinish(t, b, laptopIP, "/", k.assert(br.Challenge, rpID, checkOrigin)); code != 200 {
+		t.Fatalf("finish: got %d", code)
+	}
+	wantBody(t, serveCheckDo(t, b, laptopIP, "GET", "/", nil), "app a")
+
+	// With control down, the cached keys still check.
+	ctl.fail = true
+	page("/b/")
+	br = serveCheckBegin(t, b, laptopIP, "/b/")
+	clone := *k
+	if code := serveCheckFinish(t, b, laptopIP, "/b/", k.assert(br.Challenge, rpID, checkOrigin)); code != 200 {
+		t.Fatalf("finish with control down: got %d", code)
+	}
+	wantBody(t, serveCheckDo(t, b, laptopIP, "GET", "/b/", nil), "app b")
+
+	// Control's sign counts lag this node's; a refresh mustn't let a clone
+	// replay an older count.
+	ctl.fail = false
+	page("/")
+	br = serveCheckBegin(t, b, phoneIP, "/")
+	if code := serveCheckFinish(t, b, phoneIP, "/", clone.assert(br.Challenge, rpID, checkOrigin)); code != http.StatusForbidden {
+		t.Fatalf("cloned key after refresh: got %d, want 403", code)
 	}
 }
