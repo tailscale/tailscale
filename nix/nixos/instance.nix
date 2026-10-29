@@ -219,6 +219,22 @@ in {
       description = "Extra flags to pass to `tailscale set`.";
     };
 
+    relayServerPort = mkOption {
+      type = types.nullOr (types.either types.port (types.enum [""]));
+      default = null;
+      example = 40000;
+      description = ''
+        UDP port for the Tailscale peer relay server. A port enables it,
+        `""` disables it, and `null` leaves the setting unmanaged.
+
+        Tailscale persists this setting: going back to `null` keeps the
+        last port active, so set `""` to turn it off.
+        Opened in the firewall when `openFirewall` is set.
+
+        See <https://tailscale.com/docs/features/peer-relay>
+      '';
+    };
+
     extraDaemonFlags = mkOption {
       type = types.listOf types.str;
       default = [];

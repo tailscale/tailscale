@@ -96,6 +96,17 @@ self: {
     "--outbound-http-proxy-listen=${cfg.proxyListenAddress}"
     ++ cfg.extraDaemonFlags;
 
+  # Flags for the `tailscale set` unit.
+  setFlags = cfg:
+    cfg.extraSetFlags
+    ++ optional (cfg.relayServerPort != null)
+    "--relay-server-port=${toString cfg.relayServerPort}";
+
+  # UDP ports openFirewall opens.
+  firewallPorts = cfg:
+    optional (cfg.port != 0) cfg.port
+    ++ optional (builtins.isInt cfg.relayServerPort) cfg.relayServerPort;
+
   # Build auth key query parameters string.
   # Only includes parameters the user explicitly set (non-null).
   authKeyParams = cfg:
@@ -250,8 +261,8 @@ self: {
         '';
       };
     }
-    # ── Set service (when extraSetFlags is set) ──
-    // optionalAttrs (cfg.extraSetFlags != []) {
+    # ── Set service (when there are flags to set) ──
+    // optionalAttrs (setFlags cfg != []) {
       "${meta.svcName}-set" = {
         description =
           "Tailscale set"
@@ -267,7 +278,7 @@ self: {
         path = [cfg.package];
 
         script = ''
-          tailscale --socket=${escapeShellArg meta.socketPath} set ${escapeShellArgs cfg.extraSetFlags}
+          tailscale --socket=${escapeShellArg meta.socketPath} set ${escapeShellArgs (setFlags cfg)}
         '';
       };
     }
@@ -533,12 +544,12 @@ in {
       # ── Firewall ──
       networking.firewall.allowedUDPPorts = mkMerge [
         (mkIf
-          (singularCfg.enable && singularCfg.openFirewall && singularCfg.port != 0)
-          [singularCfg.port])
+          (singularCfg.enable && singularCfg.openFirewall)
+          (firewallPorts singularCfg))
         (mkMerge (mapAttrsToList (
             name: cfg:
-              mkIf (cfg.enable && cfg.openFirewall && cfg.port != 0)
-              [cfg.port]
+              mkIf (cfg.enable && cfg.openFirewall)
+              (firewallPorts cfg)
           )
           pluralCfg))
       ];
