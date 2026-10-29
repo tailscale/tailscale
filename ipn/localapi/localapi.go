@@ -1759,7 +1759,7 @@ func (h *Handler) serveDNSQuery(w http.ResponseWriter, r *http.Request) {
 		qt = t
 	}
 
-	res, rrs, err := h.b.QueryDNS(name, qt)
+	res, rrs, err := h.b.QueryDNS(r.Context(), name, qt)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
