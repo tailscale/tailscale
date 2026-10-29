@@ -614,6 +614,10 @@ func (r *relayManager) handleRxDiscoMsgRunLoop(event relayDiscoMsgEvent) {
 			// No outstanding work tied to this challenge, discard.
 			return
 		}
+		if msg.Generation != work.handshakeGen {
+			// Reject stale challenges before recording the handshake path.
+			return
+		}
 		_, ok = r.handshakeWorkAwaitingPong[work]
 		if ok {
 			// We've seen a challenge for this relay endpoint previously,
