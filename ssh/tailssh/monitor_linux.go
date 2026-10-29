@@ -13,7 +13,7 @@ import (
 )
 
 // monChildAttr returns the SysProcAttr for one monitor child. A ctty
-// child gets Setsid+Setctty with the pty slave as its fd 0; Setpgid is
+// child gets Setsid+Setctty with the PTY child endpoint as fd 0; Setpgid is
 // set only for non-ctty children. Pdeathsig is advisory: it fires on
 // the exit of the creating thread, not the process, per golang/go#27505.
 func monChildAttr(ctty bool) *syscall.SysProcAttr {

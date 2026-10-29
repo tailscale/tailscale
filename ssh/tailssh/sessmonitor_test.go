@@ -341,8 +341,8 @@ func TestSessionMonitorExitStatusOrder(t *testing.T) {
 }
 
 // TestSessionMonitorPTY drives a pty session through the monitor: the
-// slave fds travel to the monitor via SCM_RIGHTS, the monitor applies
-// Setsid+Setctty (slave as fd 0), and the client's window-change requests
+// PTY child descriptors travel to the monitor via SCM_RIGHTS, which applies
+// Setsid+Setctty with the PTY child endpoint as fd 0. Window-change requests
 // are applied by the resizeWindow goroutine's own master descriptor. The
 // client requests a pty at 10x40, the child reports its size, then the
 // window is changed to 24x80 and the child reports the new size, pinning

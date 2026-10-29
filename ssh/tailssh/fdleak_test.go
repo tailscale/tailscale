@@ -268,7 +268,7 @@ func ambientFds(t *testing.T) map[int]bool {
 // with the live pty's master. A beyond-set fd that was already open in
 // the test process when the test started is runner-inherited ambient
 // state and is reported, not failed; a beyond-set fd acquired since,
-// or any fd targeting the live pty's master or slave, fails.
+// or any fd targeting the live PTY master or PTY child endpoint, fails.
 func assertSessionFdsIsolated(
 	t *testing.T,
 	dump sessionFdsDump,
