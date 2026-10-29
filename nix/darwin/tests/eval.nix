@@ -130,8 +130,10 @@ in
       || { echo "bootstrap missing extraSetFlags invocation" >&2; exit 1; }
     grep -q -- 'serve set-config' "$personalBootstrap" \
       || { echo "bootstrap missing serve set-config invocation" >&2; exit 1; }
-    grep -q -- 'serve advertise svc:demo' "$personalBootstrap" \
-      || { echo "bootstrap missing serve advertise for demo svc" >&2; exit 1; }
+    # set-config --all advertises; a separate advertise overrides advertised = false.
+    if grep -q -- 'serve advertise' "$personalBootstrap"; then
+      echo "bootstrap must not run serve advertise" >&2; exit 1
+    fi
 
     touch "$out"
   ''

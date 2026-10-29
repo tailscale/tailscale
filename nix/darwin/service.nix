@@ -12,9 +12,7 @@ self: {
   ...
 }: let
   inherit (lib)
-    attrNames
     boolToString
-    concatMapStringsSep
     concatStringsSep
     escapeShellArg
     escapeShellArgs
@@ -127,7 +125,6 @@ self: {
       if cfg.services != {}
       then mkServeConfigFile name cfg.services
       else null;
-    svcNames = attrNames cfg.services;
   in
     pkgs.writeShellScript "tailscale-${name}-bootstrap" ''
       set -eu
@@ -156,10 +153,8 @@ self: {
       ''}
 
       ${optionalString (serveJson != null) ''
+        # --all also (un)advertises each service per its `advertised`.
         "$ts" --socket=${socket} serve set-config --all ${serveJson}
-        ${concatMapStringsSep "\n" (svc: ''
-          "$ts" --socket=${socket} serve advertise svc:${escapeShellArg svc}'')
-        svcNames}
       ''}
     '';
 
