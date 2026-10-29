@@ -20,24 +20,34 @@ func NewDevice(tunDev tun.Device, bind conn.Bind, logger *device.Logger) *device
 
 func getDeviceMetrics() device.Option {
 	return device.WithMetrics(device.Metrics{
-		MessageInitiationTXAttemptInitial: metricMessageInitiationTXAttemptInitial,
-		MessageInitiationTXAttemptRetry:   metricMessageInitiationTXAttemptRetry,
-		MessageResponseTXAttempt:          metricMessageResponseTXAttempt,
-		MessageCookieReplyTXAttempt:       metricMessageCookieReplyTXAttempt,
-		HandshakeInitiatorCompleted:       metricHandshakeInitiatorCompleted,
-		HandshakeResponderCompleted:       metricHandshakeResponderCompleted,
-		MessageTransportRXDroppedReplay:   metricMessageTransportRXDroppedReplay,
+		MessageInitiationTXAttemptInitial:       metricMessageInitiationTXAttemptInitial,
+		MessageHybridInitiationTXAttemptInitial: metricMessageHybridInitiationTXAttemptInitial,
+		MessageInitiationTXAttemptRetry:         metricMessageInitiationTXAttemptRetry,
+		MessageHybridInitiationTXAttemptRetry:   metricMessageHybridInitiationTXAttemptRetry,
+		MessageResponseTXAttempt:                metricMessageResponseTXAttempt,
+		MessageHybridResponseTXAttempt:          metricMessageHybridResponseTXAttempt,
+		MessageCookieReplyTXAttempt:             metricMessageCookieReplyTXAttempt,
+		HandshakeInitiatorCompleted:             metricHandshakeInitiatorCompleted,
+		HandshakeHybridInitiatorCompleted:       metricHandshakeHybridInitiatorCompleted,
+		HandshakeResponderCompleted:             metricHandshakeResponderCompleted,
+		HandshakeHybridResponderCompleted:       metricHandshakeHybridResponderCompleted,
+		MessageTransportRXDroppedReplay:         metricMessageTransportRXDroppedReplay,
 	})
 }
 
 var (
-	metricMessageInitiationTXAttemptInitial = clientmetric.NewCounter("wireguard_message_initiation_tx_attempt_initial")
-	metricMessageInitiationTXAttemptRetry   = clientmetric.NewCounter("wireguard_message_initiation_tx_attempt_retry")
-	metricMessageResponseTXAttempt          = clientmetric.NewCounter("wireguard_message_response_tx_attempt")
-	metricMessageCookieReplyTXAttempt       = clientmetric.NewCounter("wireguard_message_cookie_reply_tx_attempt")
-	metricHandshakeInitiatorCompleted       = clientmetric.NewCounter("wireguard_handshake_initiator_completed")
-	metricHandshakeResponderCompleted       = clientmetric.NewCounter("wireguard_handshake_responder_completed")
-	metricMessageTransportRXDroppedReplay   = clientmetric.NewCounter("wireguard_message_transport_rx_dropped_replay")
+	metricMessageInitiationTXAttemptInitial       = clientmetric.NewCounter("wireguard_message_initiation_tx_attempt_initial")
+	metricMessageHybridInitiationTXAttemptInitial = clientmetric.NewCounter("wireguard_message_hybrid_initiation_tx_attempt_initial")
+	metricMessageInitiationTXAttemptRetry         = clientmetric.NewCounter("wireguard_message_initiation_tx_attempt_retry")
+	metricMessageHybridInitiationTXAttemptRetry   = clientmetric.NewCounter("wireguard_message_hybrid_initiation_tx_attempt_retry")
+	metricMessageResponseTXAttempt                = clientmetric.NewCounter("wireguard_message_response_tx_attempt")
+	metricMessageHybridResponseTXAttempt          = clientmetric.NewCounter("wireguard_message_hybrid_response_tx_attempt")
+	metricMessageCookieReplyTXAttempt             = clientmetric.NewCounter("wireguard_message_cookie_reply_tx_attempt")
+	metricHandshakeInitiatorCompleted             = clientmetric.NewCounter("wireguard_handshake_initiator_completed")
+	metricHandshakeHybridInitiatorCompleted       = clientmetric.NewCounter("wireguard_handshake_hybrid_initiator_completed")
+	metricHandshakeResponderCompleted             = clientmetric.NewCounter("wireguard_handshake_responder_completed")
+	metricHandshakeHybridResponderCompleted       = clientmetric.NewCounter("wireguard_handshake_hybrid_responder_completed")
+	metricMessageTransportRXDroppedReplay         = clientmetric.NewCounter("wireguard_message_transport_rx_dropped_replay")
 )
 
 // NewPeerLookupFunc returns a [device.PeerLookupFunc] that lazily
