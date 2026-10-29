@@ -59,6 +59,32 @@ func TestPrefValue(t *testing.T) {
 			want:  false,
 		},
 		{
+			name: "accept-routes-allow",
+			flag: "accept-routes-allow",
+			prefs: &ipn.Prefs{AcceptRoutesAllow: []netip.Prefix{
+				netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("2001:db8::/32"),
+			}},
+			want: "192.0.2.0/24,2001:db8::/32",
+		},
+		{
+			name:  "accept-routes-deny",
+			flag:  "accept-routes-deny",
+			prefs: &ipn.Prefs{AcceptRoutesDeny: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}},
+			want:  "192.0.2.0/24",
+		},
+		{
+			name:  "accept-routes-allow-empty",
+			flag:  "accept-routes-allow",
+			prefs: &ipn.Prefs{},
+			want:  "",
+		},
+		{
+			name:  "accept-routes-deny-empty",
+			flag:  "accept-routes-deny",
+			prefs: &ipn.Prefs{},
+			want:  "",
+		},
+		{
 			name:  "accept-dns",
 			flag:  "accept-dns",
 			prefs: &ipn.Prefs{CorpDNS: true},

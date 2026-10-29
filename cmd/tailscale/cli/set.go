@@ -37,7 +37,19 @@ var setCmd = &ffcli.Command{
 
 Unlike "tailscale up", this command does not require the complete set of desired settings.
 
-Only settings explicitly mentioned will be set. There are no default values.`,
+Only settings explicitly mentioned will be set. There are no default values.
+
+Subnet route filters require --accept-routes=true. With --accept-routes-allow,
+only advertised routes wholly contained in an allowed CIDR are accepted.
+An empty allow list allows all advertised subnet routes. --accept-routes-deny
+excludes any advertised route overlapping a denied CIDR, even a larger route
+that contains it. Deny takes precedence; routes are never split. Pass an empty
+string to clear either list.
+
+These filters do not affect Tailscale peer addresses or exit node routes. They
+select routes, not destinations: an excluded destination can still be reached
+using another route, including an exit node. Filters remain configured when
+--accept-routes=false and do not automatically change when switching LANs.`,
 	FlagSet:   setFlagSet,
 	Exec:      runSet,
 	UsageFunc: usageFuncNoDefaultValues,
@@ -45,6 +57,8 @@ Only settings explicitly mentioned will be set. There are no default values.`,
 
 type setArgsT struct {
 	acceptRoutes               bool
+	acceptRoutesAllow          string
+	acceptRoutesDeny           string
 	acceptDNS                  bool
 	exitNodeIP                 string
 	exitNodeAllowLANAccess     bool
@@ -76,6 +90,8 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 
 	setf.StringVar(&setArgs.profileName, "nickname", "", "nickname for the current account")
 	setf.BoolVar(&setArgs.acceptRoutes, "accept-routes", acceptRouteDefault(goos), "accept routes advertised by other Tailscale nodes")
+	setf.StringVar(&setArgs.acceptRoutesAllow, "accept-routes-allow", "", "accept only subnet routes wholly contained in these comma-separated CIDRs; empty allows all (requires --accept-routes)")
+	setf.StringVar(&setArgs.acceptRoutesDeny, "accept-routes-deny", "", "exclude subnet routes overlapping these comma-separated CIDRs; empty excludes none (requires --accept-routes)")
 	setf.BoolVar(&setArgs.acceptDNS, "accept-dns", true, "accept DNS configuration from the admin panel")
 	setf.StringVar(&setArgs.exitNodeIP, "exit-node", "", "Tailscale exit node (IP, base name, or auto:any) for internet traffic, or empty string to not use an exit node")
 	setf.BoolVar(&setArgs.exitNodeAllowLANAccess, "exit-node-allow-lan-access", false, "allow direct access to the local network when routing traffic via an exit node")
@@ -170,6 +186,15 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			RemoteConfig:        setArgs.remoteConfig,
 			NoStatefulFiltering: opt.NewBool(!setArgs.statefulFiltering),
 		},
+	}
+
+	maskedPrefs.AcceptRoutesAllow, err = parseAcceptRouteFilter(setArgs.acceptRoutesAllow)
+	if err != nil {
+		return fmt.Errorf("--accept-routes-allow: %w", err)
+	}
+	maskedPrefs.AcceptRoutesDeny, err = parseAcceptRouteFilter(setArgs.acceptRoutesDeny)
+	if err != nil {
+		return fmt.Errorf("--accept-routes-deny: %w", err)
 	}
 
 	if effectiveGOOS() == "linux" {
@@ -289,6 +314,25 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 	}
 
 	return nil
+}
+
+// parseAcceptRouteFilter parses and orders a comma-separated list of CIDRs.
+// Prefix validity (including host bits) is checked by the daemon's CheckPrefs,
+// so the same validation applies to CLI and LocalAPI clients.
+func parseAcceptRouteFilter(s string) ([]netip.Prefix, error) {
+	if s == "" {
+		return nil, nil
+	}
+	var prefixes []netip.Prefix
+	for part := range strings.SplitSeq(s, ",") {
+		p, err := netip.ParsePrefix(part)
+		if err != nil {
+			return nil, fmt.Errorf("%q is not a valid CIDR prefix", part)
+		}
+		prefixes = append(prefixes, p)
+	}
+	tsaddr.SortPrefixes(prefixes)
+	return slices.Compact(prefixes), nil
 }
 
 // calcAdvertiseRoutesForSet returns the new value for Prefs.AdvertiseRoutes based on the
