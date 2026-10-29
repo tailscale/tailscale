@@ -138,28 +138,26 @@ func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip
 		}
 	}
 
-	var mip, tip netip.Addr
-	var err error
+	var magicPool, transitPool *ippool
 	if dst.Is4() {
-		mip, err = c.v4MagicIPPool.next()
-		if err != nil {
-			return nil, err
-		}
-		tip, err = c.v4TransitIPPool.next()
-		if err != nil {
-			return nil, err
-		}
+		magicPool, transitPool = c.v4MagicIPPool, c.v4TransitIPPool
 	} else if dst.Is6() {
-		mip, err = c.v6MagicIPPool.next()
-		if err != nil {
-			return nil, err
-		}
-		tip, err = c.v6TransitIPPool.next()
-		if err != nil {
-			return nil, err
-		}
+		magicPool, transitPool = c.v6MagicIPPool, c.v6TransitIPPool
 	} else {
 		return nil, errors.New("unexpected neither 4 nor 6")
+	}
+	// Addresses are only returned to the pools by the popExpired loop above,
+	// which can only see them once they're in c.assignments. So any failure
+	// before the insert below has to put them back itself, or they're leaked
+	// from the pool for the lifetime of the process.
+	mip, err := magicPool.next()
+	if err != nil {
+		return nil, err
+	}
+	tip, err := transitPool.next()
+	if err != nil {
+		magicPool.returnAddr(mip)
+		return nil, err
 	}
 	as := &addrs{
 		dst:     dst,
@@ -169,6 +167,8 @@ func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip
 		domain:  domain,
 	}
 	if err := c.assignments.insertFromTTL(as, ttl); err != nil {
+		magicPool.returnAddr(mip)
+		transitPool.returnAddr(tip)
 		return nil, err
 	}
 	err = c.enqueueAddressAssignment(as)

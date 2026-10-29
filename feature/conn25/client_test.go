@@ -135,6 +135,83 @@ func TestReserveAddressesDeduplicated(t *testing.T) {
 	}
 }
 
+// TestReserveAddressesNoLeakOnFailure checks that a magic IP isn't lost from
+// its pool when the reservation fails after the magic IP was handed out. Once
+// an address is marked in use it can only be returned via popExpired, which
+// never sees assignments that failed to be inserted, so a leak here is permanent.
+func TestReserveAddressesNoLeakOnFailure(t *testing.T) {
+	// An empty transit pool is reachable from config: the magic and transit
+	// pools come from independent node capabilities. A single-address transit
+	// pool exhausts itself after one reservation.
+	for _, tt := range []struct {
+		name    string
+		is6     bool
+		magic   string
+		transit *netipx.IPSet
+	}{
+		{
+			name:    "v4-empty-transit-pool",
+			magic:   "100.64.0.0/24",
+			transit: &netipx.IPSet{},
+		},
+		{
+			name:    "v4-exhausted-transit-pool",
+			magic:   "100.64.0.0/24",
+			transit: mustIPSetFromPrefix("169.254.0.0/30"),
+		},
+		{
+			name:    "v6-empty-transit-pool",
+			is6:     true,
+			magic:   "fd7a:115c:a1e0:a99c:0100::/80",
+			transit: &netipx.IPSet{},
+		},
+		{
+			name:    "v6-exhausted-transit-pool",
+			is6:     true,
+			magic:   "fd7a:115c:a1e0:a99c:0100::/80",
+			transit: mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0200::/127"),
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			const appName = "a"
+			c := newConn25(t.Logf).client
+
+			magicPool, transitPool := &c.v4MagicIPPool, &c.v4TransitIPPool
+			if tt.is6 {
+				magicPool, transitPool = &c.v6MagicIPPool, &c.v6TransitIPPool
+			}
+			*magicPool = newIPPool(mustIPSetFromPrefix(tt.magic))
+			*transitPool = newIPPool(tt.transit)
+
+			// Reserve until the transit pool runs out, then keep going. Every
+			// failure past that point must leave the magic pool untouched.
+			var gotErr error
+			var reserved int
+			for i := range 5 {
+				dst := netip.AddrFrom4([4]byte{0, 0, 0, byte(i + 1)})
+				if tt.is6 {
+					dst = netip.MustParseAddr(fmt.Sprintf("::%d", i+1))
+				}
+				domain := must.Get(dnsname.ToFQDN(fmt.Sprintf("e%d.example.com.", i)))
+				if _, err := c.reserveAddresses(appName, domain, dst, 10); err != nil {
+					gotErr = err
+				} else {
+					reserved++
+				}
+			}
+			if !errors.Is(gotErr, errPoolExhausted) {
+				t.Fatalf("want errPoolExhausted from the transit pool, got %v", gotErr)
+			}
+			if got := (*magicPool).inUseCount(); got != int64(reserved) {
+				t.Errorf("magic pool has %d addresses in use, want %d (one per successful reservation)", got, reserved)
+			}
+			if got := (*transitPool).inUseCount(); got != int64(reserved) {
+				t.Errorf("transit pool has %d addresses in use, want %d (one per successful reservation)", got, reserved)
+			}
+		})
+	}
+}
+
 func TestTransitIPConnMapping(t *testing.T) {
 	conn25 := newConn25(t.Logf)
 
