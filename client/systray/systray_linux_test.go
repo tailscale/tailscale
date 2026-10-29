@@ -15,7 +15,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -111,7 +113,7 @@ func startFakeWatcher(t *testing.T, addr string) <-chan string {
 // attribute, and suggests an exit node that has no Location. This mirrors
 // the tailnet in https://github.com/tailscale/tailscale/issues/20678 where
 // building the exit node menu panicked.
-func startFakeLocalAPI(t *testing.T) string {
+func startFakeLocalAPI(t *testing.T, edits *prefsEdits) string {
 	t.Helper()
 
 	self := &ipnstate.PeerStatus{
@@ -171,6 +173,21 @@ func startFakeLocalAPI(t *testing.T) string {
 			Name: exitNode.DNSName,
 		})
 	})
+	mux.HandleFunc("/localapi/v0/prefs", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "PATCH" {
+			var mp ipn.MaskedPrefs
+			if err := json.NewDecoder(r.Body).Decode(&mp); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			edits.add(mp)
+			serveJSON(w, mp.Prefs)
+			return
+		}
+		// Deliberately asymmetric: a mapping that swapped RouteAll and
+		// CorpDNS would still satisfy the labels, but not the checkboxes.
+		serveJSON(w, ipn.Prefs{RouteAll: true, CorpDNS: false})
+	})
 	mux.HandleFunc("/localapi/v0/watch-ipn-bus", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush()
@@ -214,7 +231,8 @@ func TestRun(t *testing.T) {
 	busAddr := startSessionBus(t)
 	t.Setenv("DBUS_SESSION_BUS_ADDRESS", busAddr)
 	registered := startFakeWatcher(t, busAddr)
-	sock := startFakeLocalAPI(t)
+	edits := new(prefsEdits)
+	sock := startFakeLocalAPI(t, edits)
 
 	// Run the systray app. It has no clean way to shut down (systray.Quit
 	// triggers a log.Fatal in the IPN bus watcher), so it is left running
@@ -256,7 +274,7 @@ func TestRun(t *testing.T) {
 	// answers the very first GetLayout with a depth of 1 regardless of
 	// what was asked for (and schedules a refresh), so submenu entries
 	// like the exit node list only appear on later calls.
-	wants := []string{"Connected", "This Device: self-host (100.64.0.1)", "Exit Nodes", "Recommended: exit1", "Quit"}
+	wants := []string{"Connected", "This Device: self-host (100.64.0.1)", "Exit Nodes", "Recommended: exit1", "Accept routes", "Accept DNS", "Quit"}
 	var layout string
 	var missing []string
 	deadline := time.Now().Add(30 * time.Second)
@@ -279,4 +297,120 @@ func TestRun(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+
+	// The checkboxes must show what the daemon reports, not a default.
+	items := menuItemsByLabel(t, obj)
+	for label, want := range map[string]int32{"Accept routes": 1, "Accept DNS": 0} {
+		item, ok := items[label]
+		if !ok {
+			t.Errorf("no menu item %q", label)
+			continue
+		}
+		if got := item.toggleState(); got != want {
+			t.Errorf("%q toggle-state = %d, want %d", label, got, want)
+		}
+	}
+
+	// Clicking a checkbox must ask for the opposite of the current value.
+	// The fake reports RouteAll true, so the edit must set it false.
+	routes, ok := items["Accept routes"]
+	if !ok {
+		t.Fatal("no \"Accept routes\" menu item to click")
+	}
+	if call := obj.Call("com.canonical.dbusmenu.Event", 0,
+		routes.ID, "clicked", dbus.MakeVariant(""), uint32(time.Now().Unix())); call.Err != nil {
+		t.Fatalf("clicking %q: %v", "Accept routes", call.Err)
+	}
+
+	deadline = time.Now().Add(30 * time.Second)
+	for {
+		var got []ipn.MaskedPrefs
+		for _, mp := range edits.all() {
+			if mp.RouteAllSet {
+				got = append(got, mp)
+			}
+		}
+		if len(got) > 0 {
+			if got[0].RouteAll {
+				t.Errorf("clicking %q asked for RouteAll=true, want false", "Accept routes")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for a RouteAll edit; saw %+v", edits.all())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// prefsEdits records the preference edits the fake LocalAPI is sent.
+type prefsEdits struct {
+	mu   sync.Mutex
+	seen []ipn.MaskedPrefs
+}
+
+func (e *prefsEdits) add(mp ipn.MaskedPrefs) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.seen = append(e.seen, mp)
+}
+
+func (e *prefsEdits) all() []ipn.MaskedPrefs {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return slices.Clone(e.seen)
+}
+
+// dbusMenuItem is one node of a com.canonical.dbusmenu layout, (ia{sv}av).
+type dbusMenuItem struct {
+	ID       int32
+	Props    map[string]dbus.Variant
+	Children []dbus.Variant
+}
+
+// menuItemsByLabel returns every labelled menu item, keyed by label.
+func menuItemsByLabel(t *testing.T, obj dbus.BusObject) map[string]dbusMenuItem {
+	t.Helper()
+	call := obj.Call("com.canonical.dbusmenu.GetLayout", 0, int32(0), int32(-1),
+		[]string{"label", "toggle-state"})
+	if call.Err != nil {
+		t.Fatalf("GetLayout: %v", call.Err)
+	}
+	var revision uint32
+	var root dbusMenuItem
+	if err := call.Store(&revision, &root); err != nil {
+		t.Fatalf("decoding layout: %v", err)
+	}
+
+	items := make(map[string]dbusMenuItem)
+	var walk func(item dbusMenuItem)
+	walk = func(item dbusMenuItem) {
+		if label, ok := item.Props["label"]; ok {
+			if l, ok := label.Value().(string); ok {
+				items[l] = item
+			}
+		}
+		for _, child := range item.Children {
+			var c dbusMenuItem
+			if err := dbus.Store([]any{child.Value()}, &c); err != nil {
+				continue
+			}
+			walk(c)
+		}
+	}
+	walk(root)
+	return items
+}
+
+// toggleState returns the item's toggle-state, or -1 when it has none.
+func (item dbusMenuItem) toggleState() int32 {
+	v, ok := item.Props["toggle-state"]
+	if !ok {
+		return -1
+	}
+	s, ok := v.Value().(int32)
+	if !ok {
+		return -1
+	}
+	return s
 }
