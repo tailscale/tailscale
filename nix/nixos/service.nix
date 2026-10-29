@@ -301,6 +301,8 @@ self: {
         ];
         wants = ["${meta.svcName}.service"];
         wantedBy = ["${meta.svcName}.service"];
+        # Upstream nixpkgs' unit name, so ordering on it keeps working.
+        aliases = optional meta.isDefault "tailscale-serve.service";
 
         serviceConfig = {
           Type = "oneshot";
