@@ -392,7 +392,8 @@ type Conn struct {
 	getPeerByKey func(key.NodePublic) (_ wgint.Peer, ok bool)
 
 	// lastErrRebind tracks the last time a rebind was performed after
-	// experiencing a write error, and is used to throttle the rate of rebinds.
+	// experiencing a send or receive error, and is used to throttle the rate
+	// of rebinds.
 	lastErrRebind syncs.AtomicValue[time.Time]
 
 	// appliedDisableUDPGRO and appliedDisableUDPGSO cache the last UDP offload
@@ -1638,15 +1639,29 @@ func (c *Conn) maybeRebindOnError(err error) {
 	if !ok {
 		return
 	}
-
-	if c.lastErrRebind.Load().Before(time.Now().Add(-5 * time.Second)) {
-		c.logf("magicsock: performing rebind due to %q", reason)
-		c.lastErrRebind.Store(time.Now())
-		c.Rebind()
-		go c.ReSTUN(reason)
-	} else {
+	if !c.maybeRebind(reason) {
 		c.logf("magicsock: not performing %q rebind due to throttle", reason)
 	}
+}
+
+// maybeRebind performs a rebind and restun for the given reason, unless
+// another error-driven rebind happened within the last 5 seconds. It reports
+// whether it performed the rebind.
+//
+// It may be called concurrently, from the send path and from each receive
+// func; at most one of the callers performs the rebind.
+func (c *Conn) maybeRebind(reason string) bool {
+	last := c.lastErrRebind.Load()
+	if !last.Before(time.Now().Add(-5 * time.Second)) {
+		return false
+	}
+	if !c.lastErrRebind.CompareAndSwap(last, time.Now()) {
+		return false
+	}
+	c.logf("magicsock: performing rebind due to %q", reason)
+	c.Rebind()
+	go c.ReSTUN(reason)
+	return true
 }
 
 // sendUDPNetcheck sends b via UDP to addr. It is used exclusively by netcheck.
@@ -1742,6 +1757,15 @@ func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte, is
 	return false, errDropDerpPacket
 }
 
+// The backoff bounds between retries of a UDP read that failed with an error
+// other than the socket being closed. The backoff doubles on each consecutive
+// error, so that a socket that keeps failing does not spin the CPU, and is
+// reset by a successful read. Closing the Conn or the Bind interrupts it.
+const (
+	minReceiveErrorBackoff = 50 * time.Millisecond
+	maxReceiveErrorBackoff = time.Second
+)
+
 // udpReceiveConfig tracks per-[conn.ReceiveFunc] configuration.
 type udpReceiveConfig struct {
 	ruc    *RebindingUDPConn // must be non-nil
@@ -1761,6 +1785,11 @@ func (c *Conn) mkReceiveFunc(cfg udpReceiveConfig) conn.ReceiveFunc {
 	// epCache caches an epAddr->endpoint for hot flows.
 	var epCache epAddrEndpointCache
 	var batchingPackets []batching.ReceivedPacket
+	// readErrs counts consecutive read errors, and readErrBackoff is the
+	// delay before the next read after an error. wireguard-go calls each
+	// ReceiveFunc from a single goroutine, so these need no locking.
+	var readErrs int
+	readErrBackoff := minReceiveErrorBackoff
 
 	return func(slab []byte, packets []conn.ReceivedPacket) (_ int, retErr error) {
 		if buildfeatures.HasHealth && healthItem != nil {
@@ -1785,7 +1814,39 @@ func (c *Conn) mkReceiveFunc(cfg udpReceiveConfig) conn.ReceiveFunc {
 				if neterror.PacketWasTruncated(err) {
 					continue
 				}
-				return 0, err
+				if c.closing.Load() || errors.Is(err, net.ErrClosed) || c.bind.isClosed() {
+					return 0, err
+				}
+				// Returning any other error to wireguard-go risks
+				// permanently stopping this receive routine: it exits
+				// on a non-temporary net.Error, or after a few
+				// consecutive errors, and is only restarted when the
+				// Bind is reopened. The tunnel then looks connected
+				// but can no longer receive. Instead, rebind the
+				// sockets (throttled) and retry with a bounded
+				// backoff.
+				readErrs++
+				if readErrs == 1 {
+					c.logf("magicsock: %s read error, rebinding and retrying: %v", c.receiveName(cfg.family, cfg.socket), err)
+				}
+				c.maybeRebind("receive-error")
+				t := time.NewTimer(readErrBackoff)
+				select {
+				case <-t.C:
+				case <-c.donec:
+					t.Stop()
+					return 0, net.ErrClosed
+				case <-c.bind.closedChan():
+					t.Stop()
+					return 0, net.ErrClosed
+				}
+				readErrBackoff = min(readErrBackoff*2, maxReceiveErrorBackoff)
+				continue
+			}
+			if readErrs > 0 {
+				c.logf("magicsock: %s recovered after %d read errors", c.receiveName(cfg.family, cfg.socket), readErrs)
+				readErrs = 0
+				readErrBackoff = minReceiveErrorBackoff
 			}
 
 			reportToCaller := false
@@ -3510,8 +3571,9 @@ func (c *Conn) Bind() conn.Bind {
 // The subsequent Close is a real close.
 type connBind struct {
 	*Conn
-	mu     sync.Mutex
-	closed bool
+	mu       sync.Mutex
+	closed   bool
+	closedCh chan struct{} // closed by Close; replaced by Open; nil before the first Open
 }
 
 // These are compile-time assertions that connBind implements the wireguard-go
@@ -3548,6 +3610,7 @@ func (c *connBind) Open(ignoredPort uint16) ([]conn.ReceiveFunc, uint16, error) 
 		return nil, 0, errors.New("magicsock: connBind already open")
 	}
 	c.closed = false
+	c.closedCh = make(chan struct{})
 	var fns []conn.ReceiveFunc
 	for _, cfg := range c.udpReceiveConfigs() {
 		fns = append(fns, c.mkReceiveFunc(cfg))
@@ -3636,7 +3699,9 @@ func (c *connBind) Close() error {
 		return nil
 	}
 	c.closed = true
-	// Unblock all outstanding receives.
+	// Unblock all outstanding receives, including those waiting to retry
+	// after a read error.
+	close(c.closedCh)
 	c.pconn4.Close()
 	c.pconn6.Close()
 	if c.closeDisco4 != nil {
@@ -3657,6 +3722,14 @@ func (c *connBind) isClosed() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.closed
+}
+
+// closedChan returns a channel that is closed when c is closed. It returns
+// nil if c has never been opened.
+func (c *connBind) closedChan() <-chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closedCh
 }
 
 // Close closes the connection.

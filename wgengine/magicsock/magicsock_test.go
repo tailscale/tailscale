@@ -3612,6 +3612,155 @@ func TestMaybeRebindOnError(t *testing.T) {
 	})
 }
 
+var errFakeRead = errors.New("fake read error")
+
+// readErrConn is a nettype.PacketConn whose reads always fail with
+// errFakeRead. It reports each read on reads, if there is room, and closes
+// closed when it is closed. Closing it also closes the PacketConn it wraps.
+type readErrConn struct {
+	nettype.PacketConn
+	reads     chan struct{}
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func (c *readErrConn) ReadFromUDPAddrPort([]byte) (int, netip.AddrPort, error) {
+	select {
+	case c.reads <- struct{}{}:
+	default:
+	}
+	return 0, netip.AddrPort{}, errFakeRead
+}
+
+func (c *readErrConn) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return c.PacketConn.Close()
+}
+
+// breakIPv4Socket replaces conn's first IPv4 socket with a readErrConn
+// wrapping it, and returns the readErrConn.
+func breakIPv4Socket(conn *Conn) *readErrConn {
+	ruc := &conn.pconn4
+	ruc.mu.Lock()
+	defer ruc.mu.Unlock()
+	pconns := slices.Clone(ruc.group.conns[:ruc.group.bound])
+	broken := &readErrConn{
+		PacketConn: pconns[0],
+		reads:      make(chan struct{}, 10),
+		closed:     make(chan struct{}),
+	}
+	pconns[0] = broken
+	ruc.setConnLocked(pconns, conn.udpSockets, "udp4", nil)
+	return broken
+}
+
+type receiveResult struct {
+	n   int
+	err error
+}
+
+func TestReceiveFuncReadError(t *testing.T) {
+	t.Run("rebinds-and-keeps-reading", func(t *testing.T) {
+		conn := newTestConn(t)
+		sendConn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { sendConn.Close() })
+		addTestEndpoint(t, conn, sendConn)
+
+		fns, _, err := conn.bind.Open(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		receiveIPv4 := fns[0]
+		broken := breakIPv4Socket(conn)
+
+		before := metricRebindCalls.Value()
+		slab := make([]byte, batching.ReadSlabMultiple)
+		packets := make([]wgconn.ReceivedPacket, batching.MinimumReadBatchSize)
+		done := make(chan receiveResult, 1)
+		go func() {
+			n, err := receiveIPv4(slab, packets)
+			done <- receiveResult{n, err}
+		}()
+
+		// The read error must make the receive func rebind, which closes
+		// the broken socket.
+		select {
+		case <-broken.closed:
+		case res := <-done:
+			t.Fatalf("receive func returned (%d, %v) on a read error, want it to keep reading", res.n, res.err)
+		case <-time.After(10 * time.Second):
+			t.Fatal("timeout waiting for rebind after a read error")
+		}
+		// The rebind holds pconn4.mu while it closes and rebinds the
+		// socket, so this waits for the new socket.
+		if conn.pconn4.currentConn(0) == broken {
+			t.Fatal("broken socket still in use after rebind")
+		}
+		if after := metricRebindCalls.Value(); after != before+1 {
+			t.Errorf("rebind calls = %d, want %d", after-before, 1)
+		}
+
+		dst := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: int(conn.pconn4.Port())}
+		if _, err := sendConn.WriteTo(bytes.Repeat([]byte{'x'}, 1<<10), dst); err != nil {
+			t.Fatalf("WriteTo: %v", err)
+		}
+		select {
+		case res := <-done:
+			if res.err != nil || res.n == 0 {
+				t.Errorf("receive func = (%d, %v), want a packet", res.n, res.err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("timeout waiting for a packet on the rebound socket")
+		}
+	})
+
+	t.Run("close-while-retrying", func(t *testing.T) {
+		conn := newTestConn(t)
+		fns, _, err := conn.bind.Open(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		receiveIPv4 := fns[0]
+		broken := breakIPv4Socket(conn)
+		// Throttle rebinds, so the receive func keeps retrying the
+		// broken socket.
+		conn.lastErrRebind.Store(time.Now())
+
+		slab := make([]byte, batching.ReadSlabMultiple)
+		packets := make([]wgconn.ReceivedPacket, batching.MinimumReadBatchSize)
+		done := make(chan receiveResult, 1)
+		go func() {
+			n, err := receiveIPv4(slab, packets)
+			done <- receiveResult{n, err}
+		}()
+
+		for range 2 {
+			select {
+			case <-broken.reads:
+			case res := <-done:
+				t.Fatalf("receive func returned (%d, %v) on a read error, want it to retry", res.n, res.err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("timeout waiting for the receive func to retry")
+			}
+		}
+
+		if err := conn.bind.Close(); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case res := <-done:
+			if res.err == nil {
+				t.Errorf("receive func = (%d, nil) after Close, want an error", res.n)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("receive func did not return after Close")
+		}
+	})
+}
+
 func newTestConnAndRegistry(t *testing.T, mod ...func(*Options)) (*Conn, *usermetric.Registry) {
 	t.Helper()
 	bus := eventbus.New()
