@@ -964,6 +964,7 @@ func init() {
 	addPrefFlagMapping("nickname", "ProfileName")
 	addPrefFlagMapping("update-check", "AutoUpdate.Check")
 	addPrefFlagMapping("auto-update", "AutoUpdate.Apply")
+	addPrefFlagMapping("auto-update-force-after", "AutoUpdate.ForceAfter")
 	addPrefFlagMapping("advertise-connector", "AppConnector")
 	addPrefFlagMapping("report-posture", "PostureChecking")
 	addPrefFlagMapping("remote-config", "RemoteConfig")
