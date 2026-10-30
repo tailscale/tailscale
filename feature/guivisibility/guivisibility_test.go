@@ -9,7 +9,7 @@ import (
 	"tailscale.com/tailcfg"
 )
 
-func TestVisibilityFilter(t *testing.T) {
+func TestPeerHiddenInGUI(t *testing.T) {
 	self := (&tailcfg.Node{
 		ID:   1,
 		User: 10,
@@ -36,7 +36,7 @@ func TestVisibilityFilter(t *testing.T) {
 	tests := []struct {
 		name   string
 		peer   tailcfg.NodeView
-		filter visibilityFilter
+		hidden hiddenNetworkDevices
 		want   bool
 	}{
 		{
@@ -52,73 +52,101 @@ func TestVisibilityFilter(t *testing.T) {
 			peer: tagged,
 		},
 		{
-			name:   "current-user/self-stays-visible",
-			peer:   self,
-			filter: visibilityFilter{currentUser: true},
+			name: "current-user/self-stays-visible",
+			peer: self,
+			hidden: hiddenNetworkDevices{
+				currentUser: true,
+			},
 		},
 		{
-			name:   "current-user/same-user",
-			peer:   sameUser,
-			filter: visibilityFilter{currentUser: true},
-			want:   true,
+			name: "current-user/same-user",
+			peer: sameUser,
+			hidden: hiddenNetworkDevices{
+				currentUser: true,
+			},
+			want: true,
 		},
 		{
-			name:   "current-user/shared-by-current-user",
-			peer:   sharedByCurrentUser,
-			filter: visibilityFilter{currentUser: true},
-			want:   true,
+			name: "current-user/shared-by-current-user",
+			peer: sharedByCurrentUser,
+			hidden: hiddenNetworkDevices{
+				currentUser: true,
+			},
+			want: true,
 		},
 		{
-			name:   "current-user/other-user",
-			peer:   otherUser,
-			filter: visibilityFilter{currentUser: true},
+			name: "current-user/other-user",
+			peer: otherUser,
+			hidden: hiddenNetworkDevices{
+				currentUser: true,
+			},
 		},
 		{
-			name:   "other-users/other-user",
-			peer:   otherUser,
-			filter: visibilityFilter{otherUsers: true},
-			want:   true,
+			name: "other-users/other-user",
+			peer: otherUser,
+			hidden: hiddenNetworkDevices{
+				otherUsers: true,
+			},
+			want: true,
 		},
 		{
-			name:   "other-users/tagged-is-separate",
-			peer:   tagged,
-			filter: visibilityFilter{otherUsers: true},
+			name: "other-users/tagged-is-separate",
+			peer: tagged,
+			hidden: hiddenNetworkDevices{
+				otherUsers: true,
+			},
 		},
 		{
-			name:   "tagged-devices/tagged",
-			peer:   tagged,
-			filter: visibilityFilter{taggedDevices: true},
-			want:   true,
+			name: "tagged-devices/tagged",
+			peer: tagged,
+			hidden: hiddenNetworkDevices{
+				taggedDevices: true,
+			},
+			want: true,
 		},
 		{
-			name:   "tagged-devices/other-user",
-			peer:   otherUser,
-			filter: visibilityFilter{taggedDevices: true},
+			name: "tagged-devices/other-user",
+			peer: otherUser,
+			hidden: hiddenNetworkDevices{
+				taggedDevices: true,
+			},
 		},
 		{
-			name:   "all/same-user",
-			peer:   sameUser,
-			filter: visibilityFilter{true, true, true},
-			want:   true,
+			name: "all/same-user",
+			peer: sameUser,
+			hidden: hiddenNetworkDevices{
+				currentUser:   true,
+				otherUsers:    true,
+				taggedDevices: true,
+			},
+			want: true,
 		},
 		{
-			name:   "all/other-user",
-			peer:   otherUser,
-			filter: visibilityFilter{true, true, true},
-			want:   true,
+			name: "all/other-user",
+			peer: otherUser,
+			hidden: hiddenNetworkDevices{
+				currentUser:   true,
+				otherUsers:    true,
+				taggedDevices: true,
+			},
+			want: true,
 		},
 		{
-			name:   "all/tagged",
-			peer:   tagged,
-			filter: visibilityFilter{true, true, true},
-			want:   true,
+			name: "all/tagged",
+			peer: tagged,
+			hidden: hiddenNetworkDevices{
+				currentUser:   true,
+				otherUsers:    true,
+				taggedDevices: true,
+			},
+			want: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.filter.Hide(tt.peer, self); got != tt.want {
-				t.Fatalf("Hide() = %v, want %v", got, tt.want)
+			if got := peerHiddenInGUI(tt.peer, self, tt.hidden); got != tt.want {
+				t.Fatalf("peerHiddenInGUI() = %v, want %v", got, tt.want)
 			}
 		})
 	}

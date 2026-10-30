@@ -355,21 +355,20 @@ type Notify struct {
 	// a continuous view of node state without fetching the netmap.
 	InitialStatus *ipnstate.Status `json:",omitzero"`
 
-	// NodeGUIVisibility, when non-nil, is a complete snapshot of GUI
-	// visibility state for the current node and peers, keyed by stable node ID.
-	// It is sent to watchers that requested [NotifySysPolicyChanges]. Clients
-	// should replace their previous visibility state with this map.
+	// NodeGUIVisibility, when non-empty, lists the nodes that GUI clients
+	// should hide, keyed by stable node ID, among the nodes this Notify
+	// covers: all nodes if it carries [Notify.Policy] (initially and on
+	// policy change), or the peers in [Notify.PeersChanged] otherwise.
+	// Covered nodes absent from the map are visible, so a Notify carrying
+	// Policy replaces any previously received visibility state, while one
+	// carrying PeersChanged updates it for the changed peers only.
+	//
+	// It is populated for watchers that requested [NotifySysPolicyChanges];
+	// incremental updates additionally require [NotifyPeerChanges].
 	//
 	// This is presentation metadata only. Nodes remain present in status,
-	// peer notifications, åand the underlying netmap.
+	// peer notifications, and the underlying netmap.
 	NodeGUIVisibility map[tailcfg.StableNodeID]NodeGUIVisibility `json:",omitzero"`
-
-	// NodeGUIVisibilityChanges contains visibility changes for individual peers.
-	// Entries update, rather than replace, NodeGUIVisibility on the client.
-	NodeGUIVisibilityChanges map[tailcfg.StableNodeID]NodeGUIVisibility `json:",omitzero"`
-
-	// NodeGUIVisibilityRemoved lists peers whose visibility entries should be deleted.
-	NodeGUIVisibilityRemoved []tailcfg.StableNodeID `json:",omitzero"`
 
 	// PeerChangedPatch, if non-empty, lists narrow per-field peer patches
 	// since the last Notify (currently Online, LastSeen, DERPHome,
