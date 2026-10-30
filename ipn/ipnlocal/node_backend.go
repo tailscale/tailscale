@@ -1635,6 +1635,9 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	// node resolvers, use those as the default.
 	if len(nm.DNS.Resolvers) > 0 {
 		addDefault(nm.DNS.Resolvers)
+		// --override-dns=false negates this override locally: quad-100
+		// keeps the resolvers, and the OS keeps its own resolver.
+		dcfg.DefaultResolversLocalOnly = prefs.OverrideDNS().EqualBool(false)
 	} else if buildfeatures.HasUseExitNode {
 		if resolvers, ok := wireguardExitNodeDNSResolvers(nm, peers, prefs.ExitNodeID()); ok {
 			addDefault(resolvers)
