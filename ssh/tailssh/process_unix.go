@@ -109,14 +109,23 @@ func (ss *sshSession) waitProcess() (exitCode int, err error) {
 	return 1, err
 }
 
-// hangupProcess closes the PTY or sends SIGHUP, then schedules SIGKILL
-// if the session process has not exited.
-func (ss *sshSession) hangupProcess() {
+// hangupProcess ends the session process. PTY masters are always
+// closed, and the terminal driver then SIGHUPs the foreground process
+// group. When mandated is true the process group is also sent SIGHUP
+// directly, then SIGKILL after the escalation delay. When mandated is
+// false nothing else is signaled, matching sshd, and the process exits
+// when its stdio is closed.
+func (ss *sshSession) hangupProcess(mandated bool) {
 	if ss.ptyReq != nil {
 		// Close every PTY master descriptor so the terminal driver sends SIGHUP.
 		closeAll(ss.wrStdin, ss.rdStdout, ss.ptyResize)
+		if !mandated {
+			// Not mandated, so closing the PTY and the SIGHUP that
+			// follows from it is enough.
+			return
+		}
 	}
-	if ss.hangupMonitorProcess() {
+	if ss.hangupMonitorProcess(mandated) {
 		return
 	}
 	if ss.cmd == nil || ss.cmd.Process == nil {
@@ -124,6 +133,11 @@ func (ss *sshSession) hangupProcess() {
 	}
 	p := ss.cmd.Process
 	// The process handle synchronizes signaling with exit and reaping.
+	if !mandated {
+		// Not mandated, so do not signal. The process exits when its
+		// stdio is closed.
+		return
+	}
 	if ss.ptyReq == nil {
 		p.Signal(syscall.SIGHUP)
 	}

@@ -78,6 +78,10 @@ type monitor struct {
 	hup      chan os.Signal
 	broken   bool // a reply or notification write failed. Leave the loop.
 
+	// killAll is set by the kill-all op on revocation. teardown then
+	// kills session children too.
+	killAll bool
+
 	// pendingFds holds relayed dial/listen descriptors, keyed by request
 	// ID, from the reply write until tailscaled's fdack receipt. See
 	// replyFD and the monitor_rpc.go header for the darwin kernel
@@ -308,6 +312,9 @@ func (m *monitor) handle(f rpcFrame, fds []int) {
 	case opSignal:
 		closeFds(fds)
 		m.handleSignal(f)
+	case opKillAll:
+		closeFds(fds)
+		m.handleKillAll(f)
 	case opFdAck:
 		closeFds(fds)
 		if fds, ok := m.pendingFds[f.ID]; ok {
@@ -726,19 +733,42 @@ func (m *monitor) notifyExit(child monitorProcess, code int) {
 	m.reply(rpcExitNotify(child, code))
 }
 
-// teardown is the monitor's orderly exit path, reached from RPC EOF, a
-// protocol error, or an external SIGHUP. It SIGHUPs every child group,
-// runs a brief bounded reap sweep, then SIGKILLs every group that
-// survived the HUP and reaps again. A session-level escalation timer
-// in sessmonitor.go, when one was scheduled, fails its Signal against
-// this closed RPC channel, so the monitor's own teardown performs the
-// SIGKILL. Children that survive even the SIGKILL are abandoned in
-// their own groups.
+// handleKillAll sets killAll, which makes teardown kill the session
+// children. tailscaled sends this op before closing the RPC when
+// access is revoked, because the session may be canceled too late to
+// signal its process group itself.
+func (m *monitor) handleKillAll(f rpcFrame) {
+	m.killAll = true
+	m.reply(rpcOKReply(f.ID, opKillAll))
+}
+
+// teardown is the monitor's exit path, reached on RPC EOF, a protocol
+// error, or an external SIGHUP. It sends SIGHUP to every child process
+// group, reaps briefly, then sends SIGKILL to the groups that did not
+// exit. The SIGKILL pass uses the pgid snapshot taken below, because a
+// process can outlive the reaped leader of its group.
+//
+// Forwarding children always die. They are tailscaled's own dialers,
+// listeners, and relays, and must not outlive the connection. Session
+// children die too when killAll is set, which happens on revocation.
+// Otherwise the client disconnected on its own, and the session
+// processes are not signaled here. The session in tailscaled closes
+// its I/O without signaling, and the processes exit on their own or
+// keep running.
 func (m *monitor) teardown() {
 	// Close descriptors whose receipt has not been acknowledged.
 	for id, fds := range m.pendingFds {
 		closeFds(fds)
 		delete(m.pendingFds, id)
+	}
+	if !m.killAll {
+		// Leave session children alone, and forget them so the reap
+		// loops below do not wait on children that were not signaled.
+		for pid, c := range m.children {
+			if c.id != 0 {
+				delete(m.children, pid)
+			}
+		}
 	}
 	// Snapshot the pgid set at teardown entry. A group member can
 	// outlive its reaped leader, so the SIGKILL pass keys on this

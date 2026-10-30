@@ -76,6 +76,11 @@ func TestMonitorCloseWatchdogForwardChild(t *testing.T) {
 	}()
 
 	start := time.Now()
+	kctx, kcancel := context.WithTimeout(context.Background(), 16*time.Second)
+	if err := mc.KillAll(kctx); err != nil {
+		t.Errorf("arming kill-all: %v", err)
+	}
+	kcancel()
 	err = mc.Close()
 	t.Logf("Close duration=%v error=%v; session=%d forward=%d", time.Since(start), err, session.PID, forwardPID)
 	if err != nil {

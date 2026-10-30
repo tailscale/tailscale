@@ -51,13 +51,14 @@ import (
 
 // Monitor RPC operations.
 const (
-	opDial   = "dial"   // request {net:"unix"|"tcp", addr}. reply {ok} + socket (and lifetime pipe writer for unix)
-	opListen = "listen" // request {net:"unix"|"tcp", addr, unlink?, agent?}. reply {ok, path} + listener fd
-	opExec   = "exec"   // request {argv, env, dir?, ctty?, envfd?, fds:0-4} + SCM_RIGHTS fds. reply {ok, pid, childID}
-	opSignal = "signal" // request {pid, childID, sig}. reply {ok}
-	opPing   = "ping"   // request {}. reply {ok}
-	opExit   = "exit"   // unsolicited notification {pid, childID, code}. no request ID
-	opFdAck  = "fdack"  // request {id of the reply whose descriptors were received}. no fds, no reply
+	opDial    = "dial"    // request {net:"unix"|"tcp", addr}. reply {ok} + socket (and lifetime pipe writer for unix)
+	opListen  = "listen"  // request {net:"unix"|"tcp", addr, unlink?, agent?}. reply {ok, path} + listener fd
+	opExec    = "exec"    // request {argv, env, dir?, ctty?, envfd?, fds:0-4} + SCM_RIGHTS fds. reply {ok, pid, childID}
+	opSignal  = "signal"  // request {pid, childID, sig}. reply {ok}
+	opPing    = "ping"    // request {}. reply {ok}
+	opKillAll = "killall" // request {}. reply {ok}. Makes teardown kill session children; see monitor.go
+	opExit    = "exit"    // unsolicited notification {pid, childID, code}. no request ID
+	opFdAck   = "fdack"   // request {id of the reply whose descriptors were received}. no fds, no reply
 )
 
 const (
@@ -139,6 +140,10 @@ type rpcFrame struct {
 
 func rpcPingReq(id int64) rpcFrame {
 	return rpcFrame{ID: id, Op: opPing}
+}
+
+func rpcKillAllReq(id int64) rpcFrame {
+	return rpcFrame{ID: id, Op: opKillAll}
 }
 
 func rpcDialReq(id int64, network, addr string) rpcFrame {

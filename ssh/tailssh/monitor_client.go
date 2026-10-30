@@ -318,6 +318,14 @@ func (mc *monitorClient) Signal(ctx context.Context, child monitorProcess, sig s
 	return err
 }
 
+// KillAll sets the flag that makes teardown kill the session children.
+// Call it before Close when access is revoked, because the session may
+// be canceled after the RPC is already closed.
+func (mc *monitorClient) KillAll(ctx context.Context) error {
+	_, _, err := mc.call(ctx, rpcKillAllReq(0))
+	return err
+}
+
 // Dial dials a unix socket through a relay child running with the
 // connection's bound identity. The returned data socket and lifetime pipe
 // are acknowledged to the monitor on receipt, releasing its held copies.

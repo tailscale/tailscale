@@ -432,8 +432,8 @@ func (ss *sshSession) waitMonitorProcess() (code int, ok bool, err error) {
 
 // hangupMonitorProcess is the plan9 seam of the monitor session path.
 // It always reports false, so sessions hang up their directly-started
-// child.
-func (ss *sshSession) hangupMonitorProcess() bool {
+// child. mandated is unused here; see hangupProcess.
+func (ss *sshSession) hangupMonitorProcess(mandated bool) bool {
 	return false
 }
 

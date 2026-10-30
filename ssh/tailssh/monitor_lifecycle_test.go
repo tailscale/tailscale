@@ -73,7 +73,7 @@ func TestMonitorExecCancellationAfterDispatch(t *testing.T) {
 	}
 
 	hungup := make(chan bool, 1)
-	go func() { hungup <- ss.hangupMonitorProcess() }()
+	go func() { hungup <- ss.hangupMonitorProcess(true) }()
 	frame, fds, err = peer.readFrame()
 	closeFds(fds)
 	if err != nil {

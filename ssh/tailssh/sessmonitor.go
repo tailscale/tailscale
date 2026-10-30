@@ -118,9 +118,11 @@ func (ss *sshSession) waitMonitorProcess() (code int, ok bool, err error) {
 	}
 }
 
-// hangupMonitorProcess sends SIGHUP for non-PTY sessions and schedules SIGKILL
-// if the child has not exited. It returns false for directly launched sessions.
-func (ss *sshSession) hangupMonitorProcess() bool {
+// hangupMonitorProcess sends SIGHUP to the session process group and
+// schedules the SIGKILL escalation when mandated is true, and does
+// nothing when it is false. See hangupProcess. Returns false for
+// directly launched sessions.
+func (ss *sshSession) hangupMonitorProcess(mandated bool) bool {
 	if ss.monChild.PID == 0 {
 		return false
 	}
@@ -128,6 +130,10 @@ func (ss *sshSession) hangupMonitorProcess() bool {
 	if mc == nil {
 		// Monitor teardown owns cleanup. Its reaped PIDs may already have
 		// been reused, so tailscaled must not signal them directly.
+		return true
+	}
+	if !mandated {
+		// Not mandated, so do not signal.
 		return true
 	}
 	if ss.ptyReq == nil {

@@ -6,11 +6,13 @@
 package tailssh
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // connMonitorState owns the connection's process monitor. It is started
@@ -99,6 +101,8 @@ func (c *conn) monitorCreds() (uid, gid uint32, groups []uint32, err error) {
 // closeConnMonitor closes the conn's monitor, if one was spawned. It
 // runs from HandleSSHConn's defer after the SSH connection is done.
 // Closing the RPC channel triggers the monitor's teardown in monitor.go.
+// If monitorKillAll is set, the monitor is told to kill the session
+// children before the RPC is closed.
 // Closing a second time is a no-op.
 func (c *conn) closeConnMonitor() {
 	c.monitor.mu.Lock()
@@ -108,6 +112,16 @@ func (c *conn) closeConnMonitor() {
 	c.monitor.mu.Unlock()
 	if mc == nil {
 		return
+	}
+	if c.monitorKillAll.Load() {
+		// Tell the monitor to kill the session children before closing,
+		// since the per-session signals may be sent after the RPC is
+		// already closed.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := mc.KillAll(ctx); err != nil {
+			c.logf("ssh: arming monitor kill-all: %v", err)
+		}
+		cancel()
 	}
 	if err := mc.Close(); err != nil {
 		c.logf("ssh: closing connection monitor: %v", err)

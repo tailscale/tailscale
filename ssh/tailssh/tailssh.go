@@ -236,7 +236,8 @@ func (srv *server) HandleSSHConn(nc net.Conn) error {
 }
 
 // Shutdown closes active connections and waits up to sshShutdownTimeout for
-// sessions to finish. Session goroutines may remain running after it returns.
+// sessions to finish. Session goroutines may remain running after it returns,
+// and session processes are left running, like sshd leaves them.
 func (srv *server) Shutdown() {
 	srv.mu.Lock()
 	srv.shutdownCalled = true
@@ -339,6 +340,11 @@ type conn struct {
 	// It is set on SSH authentication success, not on an unsigned key query
 	// or partial authentication success.
 	authCompleted atomic.Bool
+
+	// monitorKillAll is set when access is revoked. closeConnMonitor
+	// then tells the monitor to kill the session children before the
+	// RPC is closed.
+	monitorKillAll atomic.Bool
 
 	// authRecheckDone is closed after the asynchronous auth-completion policy
 	// check. It is initialized before the connection is published.
@@ -1071,6 +1077,9 @@ func (c *conn) closeConn() {
 func (c *conn) revokeConn(reason string) {
 	metricPolicyChangeKick.Add(1)
 	c.logf("session no longer valid per new SSH policy (%v); closing connection", reason)
+	// Tell the monitor to kill the session children before closing,
+	// since the per-session signals may be sent after the RPC closes.
+	c.monitorKillAll.Store(true)
 	c.mu.Lock()
 	for _, s := range c.sessions {
 		s.cancelCtx(userVisibleError{
@@ -1353,8 +1362,11 @@ func (c *conn) fetchSSHAction(ctx context.Context, url string) (*tailcfg.SSHActi
 	}
 }
 
-// killProcessOnContextDone reports cancellation and terminates the session
-// process. processDone stops it when the process exits normally.
+// killProcessOnContextDone handles a canceled session. When the cause
+// is an SSHTerminationError (revocation, session-duration limit, or
+// recording failure) the process tree is killed. Otherwise the
+// transport closed, and, like sshd, nothing is signaled. The session
+// I/O is closed and the process exits on stdin EOF or SIGPIPE.
 func (ss *sshSession) killProcessOnContextDone(processDone <-chan struct{}) {
 	select {
 	case <-ss.ctx.Done():
@@ -1364,7 +1376,8 @@ func (ss *sshSession) killProcessOnContextDone(processDone <-chan struct{}) {
 		}
 	}
 	err := context.Cause(ss.ctx)
-	if serr, ok := err.(SSHTerminationError); ok {
+	serr, mandated := err.(SSHTerminationError)
+	if mandated {
 		if msg := serr.SSHTerminationMessage(); msg != "" {
 			io.WriteString(ss.Stderr(), "\r\n\r\n"+msg+"\r\n\r\n")
 		}
@@ -1373,9 +1386,13 @@ func (ss *sshSession) killProcessOnContextDone(processDone <-chan struct{}) {
 	case <-processDone:
 		return
 	default:
-		ss.logf("terminating SSH session from %v: %v", ss.conn.info.src.Addr(), err)
-		ss.hangupProcess()
 	}
+	if mandated {
+		ss.logf("terminating SSH session from %v: %v", ss.conn.info.src.Addr(), err)
+	} else {
+		ss.logf("closing SSH session I/O from %v: %v; processes exit on their own", ss.conn.info.src.Addr(), err)
+	}
+	ss.hangupProcess(mandated)
 }
 
 // isNotFoundOrExecutable reports whether err is a launchProcess
