@@ -1051,6 +1051,10 @@ func TestPrefFlagMapping(t *testing.T) {
 		case "AutoExitNode":
 			// Handled by tailscale {set,up} --exit-node=auto:any.
 			continue
+		case "Tailnet":
+			// Registration-only hint for the tailnet to join, consumed when
+			// building the RegisterRequest. Not editable via a CLI flag.
+			continue
 		}
 		t.Errorf("unexpected new ipn.Pref field %q is not handled by up.go (see addPrefFlagMapping and checkForAccidentalSettingReverts)", prefName)
 	}

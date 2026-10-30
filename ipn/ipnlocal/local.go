@@ -2295,6 +2295,11 @@ func (b *LocalBackend) applySysPolicyLocked(prefs *ipn.Prefs) (anyChange bool) {
 		anyChange = true
 	}
 
+	if tailnet, err := b.polc.GetString(pkey.Tailnet, prefs.Tailnet); err == nil && prefs.Tailnet != tailnet {
+		prefs.Tailnet = tailnet
+		anyChange = true
+	}
+
 	const sentinel = "HostnameDefaultValue"
 	hostnameFromPolicy, _ := b.polc.GetString(pkey.Hostname, sentinel)
 	switch hostnameFromPolicy {
@@ -3325,6 +3330,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		Persist:              *persistv,
 		ServerURL:            serverURL,
 		AuthKey:              opts.AuthKey,
+		Tailnet:              prefs.Tailnet(),
 		Hostinfo:             b.hostInfoWithServicesLocked(),
 		HTTPTestClient:       httpTestClient,
 		DiscoPublicKey:       discoPublic,

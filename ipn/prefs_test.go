@@ -67,6 +67,7 @@ func TestPrefsEqual(t *testing.T) {
 		"AppConnector",
 		"PostureChecking",
 		"NetfilterKind",
+		"Tailnet",
 		"RemoteConfig",
 		"DriveShares",
 		"RelayServerPort",
@@ -358,6 +359,16 @@ func TestPrefsEqual(t *testing.T) {
 		{
 			&Prefs{NetfilterKind: "nftables"},
 			&Prefs{NetfilterKind: ""},
+			false,
+		},
+		{
+			&Prefs{Tailnet: "required:tn123"},
+			&Prefs{Tailnet: "required:tn123"},
+			true,
+		},
+		{
+			&Prefs{Tailnet: "required:tn123"},
+			&Prefs{Tailnet: "tn123"},
 			false,
 		},
 		{
