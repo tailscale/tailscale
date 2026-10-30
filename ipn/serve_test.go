@@ -4,6 +4,7 @@
 package ipn
 
 import (
+	"slices"
 	"testing"
 
 	"tailscale.com/ipn/ipnstate"
@@ -567,3 +568,79 @@ var _ ServiceConfig = struct {
 	Web map[HostPort]*WebServerConfig `json:",omitempty"`
 	Tun bool                          `json:",omitempty"`
 }{}
+
+func TestRedirectToHTTPSHandlers(t *testing.T) {
+	https := &TCPPortHandler{HTTPS: true}
+	redirect := &TCPPortHandler{RedirectToHTTPSPort: 443}
+	web := func() map[HostPort]*WebServerConfig {
+		return map[HostPort]*WebServerConfig{
+			"foo.ts.net:443": {Handlers: map[string]*HTTPHandler{"/": {Text: "foo"}}},
+		}
+	}
+
+	t.Run("predicates", func(t *testing.T) {
+		sc := &ServeConfig{TCP: map[uint16]*TCPPortHandler{80: redirect, 443: https}}
+		if !sc.IsRedirectToHTTPSOnPort(80, "") {
+			t.Error("IsRedirectToHTTPSOnPort(80) = false; want true")
+		}
+		if sc.IsRedirectToHTTPSOnPort(443, "") {
+			t.Error("IsRedirectToHTTPSOnPort(443) = true; want false")
+		}
+		// A redirect is a TCP handler, but it is not a forwarder: the CLI
+		// tells the two apart by this.
+		if sc.IsTCPForwardingOnPort(80, "") {
+			t.Error("IsTCPForwardingOnPort(80) = true for a redirect; want false")
+		}
+		if sc.IsServingWeb(80, "") {
+			t.Error("IsServingWeb(80) = true for a redirect; want false")
+		}
+	})
+
+	t.Run("set_node_and_service", func(t *testing.T) {
+		sc := &ServeConfig{}
+		sc.SetRedirectToHTTPS(80, 443, "")
+		sc.SetRedirectToHTTPS(8080, 8443, "svc:foo")
+		if got := sc.TCP[80]; got == nil || got.RedirectToHTTPSPort != 443 {
+			t.Errorf("node TCP[80] = %+v; want RedirectToHTTPSPort 443", got)
+		}
+		if got := sc.Services["svc:foo"].TCP[8080]; got == nil || got.RedirectToHTTPSPort != 8443 {
+			t.Errorf("service TCP[8080] = %+v; want RedirectToHTTPSPort 8443", got)
+		}
+	})
+
+	t.Run("removing_the_https_handler_takes_redirects_along", func(t *testing.T) {
+		sc := &ServeConfig{
+			TCP: map[uint16]*TCPPortHandler{80: redirect, 8080: {RedirectToHTTPSPort: 8443}, 443: https},
+			Web: web(),
+		}
+		sc.RemoveWebHandler("foo.ts.net", 443, []string{"/"}, true)
+		if _, ok := sc.TCP[80]; ok {
+			t.Error("TCP[80] survived the removal of the https serve it pointed at")
+		}
+		if _, ok := sc.TCP[8080]; !ok {
+			t.Error("TCP[8080], which points elsewhere, was removed too")
+		}
+	})
+
+	t.Run("service_removal_cascades_too", func(t *testing.T) {
+		sc := &ServeConfig{Services: map[tailcfg.ServiceName]*ServiceConfig{
+			"svc:foo": {TCP: map[uint16]*TCPPortHandler{80: redirect, 443: https}, Web: web()},
+		}}
+		sc.RemoveServiceWebHandler("svc:foo", "foo.ts.net", 443, []string{"/"})
+		if _, ok := sc.Services["svc:foo"]; ok {
+			t.Errorf("service survived with %+v; want it gone once its serve and redirect are", sc.Services["svc:foo"])
+		}
+	})
+
+	t.Run("redirect_port_is_advertised_for_a_service", func(t *testing.T) {
+		svc := &ServiceConfig{TCP: map[uint16]*TCPPortHandler{80: redirect, 443: https}}
+		got := svc.View().ServicePortRange()
+		tcp := func(p uint16) tailcfg.ProtoPortRange {
+			return tailcfg.ProtoPortRange{Proto: 6, Ports: tailcfg.PortRange{First: p, Last: p}}
+		}
+		want := []tailcfg.ProtoPortRange{tcp(80), tcp(443)}
+		if !slices.Equal(got, want) {
+			t.Errorf("ServicePortRange() = %v; want %v", got, want)
+		}
+	})
+}
