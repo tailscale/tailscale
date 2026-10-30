@@ -242,7 +242,10 @@ self: {
               case "$state" in
                 NeedsLogin|NeedsMachineAuth|Stopped)
                   echo "Server needs authentication, sending auth key"
-                  tailscale --socket=${socket} up --auth-key "$(cat ${escapeShellArg (toString cfg.authKeyFile)})${params}" ${flagsStr}
+                  # --reset: on re-auth, up refuses while prefs the set unit
+                  # applied go unmentioned. The set and serve-config units
+                  # run after this and re-apply them.
+                  tailscale --socket=${socket} up --reset --auth-key "$(cat ${escapeShellArg (toString cfg.authKeyFile)})${params}" ${flagsStr}
                   ;;
                 Running)
                   echo "Tailscale is running"
@@ -301,6 +304,9 @@ self: {
         ];
         wants = ["${meta.svcName}.service"];
         wantedBy = ["${meta.svcName}.service"];
+        # Re-run with tailscaled: autoconnect's up --reset clears advertised
+        # services, and RemainAfterExit would otherwise skip the re-run.
+        partOf = ["${meta.svcName}.service"];
         # Upstream nixpkgs' unit name, so ordering on it keeps working.
         aliases = optional meta.isDefault "tailscale-serve.service";
 
