@@ -212,12 +212,13 @@ type watchSession struct {
 	// Empty string means default/device scope.
 	policyUID string
 
-	// GUI visibility is optional; nil if the extension isn't linked.
-	guiVisibility ipnext.GUIVisibilityFilter
-	// Track hidden peers by NodeID so removals can be delivered even after
-	// they disappear from NodeBackend.
-	hiddenPeers map[tailcfg.NodeID]tailcfg.StableNodeID
+	// policy is the effective policy snapshot most recently delivered to
+	// this session, or nil if it didn't request [ipn.NotifySysPolicyChanges].
+	policy *policyclient.PolicySnapshot
 }
+
+// Policy implements [ipnext.WatchSession].
+func (sess *watchSession) Policy() *policyclient.PolicySnapshot { return sess.policy }
 
 var (
 	// errShutdown indicates that the [LocalBackend.Shutdown] was called.
@@ -2496,13 +2497,10 @@ func (b *LocalBackend) sysPolicyChangedForSession(sess *watchSession) {
 		return
 	}
 
-	sess.guiVisibility = b.guiVisibilityFilterLocked(snapshot)
-	visibility, hidden := b.nodeGUIVisibilityLocked(sess.guiVisibility)
-	sess.hiddenPeers = hidden
+	sess.policy = snapshot
 	n := ipn.Notify{
-		Policy:            snapshot,
-		NodeGUIVisibility: visibility,
-		Version:           version.Long(),
+		Policy:  snapshot,
+		Version: version.Long(),
 	}
 	for _, f := range b.extHost.Hooks().MutateNotifyLocked {
 		f(&n)
@@ -3882,8 +3880,6 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	b.mu.Lock()
 
 	var policyUID string
-	var guiVisibility ipnext.GUIVisibilityFilter
-	var hiddenPeers map[tailcfg.NodeID]tailcfg.StableNodeID
 	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs |
 		ipn.NotifyInitialStatus |
 		ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode |
@@ -3928,9 +3924,6 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 			ini.Policy, err = b.polc.GetPolicySnapshot(policyUID)
 			if err != nil {
 				b.logf("syspolicy: GetPolicySnapshot(%q): %v", policyUID, err)
-			} else if ini.Policy != nil {
-				guiVisibility = b.guiVisibilityFilterLocked(ini.Policy)
-				ini.NodeGUIVisibility, hiddenPeers = b.nodeGUIVisibilityLocked(guiVisibility)
 			}
 		}
 	}
@@ -3939,19 +3932,21 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	defer cancel()
 
 	session := &watchSession{
-		ch:                   ch,
-		ctx:                  ctx,
-		owner:                actor,
-		sessionID:            sessionID,
-		cancel:               cancel,
-		mask:                 mask,
-		policyUID:            policyUID,
-		guiVisibility: guiVisibility,
-		hiddenPeers:   hiddenPeers,
+		ch:        ch,
+		ctx:       ctx,
+		owner:     actor,
+		sessionID: sessionID,
+		cancel:    cancel,
+		mask:      mask,
+		policyUID: policyUID,
 	}
 	mak.Set(&b.notifyWatchers, sessionID, session)
 	if mask&ipn.NotifyPeerWireGuardState != 0 {
 		ini.PeerState = maps.Clone(b.peerWGState)
+	}
+	if ini != nil {
+		session.policy = ini.Policy
+		b.mutateNotifyForSessionLocked(session, ini)
 	}
 	b.mu.Unlock()
 	deadlockDone()
@@ -4250,7 +4245,8 @@ func (b *LocalBackend) closeLaggingWatchSessionLocked(sess *watchSession) {
 // into full-Node [Notify.PeersChanged] entries for sessions that asked
 // for peer changes but not patches, and tracking on sess which
 // [tailcfg.UserProfileView]s have already been delivered so subsequent
-// sends only carry new/changed profiles.
+// sends only carry new/changed profiles. Finally, it runs the extensions'
+// [ipnext.Hooks.MutateNotifyForSessionLocked] hooks, if any, on the result.
 //
 // The returned pointer is either n itself (no adjustments needed for
 // this session) or a fresh *ipn.Notify with the adjusted fields. The
@@ -4274,9 +4270,7 @@ func (b *LocalBackend) notifyForSessionLocked(sess *watchSession, n *ipn.Notify)
 	stripPatches := len(n.PeerChangedPatch) > 0 && !wantsPeerPatches
 	stripPeerState := len(n.PeerState) > 0 && sess.mask&ipn.NotifyPeerWireGuardState == 0
 	promotePatches := len(n.PeerChangedPatch) > 0 && wantsPeerChanges && !wantsPeerPatches
-	refreshNodeGUIVisibility := sess.guiVisibility != nil && n.SelfChange != nil
-	updateNodeGUIVisibility := sess.guiVisibility != nil &&
-		(len(n.PeersChanged) != 0 || len(n.PeersRemoved) != 0)
+	mutateHooks := b.extHost.Hooks().MutateNotifyForSessionLocked
 
 	if sess.selfChangeResetsImplicitState(n.SelfChange.View()) {
 		sess.lastSentUserProfile = nil
@@ -4306,16 +4300,10 @@ func (b *LocalBackend) notifyForSessionLocked(sess *watchSession, n *ipn.Notify)
 	}
 	replaceUserProfiles := !stripUserProfiles && len(sessUserProfiles) != len(n.UserProfiles)
 
-	if !stripPeersChanged && !stripPeersRemoved && !stripPatches && !stripPeerState && !stripUserProfiles && !replaceUserProfiles && !promotePatches && !refreshNodeGUIVisibility && !updateNodeGUIVisibility {
+	if !stripPeersChanged && !stripPeersRemoved && !stripPatches && !stripPeerState && !stripUserProfiles && !replaceUserProfiles && !promotePatches && len(mutateHooks) == 0 {
 		return n
 	}
 	nCopy := *n
-	if refreshNodeGUIVisibility {
-		nCopy.NodeGUIVisibility, sess.hiddenPeers = b.nodeGUIVisibilityLocked(sess.guiVisibility)
-	} else if updateNodeGUIVisibility {
-		nCopy.NodeGUIVisibilityChanges, nCopy.NodeGUIVisibilityRemoved =
-			b.nodeGUIVisibilityDeltaLocked(sess, n)
-	}
 	if stripPeersChanged {
 		nCopy.PeersChanged = nil
 	}
@@ -4346,7 +4334,18 @@ func (b *LocalBackend) notifyForSessionLocked(sess *watchSession, n *ipn.Notify)
 	} else if replaceUserProfiles {
 		nCopy.UserProfiles = sessUserProfiles
 	}
+	b.mutateNotifyForSessionLocked(sess, &nCopy)
 	return &nCopy
+}
+
+// mutateNotifyForSessionLocked lets extensions adjust n, which must not be
+// shared with other sessions, before it is delivered to sess.
+//
+// b.mu must be held.
+func (b *LocalBackend) mutateNotifyForSessionLocked(sess *watchSession, n *ipn.Notify) {
+	for _, f := range b.extHost.Hooks().MutateNotifyForSessionLocked {
+		f(sess, n)
+	}
 }
 
 // selfChangeResetsImplicitState reports whether self changes the identity of
