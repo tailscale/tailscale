@@ -686,7 +686,7 @@ func (n *network) portMappings() map[netip.AddrPort]PortMapping {
 	now := time.Now()
 	ret := maps.Clone(n.portMap)
 	maps.DeleteFunc(ret, func(_ netip.AddrPort, pm PortMapping) bool {
-		return !now.Before(pm.expiry)
+		return now.After(pm.expiry)
 	})
 	return ret
 }

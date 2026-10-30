@@ -84,6 +84,7 @@ func TestPortmapCreate(t *testing.T) {
 			// PCP "unsupported version" reply (tailscale#21799). After a
 			// timeout, it falls back to UPnP. If the probe hasn't found the
 			// UPnP server yet, that fails and the next attempt uses PCP.
+			// Remove this field once we have stabilized which protocol we get.
 			altMapping: vnet.UPnP,
 		},
 		{
