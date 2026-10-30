@@ -272,10 +272,11 @@ func getUPnPRootDevice(ctx context.Context, logf logger.Logf, debug DebugKnobs, 
 	}
 
 	// We're fetching a smallish XML document over plain HTTP
-	// across the local LAN, without using DNS.  There should be
-	// very few round trips and low latency, so one second is a
-	// long time.
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	// across the local LAN, without using DNS. There should be
+	// very few round trips and low latency, but some router
+	// firmware (e.g. the NETGEAR RS700) only answers after just
+	// over a second, so allow a few seconds before giving up.
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
 	// This part does a network fetch.
