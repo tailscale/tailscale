@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net/netip"
@@ -23,6 +24,8 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/client/tailscale/v2"
 
 	tsoperator "tailscale.com/k8s-operator"
@@ -109,6 +112,30 @@ func TestServicePGReconciler_UpdateHostname(t *testing.T) {
 	}
 	if !tailscale.IsNotFound(err) {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestServicePGReconciler_OptimisticLockError(t *testing.T) {
+	svcPGR, stateSecret, fc, _, _ := setupServiceTest(t)
+	svc, _ := setupTestService(t, "test-svc", "", "1.2.3.4", fc, stateSecret)
+
+	svcPGR.Client = interceptor.NewClient(fc.(client.WithWatch), interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if _, ok := obj.(*corev1.Service); ok {
+				return errors.New(optimisticLockErrorMsg)
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	})
+
+	res, err := svcPGR.Reconcile(t.Context(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Namespace: "default", Name: svc.Name},
+	})
+	if err != nil {
+		t.Fatalf("expected requeue on optimistic lock error, got error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Errorf("expected RequeueAfter > 0 on optimistic lock error, got %v", res.RequeueAfter)
 	}
 }
 
