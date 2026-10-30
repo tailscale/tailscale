@@ -49,7 +49,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/fxamacker/cbor/v2 v2.9.3
 	github.com/gaissmai/bart v0.29.0
-	github.com/go-jose/go-jose/v4 v4.1.4
+	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/go-json-experiment/json v0.0.0-20260820222146-c27c302e5fc3
 	github.com/go-logr/zapr v1.3.0
 	github.com/go-ole/go-ole v1.3.0
