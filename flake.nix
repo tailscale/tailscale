@@ -205,10 +205,6 @@
         inherit self pkgs headscale;
         inherit (pkgs) lib;
       };
-      shared-services = import ./nix/nixos/tests/shared-services.nix {
-        inherit self pkgs;
-        inherit (pkgs) lib;
-      };
       proxy = import ./nix/nixos/tests/proxy.nix {
         inherit self pkgs headscale;
         inherit (pkgs) lib;
@@ -217,8 +213,13 @@
         inherit self pkgs;
         inherit (pkgs) lib;
       };
-      # Eval-only test for the darwin module; runs on every system so we
+      # Eval-only tests; they run under `nix flake check --no-build`, so CI
+      # enforces them. The darwin one runs on every system so we
       # catch breakage from a Linux dev machine. No nix-darwin runtime.
+      nixos-eval = import ./nix/nixos/tests/eval.nix {
+        inherit self pkgs;
+        inherit (pkgs) lib;
+      };
       darwin-eval = import ./nix/darwin/tests/eval.nix {
         inherit self pkgs;
         inherit (pkgs) lib;
