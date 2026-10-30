@@ -57,6 +57,7 @@ ethernets:
     dhcp4: true
     dhcp4-overrides:
       route-metric: 200
+      use-dns: false
     optional: true
 `
 	}
