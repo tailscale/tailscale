@@ -19,6 +19,7 @@ import (
 
 	"tailscale.com/ipn"
 	"tailscale.com/syncs"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/multierr"
@@ -186,6 +187,7 @@ func (m *manager) IncomingFiles() []ipn.PartialFile {
 		f.mu.Lock()
 		files = append(files, ipn.PartialFile{
 			Name:         k.name,
+			PeerID:       tailcfg.StableNodeID(k.id),
 			Started:      f.started,
 			DeclaredSize: f.size,
 			Received:     f.copied,
