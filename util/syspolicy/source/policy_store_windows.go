@@ -304,19 +304,34 @@ func (ps *PlatformPolicyStore) ReadStringArray(key pkey.Key) ([]string, error) {
 			if err != nil {
 				return nil, err
 			}
+			defer valKey.Close()
 			valNames, err := valKey.ReadValueNames(0)
 			if err != nil {
 				return nil, err
 			}
 			val = make([]string, 0, len(valNames))
 			for _, name := range valNames {
-				switch item, _, err := valKey.GetStringValue(name); {
-				case err == registry.ErrNotExist:
-					continue
-				case err != nil:
-					return nil, err
-				default:
+				item, _, err := valKey.GetStringValue(name)
+				switch err {
+				case nil:
 					val = append(val, item)
+				case registry.ErrNotExist:
+					continue
+				case registry.ErrUnexpectedType:
+					// Checkbox-backed string lists use the value name as the
+					// list item and a nonzero DWORD to indicate selection.
+					enabled, valueType, err := valKey.GetIntegerValue(name)
+					if err != nil {
+						return nil, err
+					}
+					if valueType != registry.DWORD {
+						return nil, fmt.Errorf("unexpected registry value type for %q: %d", name, valueType)
+					}
+					if enabled != 0 {
+						val = append(val, name)
+					}
+				default:
+					return nil, err
 				}
 			}
 			return val, nil
