@@ -405,6 +405,12 @@ func (n *Network) BlackholeControlForAddr(addr netip.Addr) {
 	n.network.BlackholeControlForAddr(addr)
 }
 
+// PortMappings returns the router's unexpired port mappings, keyed by WAN
+// IP:port.
+func (n *Network) PortMappings() map[netip.AddrPort]PortMapping {
+	return n.network.portMappings()
+}
+
 // NetworkService is a service that can be added to a network.
 type NetworkService string
 

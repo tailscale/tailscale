@@ -674,9 +674,21 @@ func (m MAC) String() string {
 	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", m[0], m[1], m[2], m[3], m[4], m[5])
 }
 
-type portMapping struct {
-	dst    netip.AddrPort // LAN IP:port
-	expiry time.Time
+type PortMapping struct {
+	dst     netip.AddrPort // LAN IP:port
+	expiry  time.Time
+	Service NetworkService
+}
+
+func (n *network) portMappings() map[netip.AddrPort]PortMapping {
+	n.natMu.Lock()
+	defer n.natMu.Unlock()
+	now := time.Now()
+	ret := maps.Clone(n.portMap)
+	maps.DeleteFunc(ret, func(_ netip.AddrPort, pm PortMapping) bool {
+		return now.After(pm.expiry)
+	})
+	return ret
 }
 
 // writerFunc is a function that writes an Ethernet frame to a connected client.
@@ -723,7 +735,7 @@ type network struct {
 	natStyle    syncs.AtomicValue[NAT]
 	natMu       sync.Mutex // held while using + changing natTable
 	natTable    NATTable
-	portMap     map[netip.AddrPort]portMapping    // WAN ip:port -> LAN ip:port
+	portMap     map[netip.AddrPort]PortMapping    // WAN ip:port -> LAN ip:port
 	portMapFlow map[portmapFlowKey]netip.AddrPort // (lanAP, peerWANAP) -> portmapped wanAP
 
 	macMu     sync.Mutex
@@ -2775,11 +2787,15 @@ func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec 
 	}
 
 	// See if they already have a mapping and extend expiry if so.
+	// TODO(fmarier): renewing with a different protocol overwrites the
+	// service that created the mapping, so PortMappings only reports the
+	// most recent one.
 	for k, v := range n.portMap {
 		if v.dst == dst {
-			n.portMap[k] = portMapping{
-				dst:    dst,
-				expiry: time.Now().Add(time.Duration(sec) * time.Second),
+			n.portMap[k] = PortMapping{
+				dst:     dst,
+				expiry:  time.Now().Add(time.Duration(sec) * time.Second),
+				Service: service,
 			}
 			n.logf("vnet: renewed %v mapping from %v to %v", service, wanAP, dst)
 			return k.Port(), true
@@ -2788,9 +2804,10 @@ func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec 
 
 	for range 20_000 {
 		if wanAP.Port() > 0 && !n.natTable.IsPublicPortUsed(wanAP) {
-			mak.Set(&n.portMap, wanAP, portMapping{
-				dst:    dst,
-				expiry: time.Now().Add(time.Duration(sec) * time.Second),
+			mak.Set(&n.portMap, wanAP, PortMapping{
+				dst:     dst,
+				expiry:  time.Now().Add(time.Duration(sec) * time.Second),
+				Service: service,
 			})
 			n.logf("vnet: allocated %v mapping from %v to %v", service, wanAP, dst)
 			return wanAP.Port(), true
