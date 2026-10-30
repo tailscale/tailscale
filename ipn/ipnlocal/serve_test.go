@@ -260,6 +260,107 @@ func TestGetServeHandler(t *testing.T) {
 	}
 }
 
+// TestGetServeHandlerHost covers hostname selection in getServeHandler for
+// plain-HTTP requests, where the Host header is used as sent by the client.
+// DNS names are case-insensitive and a trailing dot (the root label) is
+// insignificant, so a fully-qualified name with a trailing dot or non-lowercase
+// ASCII must resolve to the same handler as the canonical lower-case, dotless
+// form. Regression tests for #21986 (trailing dot) and #21538 (mixed case).
+//
+// Only multi-label FQDN spellings are asserted to match. Whether a single-label
+// name with a trailing dot ("host.") should resolve like the bare short name
+// ("host") is an aliasing question left to maintainers, so it is not asserted.
+func TestGetServeHandlerHost(t *testing.T) {
+	const (
+		suffix = "tailnet.ts.net"
+		fqdn   = "host." + suffix
+	)
+	conf := &ipn.ServeConfig{
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			ipn.HostPort(net.JoinHostPort(fqdn, "80")): {
+				Handlers: map[string]*ipn.HTTPHandler{
+					"/": {},
+				},
+			},
+			// A second configured host, with a distinct mount, so tests can tell
+			// "selected the matching config" apart from "matched any config".
+			ipn.HostPort(net.JoinHostPort("other."+suffix, "80")): {
+				Handlers: map[string]*ipn.HTTPHandler{
+					"/other": {},
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name   string
+		host   string // r.Host
+		path   string // URL.Path; defaults to "/"
+		tlsSNI string // if non-empty, the request is HTTPS with this ServerName
+		want   string // mount point; "" means not found
+	}{
+		{name: "fqdn", host: fqdn, want: "/"},
+		{name: "fqdn-with-port", host: fqdn + ":80", want: "/"},
+		{name: "fqdn-trailing-dot", host: fqdn + ".", want: "/"},
+		{name: "fqdn-trailing-dot-with-port", host: fqdn + ".:80", want: "/"},
+		{name: "fqdn-mixed-case", host: "Host.Tailnet.TS.Net", want: "/"},
+		{name: "fqdn-mixed-case-with-port", host: "Host.Tailnet.TS.Net:80", want: "/"},
+		{name: "fqdn-mixed-case-trailing-dot", host: "Host.Tailnet.TS.Net.", want: "/"},
+		{name: "short-name", host: "host", want: "/"},
+		{name: "short-name-with-port", host: "host:80", want: "/"},
+		// Normalization must select the config whose name matches, not merely
+		// any config: "other" is also configured, at a different mount.
+		{name: "second-host", host: "other." + suffix, path: "/other", want: "/other"},
+		{name: "second-host-trailing-dot", host: "other." + suffix + ".", path: "/other", want: "/other"},
+		{name: "second-host-mixed-case", host: "OTHER." + suffix + ".", path: "/other", want: "/other"},
+		{name: "unknown-fqdn", host: "nope." + suffix, want: ""},
+		{name: "unknown-fqdn-trailing-dot", host: "nope." + suffix + ".", want: ""},
+		// Address literals are not Serve host names and must not match. The IPv6
+		// literal is in Tailscale's ULA range (fd7a:115c:a1e0::/48).
+		{name: "ipv4-literal", host: "100.64.0.1:80", want: ""},
+		{name: "ipv6-literal", host: "[fd7a:115c:a1e0::1]:80", want: ""},
+		// HTTPS selects on the TLS ServerName, ignoring the Host header.
+		{name: "tls-uses-sni-not-host", host: "[::1]:443", tlsSNI: fqdn, want: "/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := &LocalBackend{
+				serveConfig: conf.View(),
+				logf:        t.Logf,
+				health:      health.NewTracker(eventbustest.NewBus(t)),
+			}
+			pm := must.Get(newProfileManager(new(mem.Store), logger.Discard, health.NewTracker(eventbustest.NewBus(t))))
+			pm.currentProfile = (&ipn.LoginProfile{
+				ID:             "id0",
+				NetworkProfile: ipn.NetworkProfile{MagicDNSName: suffix},
+			}).View()
+			b.pm = pm
+
+			req := &http.Request{
+				Host: tt.host,
+				URL:  &url.URL{Path: cmp.Or(tt.path, "/")},
+			}
+			if tt.tlsSNI != "" {
+				req.TLS = &tls.ConnectionState{ServerName: tt.tlsSNI}
+			}
+			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(), &serveHTTPContext{
+				DestPort: 80,
+			}))
+
+			h, got, ok := b.getServeHandler(req)
+			if (got != "") != ok {
+				t.Fatalf("Host %q: got ok=%v, but got mountPoint=%q", tt.host, ok, got)
+			}
+			if h.Valid() != ok {
+				t.Fatalf("Host %q: got ok=%v, but valid=%v", tt.host, ok, h.Valid())
+			}
+			if got != tt.want {
+				t.Errorf("Host %q: got handler at mount %q, want %q", tt.host, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestServeConfigForeground tests the inter-dependency
 // between a ServeConfig and a WatchIPNBus:
 // 1. Creating a WatchIPNBus returns a sessionID, that

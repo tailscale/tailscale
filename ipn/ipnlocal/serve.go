@@ -842,6 +842,10 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 		if host, _, err := net.SplitHostPort(hostname); err == nil {
 			hostname = host
 		}
+		// Serve config keys use canonical DNS names. Normalize the plain-HTTP
+		// Host before matching the MagicDNS suffix and looking up the config.
+		// See #21986, #21538.
+		hostname = strings.ToLower(strings.TrimSuffix(hostname, "."))
 		if !strings.HasSuffix(hostname, tcd) {
 			hostname += tcd
 		}
