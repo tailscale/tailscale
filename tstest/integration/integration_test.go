@@ -54,6 +54,7 @@ import (
 	"tailscale.com/types/opt"
 	"tailscale.com/util/must"
 	"tailscale.com/util/set"
+	"tailscale.com/util/syspolicy/pkey"
 )
 
 func TestMain(m *testing.M) {
@@ -539,6 +540,25 @@ func TestOneNodeUpAuth(t *testing.T) {
 	}
 }
 
+func TestOneNodeUpAuthKeyPolicy(t *testing.T) {
+	tstest.Parallel(t)
+	const authKey = "opensesame"
+	env := NewTestEnv(t, ConfigureControl(func(control *testcontrol.Server) {
+		control.RequireAuthKey = authKey
+	}))
+	n1 := NewTestNode(t, env)
+	n1.syspolicy = map[pkey.Key]any{pkey.AuthKey: authKey}
+
+	d1 := n1.StartDaemon()
+	n1.AwaitResponding()
+	n1.MustUp()
+
+	t.Logf("Got IP: %v", n1.AwaitIP4())
+	n1.AwaitRunning()
+
+	d1.MustCleanShutdown(t)
+}
+
 // TestRetagStaleMapRequestRace reproduces tailscale/tailscale#20365: a node
 // tagged tag:tag1, where tag:tag1 owns tag:tag2, is retagged with "tailscale
 // up --advertise-tags=tag:tag2". This should always succeed, but sometimes
@@ -847,7 +867,7 @@ func TestOneNodeUpInterruptedDeviceApproval(t *testing.T) {
 
 func TestConfigFileAuthKey(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("a config file can't set unattended mode, so Windows drops the node to NoState; see #20751")
+		t.Skip("--config is unsupported by the Windows service; see #20871")
 	}
 	t.Parallel()
 	const authKey = "opensesame"
