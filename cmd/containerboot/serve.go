@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -132,6 +133,8 @@ func refreshAdvertiseServices(ctx context.Context, sc *ipn.ServeConfig, lc klc.L
 	for svc := range sc.Services {
 		svcs = append(svcs, svc.String())
 	}
+	// Keep the prefs order stable across map iterations.
+	slices.Sort(svcs)
 
 	err := services.EnsureServicesAdvertised(ctx, svcs, lc, log.Printf)
 	if err != nil {
