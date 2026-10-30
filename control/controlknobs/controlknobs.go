@@ -148,6 +148,11 @@ type Knobs struct {
 	// quad-100 as primary. Off by default; has no effect on other platforms.
 	// See tailscale/corp#45534 and tailscale/corp#48693.
 	ScopeQuad100OnMacOS atomic.Bool
+
+	// DisableHybridHandshakes disables hybrid post-quantum wireguard handshakes
+	// between nodes that otherwise support it. When enabled, communication with all
+	// peers reverts to standard wireguard handshakes.
+	DisableHybridHandshakes atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -185,6 +190,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		neverGSOEqualTail                    = has(nodecap.NeverGSOEqualTail)
 		cacheNetworkMaps                     = has(nodecap.CacheNetworkMaps)
 		scopeQuad100OnMacOS                  = has(nodecap.ScopeQuad100OnMacOS)
+		disableHybridHandshakes              = has(nodecap.DisableHybridHandshakes)
 	)
 
 	if has(nodecap.OneCGNATEnable) {
@@ -220,6 +226,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.NeverGSOEqualTail.Store(neverGSOEqualTail)
 	k.CacheNetworkMaps.Store(cacheNetworkMaps)
 	k.ScopeQuad100OnMacOS.Store(scopeQuad100OnMacOS)
+	k.DisableHybridHandshakes.Store(disableHybridHandshakes)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
@@ -247,4 +254,10 @@ func (k *Knobs) AsDebugJSON() map[string]any {
 // ForceRegisterMagicDNSIPv4Only, or false if k is nil.
 func (k *Knobs) ShouldForceRegisterMagicDNSIPv4Only() bool {
 	return k != nil && k.ForceRegisterMagicDNSIPv4Only.Load()
+}
+
+// ShouldDisableHybridHandshakes reports the value of
+// DisableHybridHandshakes, or false if k is nil.
+func (k *Knobs) ShouldDisableHybridHandshakes() bool {
+	return k != nil && k.DisableHybridHandshakes.Load()
 }
