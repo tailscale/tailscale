@@ -5,6 +5,14 @@
 
 package clientmetric
 
+// Type is a metric type: counter or gauge.
+type Type uint8
+
+const (
+	TypeGauge Type = iota
+	TypeCounter
+)
+
 type Metric struct{}
 
 func (*Metric) Add(int64)              {}
@@ -12,6 +20,7 @@ func (*Metric) Set(int64)              {}
 func (*Metric) Value() int64           { return 0 }
 func (*Metric) Register(expvarInt any) {}
 func (*Metric) UnregisterAll()         {}
+func (*Metric) DisableDeltas()         {}
 
 type MetricUpdate struct {
 	Name  string `json:"name"`
@@ -30,5 +39,6 @@ func NewCounter(string) *Metric                   { return &zeroMetric }
 func NewGauge(string) *Metric                     { return &zeroMetric }
 func NewAggregateCounter(string) *Metric          { return &zeroMetric }
 func NewCounterFunc(string, func() int64) *Metric { return &zeroMetric }
+func NewGaugeFunc(string, func() int64) *Metric   { return &zeroMetric }
 
 func ResetForTest(any) {}
