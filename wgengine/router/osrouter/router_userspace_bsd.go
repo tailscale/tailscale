@@ -6,11 +6,13 @@
 package osrouter
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"net/netip"
 	"os/exec"
 	"runtime"
+	"slices"
 
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/netipx"
@@ -112,9 +114,19 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
 	}
 	addrsToRemove := r.addrsToRemove(cfg.LocalAddrs)
 
-	// If we're removing all addresses, we need to remove and re-add all
-	// routes.
-	resetRoutes := len(r.local) > 0 && len(addrsToRemove) == len(r.local)
+	// Removing an address drops the kernel routes through it, so the routes
+	// of that address family must be deleted and re-added.
+	resetFamily := map[bool]bool{} // keyed by Is4
+	for _, addr := range addrsToRemove {
+		resetFamily[addr.Addr().Is4()] = true
+	}
+	resetRoute := func(p netip.Prefix) bool { return resetFamily[p.Addr().Is4()] }
+
+	// local tracks the addresses actually on the interface regardless of
+	// route errors below. If it went stale, a later Set would re-add an
+	// address that is already there, which FreeBSD does by deleting it
+	// first, flushing every route through it.
+	local := slices.Clone(r.local)
 
 	// Update the addresses.
 	for _, addr := range addrsToRemove {
@@ -123,7 +135,9 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
 		if err != nil {
 			r.logf("addr del failed: %v => %v\n%s", arg, err, out)
 			setErr(err)
+			continue
 		}
+		local = slices.DeleteFunc(local, func(p netip.Prefix) bool { return p == addr })
 	}
 	for _, addr := range r.addrsToAdd(cfg.LocalAddrs) {
 		var arg []string
@@ -141,7 +155,9 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
 		if err != nil {
 			r.logf("addr add failed: %v => %v\n%s", arg, err, out)
 			setErr(err)
+			continue
 		}
+		local = append(local, addr)
 	}
 
 	newRoutes := make(map[netip.Prefix]bool)
@@ -156,7 +172,7 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
 	}
 	// Delete any preexisting routes.
 	for route := range r.routes {
-		if resetRoutes || !newRoutes[route] {
+		if resetRoute(route) || !newRoutes[route] {
 			net := netipx.PrefixIPNet(route)
 			nip := net.IP.Mask(net.Mask)
 			nstr := fmt.Sprintf("%v/%d", nip, route.Bits())
@@ -168,7 +184,7 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
 				del, "-" + inet(route), nstr,
 				"-iface", r.tunname}
 			out, err := cmd(routedel...).CombinedOutput()
-			if err != nil {
+			if err != nil && !(resetRoute(route) && routeNotFound(out)) {
 				r.logf("route del failed: %v: %v\n%s", routedel, err, out)
 				setErr(err)
 			}
@@ -176,7 +192,7 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
 	}
 	// Add the routes.
 	for route := range newRoutes {
-		if resetRoutes || !r.routes[route] {
+		if resetRoute(route) || !r.routes[route] {
 			net := netipx.PrefixIPNet(route)
 			nip := net.IP.Mask(net.Mask)
 			nstr := fmt.Sprintf("%v/%d", nip, route.Bits())
@@ -192,12 +208,17 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
 	}
 
 	// Store the interface and routes so we know what to change on an update.
-	if reterr == nil {
-		r.local = append([]netip.Prefix{}, cfg.LocalAddrs...)
-	}
+	r.local = local
 	r.routes = newRoutes
 
 	return reterr
+}
+
+// routeNotFound reports whether route(8) output says the route to delete
+// does not exist ("not in table" on macOS/OpenBSD, "has not been found" on
+// FreeBSD), as when removing an address already took it away.
+func routeNotFound(out []byte) bool {
+	return bytes.Contains(out, []byte("not in table")) || bytes.Contains(out, []byte("has not been found"))
 }
 
 func (r *userspaceBSDRouter) Close() error {
