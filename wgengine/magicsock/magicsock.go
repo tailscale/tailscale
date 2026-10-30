@@ -4430,6 +4430,10 @@ var (
 	// metricDERPStaleCleaned is how many times we closed a stale DERP connection.
 	metricDERPStaleCleaned = clientmetric.NewCounter("derp_stale_cleaned")
 
+	// metricDERPQuietPingFail is how many times we closed a DERP
+	// connection that had gone quiet and then failed a liveness ping.
+	metricDERPQuietPingFail = clientmetric.NewCounter("derp_quiet_ping_fail")
+
 	// Disco packets received bpf read path
 	//lint:ignore U1000 used on Linux only
 	metricRecvDiscoPacketIPv4 = clientmetric.NewCounter("magicsock_disco_recv_bpf_ipv4")
