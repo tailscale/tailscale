@@ -221,3 +221,97 @@ func TestProxyClassHandlerForSvc(t *testing.T) {
 		})
 	}
 }
+
+func TestNameForService(t *testing.T) {
+	const (
+		longNS   = "tailscale-external-services"
+		longName = "harry1027133059-trefknee01-bee-oqggo-kinfe-0-g"
+	)
+	tests := []struct {
+		name        string
+		svcName     string
+		annotations map[string]string
+		want        string
+		wantValid   bool
+	}{
+		{
+			name:        "egress_fqdn_short_default_unchanged",
+			svcName:     "foo",
+			annotations: map[string]string{AnnotationTailnetTargetFQDN: "foo.tailnet.ts.net"},
+			want:        longNS + "-foo",
+			wantValid:   true,
+		},
+		{
+			name:        "egress_fqdn_long_default_truncated",
+			svcName:     longName,
+			annotations: map[string]string{AnnotationTailnetTargetFQDN: longName + ".tailnet.ts.net"},
+			want:        "tailscale-external-services-harry1027133059-trefknee01-0908ae76",
+			wantValid:   true,
+		},
+		{
+			name:        "egress_ip_long_default_truncated",
+			svcName:     longName,
+			annotations: map[string]string{AnnotationTailnetTargetIP: "100.64.0.1"},
+			want:        "tailscale-external-services-harry1027133059-trefknee01-0908ae76",
+			wantValid:   true,
+		},
+		{
+			name: "egress_long_hostname_annotation_not_truncated",
+			annotations: map[string]string{
+				AnnotationTailnetTargetFQDN: "foo.tailnet.ts.net",
+				AnnotationHostname:          longNS + "-" + longName,
+			},
+			svcName:   "foo",
+			want:      longNS + "-" + longName,
+			wantValid: false,
+		},
+		{
+			name:        "ingress_long_default_not_truncated",
+			svcName:     longName,
+			annotations: map[string]string{AnnotationExpose: "true"},
+			want:        longNS + "-" + longName,
+			wantValid:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        tt.svcName,
+					Namespace:   longNS,
+					Annotations: tt.annotations,
+				},
+			}
+			got := nameForService(svc)
+			if got != tt.want {
+				t.Errorf("nameForService() = %q, want %q", got, tt.want)
+			}
+			violations := validateService(svc)
+			if valid := len(violations) == 0; valid != tt.wantValid {
+				t.Errorf("validateService() violations = %v, want valid %t", violations, tt.wantValid)
+			}
+		})
+	}
+}
+
+func TestValidateEgressServiceLongName(t *testing.T) {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "harry1027133059-trefknee01-bee-oqggo-kinfe-0-g",
+			Namespace: "tailscale-external-services",
+			Annotations: map[string]string{
+				AnnotationTailnetTargetFQDN: "harry1027133059-trefknee01-bee-oqggo-kinfe-0-g.tailnet.ts.net",
+				AnnotationProxyGroup:        "egress",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type:         corev1.ServiceTypeExternalName,
+			ExternalName: "placeholder",
+			Ports:        []corev1.ServicePort{{Port: 8080, Protocol: corev1.ProtocolTCP}},
+		},
+	}
+	pg := &tsapi.ProxyGroup{Spec: tsapi.ProxyGroupSpec{Type: tsapi.ProxyGroupTypeEgress}}
+	if violations := validateEgressService(svc, pg); len(violations) > 0 {
+		t.Errorf("validateEgressService() violations = %v, want none", violations)
+	}
+}
