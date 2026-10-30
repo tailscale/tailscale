@@ -409,16 +409,18 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	if tcpipErr != nil {
 		return nil, fmt.Errorf("could not set cubic congestion control: %v", tcpipErr)
 	}
-	if rack, ok := netstackEnableRACK().Get(); ok {
-		recovery := tcpip.TCPRecovery(0)
-		if rack {
-			recovery = tcpip.TCPRACKLossDetection
-		}
-		tcpipErr = ns.ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &recovery)
-		if tcpipErr != nil {
-			return nil, fmt.Errorf("could not set TCP loss recovery: %v", tcpipErr)
-		}
+
+	// Disable RACK by default (again), the conditions under which it performs
+	// poorly are too common still. See google/gvisor#16670, #21946, #18714.
+	recovery := tcpip.TCPRecovery(0)
+	if rack, ok := netstackEnableRACK().Get(); ok && rack {
+		recovery = tcpip.TCPRACKLossDetection
 	}
+	tcpipErr = ns.ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &recovery)
+	if tcpipErr != nil {
+		return nil, fmt.Errorf("could not set TCP loss recovery: %v", tcpipErr)
+	}
+
 	err := setTCPBufSizes(ns.ipstack)
 	if err != nil {
 		return nil, err

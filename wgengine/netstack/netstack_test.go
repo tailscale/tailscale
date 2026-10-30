@@ -973,7 +973,7 @@ func TestEnableRACKKnob(t *testing.T) {
 		env  string
 		want tcpip.TCPRecovery
 	}{
-		{"", tcpip.TCPRACKLossDetection},
+		{"", 0},
 		{"false", 0},
 		{"true", tcpip.TCPRACKLossDetection},
 	} {
