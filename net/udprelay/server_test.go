@@ -474,6 +474,87 @@ func TestServer_maybeRotateMACSecretLocked(t *testing.T) {
 	qt.Assert(t, s.macSecrets.At(0), qt.Not(qt.Equals), s.macSecrets.At(1))
 }
 
+// TestServer_SetLifetimes verifies [Server.SetLifetimes] validates its
+// arguments and mutates the lifetimes used by endpoint GC.
+func TestServer_SetLifetimes(t *testing.T) {
+	t.Parallel()
+	s := &Server{
+		bindLifetime:        defaultBindLifetime,
+		steadyStateLifetime: defaultSteadyStateLifetime,
+		lifetimesChanged:    make(chan struct{}, 1),
+	}
+	for _, invalid := range [][2]time.Duration{
+		{0, time.Second},
+		{time.Second, 0},
+		{-time.Second, time.Second},
+		{time.Second, -time.Second},
+	} {
+		if err := s.SetLifetimes(invalid[0], invalid[1]); err == nil {
+			t.Errorf("SetLifetimes(%v, %v) = nil; want error", invalid[0], invalid[1])
+		}
+	}
+	if bind, steadyState := s.getLifetimes(); bind != defaultBindLifetime || steadyState != defaultSteadyStateLifetime {
+		t.Fatalf("got lifetimes %v/%v after invalid SetLifetimes calls; want unchanged defaults %v/%v", bind, steadyState, defaultBindLifetime, defaultSteadyStateLifetime)
+	}
+	if err := s.SetLifetimes(time.Second, 2*time.Second); err != nil {
+		t.Fatalf("SetLifetimes(1s, 2s) = %v; want nil", err)
+	}
+	if bind, steadyState := s.getLifetimes(); bind != time.Second || steadyState != 2*time.Second {
+		t.Fatalf("got lifetimes %v/%v; want 1s/2s", bind, steadyState)
+	}
+	select {
+	case <-s.lifetimesChanged:
+	default:
+		t.Fatal("SetLifetimes did not poke lifetimesChanged")
+	}
+}
+
+// TestServer_SetLifetimesForTest verifies [Server.SetLifetimesForTest]
+// shortens the endpoint lifetimes of an already-running [Server], and that
+// the GC loop picks up the new values, i.e. an unbound endpoint is reaped
+// within the new bind lifetime instead of [defaultBindLifetime].
+func TestServer_SetLifetimesForTest(t *testing.T) {
+	deregisterMetrics()
+	server, err := NewServer(t.Logf, 0, true, new(usermetric.Registry), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	if bind, steadyState := server.getLifetimes(); bind != defaultBindLifetime || steadyState != defaultSteadyStateLifetime {
+		t.Fatalf("got lifetimes %v/%v; want defaults %v/%v", bind, steadyState, defaultBindLifetime, defaultSteadyStateLifetime)
+	}
+	server.SetStaticAddrPorts(views.SliceOf([]netip.AddrPort{netip.MustParseAddrPort("127.0.0.1:1")}))
+	server.SetLifetimesForTest(10*time.Millisecond, 10*time.Millisecond)
+
+	ep, err := server.AllocateEndpoint(key.NewDisco().Public(), key.NewDisco().Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ep.BindLifetime.Duration != 10*time.Millisecond {
+		t.Errorf("endpoint BindLifetime = %v; want %v", ep.BindLifetime.Duration, 10*time.Millisecond)
+	}
+	if ep.SteadyStateLifetime.Duration != 10*time.Millisecond {
+		t.Errorf("endpoint SteadyStateLifetime = %v; want %v", ep.SteadyStateLifetime.Duration, 10*time.Millisecond)
+	}
+
+	// The endpoint is never bound, so the GC loop must reap it once it is
+	// older than the 10ms bind lifetime. With the default 30s lifetime this
+	// would not happen before the deadline below.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		server.mu.Lock()
+		remaining := len(server.serverEndpointByDisco)
+		server.mu.Unlock()
+		if remaining == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("endpoint was not reaped within %v of allocation", 5*time.Second)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestServer_endpointGC(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
