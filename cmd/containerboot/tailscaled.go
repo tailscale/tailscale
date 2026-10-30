@@ -145,22 +145,7 @@ func tailscaleUp(ctx context.Context, cfg *settings) error {
 	if cfg.ExtraArgs != "" {
 		args = append(args, strings.Fields(cfg.ExtraArgs)...)
 	}
-	log.Printf("Running 'tailscale up'")
-	cmd := exec.CommandContext(ctx, "tailscale", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			// A canceled context kills the command, and cmd.Run can
-			// report the subprocess's death ("signal: killed") rather
-			// than the context error that caused it. Return the
-			// context error so that callers (and ultimately main) can
-			// recognize a graceful shutdown with errors.Is.
-			return fmt.Errorf("tailscale up failed: %w", ctxErr)
-		}
-		return fmt.Errorf("tailscale up failed: %w", err)
-	}
-	return nil
+	return runTailscale(ctx, "up", args)
 }
 
 // tailscaleSet uses cfg to run 'tailscale set' to set any known configuration
@@ -183,16 +168,48 @@ func tailscaleSet(ctx context.Context, cfg *settings) error {
 	if cfg.Hostname != "" {
 		args = append(args, "--hostname="+cfg.Hostname)
 	}
-	log.Printf("Running 'tailscale set'")
+	args = appendRelayServerSetArgs(args, cfg)
+	return runTailscale(ctx, "set", args)
+}
+
+// tailscaleSetRelayServer runs 'tailscale set' to apply the peer relay server
+// settings. These are "set"-only settings, so they cannot be passed to
+// 'tailscale up' and must be applied after the node has authenticated,
+// regardless of whether TS_AUTH_ONCE is set.
+func tailscaleSetRelayServer(ctx context.Context, cfg *settings) error {
+	args := appendRelayServerSetArgs([]string{"--socket=" + cfg.Socket, "set"}, cfg)
+	return runTailscale(ctx, "set", args)
+}
+
+// appendRelayServerSetArgs appends the peer relay server flags to args when
+// they are configured.
+func appendRelayServerSetArgs(args []string, cfg *settings) []string {
+	if cfg.RelayServerPortSet {
+		args = append(args, "--relay-server-port="+cfg.RelayServerPort)
+	}
+	if cfg.RelayServerStaticEndpointsSet {
+		args = append(args, "--relay-server-static-endpoints="+cfg.RelayServerStaticEndpoints)
+	}
+	return args
+}
+
+// runTailscale runs the 'tailscale' CLI with the given subcommand ("up" or
+// "set") and arguments, streaming its output to the container's stdout/stderr.
+func runTailscale(ctx context.Context, verb string, args []string) error {
+	log.Printf("Running 'tailscale %s'", verb)
 	cmd := exec.CommandContext(ctx, "tailscale", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			// See the equivalent check in tailscaleUp.
-			return fmt.Errorf("tailscale set failed: %w", ctxErr)
+			// A canceled context kills the command, and cmd.Run can
+			// report the subprocess's death ("signal: killed") rather
+			// than the context error that caused it. Return the
+			// context error so that callers (and ultimately main) can
+			// recognize a graceful shutdown with errors.Is.
+			return fmt.Errorf("tailscale %s failed: %w", verb, ctxErr)
 		}
-		return fmt.Errorf("tailscale set failed: %w", err)
+		return fmt.Errorf("tailscale %s failed: %w", verb, err)
 	}
 	return nil
 }
