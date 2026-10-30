@@ -19,6 +19,8 @@ import (
 	"tailscale.com/feature"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/localapi"
+	"tailscale.com/net/netmon"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/util/clientmetric"
@@ -30,6 +32,7 @@ func init() {
 	}
 	ipnlocal.RegisterC2N("POST /wol", handleC2NWoL)
 	ipnlocal.RegisterPeerAPIHandler("/v0/wol", handlePeerAPIWakeOnLAN)
+	localapi.Register("wake-on-lan", serveLocalAPIWakeOnLAN)
 	hostinfo.RegisterHostinfoNewHook(func(h *tailcfg.Hostinfo) {
 		h.WoLMACs = getWoLMACs()
 	})
@@ -56,32 +59,42 @@ func handleC2NWoL(b *ipnlocal.LocalBackend, w http.ResponseWriter, r *http.Reque
 		writeJSON(w, &res)
 		return
 	}
-	var password []byte // TODO(bradfitz): support? does anything use WoL passwords?
 	for _, mac := range macs {
-		for ifName, ips := range st.InterfaceIPs {
-			for _, ip := range ips {
-				if ip.Addr().IsLoopback() || ip.Addr().Is6() {
-					continue
-				}
-				local := &net.UDPAddr{
-					IP:   ip.Addr().AsSlice(),
-					Port: 0,
-				}
-				remote := &net.UDPAddr{
-					IP:   net.IPv4bcast,
-					Port: 0,
-				}
-				if err := wol.Wake(mac, password, local, remote); err != nil {
-					res.Errors = append(res.Errors, err.Error())
-				} else {
-					res.SentTo = append(res.SentTo, ifName)
-				}
-				break // one per interface is enough
-			}
-		}
+		sentTo, errs := broadcastMagicPacket(st, mac)
+		res.SentTo = append(res.SentTo, sentTo...)
+		res.Errors = append(res.Errors, errs...)
 	}
 	sort.Strings(res.SentTo)
 	writeJSON(w, &res)
+}
+
+// broadcastMagicPacket broadcasts a Wake-on-LAN magic packet for mac on each
+// IPv4 interface in st. It returns the names of the interfaces the packet was
+// sent on and any errors encountered.
+func broadcastMagicPacket(st *netmon.State, mac net.HardwareAddr) (sentTo, errs []string) {
+	var password []byte // TODO(bradfitz): support? does anything use WoL passwords?
+	for ifName, ips := range st.InterfaceIPs {
+		for _, ip := range ips {
+			if ip.Addr().IsLoopback() || ip.Addr().Is6() {
+				continue
+			}
+			local := &net.UDPAddr{
+				IP:   ip.Addr().AsSlice(),
+				Port: 0,
+			}
+			remote := &net.UDPAddr{
+				IP:   net.IPv4bcast,
+				Port: 0,
+			}
+			if err := wol.Wake(mac, password, local, remote); err != nil {
+				errs = append(errs, err.Error())
+			} else {
+				sentTo = append(sentTo, ifName)
+			}
+			break // one per interface is enough
+		}
+	}
+	return sentTo, errs
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -118,7 +131,6 @@ func handlePeerAPIWakeOnLAN(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r 
 		http.Error(w, "bad 'mac' param", http.StatusBadRequest)
 		return
 	}
-	var password []byte // TODO(bradfitz): support? does anything use WoL passwords?
 	st := h.LocalBackend().NetMon().InterfaceState()
 	if st == nil {
 		http.Error(w, "failed to get interfaces state", http.StatusInternalServerError)
@@ -128,27 +140,7 @@ func handlePeerAPIWakeOnLAN(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r 
 		SentTo []string
 		Errors []string
 	}
-	for ifName, ips := range st.InterfaceIPs {
-		for _, ip := range ips {
-			if ip.Addr().IsLoopback() || ip.Addr().Is6() {
-				continue
-			}
-			local := &net.UDPAddr{
-				IP:   ip.Addr().AsSlice(),
-				Port: 0,
-			}
-			remote := &net.UDPAddr{
-				IP:   net.IPv4bcast,
-				Port: 0,
-			}
-			if err := wol.Wake(mac, password, local, remote); err != nil {
-				res.Errors = append(res.Errors, err.Error())
-			} else {
-				res.SentTo = append(res.SentTo, ifName)
-			}
-			break // one per interface is enough
-		}
-	}
+	res.SentTo, res.Errors = broadcastMagicPacket(st, mac)
 	sort.Strings(res.SentTo)
 	writeJSON(w, res)
 }
