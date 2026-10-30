@@ -189,6 +189,75 @@ func TestUserspaceEngineReconfigDNSAfterRouterError(t *testing.T) {
 	}
 }
 
+// flakyRouter is a router.Router whose Set fails the first failures times and
+// succeeds afterwards, recording how many times Set was called.
+type flakyRouter struct {
+	failures int
+	err      error
+	calls    int
+}
+
+func (*flakyRouter) Up() error    { return nil }
+func (*flakyRouter) Close() error { return nil }
+func (r *flakyRouter) Set(*router.Config) error {
+	r.calls++
+	if r.calls <= r.failures {
+		return r.err
+	}
+	return nil
+}
+
+// TestUserspaceEngineReconfigRetriesRouterAfterError verifies that if
+// router.Set fails, a subsequent Reconfig with the identical config retries
+// router.Set rather than returning ErrNoChanges. Otherwise a single transient
+// router failure (e.g. at boot) leaves OS routes stale until the router config
+// happens to change. See tailscale/tailscale#18271.
+func TestUserspaceEngineReconfigRetriesRouterAfterError(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+
+	ht := health.NewTracker(bus)
+	reg := new(usermetric.Registry)
+	e, err := NewFakeUserspaceEngine(t.Logf, 0, ht, reg, bus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(e.Close)
+	ue := e.(*userspaceEngine)
+
+	routerErr := errors.New("router boom")
+	fr := &flakyRouter{failures: 1, err: routerErr}
+	ue.router = fr
+
+	cfg := &wgcfg.Config{
+		Addresses: []netip.Prefix{netip.PrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32)},
+	}
+	routerCfg := &router.Config{
+		LocalAddrs: []netip.Prefix{netip.PrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32)},
+		Routes:     []netip.Prefix{netip.MustParsePrefix("192.168.1.0/24")},
+	}
+
+	if err := e.Reconfig(cfg, routerCfg, &dns.Config{}); !errors.Is(err, routerErr) {
+		t.Fatalf("first Reconfig error = %v; want %v", err, routerErr)
+	}
+	if fr.calls != 1 {
+		t.Fatalf("after first Reconfig, router.Set calls = %d; want 1", fr.calls)
+	}
+
+	if err := e.Reconfig(cfg, routerCfg, &dns.Config{}); err != nil {
+		t.Fatalf("second Reconfig error = %v; want nil (router.Set should be retried and succeed)", err)
+	}
+	if fr.calls != 2 {
+		t.Fatalf("after second Reconfig, router.Set calls = %d; want 2 (retry after failure)", fr.calls)
+	}
+
+	if err := e.Reconfig(cfg, routerCfg, &dns.Config{}); err != nil && !errors.Is(err, ErrNoChanges) {
+		t.Fatalf("third Reconfig error = %v; want nil or ErrNoChanges", err)
+	}
+	if fr.calls != 2 {
+		t.Fatalf("after third Reconfig, router.Set calls = %d; want 2 (no retry once applied)", fr.calls)
+	}
+}
+
 func TestUserspaceEnginePortReconfig(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/2855")
 	const defaultPort = 49983
