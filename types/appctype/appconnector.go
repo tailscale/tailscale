@@ -75,6 +75,17 @@ type AppConnectorAttr struct {
 	// These can either be "*" to match any advertising connector, or a
 	// tag of the form tag:<tag-name>.
 	Connectors []string `json:"connectors,omitempty"`
+	// Mode is the mode of operation of this app connector. The two supported
+	// values are "subnet" and "magicip". If the string is empty, "subnet" is
+	// assumed.
+	// A "subnet" app connector directly advertises the IP addresses as subnet
+	// routes corresponding the app's domains. This is broadly compatible with
+	// older clients but too coarse-grained for certain situations (eg. the
+	// domains of multiple apps sharing an IP address).
+	// A "magicip" app connector adds a layer of indirection to allow finer
+	// control of such situations, but requires recent client versions on both
+	// the connector and the client (Connectors 2025).
+	Mode string `json:"mode,omitempty"`
 }
 
 // RouteInfo is a data structure used to persist the in memory state of an AppConnector

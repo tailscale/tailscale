@@ -649,9 +649,9 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 }
 
 func TestReconfig(t *testing.T) {
-	rawCfg := `{"name":"app1","connectors":["tag:woo"],"domains":["example.com"]}`
+	rawCfg := `{"name":"app1","connectors":["tag:woo"],"domains":["example.com"],"mode":"magicip"}`
 	capMap := tailcfg.NodeCapMap{
-		nodecap.Cap(AppConnectorsExperimentalAttrName): []tailcfg.RawMessage{
+		nodecap.Cap(AppConnectorAttrName): []tailcfg.RawMessage{
 			tailcfg.RawMessage(rawCfg),
 		},
 		nodecap.Cap(AppConnectorsExperimentalIPPoolsAttrName): []tailcfg.RawMessage{
@@ -701,7 +701,7 @@ func TestConfigFromNodeView(t *testing.T) {
 	for _, tt := range []struct {
 		name               string
 		rawAppCfg          string
-		appCfg             []appctype.Conn25Attr
+		appCfg             []appctype.AppConnectorAttr
 		rawPoolsCfg        string
 		poolsCfg           []appctype.Conn25PoolsAttr
 		tags               []string
@@ -718,17 +718,17 @@ func TestConfigFromNodeView(t *testing.T) {
 		},
 		{
 			name: "bad-pool-config",
-			appCfg: []appctype.Conn25Attr{
-				{Name: "one", Domains: []string{"a.example.com"}, Connectors: []string{"tag:one"}},
+			appCfg: []appctype.AppConnectorAttr{
+				{Name: "one", Domains: []string{"a.example.com"}, Connectors: []string{"tag:one"}, Mode: "magicip"},
 			},
 			rawPoolsCfg: "bad",
 			wantErr:     true,
 		},
 		{
 			name: "simple",
-			appCfg: []appctype.Conn25Attr{
-				{Name: "one", Domains: []string{"a.example.com"}, Connectors: []string{"tag:one"}},
-				{Name: "two", Domains: []string{"b.example.com"}, Connectors: []string{"tag:two"}},
+			appCfg: []appctype.AppConnectorAttr{
+				{Name: "one", Domains: []string{"a.example.com"}, Connectors: []string{"tag:one"}, Mode: "magicip"},
+				{Name: "two", Domains: []string{"b.example.com"}, Connectors: []string{"tag:two"}, Mode: "magicip"},
 			},
 			rawPoolsCfg: "{}",
 			tags:        []string{"tag:one"},
@@ -740,12 +740,40 @@ func TestConfigFromNodeView(t *testing.T) {
 			wantSelfAppNames:   set.SetOf([]string{"one"}),
 		},
 		{
+			name: "old-and-new-implicit",
+			appCfg: []appctype.AppConnectorAttr{
+				{Name: "one", Domains: []string{"a.example.com"}, Connectors: []string{"tag:one"}, Mode: "magicip"},
+				{Name: "two", Domains: []string{"b.example.com"}, Connectors: []string{"tag:one"}},
+			},
+			rawPoolsCfg: "{}",
+			tags:        []string{"tag:one"},
+			wantAppsByDomain: map[dnsname.FQDN][]string{
+				"a.example.com.": {"one"},
+			},
+			wantAppsByWCDomain: map[dnsname.FQDN][]string{},
+			wantSelfAppNames:   set.SetOf([]string{"one"}),
+		},
+		{
+			name: "old-and-new-explicit",
+			appCfg: []appctype.AppConnectorAttr{
+				{Name: "one", Domains: []string{"a.example.com"}, Connectors: []string{"tag:one"}, Mode: "magicip"},
+				{Name: "two", Domains: []string{"b.example.com"}, Connectors: []string{"tag:one"}, Mode: "subnet"},
+			},
+			rawPoolsCfg: "{}",
+			tags:        []string{"tag:one"},
+			wantAppsByDomain: map[dnsname.FQDN][]string{
+				"a.example.com.": {"one"},
+			},
+			wantAppsByWCDomain: map[dnsname.FQDN][]string{},
+			wantSelfAppNames:   set.SetOf([]string{"one"}),
+		},
+		{
 			name: "more-complex-with-connector-self-domains",
-			appCfg: []appctype.Conn25Attr{
-				{Name: "one", Domains: []string{"1.a.example.com", "1.b.example.com"}, Connectors: []string{"tag:one", "tag:onea"}},
-				{Name: "two", Domains: []string{"2.b.example.com", "2.c.example.com"}, Connectors: []string{"tag:two", "tag:twoa"}},
-				{Name: "three", Domains: []string{"1.b.example.com", "1.c.example.com"}, Connectors: []string{}},
-				{Name: "four", Domains: []string{"4.b.example.com", "4.d.example.com"}, Connectors: []string{"tag:four"}},
+			appCfg: []appctype.AppConnectorAttr{
+				{Name: "one", Domains: []string{"1.a.example.com", "1.b.example.com"}, Connectors: []string{"tag:one", "tag:onea"}, Mode: "magicip"},
+				{Name: "two", Domains: []string{"2.b.example.com", "2.c.example.com"}, Connectors: []string{"tag:two", "tag:twoa"}, Mode: "magicip"},
+				{Name: "three", Domains: []string{"1.b.example.com", "1.c.example.com"}, Connectors: []string{}, Mode: "magicip"},
+				{Name: "four", Domains: []string{"4.b.example.com", "4.d.example.com"}, Connectors: []string{"tag:four"}, Mode: "magicip"},
 			},
 			rawPoolsCfg: "{}",
 			tags:        []string{"tag:onea", "tag:four", "tag:unrelated"},
@@ -763,9 +791,9 @@ func TestConfigFromNodeView(t *testing.T) {
 		},
 		{
 			name: "eligible-connector-no-matching-tag-no-self-domains",
-			appCfg: []appctype.Conn25Attr{
-				{Name: "one", Domains: []string{"a.example.com"}, Connectors: []string{"tag:one"}},
-				{Name: "two", Domains: []string{"b.example.com"}, Connectors: []string{"tag:two"}},
+			appCfg: []appctype.AppConnectorAttr{
+				{Name: "one", Domains: []string{"a.example.com"}, Connectors: []string{"tag:one"}, Mode: "magicip"},
+				{Name: "two", Domains: []string{"b.example.com"}, Connectors: []string{"tag:two"}, Mode: "magicip"},
 			},
 			rawPoolsCfg: "{}",
 			tags:        []string{"tag:unrelated"},
@@ -777,9 +805,9 @@ func TestConfigFromNodeView(t *testing.T) {
 		},
 		{
 			name: "wildcard-collapse-and-deduplication",
-			appCfg: []appctype.Conn25Attr{
-				{Name: "one", Domains: []string{"*.example.com", "example.com"}, Connectors: []string{"tag:one"}},
-				{Name: "two", Domains: []string{"example.com", "sub.example.com"}, Connectors: []string{"tag:two"}},
+			appCfg: []appctype.AppConnectorAttr{
+				{Name: "one", Domains: []string{"*.example.com", "example.com"}, Connectors: []string{"tag:one"}, Mode: "magicip"},
+				{Name: "two", Domains: []string{"example.com", "sub.example.com"}, Connectors: []string{"tag:two"}, Mode: "magicip"},
 			},
 			rawPoolsCfg: "{}",
 			tags:        []string{"tag:one", "tag:two"},
@@ -797,8 +825,8 @@ func TestConfigFromNodeView(t *testing.T) {
 			// domain and the app name must appear exactly once in appNamesByDomain,
 			// not once per case variant.
 			name: "case-variant-exact-domains-deduplicated-within-app",
-			appCfg: []appctype.Conn25Attr{
-				{Name: "one", Domains: []string{"EXAMPLE.com", "example.COM", "Example.COM"}, Connectors: []string{"tag:one"}},
+			appCfg: []appctype.AppConnectorAttr{
+				{Name: "one", Domains: []string{"EXAMPLE.com", "example.COM", "Example.COM"}, Connectors: []string{"tag:one"}, Mode: "magicip"},
 			},
 			rawPoolsCfg: "{}",
 			tags:        []string{"tag:one"},
@@ -812,8 +840,8 @@ func TestConfigFromNodeView(t *testing.T) {
 			// Same as above but for wildcard domains: *.EXAMPLE.com and *.example.COM
 			// must collapse to a single entry in appNamesByWCDomain.
 			name: "case-variant-wildcard-domains-deduplicated-within-app",
-			appCfg: []appctype.Conn25Attr{
-				{Name: "one", Domains: []string{"*.EXAMPLE.com", "*.example.COM"}, Connectors: []string{"tag:one"}},
+			appCfg: []appctype.AppConnectorAttr{
+				{Name: "one", Domains: []string{"*.EXAMPLE.com", "*.example.COM"}, Connectors: []string{"tag:one"}, Mode: "magicip"},
 			},
 			rawPoolsCfg:        "{}",
 			tags:               []string{"tag:one"},
@@ -823,8 +851,8 @@ func TestConfigFromNodeView(t *testing.T) {
 		},
 		{
 			name: "too-many-pools",
-			appCfg: []appctype.Conn25Attr{
-				{Name: "one", Domains: []string{"a.example.com"}, Connectors: []string{"tag:one"}},
+			appCfg: []appctype.AppConnectorAttr{
+				{Name: "one", Domains: []string{"a.example.com"}, Connectors: []string{"tag:one"}, Mode: "magicip"},
 			},
 			poolsCfg: []appctype.Conn25PoolsAttr{
 				{},
@@ -843,7 +871,7 @@ func TestConfigFromNodeView(t *testing.T) {
 				poolsCfg = getRawMessages(t, tt.poolsCfg)
 			}
 			capMap := tailcfg.NodeCapMap{
-				nodecap.Cap(AppConnectorsExperimentalAttrName):        appCfg,
+				nodecap.Cap(AppConnectorAttrName):                     appCfg,
 				nodecap.Cap(AppConnectorsExperimentalIPPoolsAttrName): poolsCfg,
 			}
 			sn := (&tailcfg.Node{
@@ -976,7 +1004,12 @@ func makeSelfNode(t *testing.T, attrs []appctype.Conn25Attr, pools appctype.Conn
 	t.Helper()
 	cfg := make([]tailcfg.RawMessage, 0, len(attrs))
 	for i, attr := range attrs {
-		bs, err := json.Marshal(attr)
+		bs, err := json.Marshal(appctype.AppConnectorAttr{
+			Name:       attr.Name,
+			Domains:    attr.Domains,
+			Connectors: attr.Connectors,
+			Mode:       "magicip",
+		})
 		if err != nil {
 			t.Fatalf("unexpected error in test setup at index %d: %v", i, err)
 		}
@@ -987,7 +1020,7 @@ func makeSelfNode(t *testing.T, attrs []appctype.Conn25Attr, pools appctype.Conn
 		t.Fatalf("unexpected error marshaling pools in test setup: %v", err)
 	}
 	capMap := tailcfg.NodeCapMap{
-		nodecap.Cap(AppConnectorsExperimentalAttrName):        cfg,
+		nodecap.Cap(AppConnectorAttrName):                     cfg,
 		nodecap.Cap(AppConnectorsExperimentalIPPoolsAttrName): {tailcfg.RawMessage(poolsBytes)},
 	}
 
