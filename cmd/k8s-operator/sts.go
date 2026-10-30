@@ -1499,7 +1499,19 @@ func nameForService(svc *corev1.Service) string {
 	if h, ok := svc.Annotations[AnnotationHostname]; ok {
 		return h
 	}
-	return svc.Namespace + "-" + svc.Name
+	name := svc.Namespace + "-" + svc.Name
+	if isEgressService(svc) {
+		// The hostname of an egress proxy is not user facing, so instead of
+		// failing validation, shorten a default that is longer than a DNS
+		// label allows. Defaults that already fit are unchanged.
+		return tsoperator.TruncateWithHash(name)
+	}
+	return name
+}
+
+// isEgressService reports whether svc exposes a tailnet target to the cluster.
+func isEgressService(svc *corev1.Service) bool {
+	return tailnetTargetAnnotation(svc) != "" || svc.Annotations[AnnotationTailnetTargetFQDN] != ""
 }
 
 // proxyClassForObject returns the proxy class for the given object. If the
