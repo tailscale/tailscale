@@ -278,6 +278,28 @@ type Prefs struct {
 	// Linux-only.
 	NetfilterKind string
 
+	// Tailnet is an optional identifier for the recommended or required tailnet
+	// the node should join at registration, mirroring
+	// [tailcfg.RegisterRequest.Tailnet]. It is a comma-separated list of tailnet
+	// identifiers (a stable tailnet ID, stable org ID, or tailnet SID). The
+	// server treats the list as a set and restricts login to any one of the
+	// listed tailnets.
+	//
+	// A single leading "required:" prefix (e.g. "required:tn1,tn2") governs the
+	// whole set: when present, the server forces login to one of the listed
+	// tailnets rather than merely recommending them. The prefix is not repeated
+	// per entry. If empty, no recommendation is sent and the login page offers
+	// all tailnets.
+	//
+	// The value is passed to the server verbatim; the client does not interpret
+	// it. The syspolicy "Tailnet" setting overrides this value when set, so
+	// administrators can enforce a tailnet via MDM.
+	//
+	// It is only consumed at registration time (when building the
+	// RegisterRequest), so like ControlURL it must be set in the initial prefs
+	// passed to Start rather than changed later via EditPrefs.
+	Tailnet string `json:",omitzero"`
+
 	// RemoteConfig, if true, delegates full remote control of this node's
 	// prefs and LocalAPI to the tailnet admin via the control plane. When
 	// enabled, the control server can read and edit any of this node's
@@ -386,6 +408,7 @@ type MaskedPrefs struct {
 	AppConnectorSet               bool                `json:",omitempty"`
 	PostureCheckingSet            bool                `json:",omitempty"`
 	NetfilterKindSet              bool                `json:",omitempty"`
+	TailnetSet                    bool                `json:",omitzero"`
 	RemoteConfigSet               bool                `json:",omitempty"`
 	DriveSharesSet                bool                `json:",omitempty"`
 	RelayServerPortSet            bool                `json:",omitempty"`
@@ -622,6 +645,9 @@ func (p *Prefs) pretty(goos string) string {
 	if p.NetfilterKind != "" {
 		fmt.Fprintf(&sb, "netfilterKind=%s ", p.NetfilterKind)
 	}
+	if p.Tailnet != "" {
+		fmt.Fprintf(&sb, "tailnet=%q ", p.Tailnet)
+	}
 	if buildfeatures.HasClientUpdate {
 		sb.WriteString(p.AutoUpdate.Pretty())
 	}
@@ -698,6 +724,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.PostureChecking == p2.PostureChecking &&
 		slices.EqualFunc(p.DriveShares, p2.DriveShares, drive.SharesEqual) &&
 		p.NetfilterKind == p2.NetfilterKind &&
+		p.Tailnet == p2.Tailnet &&
 		p.RemoteConfig == p2.RemoteConfig &&
 		compareUint16Ptrs(p.RelayServerPort, p2.RelayServerPort) &&
 		slices.Equal(p.RelayServerStaticEndpoints, p2.RelayServerStaticEndpoints)
