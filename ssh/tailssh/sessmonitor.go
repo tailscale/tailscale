@@ -75,6 +75,8 @@ func (s *monExitStatus) complete(code int) {
 // After dispatch, cancellation does not abandon the exec reply: a successful
 // launch always registers the child so run can terminate it and wait for exit.
 func (ss *sshSession) launchViaMonitor(cmd *exec.Cmd, envFile *os.File, stdio []*os.File, ctty bool) error {
+	ss.monitorLaunchMu.Lock()
+	defer ss.monitorLaunchMu.Unlock()
 	if len(stdio) != 3 {
 		return fmt.Errorf("internal error: monitor exec needs 3 stdio fds, got %d", len(stdio))
 	}
@@ -118,38 +120,24 @@ func (ss *sshSession) waitMonitorProcess() (code int, ok bool, err error) {
 	}
 }
 
-// hangupMonitorProcess sends SIGHUP for non-PTY sessions and schedules SIGKILL
-// if the child has not exited. It returns false for directly launched sessions.
-func (ss *sshSession) hangupMonitorProcess() bool {
+// hangupMonitorProcess requests monitor termination if mandated is true.
+// It returns false for directly launched sessions. See [sshSession.hangupProcess].
+func (ss *sshSession) hangupMonitorProcess(mandated bool) bool {
 	if ss.monChild.PID == 0 {
 		return false
 	}
 	mc := ss.conn.connMonitorIfAny()
 	if mc == nil {
-		// Monitor teardown owns cleanup. Its reaped PIDs may already have
-		// been reused, so tailscaled must not signal them directly.
+		// Only the monitor may signal its child process groups.
 		return true
 	}
-	if ss.ptyReq == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := mc.Signal(ctx, ss.monChild, "SIGHUP"); err != nil {
-			ss.logf("ssh: SIGHUP session process group: %v", err)
-		}
-	}
-	time.AfterFunc(knobDuration(sshHupEscalation(), hangupEscalation), func() { ss.escalateMonitorProcess(mc) })
-	return true
-}
-
-func (ss *sshSession) escalateMonitorProcess(mc *monitorClient) {
-	select {
-	case <-ss.monExit.done:
-		return
-	default:
+	if !mandated {
+		return true
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := mc.Signal(ctx, ss.monChild, "SIGKILL"); err != nil {
-		ss.vlogf("ssh: SIGKILL session process group: %v", err)
+	if err := mc.Terminate(ctx, ss.monChild, knobDuration(sshHupEscalation(), hangupEscalation)); err != nil {
+		ss.logf("ssh: committing session termination: %v", err)
 	}
+	return true
 }

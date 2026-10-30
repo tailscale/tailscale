@@ -147,7 +147,8 @@ func fwdSpawnChild(m *monitor, spec fwdChildSpec) (*exec.Cmd, *net.UnixConn, err
 	// which surfaces as the op's error.
 	var attr *syscall.SysProcAttr
 	if os.Getuid() != 0 && uint64(m.args.uid) == uint64(os.Getuid()) && uint64(m.args.gid) == uint64(os.Getgid()) {
-		attr = monChildAttr(false) // Setpgid, and Pdeathsig on linux. Identity is inherited.
+		attr = fwdChildAttr(m.args)
+		attr.Credential = nil // Inherit credentials but retain Pdeathsig.
 	} else {
 		attr = fwdChildAttr(m.args) // born unprivileged (Credential) in its own group
 	}

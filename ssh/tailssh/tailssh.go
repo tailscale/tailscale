@@ -236,7 +236,7 @@ func (srv *server) HandleSSHConn(nc net.Conn) error {
 }
 
 // Shutdown closes active connections and waits up to sshShutdownTimeout for
-// sessions to finish. Session goroutines may remain running after it returns.
+// sessions to finish. Session goroutines and non-PTY processes may outlive it.
 func (srv *server) Shutdown() {
 	srv.mu.Lock()
 	srv.shutdownCalled = true
@@ -339,6 +339,9 @@ type conn struct {
 	// It is set on SSH authentication success, not on an unsigned key query
 	// or partial authentication success.
 	authCompleted atomic.Bool
+
+	// monitorKillAll requests connection-wide termination on revocation.
+	monitorKillAll atomic.Bool
 
 	// authRecheckDone is closed after the asynchronous auth-completion policy
 	// check. It is initialized before the connection is published.
@@ -914,6 +917,10 @@ type sshSession struct {
 	conn          *conn
 	agentListener net.Listener // non-nil if agent-forwarding requested+allowed
 
+	// monitorLaunchMu serializes exec registration with policy cancellation.
+	// The monitor must accept termination before cancellation is published.
+	monitorLaunchMu sync.Mutex
+
 	// initialized by launchProcess:
 	osSessionState // the process itself; see process_*.go
 	wrStdin        io.WriteCloser
@@ -926,6 +933,19 @@ type sshSession struct {
 	// For pty sessions, this is the tty fd.
 	// For non-pty sessions, this is the stdin, stdout, stderr fds.
 	childPipes []io.Closer
+}
+
+// cancelWithTermination registers monitor termination before canceling ss.ctx.
+// It waits for any in-flight monitor exec to register its child.
+func (ss *sshSession) cancelWithTermination(err SSHTerminationError) {
+	ss.monitorLaunchMu.Lock()
+	defer ss.monitorLaunchMu.Unlock()
+	if ss.ctx.Err() != nil {
+		// Preserve the existing cancellation's termination policy.
+		return
+	}
+	ss.hangupMonitorProcess(true)
+	ss.cancelCtx(err)
 }
 
 func (ss *sshSession) vlogf(format string, args ...any) {
@@ -1071,6 +1091,8 @@ func (c *conn) closeConn() {
 func (c *conn) revokeConn(reason string) {
 	metricPolicyChangeKick.Add(1)
 	c.logf("session no longer valid per new SSH policy (%v); closing connection", reason)
+	// Request connection-wide cleanup before closing the transport.
+	c.monitorKillAll.Store(true)
 	c.mu.Lock()
 	for _, s := range c.sessions {
 		s.cancelCtx(userVisibleError{
@@ -1353,8 +1375,9 @@ func (c *conn) fetchSSHAction(ctx context.Context, url string) (*tailcfg.SSHActi
 	}
 }
 
-// killProcessOnContextDone reports cancellation and terminates the session
-// process. processDone stops it when the process exits normally.
+// killProcessOnContextDone terminates processes for SSHTerminationError causes.
+// Other cancellation causes close the PTY without explicitly signaling processes.
+// It returns if processDone is closed and the session is not canceled.
 func (ss *sshSession) killProcessOnContextDone(processDone <-chan struct{}) {
 	select {
 	case <-ss.ctx.Done():
@@ -1364,17 +1387,23 @@ func (ss *sshSession) killProcessOnContextDone(processDone <-chan struct{}) {
 		}
 	}
 	err := context.Cause(ss.ctx)
-	if serr, ok := err.(SSHTerminationError); ok {
+	serr, mandated := err.(SSHTerminationError)
+	select {
+	case <-processDone:
+		// Report cancellation even if the process has already exited.
+	default:
+		if mandated {
+			ss.logf("terminating SSH session from %v: %v", ss.conn.info.src.Addr(), err)
+		} else {
+			ss.logf("closing SSH session I/O from %v: %v; processes exit on their own", ss.conn.info.src.Addr(), err)
+		}
+		ss.hangupProcess(mandated)
+	}
+	// Register termination before writing to the client, which may block.
+	if mandated {
 		if msg := serr.SSHTerminationMessage(); msg != "" {
 			io.WriteString(ss.Stderr(), "\r\n\r\n"+msg+"\r\n\r\n")
 		}
-	}
-	select {
-	case <-processDone:
-		return
-	default:
-		ss.logf("terminating SSH session from %v: %v", ss.conn.info.src.Addr(), err)
-		ss.hangupProcess()
 	}
 }
 
@@ -1434,7 +1463,7 @@ func (ss *sshSession) run() {
 
 	if ss.conn.finalAction.SessionDuration != 0 {
 		t := time.AfterFunc(ss.conn.finalAction.SessionDuration, func() {
-			ss.cancelCtx(userVisibleError{
+			ss.cancelWithTermination(userVisibleError{
 				fmt.Sprintf("Session timeout of %v elapsed.", ss.conn.finalAction.SessionDuration),
 				context.DeadlineExceeded,
 			})
@@ -1888,7 +1917,7 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 			terminate := onFailure != nil && onFailure.TerminateSessionWithMessage != ""
 			if terminate {
 				ss.logf("recording: error uploading recording (closing session): %v", err)
-				ss.cancelCtx(userVisibleError{
+				ss.cancelWithTermination(userVisibleError{
 					error: err,
 					msg:   onFailure.TerminateSessionWithMessage,
 				})
