@@ -12,16 +12,15 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// monChildAttr returns the SysProcAttr for one monitor child. A ctty
-// child gets Setsid+Setctty with the PTY child endpoint as fd 0; Setpgid is
-// set only for non-ctty children. Pdeathsig is advisory: it fires on
-// the exit of the creating thread, not the process, per golang/go#27505.
+// monChildAttr returns process attributes for a session child.
+// With ctty, the child starts a session with fd 0 as its controlling terminal.
+// Otherwise it starts a process group.
+// Pdeathsig is unset so the child can survive monitor exit.
 func monChildAttr(ctty bool) *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{
-		Setpgid:   !ctty,
-		Setsid:    ctty,
-		Setctty:   ctty,
-		Pdeathsig: unix.SIGHUP,
+		Setpgid: !ctty,
+		Setsid:  ctty,
+		Setctty: ctty,
 	}
 }
 
@@ -37,11 +36,9 @@ func scrubFds() error {
 	return scrubFdsByScan("/proc/self/fd")
 }
 
-// fwdChildAttr returns the SysProcAttr for a one-shot forwarding child
-// whose identity must be applied, that is a root monitor's child. The
-// Credential carries the connection's bound identity from ma. The child
-// leads its own group so the op deadline and teardown can kill the
-// whole group, and Pdeathsig is set as in monChildAttr.
+// fwdChildAttr returns process attributes for a forwarding child.
+// The child runs with ma's credentials in its own process group.
+// Pdeathsig sends SIGHUP when the creating thread exits. See golang/go#27505.
 func fwdChildAttr(ma monitorArgs) *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{
 		Credential: &syscall.Credential{

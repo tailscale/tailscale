@@ -428,13 +428,10 @@ exit 3
 	}
 }
 
-// TestSessionMonitorConnCloseKillsHupImmuneChild pins the teardown
-// escalation on the conn-close paths, revocation, Shutdown, and plain
-// teardown: the monitor's own teardown must SIGKILL the HUP-immune
-// group, in both orderings of the session's own HUP escalation against
-// the conn teardown (kick-then-close and close-without-kick).
+// TestSessionMonitorConnCloseKillsHupImmuneChild checks that connection close
+// kills mandated sessions and preserves other sessions, regardless of HUP handling.
 func TestSessionMonitorConnCloseKillsHupImmuneChild(t *testing.T) {
-	for _, mode := range []string{"kick-then-close", "close-without-kick"} {
+	for _, mode := range []string{"mandated", "graceful", "graceful-default-hup"} {
 		t.Run(mode, func(t *testing.T) {
 			lu := fwdTestIdentity(t)
 			c := newFwdTestConn(t, lu, &tailcfg.SSHAction{Accept: true})
@@ -446,10 +443,12 @@ func TestSessionMonitorConnCloseKillsHupImmuneChild(t *testing.T) {
 				logf: t.Logf,
 			}
 
-			// An HUP-immune child, like TestSessionMonitorHangupEscalation:
-			// sh traps (ignores) SIGHUP, so only the group SIGKILL ends it.
-			// The marker gates on the trap being installed.
-			cmd := exec.Command("/bin/sh", "-c", "trap '' HUP; echo ready; while :; do sleep 1; done")
+			// Mandated termination must kill a HUP-immune child.
+			command := "trap '' HUP; echo ready; while :; do sleep 1; done"
+			if mode == "graceful-default-hup" {
+				command = "echo ready; exec sleep 300"
+			}
+			cmd := exec.Command("/bin/sh", "-c", command)
 			cmd.Args = incubatorChildArgv(cmd.Args)
 			stdin, stdinKeep, err := os.Pipe()
 			if err != nil {
@@ -483,22 +482,34 @@ func TestSessionMonitorConnCloseKillsHupImmuneChild(t *testing.T) {
 			}
 			pid := ss.monChild.PID
 
-			if mode == "kick-then-close" {
-				// The revocation kick (what killProcessOnContextDone does
-				// when the session ctx is canceled); its escalation timer
-				// races the conn teardown, which closes the monitor.
-				ss.hangupMonitorProcess()
+			if mode == "mandated" {
+				// Terminate this session without setting the connection-wide flag.
+				ss.hangupMonitorProcess(true)
 			}
-			// The conn teardown: every conn-close path funnels here
-			// (HandleSSHConn's deferred closeConnMonitor). Close waits for
-			// the monitor to exit, so on return the teardown sweeps
-			// (HUP, then SIGKILL for survivors) have run.
+			// Wait for monitor teardown to finish.
 			c.closeConnMonitor()
 
-			// The child must be dead and reaped by the monitor's own
-			// teardown: signal 0 returns ESRCH once the monitor has reaped
-			// it. Bound: the teardown's two sweeps (≤2s each) inside
-			// Close's 5s monitor-exit wait, plus slack.
+			if strings.HasPrefix(mode, "graceful") {
+				// Allow time for a parent-death signal before checking liveness.
+				// pidGone treats Linux zombies as dead.
+				time.Sleep(200 * time.Millisecond)
+				if pidGone(pid) {
+					t.Fatalf("child %d did not survive a graceful conn close", pid)
+				}
+				// Kill the survivor and wait for exit.
+				_ = unix.Kill(-pid, unix.SIGKILL)
+				_ = unix.Kill(pid, unix.SIGKILL)
+				deadline := time.Now().Add(10 * time.Second)
+				for !pidGone(pid) {
+					if time.Now().After(deadline) {
+						t.Fatalf("failed to clean up surviving child %d", pid)
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+				return
+			}
+
+			// Teardown must kill and reap the child within its shutdown bound.
 			deadline := time.Now().Add(monTeardownReap*2 + 5*time.Second)
 			for {
 				if err := unix.Kill(pid, 0); err != nil {
@@ -513,12 +524,18 @@ func TestSessionMonitorConnCloseKillsHupImmuneChild(t *testing.T) {
 	}
 }
 
-// TestSessionMonitorTeardownKillsSamePgidStraggler pins the teardown
-// SIGKILL's scope: a HUP-immune member of the session child's own
-// process group whose leader dies to the teardown SIGHUP must be
-// killed via the pgid set snapshot taken at teardown entry, not via
-// surviving table entries.
+// TestSessionMonitorTeardownKillsSamePgidStraggler checks that teardown kills
+// HUP-immune group members after their leader exits.
 func TestSessionMonitorTeardownKillsSamePgidStraggler(t *testing.T) {
+	testSessionMonitorTerminatedStraggler(t, true)
+}
+
+func TestSessionMonitorEscalationKillsSamePgidStraggler(t *testing.T) {
+	testSessionMonitorTerminatedStraggler(t, false)
+}
+
+func testSessionMonitorTerminatedStraggler(t *testing.T, closeMonitor bool) {
+	t.Helper()
 	lu := fwdTestIdentity(t)
 	c := newFwdTestConn(t, lu, &tailcfg.SSHAction{Accept: true})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -529,12 +546,7 @@ func TestSessionMonitorTeardownKillsSamePgidStraggler(t *testing.T) {
 		logf: t.Logf,
 	}
 
-	// The leader (sh) dies to the group SIGHUP. The nohup'd member of
-	// its group ignores HUP (nohup's SIG_IGN survives exec) and would
-	// survive the teardown under the entry-keyed SIGKILL: the first reap
-	// sweep reaps the leader and drops the table entry, so only the
-	// snapshot pgid set still names the group. The inner sh prints its
-	// own pid first so the test can watch it.
+	// The leader exits on HUP. Its background child ignores HUP and reports its PID.
 	cmd := exec.Command("/bin/sh", "-c",
 		"nohup sh -c 'echo $$; exec sleep 300' & echo ready; wait")
 	cmd.Args = incubatorChildArgv(cmd.Args)
@@ -589,19 +601,26 @@ func TestSessionMonitorTeardownKillsSamePgidStraggler(t *testing.T) {
 		}
 	}
 
-	// The conn teardown: closeConnMonitor runs the monitor's teardown,
-	// group SIGHUP (kills the leader, sweep reaps it, entry dropped),
-	// then the SIGKILL pass over the snapshot pgid set.
-	c.closeConnMonitor()
+	t.Cleanup(func() { _ = unix.Kill(-ss.monChild.PID, unix.SIGKILL) })
+	ss.hangupMonitorProcess(true)
+	if closeMonitor {
+		c.closeConnMonitor()
+	} else {
+		// Check leader exit before timer escalation.
+		if err := tstest.WaitFor(time.Second, func() error {
+			if !pidGone(ss.monChild.PID) {
+				return errors.New("leader still alive")
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if pidGone(straggler) {
+			t.Fatal("straggler did not survive HUP")
+		}
+	}
 
-	// The straggler must be dead and gone. Bound: the teardown's two
-	// sweeps (≤2s each) inside Close's 5s monitor-exit wait, plus slack.
-	// A killed straggler whose parent is gone can linger as a zombie
-	// adopted by a PID 1 that does not reap (the privileged CI
-	// container); kill(pid, 0) succeeds for zombies, so liveness is
-	// checked through the /proc state on linux, where a Z state counts
-	// as gone. Elsewhere the adopter reaps promptly and kill(pid, 0)
-	// suffices.
+	// Allow escalation and reap time. Orphaned Linux zombies count as dead.
 	deadline = time.Now().Add(monTeardownReap*2 + 5*time.Second)
 	for {
 		if pidGone(straggler) {
@@ -614,26 +633,34 @@ func TestSessionMonitorTeardownKillsSamePgidStraggler(t *testing.T) {
 	}
 }
 
-// pidGone reports whether pid no longer names a live process. On linux
-// it reads /proc: a missing entry or a zombie (state Z) means gone.
-// Elsewhere kill(pid, 0) is the check; the platforms in this file's
-// build tag reap orphans promptly, so a lingering zombie is not
-// expected there.
-func pidGone(pid int) bool {
-	if runtime.GOOS == "linux" {
-		b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-		if err != nil {
-			return true // gone
-		}
-		// The state field follows the comm field, which may contain
-		// spaces and parentheses; take the field after the last ')'.
-		i := bytes.LastIndexByte(b, ')')
-		if i < 0 || i+2 >= len(b) {
-			return false
-		}
-		return b[i+2] == 'Z'
+func TestPIDGoneWithUnreapedChild(t *testing.T) {
+	cmd := exec.Command("/bin/sleep", "300")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
 	}
-	return unix.Kill(pid, 0) != nil
+	t.Cleanup(func() {
+		cmd.Process.Kill()
+		cmd.Wait()
+	})
+	pid := cmd.Process.Pid
+	if pidGone(pid) {
+		t.Fatal("live child reported dead")
+	}
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	// Keep the child unreaped until after the liveness checks.
+	if err := tstest.WaitFor(5*time.Second, func() error {
+		if !pidGone(pid) {
+			return errors.New("unreaped child reported alive")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Kill(pid, 0); err != nil {
+		t.Fatalf("child was reaped before cleanup: %v", err)
+	}
 }
 
 // TestWaitMonitorProcessExitNotificationWins checks priority and repeatable
@@ -812,7 +839,7 @@ func TestSessionMonitorHangupEscalation(t *testing.T) {
 		t.Fatalf("child output = %q; want ready (the HUP trap is installed)", marker)
 	}
 
-	ss.hangupMonitorProcess()
+	ss.hangupMonitorProcess(true)
 
 	// The child must die via the SIGKILL escalation (128+9) within the
 	// escalation window plus slack.
@@ -1011,7 +1038,7 @@ func TestHangupMonitorProcessAfterMonitorClosed(t *testing.T) {
 		logf:     t.Logf,
 		monChild: monitorProcess{PID: cmd.Process.Pid, ID: 1},
 	}
-	if !ss.hangupMonitorProcess() {
+	if !ss.hangupMonitorProcess(true) {
 		t.Fatal("monitor session took the direct hangup path")
 	}
 	if got := c.connMonitorIfAny(); got != nil {

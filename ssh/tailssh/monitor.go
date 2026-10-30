@@ -19,9 +19,9 @@
 // localUser, is fixed in argv at spawn. Only the event loop touches
 // the RPC channel, the child table, and file descriptors.
 //
-// RPC EOF or an external SIGHUP tears the connection down. Every child
-// group is SIGHUPed, then a bounded reap sweep runs, and surviving
-// groups are SIGKILLed before the monitor exits.
+// Graceful close preserves session children unless termination is required.
+// RPC loss and external SIGHUP terminate all children. Forwarding children
+// always terminate.
 
 package tailssh
 
@@ -53,8 +53,7 @@ const (
 	// result. On expiry the child's group is SIGKILLed.
 	monFwdOpDeadline = 10 * time.Second
 
-	// monTeardownReap bounds each reap phase in teardown. The monitor
-	// stops waiting after this interval even if children remain.
+	// monTeardownReap bounds the teardown grace period and reap wait.
 	monTeardownReap = 2 * time.Second
 )
 
@@ -67,6 +66,24 @@ type monChild struct {
 	pgid    int   // the child's process group. Equal to its pid.
 	id      int64 // exec request ID, or zero for a forwarding child
 	oneshot bool  // dialer or listener child. Outcome carried by the op reply.
+
+	// killAt is the SIGKILL deadline. While nonzero, the leader remains
+	// unreaped to prevent PID and process-group reuse.
+	killAt time.Time
+}
+
+// beginTermination sends SIGHUP and sets the SIGKILL deadline once.
+func (c *monChild) beginTermination(grace time.Duration) {
+	if c.killAt.IsZero() {
+		c.killAt = time.Now().Add(grace)
+		_ = killGroup(c.pgid, unix.SIGHUP)
+	}
+}
+
+// kill sends SIGKILL and permits reaping the leader.
+func (c *monChild) kill() {
+	_ = killGroup(c.pgid, unix.SIGKILL)
+	c.killAt = time.Time{}
 }
 
 // monitor is the running ssh-monitor process state, owned entirely by
@@ -77,6 +94,12 @@ type monitor struct {
 	children map[int]*monChild
 	hup      chan os.Signal
 	broken   bool // a reply or notification write failed. Leave the loop.
+
+	// killAll requires teardown to terminate all session children.
+	killAll bool
+
+	// gracefulClose records receipt of an explicit close request.
+	gracefulClose bool
 
 	// pendingFds holds relayed dial/listen descriptors, keyed by request
 	// ID, from the reply write until tailscaled's fdack receipt. See
@@ -268,13 +291,34 @@ func (m *monitor) loop() error {
 	signal.Notify(sigchld, syscall.SIGCHLD)
 	defer signal.Stop(sigchld)
 
+	escalation := time.NewTimer(time.Hour)
+	defer escalation.Stop()
 	for {
+		escalation.Stop()
+		var next time.Time
+		for _, c := range m.children {
+			if !c.killAt.IsZero() && (next.IsZero() || c.killAt.Before(next)) {
+				next = c.killAt
+			}
+		}
+		var escalate <-chan time.Time
+		if !next.IsZero() {
+			escalation.Reset(time.Until(next))
+			escalate = escalation.C
+		}
 		select {
+		case <-escalate:
+			for _, c := range m.children {
+				if !c.killAt.IsZero() && !time.Now().Before(c.killAt) {
+					c.kill()
+				}
+			}
+			m.sweep(m.children, true)
 		case <-m.hup:
 			m.teardown()
 			return nil
 		case <-sigchld:
-			m.sweep(true)
+			m.sweep(m.children, true)
 		case ev := <-events:
 			if ev.err != nil {
 				// EOF, an I/O error, or a protocol error means the
@@ -283,7 +327,7 @@ func (m *monitor) loop() error {
 				return nil
 			}
 			m.handle(ev.f, ev.fds)
-			if m.broken {
+			if m.broken || m.gracefulClose {
 				m.teardown()
 				return nil
 			}
@@ -308,6 +352,16 @@ func (m *monitor) handle(f rpcFrame, fds []int) {
 	case opSignal:
 		closeFds(fds)
 		m.handleSignal(f)
+	case opTerminate:
+		closeFds(fds)
+		m.handleTerminate(f)
+	case opClose:
+		closeFds(fds)
+		m.gracefulClose = true
+		m.reply(rpcOKReply(f.ID, opClose))
+	case opKillAll:
+		closeFds(fds)
+		m.handleKillAll(f)
 	case opFdAck:
 		closeFds(fds)
 		if fds, ok := m.pendingFds[f.ID]; ok {
@@ -512,6 +566,21 @@ func (m *monitor) handleSignal(f rpcFrame) {
 	m.reply(rpcOKReply(f.ID, opSignal))
 }
 
+// handleTerminate schedules group termination before acknowledging the request.
+func (m *monitor) handleTerminate(f rpcFrame) {
+	c, ok := m.children[f.Pid]
+	if !ok || f.ChildID == 0 || c.id != f.ChildID {
+		m.reply(rpcErrReply(f.ID, opTerminate, fmt.Errorf("terminate: stale child handle")))
+		return
+	}
+	if f.Grace <= 0 {
+		m.reply(rpcErrReply(f.ID, opTerminate, fmt.Errorf("terminate: invalid grace period")))
+		return
+	}
+	c.beginTermination(f.Grace)
+	m.reply(rpcOKReply(f.ID, opTerminate))
+}
+
 // killGroup signals the process group pgid with kill(-pgid, sig), so
 // a child's descendants, such as a shell's subprocesses, die with it.
 func killGroup(pgid int, sig unix.Signal) error {
@@ -661,22 +730,26 @@ func (m *monitor) replyFD(f rpcFrame, fds ...int) {
 	m.pendingFds[f.ID] = fds
 }
 
-// sweep reaps exited children with wait4(WNOHANG) and drops them from
-// the child table. With notify set, it emits one unsolicited exit
-// notification per reaped pid.
-func (m *monitor) sweep(notify bool) {
-	for pid, c := range m.children {
+// sweep reaps exited children from the given set and removes them from both
+// the set and m.children. If notify is true, it reports session exit statuses.
+func (m *monitor) sweep(children map[int]*monChild, notify bool) {
+	for pid, c := range children {
+		if !c.killAt.IsZero() {
+			continue // Retain the leader until group SIGKILL.
+		}
 		var ws unix.WaitStatus
 		wpid, err := unix.Wait4(pid, &ws, unix.WNOHANG, nil)
 		switch {
 		case err != nil:
 			// ECHILD means not our child or already reaped. Forget it
 			// either way.
+			delete(children, pid)
 			delete(m.children, pid)
 		case wpid == pid:
 			if notify && !c.oneshot {
 				m.notifyExit(monitorProcess{PID: pid, ID: c.id}, monExitCode(ws))
 			}
+			delete(children, pid)
 			delete(m.children, pid)
 		}
 		// wpid == 0: still running.
@@ -726,50 +799,47 @@ func (m *monitor) notifyExit(child monitorProcess, code int) {
 	m.reply(rpcExitNotify(child, code))
 }
 
-// teardown is the monitor's orderly exit path, reached from RPC EOF, a
-// protocol error, or an external SIGHUP. It SIGHUPs every child group,
-// runs a brief bounded reap sweep, then SIGKILLs every group that
-// survived the HUP and reaps again. A session-level escalation timer
-// in sessmonitor.go, when one was scheduled, fails its Signal against
-// this closed RPC channel, so the monitor's own teardown performs the
-// SIGKILL. Children that survive even the SIGKILL are abandoned in
-// their own groups.
+// handleKillAll requires connection-wide termination at teardown.
+func (m *monitor) handleKillAll(f rpcFrame) {
+	m.killAll = true
+	m.reply(rpcOKReply(f.ID, opKillAll))
+}
+
+// teardown sends SIGHUP, waits for the grace period, then sends SIGKILL and reaps.
+// Graceful close targets forwarding children and sessions with pending termination.
+// RPC loss, external SIGHUP, and revocation target all children.
+// Leaders remain unreaped until SIGKILL to prevent PID and process-group reuse.
 func (m *monitor) teardown() {
 	// Close descriptors whose receipt has not been acknowledged.
 	for id, fds := range m.pendingFds {
 		closeFds(fds)
 		delete(m.pendingFds, id)
 	}
-	// Snapshot the pgid set at teardown entry. A group member can
-	// outlive its reaped leader, so the SIGKILL pass keys on this
-	// remembered set rather than on surviving table entries.
-	pgids := make(map[int]struct{}, len(m.children))
-	for _, c := range m.children {
-		pgids[c.pgid] = struct{}{}
-	}
-	for _, c := range m.children {
-		// ESRCH means already gone and the like. Nothing to do.
-		_ = killGroup(c.pgid, unix.SIGHUP)
-	}
-	deadline := time.Now().Add(monTeardownReap)
-	for len(m.children) > 0 && time.Now().Before(deadline) {
-		// Silent sweep. The peer is gone or going, so notifications
-		// have nowhere to go.
-		m.sweep(false)
-		if len(m.children) > 0 {
-			time.Sleep(20 * time.Millisecond)
+	toKill := make(map[int]*monChild, len(m.children))
+	killAll := !m.gracefulClose || m.broken || m.killAll
+	for pid, c := range m.children {
+		if killAll || c.id == 0 || !c.killAt.IsZero() {
+			toKill[pid] = c
 		}
 	}
-	if len(pgids) > 0 {
-		// Kill surviving group members even if their leader has exited,
-		// then wait for children to exit for at most monTeardownReap.
-		for pgid := range pgids {
-			_ = killGroup(pgid, unix.SIGKILL)
+	if len(toKill) > 0 {
+		deadline := time.Now().Add(monTeardownReap)
+		for _, c := range toKill {
+			c.beginTermination(monTeardownReap)
+			if c.killAt.Before(deadline) {
+				deadline = c.killAt
+			}
+		}
+		// Allow SIGHUP handlers to run before SIGKILL. Keep leaders
+		// unreaped during the grace period to reserve their process groups.
+		time.Sleep(time.Until(deadline))
+		for _, c := range toKill {
+			c.kill()
 		}
 		deadline = time.Now().Add(monTeardownReap)
-		for len(m.children) > 0 && time.Now().Before(deadline) {
-			m.sweep(false)
-			if len(m.children) > 0 {
+		for len(toKill) > 0 && time.Now().Before(deadline) {
+			m.sweep(toKill, false)
+			if len(toKill) > 0 {
 				time.Sleep(20 * time.Millisecond)
 			}
 		}

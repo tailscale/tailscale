@@ -15,9 +15,11 @@ import (
 	"time"
 )
 
-// TestMonitorExecCancellationAfterDispatch delays the exec reply until after
-// cancellation. The session must retain the child handle and terminate it.
-func TestMonitorExecCancellationAfterDispatch(t *testing.T) {
+// newTestMonitorClient connects a monitorClient to a fake RPC peer.
+// Cleanup closes the socket and waits for the read loop.
+// The client has no child process and cannot use [monitorClient.Close].
+func newTestMonitorClient(t *testing.T) (*monitorClient, *rpcConn) {
+	t.Helper()
 	client, peer := rpcTestPair(t)
 	mc := &monitorClient{
 		c:       client.c,
@@ -30,6 +32,13 @@ func TestMonitorExecCancellationAfterDispatch(t *testing.T) {
 		client.c.Close()
 		<-mc.done
 	})
+	return mc, peer
+}
+
+// TestMonitorExecCancellationAfterDispatch delays the exec reply until after
+// cancellation. The session must retain the child handle and terminate it.
+func TestMonitorExecCancellationAfterDispatch(t *testing.T) {
+	mc, peer := newTestMonitorClient(t)
 	c := &conn{srv: &server{logf: t.Logf}}
 	c.monitor.mon = mc
 	mc.SetExitCallback(c.monitor.exits.dispatchExit)
@@ -73,16 +82,16 @@ func TestMonitorExecCancellationAfterDispatch(t *testing.T) {
 	}
 
 	hungup := make(chan bool, 1)
-	go func() { hungup <- ss.hangupMonitorProcess() }()
+	go func() { hungup <- ss.hangupMonitorProcess(true) }()
 	frame, fds, err = peer.readFrame()
 	closeFds(fds)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if frame.Op != opSignal || frame.Pid != child.PID || frame.ChildID != child.ID || frame.Sig != "SIGHUP" {
+	if frame.Op != opTerminate || frame.Pid != child.PID || frame.ChildID != child.ID || frame.Grace <= 0 {
 		t.Fatalf("hangup frame=%+v", frame)
 	}
-	if err := peer.writeFrame(rpcOKReply(frame.ID, opSignal)); err != nil {
+	if err := peer.writeFrame(rpcOKReply(frame.ID, opTerminate)); err != nil {
 		t.Fatal(err)
 	}
 	if !<-hungup {
@@ -96,13 +105,52 @@ func TestMonitorExecCancellationAfterDispatch(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("exit notification not delivered")
 	}
-	// Escalation must neither consume the result nor send another signal.
-	ss.escalateMonitorProcess(mc)
+	// Each wait must return the same exit status.
 	for range 2 {
 		code, ok, err := ss.waitMonitorProcess()
 		if code != 129 || !ok || err != nil {
 			t.Fatalf("wait=(%d,%v,%v)", code, ok, err)
 		}
+	}
+}
+
+// TestMonitorPolicyCancellationWaitsForCommit checks that cancellation is
+// published only after the monitor acknowledges termination.
+func TestMonitorPolicyCancellationWaitsForCommit(t *testing.T) {
+	mc, peer := newTestMonitorClient(t)
+	c := &conn{}
+	c.monitor.mon = mc
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	ss := &sshSession{conn: c, ctx: ctx, cancelCtx: cancel, logf: t.Logf,
+		osSessionState: osSessionState{monChild: monitorProcess{PID: 42, ID: 1}},
+	}
+	finished := make(chan struct{})
+	go func() {
+		ss.cancelWithTermination(userVisibleError{msg: "policy termination", error: context.DeadlineExceeded})
+		close(finished)
+	}()
+	frame, fds, err := peer.readFrame()
+	closeFds(fds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Op != opTerminate || frame.Pid != 42 || frame.ChildID != 1 {
+		t.Fatalf("termination frame = %+v", frame)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("cancellation published before monitor acknowledgment")
+	}
+	if err := peer.writeFrame(rpcOKReply(frame.ID, opTerminate)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("policy cancellation did not finish")
+	}
+	if _, ok := context.Cause(ctx).(SSHTerminationError); !ok {
+		t.Fatalf("cancellation cause = %v; want SSHTerminationError", context.Cause(ctx))
 	}
 }
 
@@ -160,26 +208,15 @@ func TestMonitorWriteFailureClosesChannel(t *testing.T) {
 			name = "partial_write"
 		}
 		t.Run(name, func(t *testing.T) {
-			client, peer := rpcTestPair(t)
-			mc := &monitorClient{
-				c:       client.c,
-				rpc:     client,
-				pending: make(map[int64]chan *rpcResult),
-				done:    make(chan struct{}),
-			}
-			go mc.readLoop()
-			t.Cleanup(func() {
-				client.c.Close()
-				<-mc.done
-			})
+			mc, peer := newTestMonitorClient(t)
 			frame := rpcPingReq(0)
 			if partial {
-				if err := client.c.SetWriteBuffer(1024); err != nil {
+				if err := mc.c.SetWriteBuffer(1024); err != nil {
 					t.Fatal(err)
 				}
-				client.writeTimeout = 100 * time.Millisecond
+				mc.rpc.writeTimeout = 100 * time.Millisecond
 				frame = rpcExecReq(0, []string{strings.Repeat("x", 100<<10)}, nil, "", false, false, 0)
-			} else if err := client.c.CloseWrite(); err != nil {
+			} else if err := mc.c.CloseWrite(); err != nil {
 				t.Fatal(err)
 			}
 			if _, _, err := mc.call(mustCtx(t), frame); err == nil {
@@ -206,18 +243,7 @@ func TestMonitorWriteFailureClosesChannel(t *testing.T) {
 }
 
 func TestMonitorReadFailureClosesChannel(t *testing.T) {
-	client, peer := rpcTestPair(t)
-	mc := &monitorClient{
-		c:       client.c,
-		rpc:     client,
-		pending: make(map[int64]chan *rpcResult),
-		done:    make(chan struct{}),
-	}
-	go mc.readLoop()
-	t.Cleanup(func() {
-		client.c.Close()
-		<-mc.done
-	})
+	mc, peer := newTestMonitorClient(t)
 	if _, err := peer.c.Write([]byte("invalid JSON\n")); err != nil {
 		t.Fatal(err)
 	}
