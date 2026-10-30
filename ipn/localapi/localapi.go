@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
+	"golang.org/x/net/http/httpguts"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
 	"tailscale.com/feature"
@@ -1307,7 +1308,7 @@ func (h *Handler) serveDial(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	const upgradeProto = "ts-dial"
-	if !strings.Contains(r.Header.Get("Connection"), "upgrade") ||
+	if !httpguts.HeaderValuesContainsToken(r.Header["Connection"], "upgrade") ||
 		r.Header.Get("Upgrade") != upgradeProto {
 		http.Error(w, "bad ts-dial upgrade", http.StatusBadRequest)
 		return
