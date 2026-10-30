@@ -373,6 +373,7 @@ type LocalBackend struct {
 	authURL           string        // non-empty if not Running; TODO(nickkhyl): move to nodeBackend
 	authURLTime       time.Time     // when the authURL was received from the control server; TODO(nickkhyl): move to nodeBackend
 	authActor         ipnauth.Actor // an actor who called [LocalBackend.StartLoginInteractive] last, or nil; TODO(nickkhyl): move to nodeBackend
+	authKeyPending    bool          // startLocked logged in with the [pkey.AuthKey] policy setting and control hasn't answered; see [LocalBackend.StartLoginInteractiveAs]
 	egg               bool
 	interfaceState    *netmon.State      // latest network interface state or nil
 	peerAPIServer     *peerAPIServer     // or nil
@@ -1920,7 +1921,14 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 			b.setNodeRemovedLocked(true)
 			b.stateMachineLocked()
 		}
+		b.authKeyPending = false
 		return
+	}
+
+	// Control wants a URL visited, so the login startLocked began with the
+	// policy auth key is over and an interactive one is free to start.
+	if st.URL != "" {
+		b.authKeyPending = false
 	}
 
 	// Track the number of calls
@@ -2054,6 +2062,13 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		}
 
 		b.sendToLocked(ipn.Notify{Prefs: new(prefs.View())}, allClients)
+	}
+
+	// The auth key login finished and the node key it registered is now in
+	// prefs, so an interactive login would no longer discard it. Release the
+	// guard taken in startLocked.
+	if b.authKeyPending && b.hasNodeKeyLocked() {
+		b.authKeyPending = false
 	}
 
 	// initTKALocked is dependent on CurrentProfile.ID, which is initialized
@@ -3128,10 +3143,20 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.startLocked(opts)
+	return b.startLocked(opts, startFromCaller)
 }
 
-func (b *LocalBackend) startLocked(opts ipn.Options) error {
+// startReason distinguishes a [LocalBackend.Start] from the restarts the
+// backend performs on itself, which must not be mistaken for the backend
+// starting up.
+type startReason bool
+
+const (
+	startFromCaller startReason = false // a caller called [LocalBackend.Start]
+	startAfterReset startReason = true  // [LocalBackend.resetForProfileChangeLocked]
+)
+
+func (b *LocalBackend) startLocked(opts ipn.Options, why startReason) error {
 	b.logf("Start")
 	logf := logger.WithPrefix(b.logf, "Start: ")
 	b.startOnce.Do(b.initOnce)
@@ -3161,6 +3186,10 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		opts.AuthKey = v
 	}
 
+	// authKeyFromPolicy tracks whether opts.AuthKey came from the [pkey.AuthKey]
+	// policy setting, as opposed to from a caller (tailscale up --auth-key,
+	// tsnet, --config) that drives its own login. See the switch below.
+	var authKeyFromPolicy bool
 	if b.state != ipn.Running && b.conf == nil && opts.AuthKey == "" {
 		sysak, _ := b.polc.GetString(pkey.AuthKey, "")
 		if sysak != "" && len(b.pm.Profiles()) > 0 && b.state != ipn.NeedsLogin {
@@ -3168,7 +3197,14 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		} else if sysak != "" {
 			logf("setting opts.AuthKey by syspolicy, len=%v", len(sysak))
 			opts.AuthKey = strings.TrimSpace(sysak)
+			authKeyFromPolicy = true
 		}
+	}
+	// connectAutomatically is whether to log in with that key ourselves, rather
+	// than leaving it staged for whoever logs in next. See the switch below.
+	connectAutomatically := false
+	if authKeyFromPolicy && why == startFromCaller {
+		connectAutomatically, _ = b.polc.GetBoolean(pkey.AuthKeyConnectAutomatically, false)
 	}
 
 	hostinfo := hostinfo.New()
@@ -3217,6 +3253,12 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 	if b.reconcilePrefsLocked(newPrefs) {
 		prefsChanged = true
 		prefsChangedWhy = append(prefsChangedWhy, "reconcilePrefsLocked")
+	}
+
+	if connectAutomatically && !newPrefs.WantRunning {
+		newPrefs.WantRunning = true
+		prefsChanged = true
+		prefsChangedWhy = append(prefsChangedWhy, "AuthKey.ConnectAutomatically")
 	}
 
 	// neither UpdatePrefs or reconciliation should change Persist
@@ -3389,7 +3431,8 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		fs.SetShares(shares)
 	}
 
-	if !loggedOut && (b.hasNodeKeyLocked() || confWantRunning) {
+	switch {
+	case !loggedOut && (b.hasNodeKeyLocked() || confWantRunning):
 		// If we know that we're either logged in or meant to be
 		// running, tell the controlclient that it should also assume
 		// that we need to be logged in.
@@ -3397,6 +3440,9 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		// Without this, the state machine transitions to "NeedsLogin" implying
 		// that user interaction is required, which is not the case and can
 		// regress tsnet.Server restarts.
+		cc.Login(b.loginFlags)
+	case connectAutomatically:
+		b.authKeyPending = true
 		cc.Login(b.loginFlags)
 	}
 	b.stateMachineLocked()
@@ -4783,6 +4829,18 @@ func (b *LocalBackend) StartLoginInteractiveAs(ctx context.Context, user ipnauth
 	if b.cc == nil {
 		panic("LocalBackend.assertClient: b.cc == nil")
 	}
+	if b.authKeyPending && !b.hasNodeKeyLocked() {
+		// Logging in again would cancel the registration startLocked began and
+		// request a second node key, which fails if control already accepted
+		// the first and spent the single-use key. Wait for it instead; the
+		// caller watches the IPN bus and sees the result either way.
+		b.logf("StartLoginInteractiveAs(%q): awaiting the in-flight syspolicy auth key login", maybeUsernameOf(user))
+		if user != nil {
+			b.authActor = user
+		}
+		return nil
+	}
+
 	url := b.authURL
 	keyExpired := b.keyExpired
 	timeSinceAuthURLCreated := b.clock.Since(b.authURLTime)
@@ -7141,6 +7199,7 @@ func (b *LocalBackend) resetControlClientLocked() controlclient.Client {
 	}
 
 	b.resetAuthURLLocked()
+	b.authKeyPending = false
 
 	// When we clear the control client, stop any outstanding netmap expiry
 	// timer; synthesizing a new netmap while we don't have a control
@@ -8596,7 +8655,7 @@ func (b *LocalBackend) resetForProfileChangeLocked() error {
 	if tkaErr != nil {
 		return tkaErr
 	}
-	return b.startLocked(ipn.Options{})
+	return b.startLocked(ipn.Options{}, startAfterReset)
 }
 
 // DeleteProfile deletes a profile with the given ID.

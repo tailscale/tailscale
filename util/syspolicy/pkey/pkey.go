@@ -170,6 +170,13 @@ const (
 	// automatically authenticate managed devices, without requiring user interaction.
 	AuthKey Key = "AuthKey"
 
+	// AuthKeyConnectAutomatically is a boolean key that makes the backend log in
+	// with [AuthKey] and start running as soon as it starts, rather than waiting
+	// for a client to ask it to. It has no effect when [AuthKey] is unset, or on
+	// a device that has already logged in. It does not require [AlwaysOn], but
+	// is needed with it, where no client ever asks.
+	AuthKeyConnectAutomatically Key = "AuthKey.ConnectAutomatically"
+
 	// MachineCertificateSubject is the exact name of a Subject that needs
 	// to be present in an identity's certificate chain to sign a RegisterRequest,
 	// formatted as per pkix.Name.String(). The Subject may be that of the identity
