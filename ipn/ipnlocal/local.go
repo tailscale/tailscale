@@ -3156,6 +3156,11 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		opts.AuthKey = v
 	}
 
+	// authKeyFromPolicy tracks whether opts.AuthKey came from the [pkey.AuthKey]
+	// policy setting, in which case the admin wants this device to authenticate
+	// without any user interaction, and we log in below without waiting for a
+	// client to ask us to.
+	var authKeyFromPolicy bool
 	if b.state != ipn.Running && b.conf == nil && opts.AuthKey == "" {
 		sysak, _ := b.polc.GetString(pkey.AuthKey, "")
 		if sysak != "" && len(b.pm.Profiles()) > 0 && b.state != ipn.NeedsLogin {
@@ -3163,6 +3168,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		} else if sysak != "" {
 			logf("setting opts.AuthKey by syspolicy, len=%v", len(sysak))
 			opts.AuthKey = strings.TrimSpace(sysak)
+			authKeyFromPolicy = true
 		}
 	}
 
@@ -3383,7 +3389,8 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		fs.SetShares(shares)
 	}
 
-	if !loggedOut && (b.hasNodeKeyLocked() || confWantRunning) {
+	switch {
+	case !loggedOut && (b.hasNodeKeyLocked() || confWantRunning):
 		// If we know that we're either logged in or meant to be
 		// running, tell the controlclient that it should also assume
 		// that we need to be logged in.
@@ -3391,6 +3398,10 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		// Without this, the state machine transitions to "NeedsLogin" implying
 		// that user interaction is required, which is not the case and can
 		// regress tsnet.Server restarts.
+		cc.Login(b.loginFlags)
+	case authKeyFromPolicy && wantRunning:
+		// Log in automatically using the auth key whenever the backend starts.
+		logf("logging in with the auth key from syspolicy")
 		cc.Login(b.loginFlags)
 	}
 	b.stateMachineLocked()
