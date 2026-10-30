@@ -25,12 +25,17 @@ pkgs.testers.runNixOSTest {
     headscale1 = mkHeadscaleNode "100.64.0.0/24";
     headscale2 = mkHeadscaleNode "100.64.1.0/24";
 
-    # Client running two Tailscale instances (userspace mode by default)
+    # Client running two Tailscale instances (userspace mode by default).
+    # net2 joins unattended: the test drops its key in /tmp/shared first.
     client = {
       imports = [self.nixosModules.override];
       services.tailscales = {
         net1.enable = true;
-        net2.enable = true;
+        net2 = {
+          enable = true;
+          authKeyFile = "/tmp/shared/authkey2";
+          extraUpFlags = ["--login-server=http://headscale2"];
+        };
       };
     };
 
@@ -45,23 +50,31 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
-    start_all()
+    headscale1.start()
+    headscale2.start()
+    peer1.start()
+
+    authkey1 = headscale1.succeed("hs-authkey user1").strip()
+    authkey2 = headscale2.succeed("hs-authkey user2").strip()
+    (client.shared_dir / "authkey2").write_text(authkey2)
+    client.start()
 
     # Wait for client's tailscaled instances
     client.wait_for_unit("tailscaled-net1.service")
     client.wait_for_unit("tailscaled-net2.service")
     peer1.wait_for_unit("tailscaled.service")
 
-    authkey1 = headscale1.succeed("hs-authkey user1").strip()
-    authkey2 = headscale2.succeed("hs-authkey user2").strip()
-
-    # Join client's instances to their respective headscale servers.
+    # net1 joins by hand through its CLI wrapper.
     client.succeed(
         f"tailscale-net1 up --login-server http://headscale1 --auth-key {authkey1}"
     )
-    client.succeed(
-        f"tailscale-net2 up --login-server http://headscale2 --auth-key {authkey2}"
+
+    # net2's autoconnect must have run on its own socket. A unit that never
+    # ran also reads Result=success, so key on its main process exiting.
+    client.wait_until_succeeds(
+        'test "$(systemctl show -p ExecMainExitTimestampMonotonic --value tailscaled-net2-autoconnect)" != 0'
     )
+    client.succeed("systemctl show -p Result --value tailscaled-net2-autoconnect | grep -x success")
 
     # Join peer1 to headscale1. Not hs-join: it hardcodes http://headscale
     # and the tailscale CLI rejects a repeated --login-server.
