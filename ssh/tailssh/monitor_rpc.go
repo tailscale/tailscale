@@ -51,13 +51,16 @@ import (
 
 // Monitor RPC operations.
 const (
-	opDial   = "dial"   // request {net:"unix"|"tcp", addr}. reply {ok} + socket (and lifetime pipe writer for unix)
-	opListen = "listen" // request {net:"unix"|"tcp", addr, unlink?, agent?}. reply {ok, path} + listener fd
-	opExec   = "exec"   // request {argv, env, dir?, ctty?, envfd?, fds:0-4} + SCM_RIGHTS fds. reply {ok, pid, childID}
-	opSignal = "signal" // request {pid, childID, sig}. reply {ok}
-	opPing   = "ping"   // request {}. reply {ok}
-	opExit   = "exit"   // unsolicited notification {pid, childID, code}. no request ID
-	opFdAck  = "fdack"  // request {id of the reply whose descriptors were received}. no fds, no reply
+	opDial      = "dial"      // request {net:"unix"|"tcp", addr}. reply {ok} + socket (and lifetime pipe writer for unix)
+	opListen    = "listen"    // request {net:"unix"|"tcp", addr, unlink?, agent?}. reply {ok, path} + listener fd
+	opExec      = "exec"      // request {argv, env, dir?, ctty?, envfd?, fds:0-4} + SCM_RIGHTS fds. reply {ok, pid, childID}
+	opSignal    = "signal"    // request {pid, childID, sig}. reply {ok}
+	opTerminate = "terminate" // request {pid, childID, grace}. reply {ok}. Schedule group termination
+	opClose     = "close"     // request {}. reply {ok}. Graceful teardown
+	opPing      = "ping"      // request {}. reply {ok}
+	opKillAll   = "killall"   // request {}. reply {ok}. Terminate all session children at teardown
+	opExit      = "exit"      // unsolicited notification {pid, childID, code}. no request ID
+	opFdAck     = "fdack"     // request {id of the reply whose descriptors were received}. no fds, no reply
 )
 
 const (
@@ -125,11 +128,12 @@ type rpcFrame struct {
 	// this flag is not a privilege boundary against tailscaled.
 	Incubator bool `json:"incubator,omitzero"`
 
-	// signal request, exit notification, and exec reply.
-	Pid     int    `json:"pid,omitzero"`
-	ChildID int64  `json:"childID,omitzero"` // exec request ID; required for signals
-	Sig     string `json:"sig,omitempty"`
-	Code    int    `json:"code,omitzero"` // exit notification only
+	// Signal and terminate requests, exit notifications, and exec replies.
+	Pid     int           `json:"pid,omitzero"`
+	ChildID int64         `json:"childID,omitzero"` // exec request ID; required for signals
+	Sig     string        `json:"sig,omitempty"`
+	Code    int           `json:"code,omitzero"`  // exit notification only
+	Grace   time.Duration `json:"grace,omitzero"` // HUP-to-KILL delay for terminate
 
 	// Reply fields.
 	OK   bool   `json:"ok,omitzero"`
@@ -139,6 +143,10 @@ type rpcFrame struct {
 
 func rpcPingReq(id int64) rpcFrame {
 	return rpcFrame{ID: id, Op: opPing}
+}
+
+func rpcKillAllReq(id int64) rpcFrame {
+	return rpcFrame{ID: id, Op: opKillAll}
 }
 
 func rpcDialReq(id int64, network, addr string) rpcFrame {
@@ -151,6 +159,10 @@ func rpcListenReq(id int64, network, addr string, unlink, agent bool) rpcFrame {
 
 func rpcExecReq(id int64, argv, env []string, dir string, ctty, envFd bool, nfds int) rpcFrame {
 	return rpcFrame{ID: id, Op: opExec, Argv: argv, Env: env, Dir: dir, Ctty: ctty, EnvFd: envFd, Fds: nfds}
+}
+
+func rpcTerminateReq(child monitorProcess, grace time.Duration) rpcFrame {
+	return rpcFrame{Op: opTerminate, Pid: child.PID, ChildID: child.ID, Grace: grace}
 }
 
 func rpcSignalReq(id int64, child monitorProcess, sig string) rpcFrame {

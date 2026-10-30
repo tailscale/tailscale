@@ -552,9 +552,7 @@ func TestMonitorBadExec(t *testing.T) {
 	}
 }
 
-// TestMonitorTeardown closes the client and asserts the teardown path.
-// The monitor exits promptly, through EOF, group SIGHUP, reaping,
-// SIGKILL of survivors, and exit 0. Its children die with it.
+// TestMonitorTeardown checks that KillAll followed by Close terminates children.
 func TestMonitorTeardown(t *testing.T) {
 	mc := startTestMonitor(t, os.Getuid(), os.Getgid(), testGroups(t))
 	exits := collectExits(mc)
@@ -563,13 +561,17 @@ func TestMonitorTeardown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exec sleep: %v", err)
 	}
+	if err := mc.KillAll(mustCtx(t)); err != nil {
+		t.Fatal(err)
+	}
 
 	start := time.Now()
 	if err := mc.Close(); err != nil {
 		t.Fatalf("close: monitor did not exit cleanly: %v", err)
 	}
-	if d := time.Since(start); d > 2*time.Second {
-		t.Errorf("monitor teardown took %v, want < 2s", d)
+	// Allow one grace period, one reap period, and scheduling slack.
+	if d := time.Since(start); d > 2*monTeardownReap+time.Second {
+		t.Errorf("monitor teardown took %v, want at most %v", d, 2*monTeardownReap+time.Second)
 	}
 
 	// The sleep child must be dead. The monitor was its parent, so it is
