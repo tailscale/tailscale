@@ -606,7 +606,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 
 	eventbus.SubscribeFunc(ec, func(update events.DiscoKeyAdvertisement) {
-		e.logf("[v1] wgengine: got TSMP disco key advertisement from %v via eventbus", update.Src)
 		if e.magicConn == nil {
 			e.logf("wgengine: no magicConn")
 			return

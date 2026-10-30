@@ -906,7 +906,9 @@ func (nb *nodeBackend) discoChanged(pub key.NodePublic, prev, cur key.DiscoPubli
 		return false
 	}
 
-	nb.logf("nodeBackend: peer %s disco key changed from %q to %q", pub.ShortString(), prev, cur)
+	if !prev.IsZero() {
+		nb.logf("nodeBackend: peer %s disco key changed from %q to %q", pub.ShortString(), prev, cur)
+	}
 	return true
 }
 

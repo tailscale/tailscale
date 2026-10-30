@@ -4650,11 +4650,11 @@ func (c *Conn) PeerRelays() set.Set[netip.Addr] {
 func (c *Conn) HandleDiscoKeyAdvertisement(node tailcfg.NodeView, update packet.TSMPDiscoKeyAdvertisement) {
 	discoKey := update.Key
 	if discoKey.IsZero() {
-		c.logf("[v1] magicsock: received zero disco key update from %v", node.StableID())
+		c.dlogf("[v1] magicsock: received zero disco key update from %v", node.StableID())
 		return
 	}
 
-	c.logf("[v1] magicsock: received disco key update %v from %v", discoKey.ShortString(), node.StableID())
+	c.dlogf("[v1] magicsock: received disco key update %v from %v", discoKey.ShortString(), node.StableID())
 	metricTSMPDiscoKeyAdvertisementReceived.Add(1)
 
 	c.mu.Lock()
@@ -4663,7 +4663,7 @@ func (c *Conn) HandleDiscoKeyAdvertisement(node tailcfg.NodeView, update packet.
 
 	ep, ok := c.peerMap.endpointForNodeKey(nodeKey)
 	if !ok {
-		c.logf("magicsock: endpoint not found for node %v", nodeKey.ShortString())
+		c.dlogf("[v1] magicsock: endpoint not found for node %v", nodeKey.ShortString())
 		return
 	}
 
@@ -4675,7 +4675,7 @@ func (c *Conn) HandleDiscoKeyAdvertisement(node tailcfg.NodeView, update packet.
 	// If the key did not change, count it and return.
 	if oldDiscoKey.Compare(discoKey) == 0 {
 		metricTSMPDiscoKeyAdvertisementUnchanged.Add(1)
-		c.logf("[v1] magicsock: disco key did not change for node %v", nodeKey.ShortString())
+		c.dlogf("[v1] magicsock: disco key did not change for node %v", nodeKey.ShortString())
 		return
 	}
 	c.discoInfoForKnownPeerLocked(discoKey)
