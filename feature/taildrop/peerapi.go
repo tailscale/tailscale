@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"tailscale.com/ipn/ipnlocal"
@@ -21,6 +22,9 @@ import (
 
 var (
 	metricPutCalls = clientmetric.NewCounter("peerapi_put")
+	// Publish consent counters only in the enablement commit.
+	metricConsentApproved = new(atomic.Int64)
+	metricConsentDenied   = new(atomic.Int64)
 )
 
 // canPutFile reports whether h can put a file ("Taildrop") to this node.
@@ -134,7 +138,7 @@ func handlePeerPutWithBackend(h ipnlocal.PeerAPIHandler, ext extensionForPut, w 
 			}
 			offset = ranges[0].Start
 		}
-		n, err := taildropMgr.PutFile(clientID(fmt.Sprint(id)), baseName, r.Body, offset, r.ContentLength)
+		n, err := taildropMgr.legacyPutFile(clientID(fmt.Sprint(id)), baseName, r.Body, offset, r.ContentLength)
 		switch err {
 		case nil:
 			d := ext.Clock().Since(t0).Round(time.Second / 10)

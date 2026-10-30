@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"unicode"
 	"unicode/utf8"
@@ -87,6 +88,18 @@ type managerOptions struct {
 	// to the function when reception completes.
 	// It is not called if nil.
 	SendFileNotify func()
+
+	// ConsentForOwnDevices retains the explicit testing override, gated by opt-in.
+	// Authorization always exempts same-user transfers, even with this override.
+	ConsentForOwnDevices func() bool
+
+	// AllowExternalTaildrop must be enabled before cross-user requests may prompt.
+	AllowExternalTaildrop func() bool
+
+	// NotifyConsent is called whenever the set of transfers awaiting the
+	// device owner's approval changes, so the host application can present or
+	// dismiss a prompt. It is not called if nil.
+	NotifyConsent func()
 }
 
 // manager manages the state for receiving and managing taildropped files.
@@ -103,6 +116,29 @@ type manager struct {
 	// emptySince specifies that there were no waiting files
 	// since this value of totalReceived.
 	emptySince atomic.Int64
+
+	// consent holds pending consent requests and issued consent tokens.
+	// See consent.go.
+	consent consentStore
+
+	// consentWake signals the expiry worker to recompute its next deadline
+	// after consent state changes. Its buffer coalesces multiple wakeups.
+	consentWake chan struct{}
+
+	// consentStop is closed by Shutdown to stop the consent expiry worker.
+	consentStop chan struct{}
+
+	// consentDone is closed when the expiry worker exits, or by Shutdown if
+	// the worker never started. Shutdown waits on it before returning.
+	consentDone chan struct{}
+
+	// consentStopOnce ensures Shutdown closes consentStop at most once.
+	consentStopOnce sync.Once
+
+	// consentStartOnce starts the expiry worker at most once, on first use.
+	// Shutdown also uses it to prevent a later start and close consentDone
+	// if the worker never started.
+	consentStartOnce sync.Once
 }
 
 // New initializes a new taildrop manager.
@@ -115,7 +151,12 @@ func (opts managerOptions) New() *manager {
 	if opts.SendFileNotify == nil {
 		opts.SendFileNotify = func() {}
 	}
-	m := &manager{opts: opts}
+	m := &manager{
+		opts:        opts,
+		consentWake: make(chan struct{}, 1),
+		consentStop: make(chan struct{}),
+		consentDone: make(chan struct{}),
+	}
 	m.deleter.Init(m, func(string) {})
 	m.emptySince.Store(-1) // invalidate this cache
 	return m
@@ -125,6 +166,9 @@ func (opts managerOptions) New() *manager {
 // It blocks until all spawned goroutines have stopped running.
 func (m *manager) Shutdown() {
 	if m != nil {
+		m.consentStopOnce.Do(func() { close(m.consentStop) })
+		m.consentStartOnce.Do(func() { close(m.consentDone) })
+		<-m.consentDone
 		m.deleter.shutdown()
 		m.deleter.group.Wait()
 	}
