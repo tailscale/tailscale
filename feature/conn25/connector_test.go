@@ -53,14 +53,14 @@ func TestConnectorExpireTransitIPs(t *testing.T) {
 		})
 	}
 
-	register(peerANode, tipOne, netip.MustParseAddr("10.0.0.1"))
-	register(peerANode, tipFour, netip.MustParseAddr("10.0.0.4"))
-	register(peerBNode, tipThree, netip.MustParseAddr("10.0.0.3"))
+	register(peerANode, tipOne, netip.MustParseAddr("203.0.113.1"))
+	register(peerANode, tipFour, netip.MustParseAddr("203.0.113.4"))
+	register(peerBNode, tipThree, netip.MustParseAddr("203.0.113.3"))
 
 	clock.Advance(30 * time.Minute)
-	register(peerANode, tipTwo, netip.MustParseAddr("10.0.0.2"))
+	register(peerANode, tipTwo, netip.MustParseAddr("203.0.113.2"))
 	// write over the tipFour mapping, with a different dst
-	register(peerANode, tipFour, netip.MustParseAddr("10.0.0.5"))
+	register(peerANode, tipFour, netip.MustParseAddr("203.0.113.5"))
 
 	// advance past the hour expiry time of peerA+tipOne and peerB+tipThree
 	// the peerA+tipTwo and the updated peerA+tipFour registrations are still within expiry

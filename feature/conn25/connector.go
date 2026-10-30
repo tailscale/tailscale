@@ -34,6 +34,11 @@ func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr
 		return TransitIPResponse{Code: DisallowedDestination, Message: disallowedDestinationMessage}
 	}
 
+	// TODO(tailscale/corp#50542): remove this condition when we have a configurable check
+	if tipr.DestinationIP.IsPrivate() {
+		return TransitIPResponse{Code: DisallowedDestination, Message: disallowedDestinationMessage}
+	}
+
 	// The transit address has to come from a transit IP pool we're configured with.
 	if !c.transitIPInPool(tipr.TransitIP) {
 		c.logf("[Unexpected] peer attempt to map a transit IP outside of the configured pools: node: %s, IP: %v",

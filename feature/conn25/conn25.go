@@ -710,8 +710,8 @@ const (
 	TransitIPNotInPool = 7
 
 	// DisallowedDestination indicates that the destination IP address is not
-	// allowed (including but not limited to loopback, Tailscale, and link-local
-	// addresses).
+	// allowed (including but not limited to loopback, Tailscale, link-local,
+	// and private addresses).
 	DisallowedDestination = 8
 )
 

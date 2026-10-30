@@ -114,10 +114,11 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 	// tip(v4, 1) written in its IPv4-in-IPv6 form; the same address as tip(v4, 1).
 	tipV4_1In6 := netip.MustParseAddr("::ffff:169.254.0.1")
 
-	// Destination IPs
-	// v4 10.0.0.0 - 10.0.0.255
-	// v6 fc00:: - fc00::ff
-	dip := ipGenerator("dip", netip.MustParseAddr("10.0.0.0"), netip.MustParseAddr("fc00::"))
+	// Destination IPs. These have to be globally routable: conn25 rejects
+	// private destinations.
+	// v4 203.0.113.0 - 203.0.113.255
+	// v6 2001:db8:dd:: - 2001:db8:dd::ff
+	dip := ipGenerator("dip", netip.MustParseAddr("203.0.113.0"), netip.MustParseAddr("2001:db8:dd::"))
 
 	// Peer nodes
 	peerV4V6 := (&tailcfg.Node{
@@ -389,6 +390,58 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 					{pip(v6, 1), tip(v6, 2), netip.Addr{}},
 					{pip(v6, 1), tip(v6, 3), netip.Addr{}},
 					{pip(v6, 1), tip(v6, 4), netip.Addr{}},
+				},
+			},
+		},
+		// Single peer, private destinations
+		{
+			name:         "one-peer-private-dip",
+			ctipReqPeers: []tailcfg.NodeView{peerV4V6},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{
+					{TransitIP: tip(v4, 1), DestinationIP: netip.MustParseAddr("10.1.2.3"), App: appName},
+					{TransitIP: tip(v4, 2), DestinationIP: netip.MustParseAddr("172.16.0.9"), App: appName},
+					{TransitIP: tip(v4, 3), DestinationIP: netip.MustParseAddr("172.31.255.254"), App: appName},
+					{TransitIP: tip(v4, 4), DestinationIP: netip.MustParseAddr("192.168.1.1"), App: appName},
+					{TransitIP: tip(v6, 1), DestinationIP: netip.MustParseAddr("fc00::1"), App: appName},
+					{TransitIP: tip(v6, 2), DestinationIP: netip.MustParseAddr("fd12:3456:789a::1"), App: appName},
+				}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: slices.Repeat([]TransitIPResponse{{Code: DisallowedDestination, Message: disallowedDestinationMessage}}, 6)},
+			},
+			wantLookups: [][][]netip.Addr{
+				{
+					{pip(v4, 1), tip(v4, 1), netip.Addr{}},
+					{pip(v4, 1), tip(v4, 2), netip.Addr{}},
+					{pip(v4, 1), tip(v4, 3), netip.Addr{}},
+					{pip(v4, 1), tip(v4, 4), netip.Addr{}},
+					{pip(v6, 1), tip(v6, 1), netip.Addr{}},
+					{pip(v6, 1), tip(v6, 2), netip.Addr{}},
+				},
+			},
+		},
+		// Single peer, destinations just outside the private ranges are allowed
+		{
+			name:         "one-peer-near-private-dip",
+			ctipReqPeers: []tailcfg.NodeView{peerV4V6},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{
+					{TransitIP: tip(v4, 1), DestinationIP: netip.MustParseAddr("172.15.255.254"), App: appName},
+					{TransitIP: tip(v4, 2), DestinationIP: netip.MustParseAddr("172.32.0.1"), App: appName},
+					{TransitIP: tip(v6, 1), DestinationIP: netip.MustParseAddr("fb00::1"), App: appName},
+					{TransitIP: tip(v6, 2), DestinationIP: netip.MustParseAddr("fe00::1"), App: appName},
+				}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: slices.Repeat([]TransitIPResponse{{Code: OK, Message: ""}}, 4)},
+			},
+			wantLookups: [][][]netip.Addr{
+				{
+					{pip(v4, 1), tip(v4, 1), netip.MustParseAddr("172.15.255.254")},
+					{pip(v4, 1), tip(v4, 2), netip.MustParseAddr("172.32.0.1")},
+					{pip(v6, 1), tip(v6, 1), netip.MustParseAddr("fb00::1")},
+					{pip(v6, 1), tip(v6, 2), netip.MustParseAddr("fe00::1")},
 				},
 			},
 		},
