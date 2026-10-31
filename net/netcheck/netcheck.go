@@ -257,6 +257,12 @@ type Client struct {
 	// If false, the default net.Resolver will be used, with no caching.
 	UseDNSCache bool
 
+	// DisableCaptivePortalDetection, if non-nil, reports whether captive
+	// portal detection should be skipped during full reports. It is consulted
+	// when a full report starts probing so that callers can reflect live
+	// configuration changes.
+	DisableCaptivePortalDetection func() bool
+
 	// if non-zero, force this DERP region to be preferred in all reports where
 	// the DERP is found to be reachable.
 	ForcePreferredDERP tailcfg.DERPRegionID
