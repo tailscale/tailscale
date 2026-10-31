@@ -15,6 +15,8 @@ func TestString(t *testing.T) {
 		size  int
 		want  string
 	}{
+		{"", -1, ""},                   // n < 0 == length
+		{"a", -1, "a"},                 // n < 0 < length
 		{"", 1000, ""},                 // n > length
 		{"abc", 4, "abc"},              // n > length
 		{"abc", 3, "abc"},              // n == length
