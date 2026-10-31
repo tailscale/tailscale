@@ -96,6 +96,7 @@ const (
 	ReasonAWSConfigInvalid       = "AWSConfigInvalid"
 	ReasonStaticEndpointsInvalid = "StaticEndpointsInvalid"
 	ReasonTailnetUnavailable     = "TailnetUnavailable"
+	ReasonProxyClassNotReady     = "ProxyClassNotReady"
 	ReasonReady                  = "PeerRelayReady"
 )
 
@@ -248,6 +249,22 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, logger *zap.SugaredLogg
 		return reconcile.Result{}, nil
 	}
 
+	pc, err := r.getProxyClass(ctx, pr)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+
+	// The ProxyClass watch re-enqueues this PeerRelay once the ProxyClass becomes ready.
+	if pc != nil && !operatorutils.ProxyClassIsReady(pc) {
+		message := fmt.Sprintf("ProxyClass %q is not yet in a ready state, waiting...", pc.Name)
+		logger.Info(message)
+		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonProxyClassNotReady, message, r.clock, logger)
+		if err := r.Status().Update(ctx, pr); err != nil {
+			return reconcile.Result{}, fmt.Errorf("failed to update PeerRelay status for %q: %w", pr.Name, err)
+		}
+		return reconcile.Result{}, nil
+	}
+
 	for i := int32(0); i < replicas; i++ {
 		desired := r.peerRelayService(pr, i)
 		if err := r.ensureService(ctx, logger, desired); err != nil {
@@ -279,9 +296,13 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, logger *zap.SugaredLogg
 		}
 	}
 
-	ss, err := r.ensureStatefulSet(ctx, logger, pr, replicas)
+	ss, err := r.ensureStatefulSet(ctx, logger, pr, replicas, pc)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to apply StatefulSet for PeerRelay %q: %w", pr.Name, err)
+	}
+
+	if err = r.ensureMetricsResources(ctx, logger, pr, pc); err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to apply metrics resources for PeerRelay %q: %w", pr.Name, err)
 	}
 
 	if err = r.deleteDevicesFrom(ctx, logger, pr, replicas); err != nil {
@@ -493,6 +514,10 @@ func (r *Reconciler) delete(ctx context.Context, logger *zap.SugaredLogger, pr *
 		return reconcile.Result{}, fmt.Errorf("failed to delete Services for PeerRelay %q: %w", pr.Name, err)
 	}
 
+	if err := r.deleteMetricsService(ctx, logger, pr); err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to delete metrics Service for PeerRelay %q: %w", pr.Name, err)
+	}
+
 	if err := reconciler.ClearFinalizer(ctx, r.Client, pr, reconciler.Finalizer); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to remove finalizer from PeerRelay %q: %w", pr.Name, err)
 	}
@@ -597,21 +622,16 @@ func (r *Reconciler) deleteConfigSecretsFrom(ctx context.Context, logger *zap.Su
 	return nil
 }
 
-func (r *Reconciler) ensureStatefulSet(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay, replicas int32) (*appsv1.StatefulSet, error) {
-	pc, err := r.getProxyClass(ctx, pr)
-	if err != nil {
-		return nil, err
-	}
-
+func (r *Reconciler) ensureStatefulSet(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay, replicas int32, pc *tsapi.ProxyClass) (*appsv1.StatefulSet, error) {
 	desired := r.peerRelayStatefulSet(pr, replicas, pc)
 
 	logger.Debugf("applying StatefulSet %q", desired.Name)
-	if err = r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
+	if err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
 		return nil, fmt.Errorf("failed to apply StatefulSet: %w", err)
 	}
 
 	var current appsv1.StatefulSet
-	if err = r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &current); err != nil {
+	if err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &current); err != nil {
 		return nil, fmt.Errorf("failed to get StatefulSet: %w", err)
 	}
 

@@ -1032,6 +1032,21 @@ func TestReconciler_Reconcile(t *testing.T) {
 			ExpectedReadyReason:   peerrelay.ReasonAWSConfigInvalid,
 		},
 		{
+			// Nothing is created until the ProxyClass is ready.
+			Name:    "proxyclass-not-ready-blocks-reconcile",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec:       tsapi.PeerRelaySpec{ProxyClass: "custom"},
+			},
+			ExistingResources: []client.Object{
+				&tsapi.ProxyClass{ObjectMeta: metav1.ObjectMeta{Name: "custom"}},
+			},
+			ExpectStatefulSetGone: true,
+			ExpectedReadyStatus:   metav1.ConditionFalse,
+			ExpectedReadyReason:   peerrelay.ReasonProxyClassNotReady,
+		},
+		{
 			Name:    "deletion",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
@@ -1975,6 +1990,7 @@ func TestReconciler_AppliesProxyClass(t *testing.T) {
 				},
 			},
 		},
+		Status: readyProxyClassStatus(),
 	}
 
 	fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
@@ -2046,5 +2062,15 @@ func TestReconciler_AppliesProxyClass(t *testing.T) {
 	// The ProxyClass does not set a security context, so the default NET_ADMIN capability must survive.
 	if !hasCapability(c, "NET_ADMIN") {
 		t.Errorf("expected container to keep the NET_ADMIN capability, got security context %+v", c.SecurityContext)
+	}
+}
+
+// readyProxyClassStatus returns a ready status; the fake client leaves Generation at 0, so ObservedGeneration is too.
+func readyProxyClassStatus() tsapi.ProxyClassStatus {
+	return tsapi.ProxyClassStatus{
+		Conditions: []metav1.Condition{{
+			Type:   string(tsapi.ProxyClassReady),
+			Status: metav1.ConditionTrue,
+		}},
 	}
 }
