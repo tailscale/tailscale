@@ -879,7 +879,7 @@ runLoop:
 				egressAddrs, err := resolveTailnetFQDN(nmState, cfg.TailnetTargetFQDN)
 				if err != nil {
 					log.Print(err.Error())
-					break
+					continue
 				}
 
 				newCurentEgressIPs := deephash.Hash(&egressAddrs)

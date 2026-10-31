@@ -407,6 +407,50 @@ func TestContainerBoot(t *testing.T) {
 				},
 			}
 		},
+		"egress_fqdn_transient_resolve_failure": func(env *testEnv) testCase {
+			return testCase{
+				Env: map[string]string{
+					"TS_AUTHKEY":             "tskey-key",
+					"TS_TAILNET_TARGET_FQDN": "target-node.test.ts.net.",
+					"TS_USERSPACE":           "false",
+				},
+				Phases: []phase{
+					{
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp",
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						},
+						WantFiles: map[string]string{
+							"proc/sys/net/ipv4/ip_forward":          "1",
+							"proc/sys/net/ipv6/conf/all/forwarding": "0",
+						},
+					},
+					{
+						// The target peer is not in the netmap yet, so
+						// resolving the FQDN fails. containerboot must keep
+						// processing subsequent netmap updates rather than
+						// exiting its watch loop (issue #22102).
+						Notify: runningNotify,
+						WantLog: `could not find Tailscale node, service or 4via6 address "target-node.test.ts.net."; it either does not exist, or not reachable because of ACLs`,
+					},
+					{
+						// Once the peer appears, the next netmap update must
+						// resolve the FQDN and install forwarding rules.
+						Notify: &ipn.Notify{
+							State: new(ipn.Running),
+							PeersChanged: []*tailcfg.Node{
+								{
+									StableID:  tailcfg.StableNodeID("targetID"),
+									Name:      "target-node.test.ts.net.",
+									Addresses: []netip.Prefix{netip.MustParsePrefix("100.99.99.99/32")},
+								},
+							},
+						},
+						WantLog: "Installing forwarding rules for destination 100.99.99.99",
+					},
+				},
+			}
+		},
 		"authkey_once": func(env *testEnv) testCase {
 			return testCase{
 				Env: map[string]string{
