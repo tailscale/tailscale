@@ -62,7 +62,6 @@ import (
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/httpbody"
 	"tailscale.com/util/singleflight"
-	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/vizerror"
@@ -110,6 +109,7 @@ type Direct struct {
 
 	persist                 persist.PersistView
 	authKey                 string
+	tailnet                 string // optional recommended/required tailnet for registration; see [tailcfg.RegisterRequest.Tailnet]
 	tryingNewKey            key.NodePrivate
 	expiry                  time.Time         // or zero value if none/unknown
 	hostinfo                *tailcfg.Hostinfo // always non-nil
@@ -140,6 +140,7 @@ type Options struct {
 	GetMachinePrivateKey func() (key.MachinePrivate, error) // returns the machine key to use
 	ServerURL            string                             // URL of the tailcontrol server
 	AuthKey              string                             // optional node auth key for auto registration
+	Tailnet              string                             // optional recommended/required tailnet for registration; see [tailcfg.RegisterRequest.Tailnet]
 	Clock                tstime.Clock
 	Hostinfo             *tailcfg.Hostinfo // non-nil passes ownership, nil means to use default using os.Hostname, etc
 	DiscoPublicKey       key.DiscoPublic
@@ -376,6 +377,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		logf:              opts.Logf,
 		persist:           opts.Persist.View(),
 		authKey:           opts.AuthKey,
+		tailnet:           opts.Tailnet,
 		debugFlags:        opts.DebugFlags,
 		netMon:            netMon,
 		health:            opts.HealthTracker,
@@ -756,10 +758,6 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		return regen, opt.URL, nil, err
 	}
 
-	tailnet, err := c.polc.GetString(pkey.Tailnet, "")
-	if err != nil {
-		c.logf("unable to provide Tailnet field in register request. err: %v", err)
-	}
 	now := c.clock.Now().Round(time.Second)
 	request := tailcfg.RegisterRequest{
 		Version:          1,
@@ -771,7 +769,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		Timestamp:        &now,
 		Ephemeral:        (opt.Flags & LoginEphemeral) != 0,
 		NodeKeySignature: nodeKeySignature,
-		Tailnet:          tailnet,
+		Tailnet:          c.tailnet,
 	}
 	if opt.Logout {
 		request.Expiry = time.Unix(123, 0) // far in the past
