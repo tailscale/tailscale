@@ -476,39 +476,53 @@ func run() error {
 		}
 	}
 
-	client, daemonProcess, err := startTailscaled(bootCtx, cfg)
+	var (
+		client        *local.Client
+		daemonProcess *os.Process
+		shutdownOnce  sync.Once
+	)
+	shutdownTailscaled := func() {
+		shutdownOnce.Do(func() {
+			if daemonProcess == nil {
+				return
+			}
+			// The default termination grace period for a Pod is 30s. We wait 25s at
+			// most so that we still reserve some of that budget for tailscaled
+			// to receive and react to a SIGTERM before the SIGKILL that k8s
+			// will send at the end of the grace period.
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			defer cancel()
+
+			// we are shutting down, we always want to unadvertise here once the
+			// LocalAPI client is available.
+			if client != nil {
+				if err := services.EnsureServicesNotAdvertised(ctx, client, log.Printf); err != nil {
+					log.Printf("Error ensuring services are not advertised: %v", err)
+				}
+			}
+
+			if hasKubeStateStore(cfg) {
+				// Check we're not shutting tailscaled down while it's still writing
+				// state. If we authenticate and fail to write all the state, we'll
+				// never recover automatically.
+				log.Printf("Checking for consistent state")
+				err := kc.waitForConsistentState(ctx)
+				if err != nil {
+					log.Printf("Error waiting for consistent state on shutdown: %v", err)
+				}
+			}
+			log.Printf("Sending SIGTERM to tailscaled")
+			if err := daemonProcess.Signal(unix.SIGTERM); err != nil {
+				log.Fatalf("error shutting tailscaled down: %v", err)
+			}
+		})
+	}
+	defer shutdownTailscaled()
+
+	client, daemonProcess, err = startTailscaled(bootCtx, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to bring up tailscale: %w", err)
 	}
-	killTailscaled := func() {
-		// The default termination grace period for a Pod is 30s. We wait 25s at
-		// most so that we still reserve some of that budget for tailscaled
-		// to receive and react to a SIGTERM before the SIGKILL that k8s
-		// will send at the end of the grace period.
-		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-		defer cancel()
-
-		// we are shutting down, we always want to unadvertise here
-		if err := services.EnsureServicesNotAdvertised(ctx, client, log.Printf); err != nil {
-			log.Printf("Error ensuring services are not advertised: %v", err)
-		}
-
-		if hasKubeStateStore(cfg) {
-			// Check we're not shutting tailscaled down while it's still writing
-			// state. If we authenticate and fail to write all the state, we'll
-			// never recover automatically.
-			log.Printf("Checking for consistent state")
-			err := kc.waitForConsistentState(ctx)
-			if err != nil {
-				log.Printf("Error waiting for consistent state on shutdown: %v", err)
-			}
-		}
-		log.Printf("Sending SIGTERM to tailscaled")
-		if err := daemonProcess.Signal(unix.SIGTERM); err != nil {
-			log.Fatalf("error shutting tailscaled down: %v", err)
-		}
-	}
-	defer killTailscaled()
 
 	var healthCheck *healthz.Healthz
 	ep := &egressProxy{}
@@ -806,7 +820,7 @@ runLoop:
 			// have started the reaper defined below, we need to
 			// kill tailscaled and let reaper clean up child
 			// processes.
-			killTailscaled()
+			shutdownTailscaled()
 			break runLoop
 		case err := <-errChan:
 			return fmt.Errorf("reading tailscaled IPN bus: %w", err)

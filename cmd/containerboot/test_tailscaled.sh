@@ -32,6 +32,16 @@ if [[ -z "$socket" ]]; then
 	exit 1
 fi
 
+if [[ -n "${TS_TEST_DELAY_SOCKET:-}" ]]; then
+	parent=$PPID
+	while [[ ! -e "$TS_TEST_DELAY_SOCKET" ]]; do
+		if ! kill -0 "$parent" 2>/dev/null; then
+			exit 0
+		fi
+		sleep 0.01
+	done
+fi
+
 ln -s "$TS_TEST_SOCKET" "$socket"
 trap 'rm -f "$socket"' EXIT
 
