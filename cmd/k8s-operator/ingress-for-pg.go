@@ -45,7 +45,7 @@ import (
 
 const (
 	serveConfigKey = "serve-config.json"
-	// FinalizerNamePG is the finalizer used by the IngressPGReconciler
+	// FinalizerNamePG is the legacy finalizer used by the IngressPGReconciler.
 	FinalizerNamePG        = "tailscale.com/ingress-pg-finalizer"
 	indexIngressProxyGroup = ".metadata.annotations.ingress-proxy-group"
 	// annotationHTTPEndpoint can be used to configure the Ingress to expose an HTTP endpoint to tailnet (as
@@ -54,6 +54,31 @@ const (
 	labelDomain             = "tailscale.com/domain"
 	managedTSServiceComment = "This Tailscale Service is managed by the Tailscale Kubernetes Operator, do not modify"
 )
+
+// ingressFinalizerForProxyGroup returns the finalizer to set on an Ingress
+// exposed on the named ProxyGroup. Recording the ProxyGroup name lets cleanup
+// recover it after the tailscale.com/proxy-group annotation has been removed.
+func ingressFinalizerForProxyGroup(pgName string) string {
+	return pgName + "." + FinalizerNamePG
+}
+
+func isIngressPGFinalizer(f string) bool {
+	return f == FinalizerNamePG || strings.HasSuffix(f, "."+FinalizerNamePG)
+}
+
+// proxyGroupFromIngressFinalizers returns the ProxyGroup name encoded in ing's
+// ingress-pg finalizer. A bare legacy finalizer reports an empty name.
+func proxyGroupFromIngressFinalizers(ing *networkingv1.Ingress) (pgName string, ok bool) {
+	for _, f := range ing.Finalizers {
+		if f == FinalizerNamePG {
+			return "", true
+		}
+		if pgName, ok = strings.CutSuffix(f, "."+FinalizerNamePG); ok {
+			return pgName, true
+		}
+	}
+	return "", false
+}
 
 var gaugePGIngressResources = clientmetric.NewGauge(kubetypes.MetricIngressPGResourceCount)
 
@@ -116,6 +141,17 @@ func (r *HAIngressReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	logger = logger.With("hostname", hostname)
 
 	pgName := ing.Annotations[AnnotationProxyGroup]
+	if pgName == "" {
+		recovered, ok := proxyGroupFromIngressFinalizers(ing)
+		if !ok {
+			return res, nil
+		}
+		if recovered == "" {
+			logger.Warnf("ProxyGroup annotation removed but finalizer %q does not record a ProxyGroup; unable to clean up Ingress resources, remove the finalizer manually if the Ingress is stuck", FinalizerNamePG)
+			return res, nil
+		}
+		pgName = recovered
+	}
 	pg := &tsapi.ProxyGroup{}
 
 	err = r.Get(ctx, client.ObjectKey{Name: pgName}, pg)
@@ -197,13 +233,17 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		r.recorder.Event(ing, corev1.EventTypeWarning, "HTTPSNotEnabled", "HTTPS is not enabled on the tailnet; ingress may not work")
 	}
 
-	if !slices.Contains(ing.Finalizers, FinalizerNamePG) {
+	wantFinalizer := ingressFinalizerForProxyGroup(pg.Name)
+	if !slices.Contains(ing.Finalizers, wantFinalizer) {
 		// This log line is printed exactly once during initial provisioning,
 		// because once the finalizer is in place this block gets skipped. So,
 		// this is a nice place to tell the operator that the high level,
 		// multi-reconcile operation is underway.
-		logger.Infof("exposing Ingress over tailscale")
-		ing.Finalizers = append(ing.Finalizers, FinalizerNamePG)
+		if !slices.ContainsFunc(ing.Finalizers, isIngressPGFinalizer) {
+			logger.Infof("exposing Ingress over tailscale")
+		}
+		ing.Finalizers = slices.DeleteFunc(ing.Finalizers, isIngressPGFinalizer)
+		ing.Finalizers = append(ing.Finalizers, wantFinalizer)
 		if err := r.Update(ctx, ing); err != nil {
 			return false, fmt.Errorf("failed to add finalizer: %w", err)
 		}
@@ -540,8 +580,7 @@ func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, logger
 // against a domain the control plane no longer recognises.
 func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string, ing *networkingv1.Ingress, logger *zap.SugaredLogger, tsClient tsclient.Client, pg *tsapi.ProxyGroup) (svcChanged bool, err error) {
 	logger.Debugf("Ensuring any resources for Ingress are cleaned up")
-	ix := slices.Index(ing.Finalizers, FinalizerNamePG)
-	if ix < 0 {
+	if !slices.ContainsFunc(ing.Finalizers, isIngressPGFinalizer) {
 		logger.Debugf("no finalizer, nothing to do")
 		return false, nil
 	}
@@ -614,8 +653,11 @@ func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string,
 func (r *HAIngressReconciler) deleteFinalizer(ctx context.Context, ing *networkingv1.Ingress, logger *zap.SugaredLogger) error {
 	found := false
 	ing.Finalizers = slices.DeleteFunc(ing.Finalizers, func(f string) bool {
-		found = true
-		return f == FinalizerNamePG
+		if isIngressPGFinalizer(f) {
+			found = true
+			return true
+		}
+		return false
 	})
 	if !found {
 		return nil
