@@ -48,6 +48,12 @@ func (v ByteSlice[T]) IsNil() bool {
 	return v.ж == nil
 }
 
+// IsZero reports whether the ByteSlice is the zero value, with a nil underlying
+// slice. It implements the interface used by encoding/json's "omitzero" option.
+func (v ByteSlice[T]) IsZero() bool {
+	return v.ж == nil
+}
+
 // Mem returns a read-only view of the underlying slice.
 func (v ByteSlice[T]) Mem() mem.RO {
 	return mem.B(v.ж)
@@ -201,6 +207,10 @@ func (v *SliceView[T, V]) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 // IsNil reports whether the underlying slice is nil.
 func (v SliceView[T, V]) IsNil() bool { return v.ж == nil }
 
+// IsZero reports whether the SliceView is the zero value, with a nil underlying
+// slice. It implements the interface used by encoding/json's "omitzero" option.
+func (v SliceView[T, V]) IsZero() bool { return v.ж == nil }
+
 // Len returns the length of the slice.
 func (v SliceView[T, V]) Len() int { return len(v.ж) }
 
@@ -317,6 +327,10 @@ func (v *Slice[T]) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 
 // IsNil reports whether the underlying slice is nil.
 func (v Slice[T]) IsNil() bool { return v.ж == nil }
+
+// IsZero reports whether the Slice is the zero value, with a nil underlying
+// slice. It implements the interface used by encoding/json's "omitzero" option.
+func (v Slice[T]) IsZero() bool { return v.ж == nil }
 
 // Len returns the length of the slice.
 func (v Slice[T]) Len() int { return len(v.ж) }
@@ -578,6 +592,12 @@ func (m MapSlice[K, V]) IsNil() bool {
 	return m.ж == nil
 }
 
+// IsZero reports whether the MapSlice is the zero value, with a nil underlying
+// map. It implements the interface used by encoding/json's "omitzero" option.
+func (m MapSlice[K, V]) IsZero() bool {
+	return m.ж == nil
+}
+
 // Len returns the number of elements in the map.
 func (m MapSlice[K, V]) Len() int { return len(m.ж) }
 
@@ -677,6 +697,12 @@ func (m Map[K, V]) Contains(k K) bool {
 
 // IsNil reports whether the underlying map is nil.
 func (m Map[K, V]) IsNil() bool {
+	return m.ж == nil
+}
+
+// IsZero reports whether the Map is the zero value, with a nil underlying map.
+// It implements the interface used by encoding/json's "omitzero" option.
+func (m Map[K, V]) IsZero() bool {
 	return m.ж == nil
 }
 
@@ -828,6 +854,12 @@ func (m MapFn[K, T, V]) Get(k K) V {
 
 // IsNil reports whether the underlying map is nil.
 func (m MapFn[K, T, V]) IsNil() bool {
+	return m.ж == nil
+}
+
+// IsZero reports whether the MapFn is the zero value, with a nil underlying
+// map. It implements the interface used by encoding/json's "omitzero" option.
+func (m MapFn[K, T, V]) IsZero() bool {
 	return m.ж == nil
 }
 

@@ -1962,7 +1962,7 @@ func (s *Server) ListenService(name string, mode ServiceMode) (*ServiceListener,
 	}
 
 	st := s.lb.StatusWithoutPeers()
-	if st.Self.Tags == nil || st.Self.Tags.Len() == 0 {
+	if st.Self.Tags.Len() == 0 {
 		return nil, ErrUntaggedServiceHost
 	}
 

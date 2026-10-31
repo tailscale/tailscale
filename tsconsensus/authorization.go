@@ -118,7 +118,7 @@ func (a *authorization) SelfAllowed() bool {
 	if a.peers == nil {
 		return false
 	}
-	return a.peers.status.Self.Tags != nil && views.SliceContains(*a.peers.status.Self.Tags, a.tag)
+	return views.SliceContains(a.peers.status.Self.Tags, a.tag)
 }
 
 func (a *authorization) AllowedPeers() views.Slice[*ipnstate.PeerStatus] {
@@ -142,7 +142,7 @@ func newPeers(status *ipnstate.Status, tag string) *peers {
 		addrs:  set.Set[netip.Addr]{},
 	}
 	for _, p := range status.Peer {
-		if p.Tags != nil && views.SliceContains(*p.Tags, tag) {
+		if views.SliceContains(p.Tags, tag) {
 			ps.statuses = append(ps.statuses, p)
 			ps.addrs.AddSlice(p.TailscaleIPs)
 		}
