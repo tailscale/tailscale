@@ -1051,6 +1051,9 @@ func TestPrefFlagMapping(t *testing.T) {
 		case "AutoExitNode":
 			// Handled by tailscale {set,up} --exit-node=auto:any.
 			continue
+		case "IgnoredRoutes":
+			// Handled by tailscale {set,up} --ignore-routes.
+			continue
 		}
 		t.Errorf("unexpected new ipn.Pref field %q is not handled by up.go (see addPrefFlagMapping and checkForAccidentalSettingReverts)", prefName)
 	}

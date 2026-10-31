@@ -203,6 +203,15 @@ func prefValue(flagName string, prefs *ipn.Prefs, st *ipnstate.Status) any {
 			parts[i] = ep.String()
 		}
 		return strings.Join(parts, ",")
+	case "ignore-routes":
+		var sb strings.Builder
+		for i, r := range prefs.IgnoredRoutes {
+			if i > 0 {
+				sb.WriteByte(',')
+			}
+			sb.WriteString(r.String())
+		}
+		return sb.String()
 	default:
 		return nil
 	}

@@ -365,6 +365,16 @@ func (v PrefsView) AdvertiseRoutes() views.Slice[netip.Prefix] {
 	return views.SliceOf(v.ж.AdvertiseRoutes)
 }
 
+// IgnoredRoutes specifies CIDR prefixes whose routes should be carved
+// out when installing routes from other nodes (e.g., exit nodes or
+// subnet routers). If a route advertised by another node overlaps with
+// any prefix in this list, that route will be carved out. This option
+// applies to advertised routes and exit nodes, allows excluding certain
+// routes despite the network configuration.
+func (v PrefsView) IgnoredRoutes() views.Slice[netip.Prefix] {
+	return views.SliceOf(v.ж.IgnoredRoutes)
+}
+
 // AdvertiseServices specifies the list of services that this
 // node can serve as a destination for. Note that an advertised
 // service must still go through the approval process from the
@@ -510,6 +520,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	ForceDaemon                bool
 	Egg                        bool
 	AdvertiseRoutes            []netip.Prefix
+	IgnoredRoutes              []netip.Prefix
 	AdvertiseServices          []string
 	Sync                       opt.Bool
 	NoSNAT                     bool
