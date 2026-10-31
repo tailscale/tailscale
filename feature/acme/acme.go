@@ -28,6 +28,7 @@ import (
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/syncs"
+	"tailscale.com/tailcfg"
 	xacme "tailscale.com/tempfork/acme"
 	"tailscale.com/tsconst"
 	"tailscale.com/types/logger"
@@ -52,6 +53,7 @@ func init() {
 	ipnlocal.HookShutdownCertRefreshLoop.Set(shutdownCertRefreshLoopHook)
 	ipnlocal.HookConfigureCertsForTest.Set(configureCertsForTestHook)
 	ipnlocal.HookHandleC2NTLSCertStatus.Set(handleC2NTLSCertStatus)
+	ipnlocal.HookCertStatus.Set(certStatusHook)
 }
 
 // errNoExt is returned when a hook is invoked on a [*ipnlocal.LocalBackend]
@@ -261,6 +263,14 @@ func handleC2NTLSCertStatus(b *ipnlocal.LocalBackend, w http.ResponseWriter, r *
 		return
 	}
 	e.handleC2NTLSCertStatus(b, w, r)
+}
+
+func certStatusHook(b *ipnlocal.LocalBackend, domain string) (*tailcfg.C2NTLSCertInfo, error) {
+	e, err := extFor(b)
+	if err != nil {
+		return nil, err
+	}
+	return e.certStatus(b, domain)
 }
 
 // ACME / cert metrics. These are package-level (process-wide) because

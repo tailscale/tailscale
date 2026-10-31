@@ -6,6 +6,7 @@
 package localapi
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -19,6 +20,29 @@ import (
 
 func init() {
 	Register("cert/", (*Handler).serveCert)
+	Register("cert-status/", (*Handler).serveCertStatus)
+}
+
+// serveCertStatus reports the state of the cached TLS certificate for the
+// domain in the path, without fetching or issuing one. Unlike serveCert, a
+// cache miss is reported as JSON (Missing: true), not an issuance attempt.
+func (h *Handler) serveCertStatus(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "cert status access denied", http.StatusForbidden)
+		return
+	}
+	domain, ok := strings.CutPrefix(r.URL.Path, "/localapi/v0/cert-status/")
+	if !ok {
+		http.Error(w, "internal handler config wired wrong", 500)
+		return
+	}
+	info, err := h.b.CertStatus(domain)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(info)
 }
 
 func (h *Handler) serveCert(w http.ResponseWriter, r *http.Request) {
