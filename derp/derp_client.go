@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"runtime"
 	"sync"
 	"time"
 
@@ -35,9 +36,32 @@ type Client struct {
 	isProber    bool
 	appName     string
 
-	wmu  sync.Mutex // hold while writing to bw
+	wmu  sync.Mutex // hold while writing to bw; taken before connMu
 	bw   *bufio.Writer
 	rate *rate.Limiter // if non-nil, rate limiter to use
+
+	// connMu serializes writes to nc. Every write to nc, whether
+	// through bw or of a forward buffer, happens with it held, since
+	// not every Conn tolerates concurrent writes and bw can split
+	// one frame over several. Forward buffers are written with wmu
+	// released, so wmu alone doesn't serialize them.
+	connMu sync.Mutex
+
+	// Forwarded packets are double-buffered: ForwardPacket appends
+	// frames to fwdBuf under wmu, and the flusher goroutine swaps it
+	// for fwdSpare and writes it to nc with wmu released, so callers
+	// keep going while a write is in progress. Callers wait on
+	// fwdCond only when fwdBuf is full and the spare is still being
+	// written. See [Client.ForwardPacket].
+	fwdBuf      []byte     // frames waiting to be written; nil until first use
+	fwdFrames   int        // number of frames in fwdBuf
+	fwdSpare    []byte     // the other buffer; nil while being written
+	fwdCond     *sync.Cond // on wmu; broadcast when fwdBuf is swapped out
+	fwdFlushing bool       // a flusher goroutine is running; stays set after a write error so none restarts
+	// forwardErr is the first error from a deferred flush of
+	// forwarded packets, if any. It is sticky: once set, every
+	// ForwardPacket call returns it so the owner reconnects.
+	forwardErr syncs.AtomicValue[error]
 
 	// Owned by Recv:
 	peeked  int                      // bytes to discard on next Recv
@@ -269,6 +293,8 @@ func (c *Client) send(dstKey key.NodePublic, pkt []byte) (ret error) {
 
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
 	if c.rate != nil {
 		pktLen := FrameHeaderLen + key.NodePublicRawLen + len(pkt)
 		if !c.rate.AllowN(c.clock.Now(), pktLen) {
@@ -287,9 +313,32 @@ func (c *Client) send(dstKey key.NodePublic, pkt []byte) (ret error) {
 	return c.bw.Flush()
 }
 
+// forwardWriteTimeout is how long a write of forwarded packets may
+// take before the connection is closed as stuck.
+const forwardWriteTimeout = 5 * time.Second
+
+// forwardBufSize is the size of each of the two forward packet
+// buffers: the TLS maximum plaintext record size, so a full buffer
+// goes out as exactly one record.
+const forwardBufSize = 16 << 10
+
 // ForwardPacket sends a forward packet frame carrying pkt from srcKey
-// to dstKey. It writes and flushes pkt before returning and does not
-// retain it.
+// to dstKey. It does not retain pkt: the frame is copied to a buffer
+// before it returns. A flusher goroutine, started if none is running,
+// writes the buffer shortly afterwards, so frames forwarded by many
+// goroutines at once share a write. The buffer is swapped for a spare
+// before being written, so callers go on filling the spare meanwhile
+// and wait only when that fills before the write completes, which is
+// how a slow connection applies backpressure.
+//
+// Callers never write to the connection themselves, not even a lone
+// frame on a quiet connection: the goroutine handoff costs a
+// scheduler hop, but it keeps a caller, such as a DERP server's
+// per-client reader, from stalling on the mesh peer's socket.
+//
+// If a write fails, the connection is closed and the error is
+// returned by every subsequent call, so the owner reconnects as it
+// would for a synchronous write error.
 func (c *Client) ForwardPacket(srcKey, dstKey key.NodePublic, pkt LoanedBytes) (err error) {
 	defer func() {
 		if err != nil {
@@ -300,26 +349,116 @@ func (c *Client) ForwardPacket(srcKey, dstKey key.NodePublic, pkt LoanedBytes) (
 	if pkt.Len() > MaxPacketSize {
 		return fmt.Errorf("packet too big: %d", pkt.Len())
 	}
+	frameLen := FrameHeaderLen + KeyLen*2 + pkt.Len()
 
 	c.wmu.Lock()
-	defer c.wmu.Unlock()
+	if c.fwdCond == nil {
+		c.fwdCond = sync.NewCond(&c.wmu)
+		c.fwdBuf = make([]byte, 0, forwardBufSize)
+		c.fwdSpare = make([]byte, 0, forwardBufSize)
+	}
+	// Wait for room. The flusher empties fwdBuf by swapping it out,
+	// which it can do once the write of the other buffer completes.
+	// Check for a failed write each time around, including before
+	// the first wait: one may have failed since the check above,
+	// and a frame must not be buffered, or a flusher started, on a
+	// failed client.
+	for {
+		if err := c.forwardErr.Load(); err != nil {
+			c.wmu.Unlock()
+			return err
+		}
+		if len(c.fwdBuf) == 0 || len(c.fwdBuf)+frameLen <= cap(c.fwdBuf) {
+			break
+		}
+		c.fwdCond.Wait()
+	}
+	b := AppendFrameHeader(c.fwdBuf, FrameForwardPacket, uint32(KeyLen*2+pkt.Len()))
+	b = srcKey.AppendTo(b)
+	b = dstKey.AppendTo(b)
+	c.fwdBuf = append(b, pkt.bs...)
+	c.fwdFrames++
+	start := !c.fwdFlushing
+	c.fwdFlushing = true
+	c.wmu.Unlock()
+	if start {
+		go c.flushForwarded()
+	}
+	return nil
+}
 
-	timer := c.clock.AfterFunc(5*time.Second, c.writeTimeoutFired)
-	defer timer.Stop()
+// flushForwarded is the goroutine that writes forwarded packets. It
+// runs while there are frames buffered and exits when there are none.
+func (c *Client) flushForwarded() {
+	for {
+		// Let goroutines that are ready to forward go first, so
+		// their frames join this write.
+		runtime.Gosched()
+		c.wmu.Lock()
+		if len(c.fwdBuf) == 0 {
+			c.fwdFlushing = false
+			c.wmu.Unlock()
+			return
+		}
+		if _, err := c.writeForwardBufLocked(); err != nil {
+			return // wmu already released
+		}
+		c.wmu.Unlock()
+	}
+}
 
-	if err := WriteFrameHeader(c.bw, FrameForwardPacket, uint32(KeyLen*2+pkt.Len())); err != nil {
-		return err
+// writeForwardBufLocked swaps the forward buffer for the spare, so
+// callers can go on filling it, and writes it to the connection with
+// wmu released. On success it returns with wmu held again, reporting
+// whether frames arrived in the meantime. On failure it ends
+// forwarding on this client ([Client.failForwardLocked]) and returns
+// with wmu released. wmu must be held on entry, with fwdBuf non-empty
+// and fwdFlushing set, and the spare available, which it is whenever
+// no write is in progress.
+func (c *Client) writeForwardBufLocked() (more bool, err error) {
+	buf, frames := c.fwdBuf, c.fwdFrames
+	c.fwdBuf = c.fwdSpare
+	c.fwdFrames = 0
+	c.fwdSpare = nil
+	c.fwdCond.Broadcast()
+	c.wmu.Unlock()
+
+	c.connMu.Lock()
+	timer := c.clock.AfterFunc(forwardWriteTimeout, c.writeTimeoutFired)
+	_, err = c.nc.Write(buf)
+	timer.Stop()
+	c.connMu.Unlock()
+
+	c.wmu.Lock()
+	if cap(buf) == forwardBufSize {
+		c.fwdSpare = buf[:0]
+	} else {
+		// An oversized frame grew it; don't keep that.
+		c.fwdSpare = make([]byte, 0, forwardBufSize)
 	}
-	if _, err := c.bw.Write(srcKey.AppendTo(nil)); err != nil {
-		return err
+	if err != nil {
+		c.failForwardLocked(err, len(buf)+len(c.fwdBuf), frames+c.fwdFrames)
+		return false, err
 	}
-	if _, err := c.bw.Write(dstKey.AppendTo(nil)); err != nil {
-		return err
-	}
-	if _, err := pkt.WriteTo(c.bw); err != nil {
-		return err
-	}
-	return c.bw.Flush()
+	return len(c.fwdBuf) > 0, nil
+}
+
+// failForwardLocked ends forwarding on this client after a write
+// failed with err, having lost the given number of bytes and frames:
+// those of the failed write and those buffered behind it. It drops
+// the latter, makes err sticky so every later ForwardPacket call
+// returns it, wakes callers waiting for room so they return it too,
+// and closes the connection so the reader fails as well. Either way
+// the owner (derphttp.Client) reconnects. fwdFlushing stays set so
+// nothing starts another write. wmu must be held; it is released.
+func (c *Client) failForwardLocked(err error, lostBytes, lostFrames int) {
+	c.logf("derp.ForwardPacket: write failed, dropping %d frames (%d bytes): %v", lostFrames, lostBytes, err)
+	c.forwardErr.CompareAndSwap(nil, err)
+	c.fwdBuf = c.fwdBuf[:0]
+	c.fwdFrames = 0
+	c.fwdCond.Broadcast()
+	c.wmu.Unlock()
+	c.nc.Close()
 }
 
 func (c *Client) writeTimeoutFired() { c.nc.Close() }
@@ -335,6 +474,8 @@ func (c *Client) SendPong(data [8]byte) error {
 func (c *Client) sendPingOrPong(typ FrameType, data [8]byte) error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
 	if err := WriteFrameHeader(c.bw, typ, 8); err != nil {
 		return err
 	}
@@ -356,6 +497,8 @@ func (c *Client) NotePreferred(preferred bool) (err error) {
 
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
 
 	if err := WriteFrameHeader(c.bw, FrameNotePreferred, 1); err != nil {
 		return err
@@ -375,6 +518,8 @@ func (c *Client) NotePreferred(preferred bool) (err error) {
 func (c *Client) WatchConnectionChanges() error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
 	if err := WriteFrameHeader(c.bw, FrameWatchConns, 0); err != nil {
 		return err
 	}
@@ -386,6 +531,8 @@ func (c *Client) WatchConnectionChanges() error {
 func (c *Client) ClosePeer(target key.NodePublic) error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
 	return WriteFrame(c.bw, FrameClosePeer, target.AppendTo(nil))
 }
 
