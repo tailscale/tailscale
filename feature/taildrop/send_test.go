@@ -4,14 +4,30 @@
 package taildrop
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/util/must"
 )
+
+type notifyingReader struct {
+	r       io.Reader
+	started chan struct{}
+}
+
+func (r notifyingReader) Read(p []byte) (int, error) {
+	select {
+	case r.started <- struct{}{}:
+	default:
+	}
+	return r.r.Read(p)
+}
 
 func TestPutFile(t *testing.T) {
 	const content = "hello, world"
@@ -65,5 +81,61 @@ func TestPutFile(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestIncomingFilesPeerID(t *testing.T) {
+	dir := t.TempDir()
+	mgr := managerOptions{
+		Logf:           t.Logf,
+		Clock:          tstime.DefaultClock{},
+		fileOps:        must.Get(newFileOps(dir)),
+		SendFileNotify: func() {},
+	}.New()
+
+	id := clientID("n12345CNTRL")
+	pr, pw := io.Pipe()
+	defer pr.Close()
+	defer pw.Close()
+
+	started := make(chan struct{}, 1)
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := mgr.PutFile(
+			id,
+			"photo.jpg",
+			notifyingReader{r: pr, started: started},
+			0,
+			5,
+		)
+		done <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("PutFile() did not start reading")
+	}
+
+	files := mgr.IncomingFiles()
+	if len(files) != 1 {
+		t.Fatalf("IncomingFiles() returned %d files; want 1", len(files))
+	}
+
+	want := tailcfg.StableNodeID(id)
+	if files[0].PeerID != want {
+		t.Errorf("PeerID = %q; want %q", files[0].PeerID, want)
+	}
+
+	if _, err := pw.Write([]byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	if err := pw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := <-done; err != nil {
+		t.Fatalf("PutFile() error: %v", err)
 	}
 }
