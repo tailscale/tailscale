@@ -1,0 +1,59 @@
+# Copyright (c) Tailscale Inc & AUTHORS
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Minimal Headscale config for the macOS E2E test.
+# HTTP only (loopback), embedded SQLite, ephemeral state under /tmp/ts-ci.
+server_url: http://127.0.0.1:8080
+listen_addr: 127.0.0.1:8080
+metrics_listen_addr: 127.0.0.1:9090
+grpc_listen_addr: 127.0.0.1:50443
+grpc_allow_insecure: true
+
+unix_socket: /tmp/ts-ci/headscale.sock
+unix_socket_permission: "0770"
+
+private_key_path: /tmp/ts-ci/private.key
+noise:
+  private_key_path: /tmp/ts-ci/noise_private.key
+
+database:
+  type: sqlite3
+  sqlite:
+    path: /tmp/ts-ci/headscale.sqlite
+
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
+
+derp:
+  server:
+    enabled: true
+    region_id: 999
+    region_code: "ts-ci"
+    region_name: "Headscale embedded DERP"
+    stun_listen_addr: "127.0.0.1:3478"
+    private_key_path: /tmp/ts-ci/derp_server_private.key
+    automatically_add_embedded_derp_region: true
+    ipv4: 127.0.0.1
+    ipv6: ""
+  urls: []
+  paths: []
+  auto_update_enabled: false
+
+disable_check_updates: true
+ephemeral_node_inactivity_timeout: 30m
+
+log:
+  format: text
+  level: info
+
+dns:
+  override_local_dns: false
+  magic_dns: false
+  base_domain: ts-ci.example
+  nameservers:
+    global: []
+
+policy:
+  mode: database
