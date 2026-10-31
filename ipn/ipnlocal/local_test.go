@@ -454,6 +454,92 @@ func TestStartResetsAlwaysOnOverrideBeforeReconcilingPrefs(t *testing.T) {
 	}
 }
 
+func TestStartLoginsWithAuthKeyFromPolicy(t *testing.T) {
+	const authKey = "tskey-auth-test"
+	const controlURL = "https://localhost:1/"
+
+	tests := []struct {
+		name      string
+		alwaysOn  bool        // whether [pkey.AlwaysOn] is enabled
+		policyKey string      // the [pkey.AuthKey] policy setting
+		opts      ipn.Options // passed to Start
+		wantKey   string      // auth key the control client should be created with
+		wantLogin bool        // whether Start should log in
+	}{
+		{
+			name:      "always-on",
+			alwaysOn:  true,
+			policyKey: authKey,
+			wantKey:   authKey,
+			wantLogin: true,
+		},
+		{
+			name:      "not-meant-to-be-running",
+			policyKey: authKey,
+			wantKey:   authKey,
+			// Without Always-On, WantRunning is still false here; the client
+			// setting it to true is what logs us in with the key.
+			wantLogin: false,
+		},
+		{
+			name:      "no-auth-key",
+			alwaysOn:  true,
+			wantLogin: false,
+		},
+		{
+			name: "auth-key-from-client",
+			opts: ipn.Options{
+				AuthKey:     authKey,
+				UpdatePrefs: &ipn.Prefs{ControlURL: controlURL, WantRunning: true},
+			},
+			wantKey: authKey,
+			// `tailscale up --auth-key` and tsnet pass their own key and call
+			// StartLoginInteractive themselves; logging in here too would
+			// register the node twice.
+			wantLogin: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var polc policytest.Config
+			if tt.alwaysOn {
+				polc.Set(pkey.AlwaysOn, true)
+			}
+			if tt.policyKey != "" {
+				polc.Set(pkey.AuthKey, tt.policyKey)
+			}
+
+			sys := tsd.NewSystem()
+			sys.PolicyClient.Set(polc)
+
+			b := newTestLocalBackendWithSys(t, sys)
+			var cc *mockControl
+			b.ForTest().SetControlClientGetter(func(opts controlclient.Options) (controlclient.Client, error) {
+				cc = newClient(t, opts)
+				return cc, nil
+			})
+			// A device that has never logged in: prefs, but no node key.
+			b.ForTest().SetPrefs(&ipn.Prefs{
+				ControlURL:  controlURL,
+				WantRunning: false,
+			})
+
+			if err := b.Start(tt.opts); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+
+			if got := cc.opts.AuthKey; got != tt.wantKey {
+				t.Errorf("control client AuthKey = %q; want %q", got, tt.wantKey)
+			}
+			if tt.wantLogin {
+				cc.assertCalls("Login")
+			} else {
+				cc.assertCalls()
+			}
+		})
+	}
+}
+
 func TestZeroExitNodeViaLocalAPI(t *testing.T) {
 	lb := newTestLocalBackend(t)
 	user := &ipnauth.TestActor{}
