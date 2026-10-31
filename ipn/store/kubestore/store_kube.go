@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"tailscale.com/envknob"
@@ -24,9 +25,11 @@ import (
 	"tailscale.com/kube/kubeapi"
 	"tailscale.com/kube/kubeclient"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/singleflight"
 )
 
 func init() {
@@ -43,6 +46,17 @@ const (
 	// timeout is the timeout for a single state update that includes calls to the API server to write or read a
 	// state Secret and emit an Event.
 	timeout = 30 * time.Second
+
+	// rwCertTTL is how long a write replica serves a TLS cert from its
+	// in-memory cache before it reads the cert Secret again. A short TTL
+	// limits how long the replica can serve a stale cert after the cert
+	// Secret is recreated, for example after Ingress recreation.
+	rwCertTTL = 30 * time.Second
+	// rwCertFallbackTimeout is the timeout for a write replica's cert
+	// Secret read when it has a last-known-good cert to fall back to.
+	// TLS handshakes wait for this read, so it must be much shorter than
+	// typical client handshake timeouts (10s for kubectl).
+	rwCertFallbackTimeout = 3 * time.Second
 
 	reasonTailscaleStateUpdated      = "TailscaledStateUpdated"
 	reasonTailscaleStateLoaded       = "TailscaleStateLoaded"
@@ -90,6 +104,32 @@ type Store struct {
 	// memory holds the latest tailscale state. Writes write state to a kube
 	// Secret and memory, Reads read from memory.
 	memory mem.Store
+
+	// clock is used for rwCerts expiry.
+	clock tstime.DefaultClock
+
+	// certReads deduplicates concurrent cert Secret reads per domain.
+	certReads singleflight.Group[string, *rwCert]
+
+	// rwCertsMu guards rwCerts.
+	rwCertsMu sync.Mutex
+	// rwCerts holds the last-known-good TLS cert and key per domain for
+	// write replicas (cert share "rw"). Write replicas don't keep certs in
+	// memory, so that they notice a recreated, empty cert Secret and issue
+	// a new cert. Instead, they use rwCerts to skip Secret reads for
+	// rwCertTTL and to keep serving TLS when the API server is unavailable.
+	// Entries are never modified, only replaced, so that a read can tell
+	// whether a write replaced the entry while the read was in flight.
+	rwCerts map[string]*rwCert
+}
+
+// rwCert is a TLS cert and key cached by a write replica.
+type rwCert struct {
+	// cert and key are returned to every reader of the cache entry, so
+	// they must not be modified.
+	cert, key []byte
+	// recheckAt is when the replica reads the cert Secret again.
+	recheckAt time.Time
 }
 
 // New returns a new Store that persists state to Kubernets Secret(s).
@@ -153,7 +193,8 @@ func newWithClient(logf logger.Logf, c kubeclient.Client, secretName string) (*S
 	// Write replicas never load certs in-memory to avoid a situation where,
 	// after Ingress recreation (and the associated cert Secret recreation), new
 	// TLS certs don't get issued because the write replica still has certs
-	// in-memory. Instead, write replicas fetch certs from Secret on each request.
+	// in-memory. Instead, write replicas fetch certs from Secret, with a short
+	// TTL cache (see rwCerts).
 	if s.certShareMode == "ro" {
 		sel := s.certSecretSelector()
 		if err := s.loadCerts(context.Background(), sel); err != nil {
@@ -363,12 +404,14 @@ func (s *Store) WriteTLSCertAndKey(domain string, cert, key []byte) (err error) 
 	// TODO(irbekrm): certs for write replicas are currently not
 	// written to memory to avoid out of sync memory state after
 	// Ingress resources have been recreated.  This means that TLS
-	// certs for write replicas are retrieved from the Secret on
-	// each HTTPS request. This is a temporary solution till we
+	// certs for write replicas are retrieved from the Secret once
+	// rwCertTTL has passed. This is a temporary solution till we
 	// implement a Secret watch.
 	if s.certShareMode != "rw" {
 		s.memory.WriteState(ipn.StateKey(domain+".crt"), cert)
 		s.memory.WriteState(ipn.StateKey(domain+".key"), key)
+	} else {
+		s.setRWCert(domain, cert, key)
 	}
 	return nil
 }
@@ -376,7 +419,9 @@ func (s *Store) WriteTLSCertAndKey(domain string, cert, key []byte) (err error) 
 // ReadTLSCertAndKey reads a TLS cert and key from memory or from a
 // domain-specific Secret. It first checks the in-memory store, if not found in
 // memory and running cert store in read-only mode, looks up a Secret.
-// Note that write replicas of HA Ingress always retrieve TLS certs from Secrets.
+// Write replicas of HA Ingress don't use the in-memory store. They read the
+// Secret at most once per rwCertTTL, and serve the last-known-good cert if the
+// read fails with an error other than not found or forbidden.
 func (s *Store) ReadTLSCertAndKey(domain string) (cert, key []byte, err error) {
 	if err := dnsname.ValidHostname(domain); err != nil {
 		return nil, nil, fmt.Errorf("invalid domain name %q: %w", domain, err)
@@ -394,14 +439,40 @@ func (s *Store) ReadTLSCertAndKey(domain string) (cert, key []byte, err error) {
 		return nil, nil, ipn.ErrStateNotExist
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	cached := s.getRWCert(domain)
+	if cached != nil && s.clock.Now().Before(cached.recheckAt) {
+		return cached.cert, cached.key, nil
+	}
+	// Handshakes that arrive while a read is in flight wait for that read
+	// instead of reading the Secret again.
+	c, err, _ := s.certReads.Do(domain, func() (*rwCert, error) {
+		return s.readCertSecret(domain, cached)
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return c.cert, c.key, nil
+}
+
+// readCertSecret reads the TLS cert and key for domain from its Secret.
+// cached is the write replica's cached cert for domain at the start of the
+// read, or nil. The read updates the cache only if cached is still the cache
+// entry for domain, so that a read which started before a WriteTLSCertAndKey
+// doesn't replace or delete the cert that it wrote.
+func (s *Store) readCertSecret(domain string, cached *rwCert) (*rwCert, error) {
+	readTimeout := timeout
+	if cached != nil {
+		readTimeout = rwCertFallbackTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
 	defer cancel()
 	secret, err := s.client.GetSecret(ctx, domain)
 	if err != nil {
 		if kubeclient.IsNotFoundErr(err) {
+			s.replaceRWCert(domain, cached, nil)
 			// TODO(irbekrm): we should return a more specific error
 			// that wraps ipn.ErrStateNotExist here.
-			return nil, nil, ipn.ErrStateNotExist
+			return nil, ipn.ErrStateNotExist
 		}
 		st, ok := err.(*kubeapi.Status)
 		if ok && st.Code == http.StatusForbidden && (s.certShareMode == "ro" || s.certShareMode == "rw") {
@@ -418,30 +489,81 @@ func (s *Store) ReadTLSCertAndKey(domain string) (cert, key []byte, err error) {
 			// This code path gets triggered by the admin UI's machine page,
 			// which queries for the node's own TLS cert existing via the
 			// "tls-cert-status" c2n API.
-			return nil, nil, ipn.ErrStateNotExist
+			s.replaceRWCert(domain, cached, nil)
+			return nil, ipn.ErrStateNotExist
 		}
-		return nil, nil, fmt.Errorf("getting TLS Secret %q: %w", domain, err)
+		if cached != nil {
+			// The API server is slow or unavailable. Serve the
+			// last-known-good cert, and don't read the Secret again
+			// for rwCertTTL, so that handshakes don't wait on every
+			// read and we don't add load to the API server.
+			s.logf("kubestore: getting TLS Secret %q: %v; using last-known-good cert", domain, err)
+			s.replaceRWCert(domain, cached, s.newRWCert(cached.cert, cached.key))
+			return cached, nil
+		}
+		return nil, fmt.Errorf("getting TLS Secret %q: %w", domain, err)
 	}
-	cert = secret.Data[keyTLSCert]
-	key = secret.Data[keyTLSKey]
-	if len(cert) == 0 || len(key) == 0 {
-		return nil, nil, ipn.ErrStateNotExist
+	c := s.newRWCert(secret.Data[keyTLSCert], secret.Data[keyTLSKey])
+	if len(c.cert) == 0 || len(c.key) == 0 {
+		s.replaceRWCert(domain, cached, nil)
+		return nil, ipn.ErrStateNotExist
 	}
 	// TODO(irbekrm): a read between these two separate writes would
 	// get a mismatched cert and key.  Allow writing both cert and
 	// key to the memory store in a single, lock-protected operation.
 	//
 	// TODO(irbekrm): currently certs for write replicas of HA Ingress get
-	// retrieved from the cluster Secret on each HTTPS request to avoid a
-	// situation when after Ingress recreation stale certs are read from
+	// retrieved from the cluster Secret once rwCertTTL has passed to avoid
+	// a situation when after Ingress recreation stale certs are read from
 	// memory.
 	// Fix this by watching Secrets to ensure that memory store gets updated
 	// when Secrets are deleted.
 	if s.certShareMode == "ro" {
-		s.memory.WriteState(ipn.StateKey(certKey), cert)
-		s.memory.WriteState(ipn.StateKey(keyKey), key)
+		s.memory.WriteState(ipn.StateKey(domain+".crt"), c.cert)
+		s.memory.WriteState(ipn.StateKey(domain+".key"), c.key)
+	} else {
+		s.replaceRWCert(domain, cached, c)
 	}
-	return cert, key, nil
+	return c, nil
+}
+
+// newRWCert returns a write replica cert for cert and key, to read again
+// after rwCertTTL.
+func (s *Store) newRWCert(cert, key []byte) *rwCert {
+	return &rwCert{cert: cert, key: key, recheckAt: s.clock.Now().Add(rwCertTTL)}
+}
+
+// getRWCert returns the cached write replica cert for domain, or nil.
+func (s *Store) getRWCert(domain string) *rwCert {
+	s.rwCertsMu.Lock()
+	defer s.rwCertsMu.Unlock()
+	return s.rwCerts[domain]
+}
+
+// setRWCert caches copies of cert and key for domain and resets its TTL.
+// It copies them because the caller owns them.
+func (s *Store) setRWCert(domain string, cert, key []byte) {
+	c := s.newRWCert(bytes.Clone(cert), bytes.Clone(key))
+	s.rwCertsMu.Lock()
+	defer s.rwCertsMu.Unlock()
+	mak.Set(&s.rwCerts, domain, c)
+}
+
+// replaceRWCert replaces the cached write replica cert for domain with next,
+// or removes it if next is nil. It does nothing if the cached cert is no
+// longer old, for example because WriteTLSCertAndKey wrote a new cert. A nil
+// old means that no cert was cached.
+func (s *Store) replaceRWCert(domain string, old, next *rwCert) {
+	s.rwCertsMu.Lock()
+	defer s.rwCertsMu.Unlock()
+	if s.rwCerts[domain] != old {
+		return
+	}
+	if next == nil {
+		delete(s.rwCerts, domain)
+		return
+	}
+	mak.Set(&s.rwCerts, domain, next)
 }
 
 func (s *Store) updateSecret(data map[string][]byte, secretName string) (err error) {
