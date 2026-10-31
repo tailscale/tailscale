@@ -423,6 +423,10 @@ func TestMetaCert(t *testing.T) {
 	if g, w := cert.Subject.CommonName, derpconst.MetaCertCommonNamePrefix+pub.UntypedHexString(); g != w {
 		t.Errorf("CommonName = %q; want %q", g, w)
 	}
+	// See initMetacert for why the meta cert must not be Ed25519.
+	if cert.PublicKeyAlgorithm != x509.ECDSA {
+		t.Errorf("PublicKeyAlgorithm = %v; want %v", cert.PublicKeyAlgorithm, x509.ECDSA)
+	}
 	if n := len(cert.Extensions); n != 1 {
 		t.Fatalf("got %d extensions; want 1", n)
 	}
