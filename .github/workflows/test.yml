@@ -145,6 +145,12 @@ jobs:
       run: ./tool/go build ${{matrix.buildflags}} ./...
       env:
         GOARCH: ${{ matrix.goarch }}
+    - name: build tsnet without ACME
+      if: matrix.buildflags == '' # skip on race builder
+      working-directory: src
+      run: ./tool/go build -tags ts_omit_acme ./tsnet
+      env:
+        GOARCH: ${{ matrix.goarch }}
     - name: build variant CLIs
       if: matrix.buildflags == '' # skip on race builder
       working-directory: src
