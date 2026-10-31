@@ -20,6 +20,9 @@ type ResolveAuthKeyWIFArgs struct {
 	Audience string
 	// Tags is the list of tags to be associated with the auth key.
 	Tags []string
+	// AuthErrorRetries is the maximum number of token exchange attempts on
+	// transient errors, using exponential backoff. Values <= 1 make one attempt.
+	AuthErrorRetries int
 }
 
 type ExchangeJWTForTokenWIFArgs struct {
