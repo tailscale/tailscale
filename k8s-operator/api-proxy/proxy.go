@@ -296,7 +296,7 @@ func (ap *APIServerProxy) sessionForProto(w http.ResponseWriter, r *http.Request
 	ksr.CounterKubernetesAPIRequestEventsAttempted.Add(1) // at this point we know that users intended for this request to be recorded
 	if !c.failOpen && len(c.recorderAddresses) == 0 {
 		msg := fmt.Sprintf("forbidden: 'kubectl %s' session must be recorded, but no recorders are available.", sessionType)
-		ap.log.Error(msg)
+		callerLogger(ap.log, who, r.RemoteAddr).Error(msg)
 		http.Error(w, msg, http.StatusForbidden)
 		return
 	}
@@ -489,6 +489,14 @@ func (ap *APIServerProxy) whoIs(r *http.Request) (*apitype.WhoIsResponse, error)
 	}
 
 	return nil, errors.Join(remoteErr, fwdErr)
+}
+
+func callerLogger(log *zap.SugaredLogger, who *apitype.WhoIsResponse, remote string) *zap.SugaredLogger {
+	caller := strings.TrimSuffix(who.Node.Name, ".")
+	if !who.Node.IsTagged() {
+		caller = who.UserProfile.LoginName
+	}
+	return log.With("caller", caller, "remote", remote)
 }
 
 func (ap *APIServerProxy) authError(w http.ResponseWriter, err error) {

@@ -173,7 +173,11 @@ func (h *Hijacker) setUpRecording(conn net.Conn) (_ net.Conn, retErr error) {
 			h.log.Warnf(msg)
 			return conn, nil
 		}
-		msg = msg + "; failure mode is 'fail closed'; closing connection."
+		caller := strings.TrimSuffix(h.who.Node.Name, ".")
+		if !h.who.Node.IsTagged() {
+			caller = h.who.UserProfile.LoginName
+		}
+		msg = fmt.Sprintf("%s; failure mode is 'fail closed'; closing connection; caller %q from %q.", msg, caller, h.req.RemoteAddr)
 		if err := closeConnWithWarning(conn, msg); err != nil {
 			return nil, errors.Join(errors.New(msg), err)
 		}

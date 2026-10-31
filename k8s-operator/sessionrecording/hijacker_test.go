@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +38,7 @@ func Test_Hijacker(t *testing.T) {
 		failRecorderConnPostConnect bool // send error down the error channel
 		wantsConnClosed             bool
 		wantsSetupErr               bool
+		wantSetupErrContains        string
 		proto                       Protocol
 	}{
 		{
@@ -54,11 +56,12 @@ func Test_Hijacker(t *testing.T) {
 			proto:               SPDYProtocol,
 		},
 		{
-			name:                "setup_fails_policy_is_to_fail_closed_conn_is_closed",
-			failRecorderConnect: true,
-			wantsSetupErr:       true,
-			wantsConnClosed:     true,
-			proto:               SPDYProtocol,
+			name:                 "setup_fails_policy_is_to_fail_closed_conn_is_closed",
+			failRecorderConnect:  true,
+			wantsSetupErr:        true,
+			wantSetupErrContains: `caller "foo@example.com" from "100.64.0.1:54321"`,
+			wantsConnClosed:      true,
+			proto:                SPDYProtocol,
 		},
 		{
 			name:                        "connection_fails_post-initial_connect_policy_is_to_fail_open_conn_stays_open",
@@ -88,10 +91,10 @@ func Test_Hijacker(t *testing.T) {
 					return wc, rec, ch, err
 				},
 				failOpen: tt.failOpen,
-				who:      &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{}},
+				who:      &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: "foo@example.com"}},
 				log:      zl.Sugar(),
 				ts:       &tsnet.Server{},
-				req:      &http.Request{URL: &url.URL{RawQuery: "tty=true"}},
+				req:      &http.Request{URL: &url.URL{RawQuery: "tty=true"}, RemoteAddr: "100.64.0.1:54321"},
 				proto:    tt.proto,
 			}
 			ctx := context.Background()
@@ -99,6 +102,9 @@ func Test_Hijacker(t *testing.T) {
 			if (err != nil) != tt.wantsSetupErr {
 				t.Errorf("spdyHijacker.setupRecording() error = %v, wantErr %v", err, tt.wantsSetupErr)
 				return
+			}
+			if tt.wantSetupErrContains != "" && !strings.Contains(err.Error(), tt.wantSetupErrContains) {
+				t.Errorf("setupRecording() error = %q, want it to contain %q", err, tt.wantSetupErrContains)
 			}
 			if tt.failRecorderConnPostConnect {
 				select {
