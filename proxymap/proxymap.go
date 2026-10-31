@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
-	"time"
 
 	"tailscale.com/syncs"
 	"tailscale.com/util/mak"
@@ -79,31 +78,15 @@ func (m *Mapper) UnregisterIPPortIdentity(proto string, ipport netip.AddrPort) {
 	delete(m.m, k) // safe to delete from a nil map
 }
 
-var whoIsSleeps = [...]time.Duration{
-	0,
-	10 * time.Millisecond,
-	20 * time.Millisecond,
-	50 * time.Millisecond,
-	100 * time.Millisecond,
-}
-
 // WhoIsIPPort looks up an IP:port in the temporary registrations,
 // and returns a matching Tailscale IP, if it exists.
+//
+// The registration is created synchronously before the proxied connection's
+// handshake completes (see issue #1616), so a backend that asks about its
+// peer right after Accept finds the mapping on the first try.
 func (m *Mapper) WhoIsIPPort(proto string, ipport netip.AddrPort) (tsIP netip.Addr, ok bool) {
-	// We currently have a registration race,
-	// https://github.com/tailscale/tailscale/issues/1616,
-	// so loop a few times for now waiting for the registration
-	// to appear.
-	// TODO(bradfitz,namansood): remove this once #1616 is fixed.
-	k := mappingKey{proto, ipport}
-	for _, d := range whoIsSleeps {
-		time.Sleep(d)
-		m.mu.Lock()
-		tsIP, ok := m.m[k]
-		m.mu.Unlock()
-		if ok {
-			return tsIP, true
-		}
-	}
-	return tsIP, false
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	tsIP, ok = m.m[mappingKey{proto, ipport}]
+	return tsIP, ok
 }
