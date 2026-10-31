@@ -5,81 +5,81 @@ package ipnlocal
 
 import (
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnext"
 	"tailscale.com/tailcfg"
-	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/syspolicy/policyclient"
 )
 
-const (
-	hiddenNetworkDevicesCurrentUser   = "current-user"
-	hiddenNetworkDevicesOtherUsers    = "other-users"
-	hiddenNetworkDevicesTaggedDevices = "tagged-devices"
-)
-
-// hiddenNetworkDevices is the parsed HiddenNetworkDevices policy for a watch
-// session. Its zero value means no devices are hidden.
-type hiddenNetworkDevices struct {
-	currentUser   bool
-	otherUsers    bool
-	taggedDevices bool
-}
-
-func hiddenNetworkDevicesFromPolicy(snapshot *policyclient.PolicySnapshot) hiddenNetworkDevices {
-	values := policyclient.GetStringArrayFromSnapshot(
-		snapshot,
-		pkey.HiddenNetworkDevices,
-	)
-
-	var hidden hiddenNetworkDevices
-	for _, value := range values {
-		switch value {
-		case hiddenNetworkDevicesCurrentUser:
-			hidden.currentUser = true
-		case hiddenNetworkDevicesOtherUsers:
-			hidden.otherUsers = true
-		case hiddenNetworkDevicesTaggedDevices:
-			hidden.taggedDevices = true
-		}
-	}
-	return hidden
-}
-
-// nodeGUIVisibilityLocked returns a complete snapshot of GUI visibility
-// metadata for self and all current peers.
-//
+// guiVisibilityFilterLocked gets the optional GUI-specific extension.
 // b.mu must be held.
-func (b *LocalBackend) nodeGUIVisibilityLocked(hidden hiddenNetworkDevices) map[tailcfg.StableNodeID]ipn.NodeGUIVisibility {
-	cn := b.currentNode()
-	nm := cn.NetMap()
-	if nm == nil || !nm.SelfNode.Valid() {
+func (b *LocalBackend) guiVisibilityFilterLocked(snapshot *policyclient.PolicySnapshot) ipnext.GUIVisibilityFilter {
+	var provider ipnext.GUIVisibilityProvider
+	if !b.FindMatchingExtension(&provider) {
 		return nil
 	}
-
-	visibility := make(map[tailcfg.StableNodeID]ipn.NodeGUIVisibility, len(nm.Peers)+1)
-
-	visibility[nm.SelfNode.StableID()] = ipn.NodeGUIVisibility{}
-
-	for _, peer := range nm.Peers {
-		visibility[peer.StableID()] = ipn.NodeGUIVisibility{
-			HideInGUI: peerHiddenInGUI(peer, nm.SelfNode, hidden),
-		}
-	}
-
-	return visibility
+	return provider.ForPolicy(snapshot)
 }
 
-func peerHiddenInGUI(peer, self tailcfg.NodeView, hidden hiddenNetworkDevices) bool {
-	if peer.ID() == self.ID() {
-		return false
+// nodeGUIVisibilityLocked returns a snapshot of hidden peers. An empty,
+// non-nil map clears the previous snapshot when the policy is disabled.
+// b.mu must be held.
+func (b *LocalBackend) nodeGUIVisibilityLocked(filter ipnext.GUIVisibilityFilter) (map[tailcfg.StableNodeID]ipn.NodeGUIVisibility, map[tailcfg.NodeID]tailcfg.StableNodeID) {
+	visibility := make(map[tailcfg.StableNodeID]ipn.NodeGUIVisibility)
+	if filter == nil {
+		return visibility, nil
 	}
-
-	if peer.IsTagged() {
-		return hidden.taggedDevices
+	nm := b.currentNode().NetMap()
+	if nm == nil || !nm.SelfNode.Valid() {
+		return visibility, nil
 	}
-
-	if peer.SharerOrUser() == self.User() {
-		return hidden.currentUser
+	var hidden map[tailcfg.NodeID]tailcfg.StableNodeID
+	for _, peer := range nm.Peers {
+		if filter.Hide(peer, nm.SelfNode) {
+			visibility[peer.StableID()] = ipn.NodeGUIVisibility{HideInGUI: true}
+			mak.Set(&hidden, peer.ID(), peer.StableID())
+		}
 	}
+	return visibility, hidden
+}
 
-	return hidden.otherUsers
+// nodeGUIVisibilityDeltaLocked evaluates only peers in this notification.
+// It returns nil deltas if effective visibility did not change.
+// b.mu must be held.
+func (b *LocalBackend) nodeGUIVisibilityDeltaLocked(sess *watchSession, n *ipn.Notify) (map[tailcfg.StableNodeID]ipn.NodeGUIVisibility, []tailcfg.StableNodeID) {
+	var changes map[tailcfg.StableNodeID]ipn.NodeGUIVisibility
+	var removed []tailcfg.StableNodeID
+	nm := b.currentNode().NetMap()
+	var self tailcfg.NodeView
+	if nm != nil {
+		self = nm.SelfNode
+	}
+	for _, id := range n.PeersRemoved {
+		if stable, ok := sess.hiddenPeers[id]; ok {
+			removed = append(removed, stable)
+			delete(sess.hiddenPeers, id)
+		}
+	}
+	for _, peer := range n.PeersChanged {
+		if peer == nil {
+			continue
+		}
+		if prev, ok := sess.hiddenPeers[peer.ID]; ok && prev != peer.StableID {
+			removed = append(removed, prev)
+			delete(sess.hiddenPeers, peer.ID)
+		}
+		hidden := self.Valid() && sess.guiVisibility.Hide(peer.View(), self)
+		_, wasHidden := sess.hiddenPeers[peer.ID]
+		if hidden == wasHidden {
+			continue
+		}
+		if hidden {
+			mak.Set(&changes, peer.StableID, ipn.NodeGUIVisibility{HideInGUI: true})
+			mak.Set(&sess.hiddenPeers, peer.ID, peer.StableID)
+		} else {
+			removed = append(removed, peer.StableID)
+			delete(sess.hiddenPeers, peer.ID)
+		}
+	}
+	return changes, removed
 }

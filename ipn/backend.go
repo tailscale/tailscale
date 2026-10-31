@@ -364,6 +364,13 @@ type Notify struct {
 	// peer notifications, åand the underlying netmap.
 	NodeGUIVisibility map[tailcfg.StableNodeID]NodeGUIVisibility `json:",omitzero"`
 
+	// NodeGUIVisibilityChanges contains visibility changes for individual peers.
+	// Entries update, rather than replace, NodeGUIVisibility on the client.
+	NodeGUIVisibilityChanges map[tailcfg.StableNodeID]NodeGUIVisibility `json:",omitzero"`
+
+	// NodeGUIVisibilityRemoved lists peers whose visibility entries should be deleted.
+	NodeGUIVisibilityRemoved []tailcfg.StableNodeID `json:",omitzero"`
+
 	// PeerChangedPatch, if non-empty, lists narrow per-field peer patches
 	// since the last Notify (currently Online, LastSeen, DERPHome,
 	// Endpoints). It mirrors [tailcfg.MapResponse.PeersChangedPatch].
