@@ -152,6 +152,12 @@ func Config(ht *health.Tracker, base *tls.Config) *tls.Config {
 					// TODO(bradfitz): plumb down the selfSignedIssuer as a
 					// structured health warning argument.
 					ht.SetTLSConnectionError(cs.ServerName, fmt.Errorf("likely intercepted connection; certificate is self-signed by %v", selfSignedIssuer))
+				} else if verr := certValidityPeriodError(retErr); verr != nil {
+					// The server's certificate is expired (or not yet valid).
+					// Surface this to the user instead of failing silently:
+					// otherwise clients just misbehave, and users end up
+					// troubleshooting the wrong thing.
+					ht.SetTLSConnectionError(cs.ServerName, verr)
 				} else {
 					// Ensure we clear any error state for this ServerName.
 					ht.SetTLSConnectionError(cs.ServerName, nil)
@@ -226,6 +232,16 @@ func Config(ht *health.Tracker, base *tls.Config) *tls.Config {
 		return errSys
 	}
 	return conf
+}
+
+// certValidityPeriodError reports a user-facing error if err is an x509
+// verification error caused by the certificate being expired or not yet valid.
+// It returns nil for any other error (including nil).
+func certValidityPeriodError(err error) error {
+	if invalid, ok := errors.AsType[x509.CertificateInvalidError](err); ok && invalid.Reason == x509.Expired {
+		return errors.New("certificate has expired or is not yet valid; renew the server's certificate and check this device's clock")
+	}
+	return nil
 }
 
 func certIsSelfSigned(cert *x509.Certificate) bool {
