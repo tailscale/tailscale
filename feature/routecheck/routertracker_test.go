@@ -110,6 +110,15 @@ func TestRouterTracker(t *testing.T) {
 			wantModified: nil,
 			wantRemoved:  []tailcfg.NodeID{6},
 		},
+		{
+			name: "conn25-connector",
+			bus: ipnBus{
+				{PeersChanged: []*tailcfg.Node{makeNode(7, withConn25Connector("example"))}},
+			},
+			wantAdded:    []tailcfg.NodeID{7},
+			wantModified: nil,
+			wantRemoved:  nil,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -264,5 +273,18 @@ func makeNode(id tailcfg.NodeID, opts ...nodeOptFunc) *tailcfg.Node {
 func withRoutes(routes ...netip.Prefix) nodeOptFunc {
 	return func(n *tailcfg.Node) {
 		n.AllowedIPs = append(n.AllowedIPs, routes...)
+	}
+}
+
+func withConn25Connector(apps ...string) nodeOptFunc {
+	return func(n *tailcfg.Node) {
+		vals := make([]tailcfg.RawMessage, 0, len(apps))
+		for _, app := range apps {
+			vals = append(vals, tailcfg.RawMessage(fmt.Sprintf("%q", app)))
+		}
+		if n.CapMap == nil {
+			n.CapMap = tailcfg.NodeCapMap{}
+		}
+		n.CapMap[nodecap.Conn25Connector] = vals
 	}
 }
