@@ -1582,19 +1582,22 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	}
 
 	// coverExtraRecords adds an authoritative (resolver-less) route for each
-	// ExtraRecord name not already covered by one, so dns.Manager can scope
-	// quad-100 to those names instead of having to install it as the OS's
-	// primary resolver just to answer them. This is the same convention
-	// addSplitDNSRoutes implements for control-sent empty routes (Issue 2706);
-	// here we apply it to records control sent without a matching route.
+	// ExtraRecord name not already covered by one, when no default resolvers
+	// are configured, so dns.Manager can scope quad-100 to those names.
+	// With default resolvers, quad-100 already handles all queries. Adding
+	// authoritative routes would prevent forwarding unknown descendants of
+	// ExtraRecords to those resolvers (Issue 21787).
 	//
 	// Only ExtraRecords, not all of dcfg.Hosts: on Windows Hosts also carries
 	// every node's records, and routing each one individually would mean a
 	// per-node NRPT rule.
 	//
-	// Must run after all addSplitDNSRoutes calls so a control-sent route for
-	// the same suffix wins.
+	// Must run after all addSplitDNSRoutes calls and default resolver selection
+	// so a control-sent route for the same suffix wins.
 	coverExtraRecords := func() {
+		if len(dcfg.DefaultResolvers) > 0 {
+			return
+		}
 		for _, fqdn := range extraRecordNames {
 			covered := false
 			for route := range dcfg.Routes {
@@ -1644,7 +1647,6 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	// Add split DNS routes, with no regard to exit node configuration.
 	addSplitDNSRoutes(nm.DNS.Routes)
 	addSplitDNSRoutes(extraRoutes)
-	coverExtraRecords()
 
 	// Set FallbackResolvers as the default resolvers in the
 	// scenarios that can't handle a purely split-DNS config. See
@@ -1671,6 +1673,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	case len(dcfg.Routes) == 0:
 		// No settings requiring split DNS, no problem.
 	}
+	coverExtraRecords()
 
 	return dcfg
 }
