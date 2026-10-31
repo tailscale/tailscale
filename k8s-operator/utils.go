@@ -95,10 +95,10 @@ func ResolveViaDomain(name string) (netip.Addr, bool) {
 	return out.Addr(), true
 }
 
-// TruncateLabelValue truncates a Kubernetes label value to fit within the
-// 63-character limit. If the value exceeds the limit, it is truncated and a
-// short hash suffix is appended to preserve uniqueness.
-func TruncateLabelValue(val string) string {
+// TruncateWithHash truncates val to fit within 63 bytes, the maximum length
+// of both a Kubernetes label value and a DNS label. If val exceeds the limit,
+// it is truncated and a short hash suffix is appended to preserve uniqueness.
+func TruncateWithHash(val string) string {
 	const maxLen = 63
 	if len(val) <= maxLen {
 		return val
