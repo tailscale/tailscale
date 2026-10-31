@@ -436,6 +436,21 @@ func (c *Direct) Close() error {
 	return nil
 }
 
+// dropNoiseClient closes nc and, if it's still the current Noise client,
+// forgets it so the next request dials a fresh connection. It's used when
+// nc's connection is suspected dead, e.g. silently blackholed by an upstream
+// NAT change, which the HTTP/2 transport would otherwise keep reusing.
+func (c *Direct) dropNoiseClient(nc *ts2021.Client) {
+	c.mu.Lock()
+	if c.noiseClient == nc {
+		c.noiseClient = nil
+	}
+	c.mu.Unlock()
+	if err := nc.Close(); err != nil {
+		c.logf("closing stale control connection: %v", err)
+	}
+}
+
 // SetHostinfo clones the provided Hostinfo and remembers it for the
 // next update. It reports whether the Hostinfo has changed.
 func (c *Direct) SetHostinfo(hi *tailcfg.Hostinfo) bool {
@@ -1191,6 +1206,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		case <-watchdogTimedOut:
 			c.logf("map response long-poll timed out!")
 			cancel()
+			// Not even a keep-alive arrived, so the connection itself is
+			// likely dead. Don't let the next request reuse it.
+			c.dropNoiseClient(httpc)
 			return
 		}
 	}()
