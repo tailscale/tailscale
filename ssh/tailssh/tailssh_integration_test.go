@@ -38,6 +38,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 	"tailscale.com/net/tsdial"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -936,29 +937,12 @@ func testClient(t *testing.T, forceV1Behavior bool, allowSendEnv bool, authMetho
 }
 
 func testServer(t *testing.T, username string, forceV1Behavior bool, allowSendEnv bool) string {
-	srv := &server{
-		lb:             &testBackend{localUser: username, forceV1Behavior: forceV1Behavior, allowSendEnv: allowSendEnv},
-		logf:           log.Printf,
-		tailscaledPath: os.Getenv("TAILSCALED_PATH"),
-		timeNow:        time.Now,
-	}
-
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { l.Close() })
-
-	go func() {
-		for {
-			conn, err := l.Accept()
-			if err == nil {
-				go srv.HandleSSHConn(&addressFakingConn{conn})
-			}
-		}
-	}()
-
-	return l.Addr().String()
+	t.Helper()
+	return testServerWithOpts(t, testServerOpts{
+		username:        username,
+		forceV1Behavior: forceV1Behavior,
+		allowSendEnv:    allowSendEnv,
+	})
 }
 
 type testServerOpts struct {
@@ -968,22 +952,40 @@ type testServerOpts struct {
 	allowLocalPortForwarding  bool
 	allowRemotePortForwarding bool
 	logf                      logger.Logf // defaults to log.Printf
+	varRoot                   string      // TailscaleVarRoot; defaults to testVarRoot
+
+	// modifyRule, if non-nil, adjusts the single SSH rule the test
+	// backend's netmap returns. It can be replaced later with
+	// [testBackend.setModifyRule].
+	modifyRule func(*tailcfg.SSHRule)
 }
 
 func testServerWithOpts(t *testing.T, opts testServerOpts) string {
+	t.Helper()
+	_, _, addr := startTestServer(t, opts)
+	return addr
+}
+
+// startTestServer starts a Tailscale SSH server configured by opts,
+// listening on a random localhost port. It returns the server, its
+// backend, and the address it listens on.
+func startTestServer(t *testing.T, opts testServerOpts) (*server, *testBackend, string) {
 	t.Helper()
 	logf := opts.logf
 	if logf == nil {
 		logf = log.Printf
 	}
+	tb := &testBackend{
+		localUser:                 opts.username,
+		forceV1Behavior:           opts.forceV1Behavior,
+		allowSendEnv:              opts.allowSendEnv,
+		allowLocalPortForwarding:  opts.allowLocalPortForwarding,
+		allowRemotePortForwarding: opts.allowRemotePortForwarding,
+		varRoot:                   opts.varRoot,
+	}
+	tb.setModifyRule(opts.modifyRule)
 	srv := &server{
-		lb: &testBackend{
-			localUser:                 opts.username,
-			forceV1Behavior:           opts.forceV1Behavior,
-			allowSendEnv:              opts.allowSendEnv,
-			allowLocalPortForwarding:  opts.allowLocalPortForwarding,
-			allowRemotePortForwarding: opts.allowRemotePortForwarding,
-		},
+		lb:             tb,
 		logf:           logf,
 		tailscaledPath: os.Getenv("TAILSCALED_PATH"),
 		timeNow:        time.Now,
@@ -998,13 +1000,14 @@ func testServerWithOpts(t *testing.T, opts testServerOpts) string {
 	go func() {
 		for {
 			conn, err := l.Accept()
-			if err == nil {
-				go srv.HandleSSHConn(&addressFakingConn{conn})
+			if err != nil {
+				return
 			}
+			go srv.HandleSSHConn(&addressFakingConn{conn})
 		}
 	}()
 
-	return l.Addr().String()
+	return srv, tb, l.Addr().String()
 }
 
 func testSession(t *testing.T, forceV1Behavior bool, allowSendEnv bool, sendEnv map[string]string) *session {
@@ -1069,6 +1072,16 @@ type testBackend struct {
 	allowSendEnv              bool
 	allowLocalPortForwarding  bool
 	allowRemotePortForwarding bool
+	varRoot                   string // or empty for testVarRoot
+
+	modifyRule syncs.AtomicValue[func(*tailcfg.SSHRule)] // or nil
+}
+
+// setModifyRule sets the func that adjusts the SSH rule returned by
+// [testBackend.NetMap]. Callers that want existing connections to
+// observe the change must also call [server.OnPolicyChange].
+func (tb *testBackend) setModifyRule(f func(*tailcfg.SSHRule)) {
+	tb.modifyRule.Store(f)
 }
 
 func (tb *testBackend) ShouldRunSSH() bool {
@@ -1083,23 +1096,23 @@ func (tb *testBackend) NetMap() *netmap.NetworkMap {
 	if tb.allowSendEnv {
 		capMap[tailcfg.NodeAttrSSHEnvironmentVariables] = struct{}{}
 	}
-	return &netmap.NetworkMap{
-		SSHPolicy: &tailcfg.SSHPolicy{
-			Rules: []*tailcfg.SSHRule{
-				{
-					Principals: []*tailcfg.SSHPrincipal{{Any: true}},
-					Action: &tailcfg.SSHAction{
-						Accept:                    true,
-						AllowAgentForwarding:      true,
-						AllowLocalPortForwarding:  tb.allowLocalPortForwarding,
-						AllowRemotePortForwarding: tb.allowRemotePortForwarding,
-					},
-					SSHUsers:  map[string]string{"*": tb.localUser},
-					AcceptEnv: []string{"GIT_*", "EXACT_MATCH", "TEST?NG"},
-				},
-			},
+	rule := &tailcfg.SSHRule{
+		Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+		Action: &tailcfg.SSHAction{
+			Accept:                    true,
+			AllowAgentForwarding:      true,
+			AllowLocalPortForwarding:  tb.allowLocalPortForwarding,
+			AllowRemotePortForwarding: tb.allowRemotePortForwarding,
 		},
-		AllCaps: capMap,
+		SSHUsers:  map[string]string{"*": tb.localUser},
+		AcceptEnv: []string{"GIT_*", "EXACT_MATCH", "TEST?NG"},
+	}
+	if f := tb.modifyRule.Load(); f != nil {
+		f(rule)
+	}
+	return &netmap.NetworkMap{
+		SSHPolicy: &tailcfg.SSHPolicy{Rules: []*tailcfg.SSHRule{rule}},
+		AllCaps:   capMap,
 	}
 }
 
@@ -1120,7 +1133,7 @@ func (tb *testBackend) Dialer() *tsdial.Dialer {
 }
 
 func (tb *testBackend) TailscaleVarRoot() string {
-	return testVarRoot
+	return cmp.Or(tb.varRoot, testVarRoot)
 }
 
 func (tb *testBackend) NodeKey() key.NodePublic {
