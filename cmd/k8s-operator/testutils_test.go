@@ -39,6 +39,7 @@ import (
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/types/key"
 	"tailscale.com/util/mak"
 )
 
@@ -946,6 +947,21 @@ func (m *fakeDevices) Get(_ context.Context, id string) (*tailscale.Device, erro
 	}
 
 	return nil, tailscale.APIError{Status: http.StatusNotFound}
+}
+
+// setUnreportedDevice leaves only a machine key in state Secret name and registers a device with that key, as if
+// tailscaled registered with control but never reported its device ID.
+func setUnreportedDevice(t *testing.T, cl client.Client, tsClient *fakeTSClient, name, nodeID string) {
+	t.Helper()
+	mk := key.NewMachine()
+	mkText, err := mk.MarshalText()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustUpdate(t, cl, tsNamespace, name, func(s *corev1.Secret) {
+		s.Data = map[string][]byte{string(ipn.MachineKeyStateKey): mkText}
+	})
+	tsClient.devices = append(tsClient.devices, tailscale.Device{NodeID: nodeID, MachineKey: mk.Public().String()})
 }
 
 func (c *fakeTSClient) Keys() tsclient.KeyResource {

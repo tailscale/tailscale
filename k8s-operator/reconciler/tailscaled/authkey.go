@@ -18,6 +18,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 )
 
 // ClientProvider returns a Tailscale API client for the given tailnet name. A blank name should return the
@@ -54,6 +55,44 @@ func EnsureDeviceDeleted(ctx context.Context, client tsclient.Client, logger *za
 	default:
 		logger.Debugf("device %s deleted from control", string(id))
 	}
+	return nil
+}
+
+// EnsureUnreportedDeviceDeleted deletes the device registered with the machine key in state Secret secret, for a
+// tailscaled that registered with control but was shut down before it received a netmap, so it never learned its
+// device ID to write to the state Secret.
+func EnsureUnreportedDeviceDeleted(ctx context.Context, client tsclient.Client, logger *zap.SugaredLogger, secret *corev1.Secret) error {
+	mkText := secret.Data[string(ipn.MachineKeyStateKey)]
+	// tailscaled writes its machine key before registering, so no key means no device.
+	if len(mkText) == 0 {
+		return nil
+	}
+
+	var mk key.MachinePrivate
+	if err := mk.UnmarshalText(mkText); err != nil {
+		// tailscaled refuses to start with an invalid machine key, so it cannot have registered a device with it.
+		logger.Warnf("failed to parse machine key in state Secret %q, skipping: %v", secret.Name, err)
+		return nil
+	}
+
+	mkPub := mk.Public().String()
+	devices, err := client.Devices().List(ctx, tailscaleclient.WithFilter("machineKey", []string{mkPub}))
+	if err != nil {
+		return fmt.Errorf("failed to list devices: %w", err)
+	}
+
+	for _, dev := range devices {
+		// Control ignores filters it does not support, so check the key rather than trusting the filter.
+		if dev.MachineKey != mkPub {
+			continue
+		}
+
+		logger.Infof("deleting device %q that registered but never reported its device ID", dev.NodeID)
+		if err := client.Devices().Delete(ctx, dev.NodeID); err != nil && !tailscaleclient.IsNotFound(err) {
+			return fmt.Errorf("failed to delete device %q: %w", dev.NodeID, err)
+		}
+	}
+
 	return nil
 }
 

@@ -20,9 +20,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/yaml"
+	"tailscale.com/client/tailscale/v2"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/types/key"
 )
 
 // Test_statefulSetNameBase tests that parent name portion in a StatefulSet name
@@ -400,6 +404,88 @@ func Test_mergeStatefulSetLabelsOrAnnots(t *testing.T) {
 			if got := mergeStatefulSetLabelsOrAnnots(tt.current, tt.custom, tt.managed); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("mergeStatefulSetLabels() = %v, want %v", got, tt.want)
 			}
+		})
+	}
+}
+
+// TestCleanupUnreportedDevices tests that Cleanup deletes devices that
+// registered but never wrote their device ID to the state Secret, by looking
+// them up by the machine key tailscaled stored there.
+func TestCleanupUnreportedDevices(t *testing.T) {
+	mk := key.NewMachine()
+	mkText, err := mk.MarshalText()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mkPub := mk.Public().String()
+	labels := childResourceLabels("test", "default", "svc")
+
+	tests := []struct {
+		name        string
+		data        map[string][]byte
+		devices     []tailscale.Device
+		wantDeleted []string
+	}{
+		{
+			name: "deletes_device_matching_machine_key",
+			data: map[string][]byte{"_machinekey": mkText},
+			devices: []tailscale.Device{
+				{NodeID: "nodeid-0", MachineKey: mkPub},
+				{NodeID: "nodeid-1", MachineKey: key.NewMachine().Public().String()},
+			},
+			wantDeleted: []string{"nodeid-0"},
+		},
+		{
+			name: "uses_reported_device_id",
+			data: map[string][]byte{
+				"_machinekey": mkText,
+				"device_id":   []byte("nodeid-0"),
+			},
+			devices:     []tailscale.Device{{NodeID: "nodeid-0", MachineKey: mkPub}},
+			wantDeleted: []string{"nodeid-0"},
+		},
+		{
+			name:    "no_machine_key",
+			devices: []tailscale.Device{{NodeID: "nodeid-0", MachineKey: mkPub}},
+		},
+		{
+			name:    "invalid_machine_key",
+			data:    map[string][]byte{"_machinekey": []byte("not-a-key")},
+			devices: []tailscale.Device{{NodeID: "nodeid-0", MachineKey: mkPub}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fc := fake.NewClientBuilder().
+				WithScheme(tsapi.GlobalScheme).
+				WithObjects(&corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "ts-test-abcde-0",
+						Namespace: "operator-ns",
+						Labels:    labels,
+					},
+					Data: tt.data,
+				}).
+				Build()
+			ft := &fakeTSClient{devices: tt.devices}
+			r := &tailscaleSTSReconciler{
+				Client:            fc,
+				clients:           tsclient.NewProvider(ft),
+				operatorNamespace: "operator-ns",
+			}
+
+			done, err := r.Cleanup(t.Context(), operatorTailnet, zap.Must(zap.NewDevelopment()).Sugar(), labels, proxyTypeIngressService)
+			if err != nil {
+				t.Fatalf("Cleanup() error = %v", err)
+			}
+			if !done {
+				t.Errorf("Cleanup() done = %v, want true", done)
+			}
+			if diff := cmp.Diff(tt.wantDeleted, ft.deleted); diff != "" {
+				t.Errorf("Cleanup() deleted devices mismatch (-want +got):\n%s", diff)
+			}
+			expectMissing[corev1.Secret](t, fc, "operator-ns", "ts-test-abcde-0")
 		})
 	}
 }
