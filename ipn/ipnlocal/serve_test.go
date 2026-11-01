@@ -1384,6 +1384,7 @@ func TestServeFileOrDirectory(t *testing.T) {
 	writeFile("foo", "this is foo")
 	writeFile("bar", "this is bar")
 	os.MkdirAll(filepath.Join(td, "subdir"), 0o700)
+	os.MkdirAll(filepath.Join(td, "subdir", "nested"), 0o700)
 	writeFile("subdir/file-a", "this is A")
 	writeFile("subdir/file-b", "this is B")
 	writeFile("subdir/file-c", "this is C")
@@ -1438,6 +1439,7 @@ func TestServeFileOrDirectory(t *testing.T) {
 		{"/bar/inside-file", "/", isStatus(404)},
 		{"/subdir", "/", isRedirect("/subdir/")},
 		{"/subdir/", "/", contains("file-a", "file-b", "file-c")},
+		{"/subdir/nested", "/", isRedirect("/subdir/nested/")},
 		{"/subdir/file-a", "/", contains("this is A")},
 		{"/subdir/file-z", "/", isStatus(404)},
 
@@ -1449,6 +1451,7 @@ func TestServeFileOrDirectory(t *testing.T) {
 		{"/doc/bar/inside-file", "/doc/", isStatus(404)},
 		{"/doc/subdir", "/doc/", isRedirect("/doc/subdir/")},
 		{"/doc/subdir/", "/doc/", contains("file-a", "file-b", "file-c")},
+		{"/doc/subdir/nested", "/doc/", isRedirect("/doc/subdir/nested/")},
 		{"/doc/subdir/file-a", "/doc/", contains("this is A")},
 		{"/doc/subdir/file-z", "/doc/", isStatus(404)},
 	}
