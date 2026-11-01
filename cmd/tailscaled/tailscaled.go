@@ -523,17 +523,23 @@ func run() (err error) {
 		})
 
 		pol := logpolicy.Options{
-			Collection: logtail.CollectionNode,
-			NetMon:     netMon,
-			Health:     sys.HealthTracker.Get(),
-			Bus:        sys.Bus.Get(),
+			Collection:         logtail.CollectionNode,
+			NetMon:             netMon,
+			Health:             sys.HealthTracker.Get(),
+			Bus:                sys.Bus.Get(),
+			DisableFilchBuffer: args.cleanUp,
 		}.New()
 		pol.SetVerbosityLevel(args.verbose)
 		publicLogID = pol.PublicID
 		logPol = pol
 		defer func() {
 			// Finish uploading logs after closing everything else.
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			// 5s matches the logtail shutdown budgets in tsnet
+			// and sockstatlog. It cannot cover a full 45s
+			// upload attempt or a retry backoff, so shutdown
+			// remains best-effort, but it gives an in-flight
+			// upload and a drained backlog a chance to land.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			pol.Shutdown(ctx)
 		}()
