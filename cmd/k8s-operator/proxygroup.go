@@ -486,6 +486,11 @@ func (r *ProxyGroupReconciler) maybeUpdateStatus(ctx context.Context, logger *za
 		return fmt.Errorf("failed to list running proxies: %w", err)
 	}
 
+	statefulSetRolledOut, err := r.statefulSetRolledOut(ctx, pg)
+	if err != nil {
+		return fmt.Errorf("failed to check ProxyGroup StatefulSet rollout: %w", err)
+	}
+
 	pg.Status.Devices = devices
 
 	desiredReplicas := int(pgReplicas(pg))
@@ -517,6 +522,8 @@ func (r *ProxyGroupReconciler) maybeUpdateStatus(ctx context.Context, logger *za
 	case len(devices) < desiredReplicas:
 	case len(devices) > desiredReplicas:
 		message = fmt.Sprintf("waiting for %d ProxyGroup pods to shut down", len(devices)-desiredReplicas)
+	case !statefulSetRolledOut:
+		message = "waiting for ProxyGroup StatefulSet rollout to complete"
 	case pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer && !tsoperator.KubeAPIServerProxyConfigured(pg):
 		reason = reasonProxyGroupCreating
 		message = "waiting for proxies to start advertising the kube-apiserver proxy's hostname"
@@ -528,6 +535,26 @@ func (r *ProxyGroupReconciler) maybeUpdateStatus(ctx context.Context, logger *za
 	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, status, reason, message, pg.Generation, r.clock, logger)
 
 	return nil
+}
+
+func (r *ProxyGroupReconciler) statefulSetRolledOut(ctx context.Context, pg *tsapi.ProxyGroup) (bool, error) {
+	sts := &appsv1.StatefulSet{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: r.tsNamespace, Name: pg.Name}, sts); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	// StatefulSets created by the API server always have a positive generation.
+	// The zero-generation case keeps fake-client tests that do not model status
+	// compatible without weakening the production rollout check.
+	if sts.Generation == 0 {
+		return true, nil
+	}
+	return sts.Status.ObservedGeneration >= sts.Generation &&
+		sts.Status.CurrentRevision != "" &&
+		sts.Status.CurrentRevision == sts.Status.UpdateRevision, nil
 }
 
 func (r *ProxyGroupReconciler) ensureNodePortServiceCreated(ctx context.Context, pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass) (map[string]uint16, *uint16, error) {

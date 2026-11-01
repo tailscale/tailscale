@@ -1006,6 +1006,23 @@ func TestProxyGroup(t *testing.T) {
 		mustUpdate(t, fc, "", pg.Name, func(p *tsapi.ProxyGroup) {
 			p.ObjectMeta.Generation = pg.ObjectMeta.Generation
 		})
+		sts := &appsv1.StatefulSet{}
+		if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
+			t.Fatal(err)
+		}
+		sts.Generation = 2
+		if err := fc.Update(t.Context(), sts); err != nil {
+			t.Fatal(err)
+		}
+		if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
+			t.Fatal(err)
+		}
+		sts.Status.ObservedGeneration = 1
+		sts.Status.CurrentRevision = "old"
+		sts.Status.UpdateRevision = "new"
+		if err := fc.Status().Update(t.Context(), sts); err != nil {
+			t.Fatal(err)
+		}
 		expectReconciled(t, reconciler, "", pg.Name)
 
 		pg.Status.Devices = []tsapi.TailnetDevice{
@@ -1018,9 +1035,39 @@ func TestProxyGroup(t *testing.T) {
 				TailnetIPs: []string{"1.2.3.4", "::1"},
 			},
 		}
-		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupReady, reasonProxyGroupReady, 3, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "waiting for ProxyGroup StatefulSet rollout to complete", 3, cl, zl.Sugar())
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, reasonProxyGroupAvailable, "2/2 ProxyGroup pods running", 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg)
+		if tsoperator.ProxyGroupIsReady(pg) {
+			t.Fatal("expected ProxyGroup to remain unready during StatefulSet rollout")
+		}
+
+		if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
+			t.Fatal(err)
+		}
+		sts.Status.ObservedGeneration = sts.Generation
+		sts.Status.CurrentRevision = "new"
+		sts.Status.UpdateRevision = "new"
+		if err := fc.Status().Update(t.Context(), sts); err != nil {
+			t.Fatal(err)
+		}
+		expectReconciled(t, reconciler, "", pg.Name)
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupReady, reasonProxyGroupReady, 3, cl, zl.Sugar())
+		expectEqual(t, fc, pg)
+		if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
+			t.Fatal(err)
+		}
+		sts.Status = appsv1.StatefulSetStatus{}
+		if err := fc.Status().Update(t.Context(), sts); err != nil {
+			t.Fatal(err)
+		}
+		if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
+			t.Fatal(err)
+		}
+		sts.Generation = 0
+		if err := fc.Update(t.Context(), sts); err != nil {
+			t.Fatal(err)
+		}
 		expectProxyGroupResources(t, fc, pg, true, pc)
 		if !tsoperator.ProxyGroupAvailable(pg) {
 			t.Fatal("expected ProxyGroup to be available")
