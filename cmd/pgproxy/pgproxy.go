@@ -209,7 +209,7 @@ func (p *proxy) serve(sessionID int64, c net.Conn) error {
 	// Before anything else, log the connection attempt.
 	user, machine := "", ""
 	if whois.Node != nil {
-		if whois.Node.Hostinfo.ShareeNode() {
+		if whois.Node.Hostinfo.Valid() && whois.Node.Hostinfo.ShareeNode() {
 			machine = "external-device"
 		} else {
 			machine = strings.TrimSuffix(whois.Node.Name, ".")
