@@ -232,6 +232,9 @@ func (p *proxy) serve(sessionID int64, c net.Conn) error {
 		log.Printf("%d: session end, from %s (machine %s, user %s), lasted %s", sessionID, c.RemoteAddr(), machine, user, elapsed.Round(time.Millisecond))
 	}()
 
+	deadline, _ := ctx.Deadline()
+	c.SetDeadline(deadline)
+
 	// Read the client's opening message, to figure out if it's trying
 	// to TLS or not.
 	var buf [8]byte
@@ -304,6 +307,8 @@ func (p *proxy) serve(sessionID int64, c net.Conn) error {
 		}
 		clientConn = c
 	}
+
+	c.SetDeadline(time.Time{})
 
 	// Finally, proxy the client to the upstream.
 	errc := make(chan error, 1)
