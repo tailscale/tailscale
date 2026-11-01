@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -186,6 +187,13 @@ var (
 	// that they want to do a TLS handshake. Servers should respond with
 	// the single byte "S" before starting a normal TLS handshake.
 	sslStart = [8]byte{0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f}
+	// gssencStart is the magic bytes that postgres clients use to request
+	// GSSAPI encryption. Servers that don't support it respond "N", and
+	// the client continues on the same connection.
+	gssencStart = [8]byte{0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x30}
+	// cancelRequestCode identifies a CancelRequest, which is forwarded
+	// upstream like a StartupMessage.
+	cancelRequestCode = [4]byte{0x04, 0xd2, 0x16, 0x2e}
 )
 
 // serve proxies the postgres client on c to the proxy's upstream,
@@ -231,19 +239,30 @@ func (p *proxy) serve(sessionID int64, c net.Conn) error {
 	// Read the client's opening message, to figure out if it's trying
 	// to TLS or not.
 	var buf [8]byte
-	if _, err := io.ReadFull(c, buf[:len(sslStart)]); err != nil {
-		p.errors.Add("network-error", 1)
-		return fmt.Errorf("initial magic read: %v", err)
-	}
-	var clientIsTLS bool
-	switch {
-	case buf == sslStart:
-		clientIsTLS = true
-	case buf[4] == 0 && buf[5] == 3: // protocol 3.x StartupMessage
-		clientIsTLS = false
-	default:
-		p.errors.Add("client-bad-protocol", 1)
-		return fmt.Errorf("unrecognized initial packet = % 02x", buf)
+	var clientIsTLS, clientIsDirectTLS bool
+	for {
+		if _, err := io.ReadFull(c, buf[:]); err != nil {
+			p.errors.Add("network-error", 1)
+			return fmt.Errorf("initial magic read: %v", err)
+		}
+		switch {
+		case buf == sslStart:
+			clientIsTLS = true
+		case buf[0] == 0x16: // TLS handshake record, from sslnegotiation=direct
+			clientIsTLS, clientIsDirectTLS = true, true
+		case buf == gssencStart:
+			if _, err := io.WriteString(c, "N"); err != nil {
+				p.errors.Add("network-error", 1)
+				return fmt.Errorf("declining GSSAPI encryption: %v", err)
+			}
+			continue
+		case buf[4] == 0 && buf[5] == 3, [4]byte(buf[4:]) == cancelRequestCode:
+			// Protocol 3.x StartupMessage or CancelRequest.
+		default:
+			p.errors.Add("client-bad-protocol", 1)
+			return fmt.Errorf("unrecognized initial packet = % 02x", buf)
+		}
+		break
 	}
 
 	// Dial & verify upstream connection.
@@ -282,11 +301,17 @@ func (p *proxy) serve(sessionID int64, c net.Conn) error {
 	// Accept the client conn and set it up the way the client wants.
 	var clientConn net.Conn
 	if clientIsTLS {
-		io.WriteString(c, "S") // yeah, we're good to speak TLS
-		s := tls.Server(c, &tls.Config{
+		var tlsConn net.Conn = c
+		if clientIsDirectTLS {
+			tlsConn = prefixConn{c, io.MultiReader(bytes.NewReader(buf[:]), c)}
+		} else {
+			io.WriteString(c, "S") // yeah, we're good to speak TLS
+		}
+		s := tls.Server(tlsConn, &tls.Config{
 			ServerName:   p.upstreamHost,
 			Certificates: p.downstreamCert,
 			MinVersion:   tls.VersionTLS12,
+			NextProtos:   []string{"postgresql"},
 		})
 		if err = s.HandshakeContext(ctx); err != nil {
 			p.errors.Add("client-tls", 1)
@@ -321,6 +346,14 @@ func (p *proxy) serve(sessionID int64, c net.Conn) error {
 	}
 	return nil
 }
+
+// prefixConn is a net.Conn whose reads come from r.
+type prefixConn struct {
+	net.Conn
+	r io.Reader
+}
+
+func (c prefixConn) Read(b []byte) (int, error) { return c.r.Read(b) }
 
 // mkSelfSigned creates and returns a self-signed TLS certificate for
 // hostname.
