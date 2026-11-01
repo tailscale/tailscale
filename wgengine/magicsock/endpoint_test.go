@@ -1256,3 +1256,105 @@ func TestChangedActiveDiscoLocked(t *testing.T) {
 		}
 	})
 }
+
+func Test_endpoint_currentPathLocked(t *testing.T) {
+	vni := packet.VirtualNetworkID{}
+	vni.Set(1)
+	derpAddr := netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, 1)
+
+	tests := []struct {
+		name      string
+		bestAddr  addrQuality
+		trustFor  time.Duration // relative to lastSendExt; ignored if noBest
+		noBest    bool
+		noDERP    bool
+		sentAgo   time.Duration // zero means just sent, unless neverSent
+		neverSent bool
+		want      Path
+		wantOK    bool
+	}{
+		{
+			name:     "direct_ipv4",
+			bestAddr: addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("192.0.2.1:40000")}},
+			trustFor: time.Hour,
+			want:     PathDirectIPv4,
+			wantOK:   true,
+		},
+		{
+			name:     "direct_ipv6",
+			bestAddr: addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("[2001:db8::1]:40000")}},
+			trustFor: time.Hour,
+			want:     PathDirectIPv6,
+			wantOK:   true,
+		},
+		{
+			name:     "peer_relay_ipv4",
+			bestAddr: addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("192.0.2.1:40000"), vni: vni}},
+			trustFor: time.Hour,
+			want:     PathPeerRelayIPv4,
+			wantOK:   true,
+		},
+		{
+			name:     "peer_relay_ipv6",
+			bestAddr: addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("[2001:db8::1]:40000"), vni: vni}},
+			trustFor: time.Hour,
+			want:     PathPeerRelayIPv6,
+			wantOK:   true,
+		},
+		{
+			name:     "expired_trust_falls_back_to_derp",
+			bestAddr: addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("192.0.2.1:40000")}},
+			trustFor: -time.Second,
+			want:     PathDERP,
+			wantOK:   true,
+		},
+		{
+			name:   "no_best_addr_uses_derp",
+			noBest: true,
+			want:   PathDERP,
+			wantOK: true,
+		},
+		{
+			name:      "never_sent_excluded",
+			neverSent: true,
+			bestAddr:  addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("192.0.2.1:40000")}},
+			trustFor:  time.Hour,
+		},
+		{
+			name:     "stale_send_excluded",
+			bestAddr: addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("192.0.2.1:40000")}},
+			trustFor: time.Hour,
+			sentAgo:  sessionActiveTimeout,
+		},
+		{
+			name:   "no_path_at_all_excluded",
+			noBest: true,
+			noDERP: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := mono.Now()
+			de := &endpoint{derpAddr: derpAddr}
+			if tt.noDERP {
+				de.derpAddr = netip.AddrPort{}
+			}
+			if !tt.neverSent {
+				de.lastSendExt = now.Add(-tt.sentAgo)
+			}
+			if !tt.noBest {
+				de.bestAddr = tt.bestAddr
+				de.trustBestAddrUntil = de.lastSendExt.Add(tt.trustFor)
+				if tt.neverSent {
+					de.trustBestAddrUntil = now.Add(tt.trustFor)
+				}
+			}
+			de.mu.Lock()
+			got, ok := de.currentPathLocked(now)
+			de.mu.Unlock()
+			if got != tt.want || ok != tt.wantOK {
+				t.Errorf("currentPathLocked() = %q, %v; want %q, %v", got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}
