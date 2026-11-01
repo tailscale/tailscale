@@ -308,6 +308,9 @@ func (c *Client) Close() error {
 	}
 	c.closed = true
 	c.invalidateMappingsLocked(true)
+	if c.uPnPHTTPClient != nil {
+		c.uPnPHTTPClient.CloseIdleConnections()
+	}
 	c.updates.Close()
 	c.pubClient.Close()
 
@@ -413,6 +416,20 @@ func (c *Client) invalidateMappingsLocked(releaseOld bool) {
 	c.uPnPMetas = nil
 }
 
+// setMappingLocked stores m as the current mapping and reports true, or, if c
+// is closed, releases m and reports false. A mapping that completes after
+// Close would otherwise stay on the gateway after the client is gone.
+//
+// c.mu must be held.
+func (c *Client) setMappingLocked(m mapping) bool {
+	if c.closed {
+		m.Release(context.Background())
+		return false
+	}
+	c.mapping = m
+	return true
+}
+
 func (c *Client) sawPMPRecently() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -500,7 +517,7 @@ func (c *Client) GetCachedMappingOrStartCreatingOne() (external netip.AddrPort, 
 //
 // c.mu must be held.
 func (c *Client) maybeStartMappingLocked() {
-	if !c.runningCreate {
+	if !c.closed && !c.runningCreate {
 		c.runningCreate = true
 		go c.createMapping()
 	}
@@ -787,7 +804,9 @@ func (c *Client) createOrGetMapping(ctx context.Context) (mapping mapping, exter
 				pcpMapping.gw = netip.AddrPortFrom(gw, c.pxpPort())
 				c.mu.Lock()
 				defer c.mu.Unlock()
-				c.mapping = pcpMapping
+				if !c.setMappingLocked(pcpMapping) {
+					return nil, netip.AddrPort{}, NoMappingError{net.ErrClosed}
+				}
 				return pcpMapping, pcpMapping.external, nil
 			default:
 				c.logf("unknown PMP/PCP version number: %d %v", version, res[:n])
@@ -798,7 +817,9 @@ func (c *Client) createOrGetMapping(ctx context.Context) (mapping mapping, exter
 		if m.externalValid() {
 			c.mu.Lock()
 			defer c.mu.Unlock()
-			c.mapping = m
+			if !c.setMappingLocked(m) {
+				return nil, netip.AddrPort{}, NoMappingError{net.ErrClosed}
+			}
 			return nil, m.external, nil
 		}
 	}
