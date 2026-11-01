@@ -186,10 +186,6 @@ var (
 	// that they want to do a TLS handshake. Servers should respond with
 	// the single byte "S" before starting a normal TLS handshake.
 	sslStart = [8]byte{0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f}
-	// plaintextStart is the magic bytes that postgres clients use to
-	// indicate that they're starting a plaintext authentication
-	// handshake.
-	plaintextStart = [8]byte{0, 0, 0, 86, 0, 3, 0, 0}
 )
 
 // serve proxies the postgres client on c to the proxy's upstream,
@@ -243,7 +239,7 @@ func (p *proxy) serve(sessionID int64, c net.Conn) error {
 	switch {
 	case buf == sslStart:
 		clientIsTLS = true
-	case buf == plaintextStart:
+	case buf[4] == 0 && buf[5] == 3: // protocol 3.x StartupMessage
 		clientIsTLS = false
 	default:
 		p.errors.Add("client-bad-protocol", 1)
@@ -263,13 +259,14 @@ func (p *proxy) serve(sessionID int64, c net.Conn) error {
 		p.errors.Add("network-error", 1)
 		return fmt.Errorf("upstream write of start-ssl magic: %v", err)
 	}
-	if _, err := io.ReadFull(upc, buf[:1]); err != nil {
+	var sslResp [1]byte
+	if _, err := io.ReadFull(upc, sslResp[:]); err != nil {
 		p.errors.Add("network-error", 1)
 		return fmt.Errorf("reading upstream start-ssl response: %v", err)
 	}
-	if buf[0] != 'S' {
+	if sslResp[0] != 'S' {
 		p.errors.Add("upstream-bad-protocol", 1)
-		return fmt.Errorf("upstream didn't acknowledge start-ssl, said %q", buf[0])
+		return fmt.Errorf("upstream didn't acknowledge start-ssl, said %q", sslResp[0])
 	}
 	tlsConf := &tls.Config{
 		ServerName: p.upstreamHost,
@@ -298,7 +295,7 @@ func (p *proxy) serve(sessionID int64, c net.Conn) error {
 		clientConn = s
 	} else {
 		// Repeat the header we read earlier up to the server.
-		if _, err := uptc.Write(plaintextStart[:]); err != nil {
+		if _, err := uptc.Write(buf[:]); err != nil {
 			p.errors.Add("network-error", 1)
 			return fmt.Errorf("sending initial client bytes to upstream: %v", err)
 		}
