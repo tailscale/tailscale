@@ -45,6 +45,7 @@ import (
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/eventbus/eventbustest"
+	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 	"tailscale.com/util/syspolicy/policyclient"
@@ -1726,6 +1727,87 @@ func TestServeProxyHTTP2PreservesContentType(t *testing.T) {
 // b.serveWebHandler entry point (the actual production code path) via a real
 // HTTP/2 TLS frontend, with serveHTTPContext.Funnel set to mimic a funnel
 // request. Repro probe for tailscale/tailscale#19866.
+// stallAfterEOF delays the Read that follows the one that returned io.EOF.
+// For a request body with a Content-Length, that is the Transport's extra
+// read that checks for EOF after it copied the declared bytes upstream
+// (net/http transfer.go, transferWriter.writeBody). The delay stands in
+// for a descheduled goroutine and gives the backend time to answer first.
+type stallAfterEOF struct {
+	io.ReadCloser
+	stall  time.Duration
+	sawEOF bool
+}
+
+func (s *stallAfterEOF) Read(p []byte) (int, error) {
+	if s.sawEOF {
+		time.Sleep(s.stall)
+	}
+	n, err := s.ReadCloser.Read(p)
+	if err == io.EOF {
+		s.sawEOF = true
+	}
+	return n, err
+}
+
+// TestServeProxyStreamedResponseWithRequestBody reproduces
+// tailscale/tailscale#21894: an HTTP/1.1 client POSTs to a backend that
+// flushes the start of its response as soon as it has read the request.
+// When the response reaches the proxy's HTTP/1 server before the proxy's
+// Transport has done its final EOF read of the request body, the server
+// closes that body (golang/go#15527 behavior), the Transport's read fails,
+// the Transport closes the upstream connection, and the client gets a
+// truncated response.
+func TestServeProxyStreamedResponseWithRequestBody(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "data: first\n\n")
+		w.(http.Flusher).Flush()
+		time.Sleep(50 * time.Millisecond)
+		io.WriteString(w, "data: final\n\n")
+	}))
+	defer backend.Close()
+
+	rp := &reverseProxy{
+		logf:    t.Logf,
+		url:     must.Get(url.Parse(backend.URL)),
+		backend: backend.URL,
+		lb:      newTestBackend(t),
+	}
+
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = &stallAfterEOF{ReadCloser: r.Body, stall: 20 * time.Millisecond}
+		rp.ServeHTTP(w, r)
+	}))
+	defer front.Close()
+
+	// Plain HTTP: the client speaks HTTP/1.1.
+	client := front.Client()
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`)
+	const attempts = 5
+	var truncated int
+	for i := range attempts {
+		req := must.Get(http.NewRequest(httpm.POST, front.URL, bytes.NewReader(body)))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("attempt %d: %v", i, err)
+		}
+		got, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil || !strings.Contains(string(got), "data: final") {
+			t.Logf("attempt %d: truncated response %q, read error %v", i, got, err)
+			truncated++
+		}
+	}
+	if truncated > 0 {
+		t.Errorf("%d of %d responses were truncated", truncated, attempts)
+	}
+}
+
 func TestServeWebHandlerHTTP2PreservesContentType(t *testing.T) {
 	var gotHeader http.Header
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
