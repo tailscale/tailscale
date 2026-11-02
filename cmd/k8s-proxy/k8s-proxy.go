@@ -3,6 +3,8 @@
 
 //go:build !plan9
 
+//go:debug multipathtcp=0
+
 // k8s-proxy proxies between tailnet and Kubernetes cluster traffic.
 // Currently, it only supports proxying tailnet clients to the Kubernetes API
 // server.

@@ -3,6 +3,8 @@
 
 //go:build linux
 
+//go:debug multipathtcp=0
+
 // The containerboot binary is a wrapper for starting tailscaled in a container.
 // It handles reading the desired mode of operation out of environment
 // variables, bringing up and authenticating Tailscale, and any other

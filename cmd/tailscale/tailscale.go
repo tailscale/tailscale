@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:debug multipathtcp=0
+
 // The tailscale command is the Tailscale command-line client. It interacts
 // with the tailscaled node agent.
 package main // import "tailscale.com/cmd/tailscale"

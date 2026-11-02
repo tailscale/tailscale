@@ -3,6 +3,8 @@
 
 //go:build go1.23
 
+//go:debug multipathtcp=0
+
 // The tailscaled program is the Tailscale client daemon. It's configured
 // and controlled via the tailscale CLI program.
 //

@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:debug multipathtcp=0
+
 // The derper binary is a simple DERP server.
 //
 // For more information, see:

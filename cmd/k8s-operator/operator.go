@@ -3,6 +3,8 @@
 
 //go:build !plan9
 
+//go:debug multipathtcp=0
+
 // tailscale-operator provides a way to expose services running in a Kubernetes
 // cluster to your Tailnet.
 package main

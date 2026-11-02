@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:debug multipathtcp=0
+
 // The tsidp command is an OpenID Connect Identity Provider server.
 //
 // See https://github.com/tailscale/tailscale/issues/10263 for background.
