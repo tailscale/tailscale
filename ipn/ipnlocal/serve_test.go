@@ -819,8 +819,9 @@ func TestServeHTTPProxyHeaders(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := &http.Request{
-				URL: &url.URL{Path: "/"},
-				TLS: &tls.ConnectionState{ServerName: "example.ts.net"},
+				URL:    &url.URL{Path: "/"},
+				TLS:    &tls.ConnectionState{ServerName: "example.ts.net"},
+				Header: spoofedTailscaleHeaders(),
 			}
 			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(), &serveHTTPContext{
 				DestPort: 443,
@@ -837,6 +838,7 @@ func TestServeHTTPProxyHeaders(t *testing.T) {
 					t.Errorf("invalid %q header; want=%q, got=%q", c.header, c.want, got)
 				}
 			}
+			checkNoSpoofedTailscaleHeaders(t, h)
 		})
 	}
 }
@@ -962,8 +964,9 @@ func TestServeHTTPProxyGrantHeader(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := &http.Request{
-				URL: &url.URL{Path: "/"},
-				TLS: &tls.ConnectionState{ServerName: "example.ts.net"},
+				URL:    &url.URL{Path: "/"},
+				TLS:    &tls.ConnectionState{ServerName: "example.ts.net"},
+				Header: spoofedTailscaleHeaders(),
 			}
 			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(), &serveHTTPContext{
 				DestPort: 443,
@@ -987,7 +990,41 @@ func TestServeHTTPProxyGrantHeader(t *testing.T) {
 					t.Errorf("invalid %q header; want=%q, got=%q", c.header, c.want, got)
 				}
 			}
+			checkNoSpoofedTailscaleHeaders(t, h)
 		})
+	}
+}
+
+// spoofedTailscaleHeaders returns client-supplied request headers that try to
+// impersonate the headers set by `tailscale serve`. This includes variants
+// using '_' in place of '-' that CGI-style backends treat as equivalent.
+func spoofedTailscaleHeaders() http.Header {
+	h := http.Header{}
+	for _, name := range []string{
+		"Tailscale-User-Login",
+		"Tailscale-User-Name",
+		"Tailscale-User-Profile-Pic",
+		"Tailscale-Funnel-Request",
+		"Tailscale-Headers-Info",
+		"Tailscale-App-Capabilities",
+	} {
+		h[name] = []string{"spoofed"}
+		h[strings.ReplaceAll(name, "-", "_")] = []string{"spoofed"}
+		h[http.CanonicalHeaderKey(strings.ReplaceAll(strings.ToLower(name), "-", "_"))] = []string{"spoofed"}
+	}
+	return h
+}
+
+// checkNoSpoofedTailscaleHeaders reports an error if any value from
+// spoofedTailscaleHeaders made it to the backend.
+func checkNoSpoofedTailscaleHeaders(t *testing.T, h http.Header) {
+	t.Helper()
+	for k, vv := range h {
+		for _, v := range vv {
+			if strings.Contains(v, "spoofed") {
+				t.Errorf("spoofed header %q reached backend: %q", k, v)
+			}
+		}
 	}
 }
 
