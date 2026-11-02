@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !plan9 && !js && !wasip1 && !wasm
+//go:build unix
 
 package neterror
 
@@ -9,17 +9,17 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"runtime"
 	"syscall"
 )
 
+// IsUDPReadFeedback reports whether err is host or network reachability
+// feedback reported by a UDP read, rather than a socket failure.
+func IsUDPReadFeedback(err error) bool {
+	return errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH)
+}
+
 // Reports whether err resulted from reading or writing to a closed or broken pipe.
 func IsClosedPipeError(err error) bool {
-	// 232 is Windows error code ERROR_NO_DATA, "The pipe is being closed".
-	if runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(232)) {
-		return true
-	}
-
 	// EPIPE/ENOTCONN are common errors when a send fails due to a closed
 	// socket. There is some platform and version inconsistency in which
 	// error is returned, but the meaning is the same.
