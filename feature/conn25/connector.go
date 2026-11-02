@@ -30,12 +30,7 @@ func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr
 		return TransitIPResponse{Code: AddrFamilyMismatch, Message: addrFamilyMismatchMessage}
 	}
 
-	if routelimits.IsDisallowed(tipr.DestinationIP) {
-		return TransitIPResponse{Code: DisallowedDestination, Message: disallowedDestinationMessage}
-	}
-
-	// TODO(tailscale/corp#50542): remove this condition when we have a configurable check
-	if tipr.DestinationIP.IsPrivate() {
+	if c.destIsDisallowed(tipr.DestinationIP) {
 		return TransitIPResponse{Code: DisallowedDestination, Message: disallowedDestinationMessage}
 	}
 
@@ -132,6 +127,26 @@ func (c *connector) transitIPInPool(tip netip.Addr) bool {
 		return ipSets.v4Transit != nil && ipSets.v4Transit.Contains(tip)
 	}
 	return ipSets.v6Transit != nil && ipSets.v6Transit.Contains(tip)
+}
+
+func (c *connector) destIsDisallowed(dst netip.Addr) bool {
+	if routelimits.IsDisallowed(dst) || c.destinationInPools(dst) {
+		return true
+	}
+	// TODO(tailscale/corp#50542): remove this condition when we have a configurable check
+	return dst.IsPrivate()
+}
+
+// destinationInPool reports whether dst is within one of the magic or transit IP pools,
+// of its address family, that this connector is configured with. Forwarding to such
+// an address would route back into conn25's own mapping layer rather than out to an app.
+func (c *connector) destinationInPools(dst netip.Addr) bool {
+	ipSets := c.getIPSets()
+	magic, transit := ipSets.v6Magic, ipSets.v6Transit
+	if dst.Unmap().Is4() {
+		magic, transit = ipSets.v4Magic, ipSets.v4Transit
+	}
+	return (magic != nil && magic.Contains(dst)) || (transit != nil && transit.Contains(dst))
 }
 
 // packetFilterAllow returns true if the provided packet has a Src that is in
