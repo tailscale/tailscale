@@ -522,6 +522,17 @@ type Options struct {
 	// with the logging service as having a higher upload limit.
 	// If zero, a default upload size is chosen.
 	MaxUploadSize int
+
+	// DisableFilchBuffer, if true, skips attaching the on-disk
+	// filch buffer, leaving logtail with an in-memory buffer.
+	// A short-lived process that shares its log files with a
+	// previous daemon run (e.g. "tailscaled --cleanup", run from
+	// systemd ExecStopPost) must set this: opening the shared
+	// filch files would let its own writes rotate away the
+	// previous run's not-yet-uploaded logs, and its uploader
+	// could consume buffered logs it won't live long enough to
+	// upload.
+	DisableFilchBuffer bool
 }
 
 // init initializes the log policy and returns a logtail.Config and the
@@ -653,7 +664,9 @@ func (opts Options) init(disableLogging bool) (*logtail.Config, *Policy) {
 	} else {
 		// Only attach an on-disk filch buffer if we are going to be sending logs.
 		// No reason to persist them locally just to drop them later.
-		attachFilchBuffer(&conf, opts.Dir, opts.CmdName, opts.MaxBufferSize, opts.Logf)
+		if !opts.DisableFilchBuffer {
+			attachFilchBuffer(&conf, opts.Dir, opts.CmdName, opts.MaxBufferSize, opts.Logf)
+		}
 		conf.HTTPC = opts.HTTPC
 
 		logHost := logtail.DefaultHost

@@ -715,6 +715,181 @@ func TestLoggerSetEnabledStopsPendingRetry(t *testing.T) {
 	})
 }
 
+// flakyTransport returns an http.Client whose transport fails with
+// 503 (Retry-After: 1) while fail is set, and otherwise records the
+// request body as successfully uploaded and returns 200.
+func flakyTransport(fail *atomic.Bool, mu *sync.Mutex, okBodies *[][]byte) *http.Client {
+	return &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			body, _ := io.ReadAll(r.Body)
+			if fail.Load() {
+				return &http.Response{
+					StatusCode: http.StatusServiceUnavailable,
+					Header:     http.Header{"Retry-After": []string{"1"}},
+					Body:       io.NopCloser(strings.NewReader("try again")),
+				}, nil
+			}
+			mu.Lock()
+			*okBodies = append(*okBodies, body)
+			mu.Unlock()
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{},
+				Body:       io.NopCloser(strings.NewReader("")),
+			}, nil
+		}),
+	}
+}
+
+func TestShutdownDrainsBacklog(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var fail atomic.Bool
+		fail.Store(true)
+		var mu sync.Mutex
+		var okBodies [][]byte
+
+		lg := NewLogger(Config{
+			BaseURL:       "http://logtail.test.invalid",
+			HTTPC:         flakyTransport(&fail, &mu, &okBodies),
+			Bus:           eventbustest.NewBus(t),
+			FlushDelayFn:  func() time.Duration { return 0 },
+			MaxUploadSize: 200, // force the backlog into several upload batches
+		}, t.Logf)
+
+		const lines = 12
+		for i := range lines {
+			lg.Write(fmt.Appendf(nil, "backlog-line-%02d", i))
+		}
+		synctest.Wait() // first batch attempted, failed, sleeping before retry
+
+		fail.Store(false)
+		if err := lg.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown: %v", err)
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+		var all strings.Builder
+		for _, b := range okBodies {
+			all.Write(b)
+		}
+		for i := range lines {
+			want := fmt.Sprintf("backlog-line-%02d", i)
+			if !strings.Contains(all.String(), want) {
+				t.Errorf("uploaded logs missing %q; got %q", want, all.String())
+			}
+		}
+		if !strings.Contains(all.String(), "logger closing down") {
+			t.Errorf("uploaded logs missing closing line; got %q", all.String())
+		}
+	})
+}
+
+func TestFlushContextWaitsForUpload(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var fail atomic.Bool
+		fail.Store(true)
+		var mu sync.Mutex
+		var okBodies [][]byte
+
+		lg := NewLogger(Config{
+			BaseURL:      "http://logtail.test.invalid",
+			HTTPC:        flakyTransport(&fail, &mu, &okBodies),
+			Bus:          eventbustest.NewBus(t),
+			FlushDelayFn: func() time.Duration { return 0 },
+		}, t.Logf)
+		defer func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			lg.Shutdown(ctx)
+		}()
+
+		// Flushing an idle logger returns promptly.
+		if err := lg.FlushContext(context.Background()); err != nil {
+			t.Fatalf("idle FlushContext: %v", err)
+		}
+
+		lg.Write([]byte("flush-line-1"))
+		lg.Write([]byte("flush-line-2"))
+		synctest.Wait() // batch attempted, failed, sleeping before retry
+
+		flushed := make(chan error, 1)
+		go func() { flushed <- lg.FlushContext(context.Background()) }()
+		synctest.Wait()
+		select {
+		case err := <-flushed:
+			t.Fatalf("FlushContext returned %v before upload succeeded", err)
+		default:
+		}
+
+		fail.Store(false)
+		if err := <-flushed; err != nil {
+			t.Fatalf("FlushContext: %v", err)
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+		var all strings.Builder
+		for _, b := range okBodies {
+			all.Write(b)
+		}
+		for _, want := range []string{"flush-line-1", "flush-line-2"} {
+			if !strings.Contains(all.String(), want) {
+				t.Errorf("uploaded logs missing %q; got %q", want, all.String())
+			}
+		}
+	})
+}
+
+func TestFlushContextCancelRetainsBatch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var fail atomic.Bool
+		fail.Store(true)
+		var mu sync.Mutex
+		var okBodies [][]byte
+
+		lg := NewLogger(Config{
+			BaseURL:      "http://logtail.test.invalid",
+			HTTPC:        flakyTransport(&fail, &mu, &okBodies),
+			Bus:          eventbustest.NewBus(t),
+			FlushDelayFn: func() time.Duration { return 0 },
+		}, t.Logf)
+		defer func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			lg.Shutdown(ctx)
+		}()
+
+		lg.Write([]byte("retained-line"))
+		synctest.Wait() // batch attempted, failed, sleeping before retry
+
+		ctx, cancel := context.WithCancel(context.Background())
+		flushed := make(chan error, 1)
+		go func() { flushed <- lg.FlushContext(ctx) }()
+		synctest.Wait()
+		cancel()
+		if err := <-flushed; err != context.Canceled {
+			t.Fatalf("FlushContext after cancel = %v; want context.Canceled", err)
+		}
+
+		// The batch must not have been dropped: once the server
+		// recovers, a later flush delivers it.
+		fail.Store(false)
+		if err := lg.FlushContext(context.Background()); err != nil {
+			t.Fatalf("second FlushContext: %v", err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		var all strings.Builder
+		for _, b := range okBodies {
+			all.Write(b)
+		}
+		if !strings.Contains(all.String(), "retained-line") {
+			t.Errorf("uploaded logs missing retained line; got %q", all.String())
+		}
+	})
+}
+
 func TestAppendMetadata(t *testing.T) {
 	var lg Logger
 	lg.clock = tstest.NewClock(tstest.ClockOpts{Start: time.Date(2000, 01, 01, 0, 0, 0, 0, time.UTC)})

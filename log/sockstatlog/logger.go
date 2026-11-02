@@ -249,8 +249,12 @@ func (lg *Logger) Shutdown(ctx context.Context) {
 	if lg.cancelFn != nil {
 		lg.cancelFn()
 	}
-	lg.filch.Close()
+	// Shut the logger down before closing its filch buffer: the
+	// logger drains from (and writes its closing line to) the
+	// filch, so closing the filch first would abandon everything
+	// still buffered in it.
 	lg.logger.Shutdown(ctx)
+	lg.filch.Close()
 
 	type closeIdler interface {
 		CloseIdleConnections()

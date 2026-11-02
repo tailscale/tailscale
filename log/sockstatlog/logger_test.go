@@ -6,6 +6,7 @@ package sockstatlog
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/net/sockstats"
@@ -29,7 +30,12 @@ func TestResourceCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	lg.Write([]byte("hello"))
-	lg.Shutdown(context.Background())
+	// Bound the shutdown as the production caller in ipnlocal
+	// does: with no reachable log server, the logger retries
+	// uploads until the context expires.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	lg.Shutdown(ctx)
 }
 
 func TestDelta(t *testing.T) {
