@@ -34,7 +34,9 @@ type settings struct {
 	Routes       *string
 	// ProxyTargetIP is the destination IP to which all incoming
 	// Tailscale traffic should be proxied. If empty, no proxying
-	// is done. This is typically a locally reachable IP.
+	// is done. This is typically a locally reachable IP. It may also be a
+	// comma-separated list of IPs (at most one per IP family) for
+	// dual-stack destinations.
 	ProxyTargetIP string
 	// ProxyTargetDNSName is a DNS name to whose backing IP addresses all
 	// incoming Tailscale traffic should be proxied.
