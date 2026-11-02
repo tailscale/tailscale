@@ -722,7 +722,8 @@ const (
 
 	// DisallowedDestination indicates that the destination IP address is not
 	// allowed (including but not limited to loopback, Tailscale, link-local,
-	// and private addresses).
+	// and private addresses, along with addresses within the configured magic and
+	// transit IP pools).
 	DisallowedDestination = 8
 )
 
