@@ -908,7 +908,7 @@ runLoop:
 			}
 			if cfg.ProxyTargetIP != "" && len(addrs) != 0 && ipsHaveChanged {
 				log.Printf("Installing proxy rules")
-				if err := installIngressForwardingRule(ctx, cfg.ProxyTargetIP, addrs, nfr); err != nil {
+				if err := installIngressForwardingRules(ctx, cfg.ProxyTargetIP, addrs, nfr); err != nil {
 					return fmt.Errorf("installing ingress proxy rules: %w", err)
 				}
 			}
