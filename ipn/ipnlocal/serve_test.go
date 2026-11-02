@@ -742,6 +742,27 @@ func TestServeHTTPProxyPath(t *testing.T) {
 	}
 }
 
+// spoofedIdentityHeaders returns request headers with every Tailscale-*
+// identity header set to a client-supplied value, which must never reach the
+// backend. Names are spelled out rather than using the identityheaders
+// constants so a typo there can't hide a leak.
+func spoofedIdentityHeaders() http.Header {
+	h := http.Header{}
+	for _, k := range []string{
+		"Tailscale-User-Login",
+		"Tailscale-User-Name",
+		"Tailscale-User-Profile-Pic",
+		"Tailscale-Node-Name",
+		"Tailscale-Node-Tags",
+		"Tailscale-Funnel-Request",
+		"Tailscale-Headers-Info",
+		"Tailscale-App-Capabilities",
+	} {
+		h.Set(k, "spoofed")
+	}
+	return h
+}
+
 func TestServeHTTPProxyHeaders(t *testing.T) {
 	b := newTestBackend(t)
 
@@ -799,7 +820,9 @@ func TestServeHTTPProxyHeaders(t *testing.T) {
 				{"Tailscale-User-Login", ""},
 				{"Tailscale-User-Name", ""},
 				{"Tailscale-User-Profile-Pic", ""},
-				{"Tailscale-Headers-Info", ""},
+				{"Tailscale-Node-Name", "some-tagged-peer.ts.net"},
+				{"Tailscale-Node-Tags", "tag:server,tag:test"},
+				{"Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers"},
 			},
 		},
 		{
@@ -808,6 +831,8 @@ func TestServeHTTPProxyHeaders(t *testing.T) {
 			wantHeaders: []headerCheck{
 				{"X-Forwarded-Proto", "https"},
 				{"X-Forwarded-For", "100.160.161.162"},
+				{"Tailscale-Node-Name", ""},
+				{"Tailscale-Node-Tags", ""},
 				{"Tailscale-User-Login", ""},
 				{"Tailscale-User-Name", ""},
 				{"Tailscale-User-Profile-Pic", ""},
@@ -819,8 +844,9 @@ func TestServeHTTPProxyHeaders(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := &http.Request{
-				URL: &url.URL{Path: "/"},
-				TLS: &tls.ConnectionState{ServerName: "example.ts.net"},
+				URL:    &url.URL{Path: "/"},
+				TLS:    &tls.ConnectionState{ServerName: "example.ts.net"},
+				Header: spoofedIdentityHeaders(),
 			}
 			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(), &serveHTTPContext{
 				DestPort: 443,
@@ -940,7 +966,9 @@ func TestServeHTTPProxyGrantHeader(t *testing.T) {
 				{"Tailscale-User-Login", ""},
 				{"Tailscale-User-Name", ""},
 				{"Tailscale-User-Profile-Pic", ""},
-				{"Tailscale-Headers-Info", ""},
+				{"Tailscale-Node-Name", "some-tagged-peer.ts.net"},
+				{"Tailscale-Node-Tags", "tag:server,tag:test"},
+				{"Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers"},
 				{"Tailscale-App-Capabilities", `{"example.com/cap/boring":[{"role":"Viewer"}]}`},
 			},
 		},
@@ -950,6 +978,8 @@ func TestServeHTTPProxyGrantHeader(t *testing.T) {
 			wantHeaders: []headerCheck{
 				{"X-Forwarded-Proto", "https"},
 				{"X-Forwarded-For", "100.160.161.162"},
+				{"Tailscale-Node-Name", ""},
+				{"Tailscale-Node-Tags", ""},
 				{"Tailscale-User-Login", ""},
 				{"Tailscale-User-Name", ""},
 				{"Tailscale-User-Profile-Pic", ""},
@@ -962,8 +992,9 @@ func TestServeHTTPProxyGrantHeader(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := &http.Request{
-				URL: &url.URL{Path: "/"},
-				TLS: &tls.ConnectionState{ServerName: "example.ts.net"},
+				URL:    &url.URL{Path: "/"},
+				TLS:    &tls.ConnectionState{ServerName: "example.ts.net"},
+				Header: spoofedIdentityHeaders(),
 			}
 			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(), &serveHTTPContext{
 				DestPort: 443,
@@ -1361,6 +1392,7 @@ func newTestBackend(t *testing.T, opts ...any) *LocalBackend {
 			}).View(),
 			(&tailcfg.Node{
 				ID:           153,
+				Name:         "some-tagged-peer.ts.net.",
 				ComputedName: "some-tagged-peer",
 				Tags:         []string{"tag:server", "tag:test"},
 				User:         tailcfg.UserID(1),
@@ -1482,24 +1514,6 @@ func Test_isGRPCContentType(t *testing.T) {
 	for _, tt := range tests {
 		if got := isGRPCContentType(tt.contentType); got != tt.want {
 			t.Errorf("isGRPCContentType(%q) = %v, want %v", tt.contentType, got, tt.want)
-		}
-	}
-}
-
-func TestEncTailscaleHeaderValue(t *testing.T) {
-	tests := []struct {
-		in   string
-		want string
-	}{
-		{"", ""},
-		{"Alice Smith", "Alice Smith"},
-		{"Bad\xffUTF-8", ""},
-		{"Krūmiņa", "=?utf-8?q?Kr=C5=ABmi=C5=86a?="},
-	}
-	for _, tt := range tests {
-		got := encTailscaleHeaderValue(tt.in)
-		if got != tt.want {
-			t.Errorf("encTailscaleHeaderValue(%q) = %q, want %q", tt.in, got, tt.want)
 		}
 	}
 }
