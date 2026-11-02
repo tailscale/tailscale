@@ -279,7 +279,9 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 
 	a.mu.Lock()
 	if shouldExposeClusterIP(svc, a.isDefaultLoadBalancer) {
-		sts.ClusterTargetIP = svc.Spec.ClusterIP
+		// For dual-stack Services, pass all ClusterIPs (comma-separated) so
+		// that the proxy installs a DNAT rule for each IP family.
+		sts.ClusterTargetIP = clusterTargetIPs(svc)
 		a.managedIngressProxies.Add(svc.UID)
 		gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
 	} else if shouldExposeDNSName(svc) {
@@ -352,11 +354,15 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		{Hostname: dev.hostname},
 	}
 
-	clusterIPAddr, err := netip.ParseAddr(svc.Spec.ClusterIP)
-	if err != nil {
-		msg := fmt.Sprintf("failed to parse cluster IP: %v", err)
-		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, msg, a.clock, logger)
-		return errors.New(msg)
+	var clusterIPAddrs []netip.Addr
+	for ipStr := range strings.SplitSeq(clusterTargetIPs(svc), ",") {
+		clusterIPAddr, err := netip.ParseAddr(ipStr)
+		if err != nil {
+			msg := fmt.Sprintf("failed to parse cluster IP: %v", err)
+			tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, msg, a.clock, logger)
+			return errors.New(msg)
+		}
+		clusterIPAddrs = append(clusterIPAddrs, clusterIPAddr)
 	}
 
 	for _, ip := range dev.ips {
@@ -364,7 +370,8 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		if err != nil {
 			continue
 		}
-		if addr.Is4() == clusterIPAddr.Is4() { // only add addresses of the same family
+		// Only add addresses of a family that the Service has a ClusterIP for.
+		if slices.ContainsFunc(clusterIPAddrs, func(c netip.Addr) bool { return c.Is4() == addr.Is4() }) {
 			ingress = append(ingress, corev1.LoadBalancerIngress{IP: ip})
 		}
 	}
@@ -372,6 +379,16 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	svc.Status.LoadBalancer.Ingress = ingress
 	tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionTrue, reasonProxyCreated, reasonProxyCreated, a.clock, logger)
 	return nil
+}
+
+// clusterTargetIPs returns the Service's ClusterIPs as a comma-separated
+// string, primary family first. It falls back to Spec.ClusterIP for Services
+// that do not (yet) have Spec.ClusterIPs populated.
+func clusterTargetIPs(svc *corev1.Service) string {
+	if len(svc.Spec.ClusterIPs) == 0 {
+		return svc.Spec.ClusterIP
+	}
+	return strings.Join(svc.Spec.ClusterIPs, ",")
 }
 
 func validateService(svc *corev1.Service) []string {
