@@ -21,7 +21,7 @@ func TestAppDNSRoutes(t *testing.T) {
 			Name:       name,
 			Domains:    domains,
 			Connectors: tags,
-			Mode:       "magicip",
+			Mode:       appctype.AppConnectorModeMagicIP,
 		}
 		bs, err := json.Marshal(attr)
 		if err != nil {

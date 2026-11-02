@@ -14,7 +14,6 @@ import (
 )
 
 const AppConnectorAttrName = "tailscale.com/app-connectors"
-const AppConnectorsExperimentalAttrName = "tailscale.com/app-connectors-experimental"
 
 // DNSAddrScheme is the custom URI scheme used for conn25-managed split DNS
 // entries to determine the destination at query time rather than configuration
@@ -26,29 +25,22 @@ const DNSAddrScheme = "tailscale-app"
 // [DNSAddrScheme] scheme naming the app, so the connector that serves it is
 // chosen at query time. It returns nil if the node lacks Connectors 2025 apps.
 func AppDNSRoutes(hasCap func(c nodecap.Cap) bool, self tailcfg.NodeView) map[string][]*dnstype.Resolver {
-	if !hasCap(AppConnectorsExperimentalAttrName) && !hasCap(AppConnectorAttrName) {
-		return nil
-	}
-	apps, err := tailcfg.UnmarshalNodeCapViewJSON[appctype.AppConnectorAttr](self.CapMap(), AppConnectorsExperimentalAttrName)
-	if err != nil {
+	if !hasCap(AppConnectorAttrName) {
 		return nil
 	}
 
-	// In addition to the apps under the [AppConnectorsExperimentalAttrName],
-	// apps can also be provided  under [AppConnectorAttrName] with the Mode
-	// field set to "magicip".
-	unfilteredApps, err := tailcfg.UnmarshalNodeCapViewJSON[appctype.AppConnectorAttr](self.CapMap(), AppConnectorAttrName)
+	apps, err := tailcfg.UnmarshalNodeCapViewJSON[appctype.AppConnectorAttr](self.CapMap(), AppConnectorAttrName)
 	if err != nil {
 		return nil
-	}
-	for _, app := range unfilteredApps {
-		if app.Mode == "magicip" {
-			apps = append(apps, app)
-		}
 	}
 
 	appNamesByDomain := map[string]string{}
 	for _, app := range apps {
+		// conn25 apps are provided under [AppConnectorAttrName] with the Mode
+		// field set to [appctype.AppConnectorModeMagicIP].
+		if app.Mode != appctype.AppConnectorModeMagicIP {
+			continue
+		}
 		for _, domain := range app.Domains {
 			domain, _ = strings.CutPrefix(domain, "*.")
 			domain = strings.ToLower(domain)

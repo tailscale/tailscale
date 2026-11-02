@@ -198,7 +198,7 @@ type CapabilityVersion int
 //   - 147: 2026-09-09: Client handles 429/503 responses with retry-after headers to /machine/ endpoints
 //   - 148: 2026-09-15: Client understands [Node.StableTailnetID]
 //   - 149: 2026-10-07: Sentinel version to request the server send back [NodeAttrCacheNetworkMaps] set to enabled
-//   - 150: 2026-10-13: Client handles app connectors with "mode": "magicip" as Connectors 2025.
+//   - 150: 2026-10-13: Client handles app connectors with "mode": "magicip" as conn25.
 const CurrentCapabilityVersion CapabilityVersion = 150
 
 // ID is an integer ID for a user, node, or login allocated by the
