@@ -542,13 +542,6 @@ func TestGetUPnPClient(t *testing.T) {
 // failing with a context deadline error.
 func TestGetUPnPRootDeviceSlowResponse(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		// Answer the root device fetch through a fake transport
-		// instead of a real HTTP server: a server's goroutines
-		// blocked on real network I/O would keep synctest's fake
-		// clock from ever advancing, so the simulated slow
-		// response below would never arrive. With no real sockets
-		// involved, the 1.5s delay advances on the fake clock and
-		// the test takes no real wall-clock time.
 		slowRT := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 			select {
 			case <-time.After(1500 * time.Millisecond):
