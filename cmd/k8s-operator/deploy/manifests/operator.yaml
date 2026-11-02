@@ -6670,6 +6670,14 @@ rules:
         - tailscale.com
       resources:
         - dnsconfigs/finalizers
+        - proxygroups/finalizers
+        - recorders/finalizers
+      verbs:
+        - update
+    - apiGroups:
+        - ""
+      resources:
+        - services/finalizers
       verbs:
         - update
     - apiGroups:
