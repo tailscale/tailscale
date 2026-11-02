@@ -1160,11 +1160,13 @@ func addProxyForwardedHeaders(r *httputil.ProxyRequest) {
 
 func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	// Clear any incoming values squatting in the headers.
-	r.Out.Header.Del("Tailscale-User-Login")
-	r.Out.Header.Del("Tailscale-User-Name")
-	r.Out.Header.Del("Tailscale-User-Profile-Pic")
-	r.Out.Header.Del("Tailscale-Funnel-Request")
-	r.Out.Header.Del("Tailscale-Headers-Info")
+	delHeaderVariants(r.Out.Header,
+		"Tailscale-User-Login",
+		"Tailscale-User-Name",
+		"Tailscale-User-Profile-Pic",
+		"Tailscale-Funnel-Request",
+		"Tailscale-Headers-Info",
+	)
 
 	c, ok := serveHTTPContextKey.ValueOk(r.Out.Context())
 	if !ok {
@@ -1189,6 +1191,25 @@ func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	r.Out.Header.Set("Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers")
 }
 
+// delHeaderVariants deletes each header in 'names' from 'h', along with any
+// header whose name matches case-insensitively after replacing '_' with '-'.
+//
+// Any backends that map headers to CGI-style variables (e.g. PHP;
+// HTTP_TAILSCALE_USER_LOGIN) would treat "Tailscale_User_Login" the same as
+// "Tailscale-User-Login". If we just used a plain [http.Header.Del], clients
+// could spoof the headers we set.
+func delHeaderVariants(h http.Header, names ...string) {
+	for k := range h {
+		norm := strings.ReplaceAll(k, "_", "-")
+		for _, name := range names {
+			if strings.EqualFold(norm, name) {
+				delete(h, k)
+				break
+			}
+		}
+	}
+}
+
 // encTailscaleHeaderValue cleans or encodes as necessary v, to be suitable in
 // an HTTP header value. See
 // https://github.com/tailscale/tailscale/issues/11603.
@@ -1206,7 +1227,7 @@ func encTailscaleHeaderValue(v string) string {
 
 func (b *LocalBackend) addAppCapabilitiesHeader(r *httputil.ProxyRequest) error {
 	const appCapabilitiesHeaderName = "Tailscale-App-Capabilities"
-	r.Out.Header.Del(appCapabilitiesHeaderName)
+	delHeaderVariants(r.Out.Header, appCapabilitiesHeaderName)
 
 	c, ok := serveHTTPContextKey.ValueOk(r.Out.Context())
 	if !ok || c.Funnel != nil {

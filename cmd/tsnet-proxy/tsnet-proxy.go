@@ -34,6 +34,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"tailscale.com/client/local"
@@ -148,11 +149,14 @@ func proxyTCP(c net.Conn, target string) {
 }
 
 func addTailscaleIdentityHeaders(lc *local.Client, r *httputil.ProxyRequest) {
-	r.Out.Header.Del("Tailscale-User-Login")
-	r.Out.Header.Del("Tailscale-User-Name")
-	r.Out.Header.Del("Tailscale-User-Profile-Pic")
-	r.Out.Header.Del("Tailscale-Funnel-Request")
-	r.Out.Header.Del("Tailscale-Headers-Info")
+	delHeaderVariants(r.Out.Header,
+		"Tailscale-User-Login",
+		"Tailscale-User-Name",
+		"Tailscale-User-Profile-Pic",
+		"Tailscale-Funnel-Request",
+		"Tailscale-Headers-Info",
+		"Tailscale-App-Capabilities",
+	)
 
 	who, err := lc.WhoIs(r.In.Context(), r.In.RemoteAddr)
 	if err != nil || who == nil || who.Node.IsTagged() {
@@ -161,6 +165,20 @@ func addTailscaleIdentityHeaders(lc *local.Client, r *httputil.ProxyRequest) {
 	r.Out.Header.Set("Tailscale-User-Login", encHeader(who.UserProfile.LoginName))
 	r.Out.Header.Set("Tailscale-User-Name", encHeader(who.UserProfile.DisplayName))
 	r.Out.Header.Set("Tailscale-User-Profile-Pic", who.UserProfile.ProfilePicURL)
+}
+
+// delHeaderVariants is the same logic that tailscaled's serve path uses to
+// delete headers before adding outbound headers.
+func delHeaderVariants(h http.Header, names ...string) {
+	for k := range h {
+		norm := strings.ReplaceAll(k, "_", "-")
+		for _, name := range names {
+			if strings.EqualFold(norm, name) {
+				delete(h, k)
+				break
+			}
+		}
+	}
 }
 
 // encHeader mirrors the encoding tailscaled's serve path applies to
