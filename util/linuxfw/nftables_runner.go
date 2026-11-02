@@ -1528,7 +1528,9 @@ func createAcceptOnPortRule(table *nftables.Table, chain *nftables.Chain, port u
 // a given destination UDP port.
 func addAcceptOnPortRule(conn *nftables.Conn, table *nftables.Table, chain *nftables.Chain, port uint16) error {
 	rule := createAcceptOnPortRule(table, chain, port)
-	_ = conn.AddRule(rule)
+	// Prepend the transport-only exception before CGNAT drop/return rules.
+	// Do not remove or broaden the spoofing protections for other traffic.
+	_ = conn.InsertRule(rule)
 
 	if err := conn.Flush(); err != nil {
 		return fmt.Errorf("flush add rule: %w", err)
