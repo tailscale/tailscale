@@ -15,8 +15,10 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"tailscale.com/net/portmapper/portmappertype"
@@ -539,24 +541,43 @@ func TestGetUPnPClient(t *testing.T) {
 // NETGEAR RS700 firmware does) still yields a root device, instead of
 // failing with a context deadline error.
 func TestGetUPnPRootDeviceSlowResponse(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(1500 * time.Millisecond)
-		io.WriteString(w, pfSenseRootDescXML)
-	}))
-	defer ts.Close()
-	gw, _ := netip.AddrFromSlice(ts.Listener.Addr().(*net.TCPAddr).IP)
-	gw = gw.Unmap()
+	synctest.Test(t, func(t *testing.T) {
+		// Answer the root device fetch through a fake transport
+		// instead of a real HTTP server: a server's goroutines
+		// blocked on real network I/O would keep synctest's fake
+		// clock from ever advancing, so the simulated slow
+		// response below would never arrive. With no real sockets
+		// involved, the 1.5s delay advances on the fake clock and
+		// the test takes no real wall-clock time.
+		slowRT := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			select {
+			case <-time.After(1500 * time.Millisecond):
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			}
+			return &http.Response{
+				Status:     "200 OK",
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"text/xml"},
+				},
+				Body:    io.NopCloser(strings.NewReader(pfSenseRootDescXML)),
+				Request: req,
+			}, nil
+		})
+		ctx := upnpHTTPClientKey.WithValue(t.Context(), &http.Client{Transport: slowRT})
 
-	var logBuf tstest.MemLogger
-	dev, _, err := getUPnPRootDevice(context.Background(), logBuf.Logf, DebugKnobs{}, gw, uPnPDiscoResponse{
-		Location: ts.URL + "/rootDesc.xml",
+		var logBuf tstest.MemLogger
+		dev, _, err := getUPnPRootDevice(ctx, logBuf.Logf, DebugKnobs{}, netip.MustParseAddr("192.168.1.1"), uPnPDiscoResponse{
+			Location: "http://192.168.1.1:5000/rootDesc.xml",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dev == nil {
+			t.Fatal("got nil root device")
+		}
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if dev == nil {
-		t.Fatal("got nil root device")
-	}
 }
 
 func TestGetUPnPPortMapping(t *testing.T) {
