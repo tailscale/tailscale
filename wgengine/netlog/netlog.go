@@ -141,7 +141,9 @@ func (nl *Logger) Startup(logf logger.Logf, source NodeSource, nodeLogID, domain
 	}
 	nl.source = source
 
-	// Startup a log stream to Tailscale's logging service.
+	// Startup a log stream to the logging service. Defaults to Tailscale's
+	// log server, unless the LogTarget system policy or the TS_LOG_TARGET
+	// environment variable is set; the system policy wins if both are set.
 	if logf == nil {
 		logf = log.Printf
 	}
@@ -150,6 +152,7 @@ func (nl *Logger) Startup(logf logger.Logf, source NodeSource, nodeLogID, domain
 		httpc = testClient
 	}
 	logger := logtail.NewLogger(logtail.Config{
+		BaseURL:       logpolicy.LogURL(),
 		Collection:    "tailtraffic.log.tailscale.io",
 		PrivateID:     nodeLogID,
 		CopyPrivateID: domainLogID,

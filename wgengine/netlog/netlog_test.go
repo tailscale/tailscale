@@ -6,8 +6,11 @@
 package netlog
 
 import (
+	"context"
 	"encoding/binary"
+	"io"
 	"math/rand/v2"
+	"net/http"
 	"net/netip"
 	"sync"
 	"testing"
@@ -17,10 +20,14 @@ import (
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"tailscale.com/logpolicy"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest"
 	"tailscale.com/types/bools"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/types/logid"
 	"tailscale.com/types/netlogtype"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/wgengine/router"
 )
 
@@ -269,6 +276,79 @@ func TestAutoFlushTimeout(t *testing.T) {
 	}
 	if len(rec.virtConns) != 1 {
 		t.Errorf("len(virtConns) = %d, want 1", len(rec.virtConns))
+	}
+}
+
+// captureTransport is an [http.RoundTripper] that stands in for a log
+// server: it records the URL of every request and answers 200 OK.
+type captureTransport struct {
+	mu   sync.Mutex
+	urls []string
+}
+
+func (c *captureTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Body != nil {
+		io.Copy(io.Discard, r.Body)
+		r.Body.Close()
+	}
+	c.mu.Lock()
+	c.urls = append(c.urls, r.URL.String())
+	c.mu.Unlock()
+	return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Request: r}, nil
+}
+
+// TestLogTarget verifies that TS_LOG_TARGET overrides where network flow
+// logs are sent, rather than them always going to [logtail.DefaultHost].
+// The LogTarget policy reaches the same code through logpolicy.LogURL,
+// but this test does not set it.
+func TestLogTarget(t *testing.T) {
+	const target = "https://logs.example.com"
+	t.Setenv("TS_LOG_TARGET", target)
+	// logpolicy reads the log target once per process, so this test must
+	// be the first in the package to read it.
+	if got := logpolicy.LogURL(); got != target {
+		t.Fatalf("logpolicy.LogURL() = %q, want %q; was the log target read before this test set it?", got, target)
+	}
+
+	// Upload each log entry at once instead of after logtail's flush delay,
+	// which Shutdown would otherwise cut short.
+	t.Setenv("IN_TS_TEST", "1")
+
+	var tr captureTransport
+	tstest.Replace(t, &testClient, &http.Client{Transport: &tr})
+
+	nodeID, err := logid.NewPrivateID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	domainID, err := logid.NewPrivateID()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var nl Logger
+	if err := nl.Startup(t.Logf, &fakeNodeSource{}, nodeID, domainID, nil, nil, nil, nil, eventbustest.NewBus(t), false); err != nil {
+		t.Fatal(err)
+	}
+	src := netip.MustParseAddrPort("100.64.0.1:12345")
+	dst := netip.MustParseAddrPort("100.64.0.2:80")
+	nl.updateVirtConn(ipproto.TCP, src, dst, 1, 100, false)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := nl.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	want := target + "/c/tailtraffic.log.tailscale.io/" + nodeID.String() + "?copyId=" + domainID.String()
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if len(tr.urls) == 0 {
+		t.Fatal("no network flow logs were uploaded")
+	}
+	for _, got := range tr.urls {
+		if got != want {
+			t.Errorf("upload URL = %q, want %q", got, want)
+		}
 	}
 }
 
