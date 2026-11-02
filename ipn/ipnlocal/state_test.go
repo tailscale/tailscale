@@ -1949,6 +1949,9 @@ type mockEngine struct {
 	peerConfigFn func(key.NodePublic) (config wgcfg.PeerConfig, ok bool)
 
 	statusCb wgengine.StatusCallback
+
+	// syncedPeers records every key passed to SyncDevicePeer, in order.
+	syncedPeers []key.NodePublic
 }
 
 func newMockEngine() *mockEngine {
@@ -2072,7 +2075,20 @@ func (e *mockEngine) PeerAllowedIPs(k key.NodePublic) (_ []netip.Prefix, ok bool
 	return conf.AllowedIPs, ok
 }
 
-func (e *mockEngine) SyncDevicePeer(key.NodePublic)             {}
+func (e *mockEngine) SyncDevicePeer(k key.NodePublic) {
+	e.mu.Lock()
+	e.syncedPeers = append(e.syncedPeers, k)
+	e.mu.Unlock()
+}
+
+// syncedPeersSince returns the keys passed to SyncDevicePeer since index n,
+// where n is a previous return value of len(e.syncedPeers).
+func (e *mockEngine) syncedPeersSince(n int) []key.NodePublic {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return slices.Clone(e.syncedPeers[n:])
+}
+
 func (e *mockEngine) MarkDevicePeerForHandshake(key.NodePublic) {}
 func (e *mockEngine) SetPeerSessionStateFunc(func(key.NodePublic, wgengine.PeerWireGuardState)) {
 }
@@ -2094,6 +2110,64 @@ func (e *mockEngine) Close() {
 
 func (e *mockEngine) Done() <-chan struct{} {
 	return e.done
+}
+
+// TestProfileSwitchRemovesWireGuardPeers verifies that switching to a new
+// profile causes SyncDevicePeer to be called for all peers from the previous
+// tailnet, so that the WireGuard device removes them rather than keeping them
+// as ghost peers.
+func TestProfileSwitchRemovesWireGuardPeers(t *testing.T) {
+	lb, engine, cc := newLocalBackendWithMockEngineAndControl(t, true)
+
+	// Build a netmap whose self node has two peers with known AllowedIPs.
+	peer1 := makePeer(1,
+		withName("peer-1"),
+		withAddresses(netip.MustParsePrefix("100.64.1.1/32")),
+		withAllowedIPs(netip.MustParsePrefix("100.64.1.1/32")),
+	)
+	peer2 := makePeer(2,
+		withName("peer-2"),
+		withAddresses(netip.MustParsePrefix("100.64.1.2/32")),
+		withAllowedIPs(netip.MustParsePrefix("100.64.1.2/32")),
+	)
+	self := makePeer(3,
+		withName("self"),
+		withAddresses(netip.MustParsePrefix("100.64.1.3/32")),
+	)
+	nm := buildNetmapWithPeers(self, peer1, peer2)
+
+	// Connect and authenticate with the netmap containing the two peers.
+	mustDo(t)(lb.Start(ipn.Options{}))
+	cc().authenticated(nm)
+
+	if _, ok := engine.PeerAllowedIPs(peer1.Key()); !ok {
+		t.Fatal("peer1 not in engine")
+	}
+	if _, ok := engine.PeerAllowedIPs(peer2.Key()); !ok {
+		t.Fatal("peer2 not in engine")
+	}
+
+	// Record the current number of SyncDevicePeer calls.
+	engine.mu.Lock()
+	nBefore := len(engine.syncedPeers)
+	engine.mu.Unlock()
+
+	// Switch to a new empty profile.
+	mustDo(t)(lb.NewProfile())
+
+	// Peers synced after switcing profile.
+	synced := engine.syncedPeersSince(nBefore)
+
+	// Verify the absence of the peers.
+	for _, peer := range []tailcfg.NodeView{peer1, peer2} {
+		if !slices.Contains(synced, peer.Key()) {
+			t.Errorf("SyncDevicePeer(%v) not called for %s during profile switch. Called for: %v",
+				peer.Key().ShortString(), peer.Name(), synced)
+		}
+		if _, ok := engine.PeerAllowedIPs(peer.Key()); ok {
+			t.Errorf("peer(%s) still in peer config after new profile", peer.Name())
+		}
+	}
 }
 
 // hasValidNetMap returns true if the backend has a valid network map with a valid self node.

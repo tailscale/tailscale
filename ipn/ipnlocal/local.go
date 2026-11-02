@@ -8548,12 +8548,21 @@ func (b *LocalBackend) resetForProfileChangeLocked() error {
 			dm.Resolver().ClearNegativeCache()
 		}
 	}
+	// Snapshot peer keys from the old nodeBackend before swapping it out.
+	oldPeerKeys := b.currentNode().peerNodeKeys()
 	newNode := newNodeBackend(b.ctx, b.logf, b.sys.Bus.Get())
 	if oldNode := b.currentNodeAtomic.Swap(newNode); oldNode != nil {
 		oldNode.shutdown(errNodeContextChanged)
 	}
 	defer newNode.ready()
 	b.setNetMapLocked(nil) // Reset netmap.
+
+	// Use oldPeerKeys to explicitly remove the old tailnet's peers from the
+	// WireGuard device (the peer config is empty so all keys will be removed).
+	for _, k := range oldPeerKeys {
+		b.e.SyncDevicePeer(k)
+	}
+
 	b.updateFilterLocked(ipn.PrefsView{})
 	// Reset the self node in the engine.
 	b.e.SetSelfNode(tailcfg.NodeView{})

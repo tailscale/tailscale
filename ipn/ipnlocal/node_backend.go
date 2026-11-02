@@ -671,6 +671,14 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) (discoChanged []key.Node
 	return discoChanged, routeChanged
 }
 
+// peerNodeKeys returns the node public keys of all current peers.
+// These are the keys used by the WireGuard device to identify peers.
+func (nb *nodeBackend) peerNodeKeys() []key.NodePublic {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	return slices.Collect(maps.Keys(nb.nodeByKey))
+}
+
 // AwaitNodeKeyForTest returns a channel that is closed once a peer with the
 // given node key first appears in this nodeBackend's peer index, or
 // immediately (a closed channel) if it's already present. It is intended for
