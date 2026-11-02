@@ -1026,6 +1026,13 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		p.Transport = rp.getTransport()
 	}
+	// Let the Transport keep reading the request body after the response
+	// starts. Otherwise the HTTP/1 server closes the body at that point and
+	// the Transport closes its backend connection under the response it is
+	// copying (golang/go#40747). The HTTP/2 server always allows this.
+	if err := http.NewResponseController(w).EnableFullDuplex(); err != nil {
+		rp.logf("serve: enable full duplex: %v", err)
+	}
 	p.ServeHTTP(w, r)
 }
 
