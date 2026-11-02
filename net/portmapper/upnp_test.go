@@ -15,8 +15,11 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"tailscale.com/net/portmapper/portmappertype"
 	"tailscale.com/tstest"
@@ -531,6 +534,43 @@ func TestGetUPnPClient(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestGetUPnPRootDeviceSlowResponse verifies that a router whose HTTP
+// server takes over a second to answer the root device fetch (as the
+// NETGEAR RS700 firmware does) still yields a root device, instead of
+// failing with a context deadline error.
+func TestGetUPnPRootDeviceSlowResponse(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		slowRT := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			select {
+			case <-time.After(1500 * time.Millisecond):
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			}
+			return &http.Response{
+				Status:     "200 OK",
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"text/xml"},
+				},
+				Body:    io.NopCloser(strings.NewReader(pfSenseRootDescXML)),
+				Request: req,
+			}, nil
+		})
+		ctx := upnpHTTPClientKey.WithValue(t.Context(), &http.Client{Transport: slowRT})
+
+		var logBuf tstest.MemLogger
+		dev, _, err := getUPnPRootDevice(ctx, logBuf.Logf, DebugKnobs{}, netip.MustParseAddr("192.168.1.1"), uPnPDiscoResponse{
+			Location: "http://192.168.1.1:5000/rootDesc.xml",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dev == nil {
+			t.Fatal("got nil root device")
+		}
+	})
 }
 
 func TestGetUPnPPortMapping(t *testing.T) {
