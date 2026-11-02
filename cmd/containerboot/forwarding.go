@@ -24,14 +24,18 @@ func ensureIPForwarding(root, clusterProxyTargetIP, tailnetTargetIP, tailnetTarg
 		v4Forwarding, v6Forwarding bool
 	)
 	if clusterProxyTargetIP != "" {
-		proxyIP, err := netip.ParseAddr(clusterProxyTargetIP)
-		if err != nil {
-			return fmt.Errorf("invalid cluster destination IP: %v", err)
-		}
-		if proxyIP.Is4() {
-			v4Forwarding = true
-		} else {
-			v6Forwarding = true
+		// clusterProxyTargetIP may be a comma-separated list of IPs, one per
+		// IP family (dual-stack Services).
+		for ipStr := range strings.SplitSeq(clusterProxyTargetIP, ",") {
+			proxyIP, err := netip.ParseAddr(strings.TrimSpace(ipStr))
+			if err != nil {
+				return fmt.Errorf("invalid cluster destination IP: %v", err)
+			}
+			if proxyIP.Is4() {
+				v4Forwarding = true
+			} else {
+				v6Forwarding = true
+			}
 		}
 	}
 	if tailnetTargetIP != "" {
@@ -155,6 +159,23 @@ func installTSForwardingRuleForDestination(_ context.Context, dstFilter string, 
 	return nil
 }
 
+// installIngressForwardingRules installs ingress forwarding rules for each of
+// the comma-separated destination IPs in dstsStr (one per IP family for
+// dual-stack Services). A rule is installed for every destination, so that the
+// proxy is reachable over each of its tailnet addresses.
+func installIngressForwardingRules(ctx context.Context, dstsStr string, tsIPs []netip.Prefix, nfr linuxfw.NetfilterRunner) error {
+	for dstStr := range strings.SplitSeq(dstsStr, ",") {
+		dstStr = strings.TrimSpace(dstStr)
+		if dstStr == "" {
+			continue
+		}
+		if err := installIngressForwardingRule(ctx, dstStr, tsIPs, nfr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func installIngressForwardingRule(_ context.Context, dstStr string, tsIPs []netip.Prefix, nfr linuxfw.NetfilterRunner) error {
 	dst, err := netip.ParseAddr(dstStr)
 	if err != nil {
@@ -175,7 +196,7 @@ func installIngressForwardingRule(_ context.Context, dstStr string, tsIPs []neti
 		local = pfx.Addr()
 		break
 	}
-	if proxyHasIPv4Address && dst.Is6() {
+	if proxyHasIPv4Address && dst.Is6() && !local.IsValid() {
 		log.Printf("Warning: proxy backend ClusterIP is an IPv6 address and the proxy has a IPv4 tailnet address. You might need to disable IPv4 address allocation for the proxy for forwarding to work. See https://github.com/tailscale/tailscale/issues/12156")
 	}
 	if !local.IsValid() {
