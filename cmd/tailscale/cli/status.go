@@ -56,6 +56,7 @@ https://github.com/tailscale/tailscale/blob/main/ipn/ipnstate/ipnstate.go
 		fs.StringVar(&statusArgs.listen, "listen", "127.0.0.1:8384", "listen address for web mode; use port 0 for automatic")
 		fs.BoolVar(&statusArgs.browser, "browser", true, "open a browser in web mode")
 		fs.BoolVar(&statusArgs.header, "header", false, "show column headers in table format")
+		fs.BoolVar(&statusArgs.owner, "owner", true, "show owner column in table format")
 		return fs
 	})(),
 }
@@ -69,6 +70,7 @@ var statusArgs struct {
 	self    bool   // in CLI mode, show status of local machine
 	peers   bool   // in CLI mode, show status of peer machines
 	header  bool   // in CLI mode, show column headers in table format
+	owner   bool   // in CLI mode, show the owner column in table format
 }
 
 const mullvadTCD = "mullvad.ts.net."
@@ -157,17 +159,21 @@ func runStatus(ctx context.Context, args []string) error {
 	w := tabwriter.NewWriter(Stdout, 0, 0, 2, ' ', 0)
 	f := func(format string, a ...any) { fmt.Fprintf(w, format, a...) }
 	if statusArgs.header {
-		fmt.Fprintln(w, "IP\tHostname\tOwner\tOS\tStatus\t")
-		fmt.Fprintln(w, "--\t--------\t-----\t--\t------\t")
+		if statusArgs.owner {
+			fmt.Fprintln(w, "IP\tHostname\tOwner\tOS\tStatus\t")
+			fmt.Fprintln(w, "--\t--------\t-----\t--\t------\t")
+		} else {
+			fmt.Fprintln(w, "IP\tHostname\tOS\tStatus\t")
+			fmt.Fprintln(w, "--\t--------\t--\t------\t")
+		}
 	}
 
 	printPS := func(ps *ipnstate.PeerStatus) {
-		f("%s\t%s\t%s\t%s\t",
-			firstIPString(ps.TailscaleIPs),
-			dnsOrQuoteHostname(st, ps),
-			ownerLogin(st, ps),
-			ps.OS,
-		)
+		f("%s\t%s\t", firstIPString(ps.TailscaleIPs), dnsOrQuoteHostname(st, ps))
+		if statusArgs.owner {
+			f("%s\t", ownerLogin(st, ps))
+		}
+		f("%s\t", ps.OS)
 		relay := ps.Relay
 		anyTraffic := ps.TxBytes != 0 || ps.RxBytes != 0
 		var offline string
