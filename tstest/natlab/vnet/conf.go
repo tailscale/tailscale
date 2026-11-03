@@ -359,6 +359,8 @@ type Network struct {
 	latency  time.Duration // latency applied to interface writes
 	lossRate float64       // chance of packet loss (0.0 to 1.0)
 
+	portMapLifetime time.Duration // max NAT-PMP/PCP mapping lifetime, if non-zero
+
 	// ...
 	err error // carried error
 }
@@ -376,6 +378,12 @@ func (n *Network) SetPacketLoss(rate float64) {
 		rate = 1
 	}
 	n.lossRate = rate
+}
+
+// SetPortMapLifetime caps the lifetime of NAT-PMP and PCP mappings granted by
+// this network's router to d. UPnP mappings are unaffected.
+func (n *Network) SetPortMapLifetime(d time.Duration) {
+	n.portMapLifetime = d
 }
 
 // SetBlackholedIPv4 sets whether the network should blackhole all IPv4 traffic
@@ -458,21 +466,22 @@ func (s *Server) initFromConfig(c *Config) error {
 			conf.lanIP4 = netip.MustParsePrefix("192.168.0.0/24")
 		}
 		n := &network{
-			num:        conf.num,
-			s:          s,
-			mac:        conf.mac,
-			svcs:       conf.svcs.Clone(),
-			wanIP6:     conf.wanIP6,
-			v4:         conf.lanIP4.IsValid(),
-			v6:         conf.wanIP6.IsValid(),
-			wanIP4:     conf.wanIP4,
-			lanIP4:     conf.lanIP4,
-			breakWAN4:  conf.breakWAN4,
-			latency:    conf.latency,
-			lossRate:   conf.lossRate,
-			nodesByIP4: map[netip.Addr]*node{},
-			nodesByMAC: map[MAC]*node{},
-			logf:       logger.WithPrefix(s.logf, fmt.Sprintf("[net-%v] ", conf.mac)),
+			num:             conf.num,
+			s:               s,
+			mac:             conf.mac,
+			svcs:            conf.svcs.Clone(),
+			wanIP6:          conf.wanIP6,
+			v4:              conf.lanIP4.IsValid(),
+			v6:              conf.wanIP6.IsValid(),
+			wanIP4:          conf.wanIP4,
+			lanIP4:          conf.lanIP4,
+			breakWAN4:       conf.breakWAN4,
+			latency:         conf.latency,
+			lossRate:        conf.lossRate,
+			portMapLifetime: conf.portMapLifetime,
+			nodesByIP4:      map[netip.Addr]*node{},
+			nodesByMAC:      map[MAC]*node{},
+			logf:            logger.WithPrefix(s.logf, fmt.Sprintf("[net-%v] ", conf.mac)),
 		}
 		netOfConf[conf] = n
 		s.networks.Add(n)

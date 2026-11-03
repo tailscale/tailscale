@@ -20,6 +20,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"tailscale.com/util/must"
 )
@@ -68,6 +69,36 @@ func checkMapping(t *testing.T, n *network, extPort uint16, want netip.AddrPort)
 	}
 }
 
+func mappingExpiry(n *network, extPort uint16) time.Time {
+	n.natMu.Lock()
+	defer n.natMu.Unlock()
+	return n.portMap[netip.AddrPortFrom(n.wanIP4, extPort)].Expiry
+}
+
+// checkRenewed checks that the mapping for extPort is the only one to dst
+// and that its expiry was pushed more than an hour past oldExpiry.
+func checkRenewed(t *testing.T, n *network, extPort uint16, dst netip.AddrPort, oldExpiry time.Time) {
+	t.Helper()
+	checkMapping(t, n, extPort, dst)
+	if exp := mappingExpiry(n, extPort); exp.Sub(oldExpiry) < time.Hour {
+		t.Errorf("renewed expiry %v, want more than an hour after %v", exp, oldExpiry)
+	}
+	n.natMu.Lock()
+	defer n.natMu.Unlock()
+	for k, v := range n.portMap {
+		if v.dst == dst && k.Port() != extPort {
+			t.Errorf("extra mapping from %v to %v", k, dst)
+		}
+	}
+}
+
+func checkExpiresWithin(t *testing.T, n *network, extPort uint16, d time.Duration) {
+	t.Helper()
+	if exp := mappingExpiry(n, extPort); time.Until(exp) <= 0 || time.Until(exp) > d {
+		t.Errorf("mapping expires at %v, want within %v", exp, d)
+	}
+}
+
 type soapResponse struct {
 	ExternalIP   netip.Addr `xml:"NewExternalIPAddress"`
 	ReservedPort uint16     `xml:"NewReservedPort"`
@@ -112,11 +143,30 @@ func TestNATPMP(t *testing.T) {
 		checkReply(t, got, "00 80 00 00 ?? ?? ?? ?? 02 01 01 01")
 	})
 	t.Run("map-udp", func(t *testing.T) {
+		n.portMapLifetime = time.Minute
+		t.Cleanup(func() { n.portMapLifetime = 0 })
 		// MAP UDP of int port 60736 to any ext port for 7200s
 		got := sendUDPToRouter(t, s, pxpPort, mustHex("00 01 00 00 ed 40 00 00 00 00 1c 20"))
-		// success, MAP UDP of int port 60736 for 7200s
-		checkReply(t, got, "00 81 00 00 ?? ?? ?? ?? ed 40 ?? ?? 00 00 1c 20")
-		checkMapping(t, n, binary.BigEndian.Uint16(got[10:12]), netip.AddrPortFrom(clientIPv4(1), 60736))
+		// success, MAP UDP of int port 60736 for 60s
+		checkReply(t, got, "00 81 00 00 ?? ?? ?? ?? ed 40 ?? ?? 00 00 00 3c")
+		extPort := binary.BigEndian.Uint16(got[10:12])
+		checkMapping(t, n, extPort, netip.AddrPortFrom(clientIPv4(1), 60736))
+		checkExpiresWithin(t, n, extPort, time.Minute)
+	})
+	t.Run("renew-udp", func(t *testing.T) {
+		// MAP UDP of int port 60737 to ext port 20000 for 60s
+		got := sendUDPToRouter(t, s, pxpPort, mustHex("00 01 00 00 ed 41 4e 20 00 00 00 3c"))
+		// success, MAP UDP of int port 60737 to ext port 20000 for 60s
+		checkReply(t, got, "00 81 00 00 ?? ?? ?? ?? ed 41 4e 20 00 00 00 3c")
+		extPort := uint16(20000) // 4e 20 in hex
+		checkMapping(t, n, extPort, netip.AddrPortFrom(clientIPv4(1), 60737))
+		expiry := mappingExpiry(n, extPort)
+
+		// MAP UDP of int port 60737 to any ext port for 7200s
+		got = sendUDPToRouter(t, s, pxpPort, mustHex("00 01 00 00 ed 41 00 00 00 00 1c 20"))
+		// success, MAP UDP of int port 60737 to the same ext port for 7200s
+		checkReply(t, got, "00 81 00 00 ?? ?? ?? ?? ed 41 4e 20 00 00 1c 20")
+		checkRenewed(t, n, extPort, netip.AddrPortFrom(clientIPv4(1), 60737), expiry)
 	})
 	t.Run("request-unsupported", func(t *testing.T) {
 		got := sendUDPToRouter(t, s, pxpPort, pcpAnnounceReq)
@@ -133,13 +183,36 @@ func TestPCP(t *testing.T) {
 		checkReply(t, got, "02 80 00 00 00 00 00 00 ?? ?? ?? ?? 00 00 00 00 00 00 00 00 00 00 00 00")
 	})
 	t.Run("map-udp", func(t *testing.T) {
+		n.portMapLifetime = time.Minute
+		t.Cleanup(func() { n.portMapLifetime = 0 })
 		// MAP UDP of int 192.168.0.101:40768 to any ext IP and port for 7200s, with nonce 95bcb5d93d07ecbbc8b3bd4f
 		got := sendUDPToRouter(t, s, pxpPort, mustHex("02 01 00 00 00 00 1c 20 00 00 00 00 00 00 00 00 00 00 ff ff c0 a8 00 65 "+
 			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f 11 00 00 00 9f 40 00 00 00 00 00 00 00 00 00 00 00 00 ff ff 00 00 00 00"))
-		// success, MAP UDP of int port 40768 to ext IP 2.1.1.1 for 7200s, same nonce
-		checkReply(t, got, "02 81 00 00 00 00 1c 20 ?? ?? ?? ?? 00 00 00 00 00 00 00 00 00 00 00 00 "+
+		// success, MAP UDP of int port 40768 to ext IP 2.1.1.1 for 60s, same nonce
+		checkReply(t, got, "02 81 00 00 00 00 00 3c ?? ?? ?? ?? 00 00 00 00 00 00 00 00 00 00 00 00 "+
 			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f 11 00 00 00 9f 40 ?? ?? 00 00 00 00 00 00 00 00 00 00 ff ff 02 01 01 01")
-		checkMapping(t, n, binary.BigEndian.Uint16(got[42:44]), netip.AddrPortFrom(clientIPv4(1), 40768))
+		extPort := binary.BigEndian.Uint16(got[42:44])
+		checkMapping(t, n, extPort, netip.AddrPortFrom(clientIPv4(1), 40768))
+		checkExpiresWithin(t, n, extPort, time.Minute)
+	})
+	t.Run("renew-udp", func(t *testing.T) {
+		// MAP UDP of int 192.168.0.101:40769 to any ext IP and port 20001 for 60s, with nonce 95bcb5d93d07ecbbc8b3bd4f
+		got := sendUDPToRouter(t, s, pxpPort, mustHex("02 01 00 00 00 00 00 3c 00 00 00 00 00 00 00 00 00 00 ff ff c0 a8 00 65 "+
+			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f 11 00 00 00 9f 41 4e 21 00 00 00 00 00 00 00 00 00 00 ff ff 00 00 00 00"))
+		// success, MAP UDP of int port 40769 to ext 2.1.1.1:20001 for 60s, same nonce
+		checkReply(t, got, "02 81 00 00 00 00 00 3c ?? ?? ?? ?? 00 00 00 00 00 00 00 00 00 00 00 00 "+
+			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f 11 00 00 00 9f 41 4e 21 00 00 00 00 00 00 00 00 00 00 ff ff 02 01 01 01")
+		extPort := uint16(20001) // 4e 21 in hex
+		checkMapping(t, n, extPort, netip.AddrPortFrom(clientIPv4(1), 40769))
+		expiry := mappingExpiry(n, extPort)
+
+		// MAP UDP of int 192.168.0.101:40769 to any ext IP and port for 7200s, same nonce
+		got = sendUDPToRouter(t, s, pxpPort, mustHex("02 01 00 00 00 00 1c 20 00 00 00 00 00 00 00 00 00 00 ff ff c0 a8 00 65 "+
+			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f 11 00 00 00 9f 41 00 00 00 00 00 00 00 00 00 00 00 00 ff ff 00 00 00 00"))
+		// success, MAP UDP of int port 40769 to the same ext IP and port for 7200s, same nonce
+		checkReply(t, got, "02 81 00 00 00 00 1c 20 ?? ?? ?? ?? 00 00 00 00 00 00 00 00 00 00 00 00 "+
+			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f 11 00 00 00 9f 41 4e 21 00 00 00 00 00 00 00 00 00 00 ff ff 02 01 01 01")
+		checkRenewed(t, n, extPort, netip.AddrPortFrom(clientIPv4(1), 40769), expiry)
 	})
 	t.Run("request-unsupported", func(t *testing.T) {
 		got := sendUDPToRouter(t, s, pxpPort, natpmpAddrReq)
@@ -196,5 +269,28 @@ func TestUPnP(t *testing.T) {
       <NewInternalClient>192.168.0.101</NewInternalClient>
       <NewLeaseDuration>7200</NewLeaseDuration>`)
 		checkMapping(t, n, res.ReservedPort, netip.AddrPortFrom(clientIPv4(1), 40768))
+	})
+	t.Run("renew-any-port-mapping", func(t *testing.T) {
+		res := soapRequest(t, n, "AddAnyPortMapping", `
+      <NewExternalPort>20002</NewExternalPort>
+      <NewInternalPort>40769</NewInternalPort>
+      <NewInternalClient>192.168.0.101</NewInternalClient>
+      <NewLeaseDuration>60</NewLeaseDuration>`)
+		extPort := uint16(20002)
+		if res.ReservedPort != extPort {
+			t.Errorf("NewReservedPort = %d, want %d", res.ReservedPort, extPort)
+		}
+		checkMapping(t, n, extPort, netip.AddrPortFrom(clientIPv4(1), 40769))
+		expiry := mappingExpiry(n, extPort)
+
+		res = soapRequest(t, n, "AddAnyPortMapping", `
+      <NewExternalPort>20002</NewExternalPort>
+      <NewInternalPort>40769</NewInternalPort>
+      <NewInternalClient>192.168.0.101</NewInternalClient>
+      <NewLeaseDuration>7200</NewLeaseDuration>`)
+		if res.ReservedPort != extPort {
+			t.Errorf("renewed NewReservedPort = %d, want %d", res.ReservedPort, extPort)
+		}
+		checkRenewed(t, n, extPort, netip.AddrPortFrom(clientIPv4(1), 40769), expiry)
 	})
 }
