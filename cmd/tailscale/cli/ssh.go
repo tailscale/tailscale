@@ -157,16 +157,39 @@ func runSSH(ctx context.Context, args []string) error {
 }
 
 func writeKnownHosts(st *ipnstate.Status) (knownHostsFile string, err error) {
+	want := genKnownHosts(st)
 	confDir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
+	if err == nil {
+		knownHostsFile, err = writeKnownHostsIn(confDir, want)
+		if err == nil {
+			return knownHostsFile, nil
+		}
 	}
+	// The config dir is missing or unwritable (e.g. read-only home).
+	// Fall back to a temp file; host key checking is unchanged. We don't
+	// remove it: on Unix we exec ssh and never return, and the file only
+	// holds public host keys.
+	f, tmpErr := os.CreateTemp("", "tailscale-ssh-known-hosts-*")
+	if tmpErr != nil {
+		return "", fmt.Errorf("writing known_hosts: %w; temp file fallback: %w", err, tmpErr)
+	}
+	defer f.Close()
+	if _, tmpErr := f.Write(want); tmpErr != nil {
+		os.Remove(f.Name())
+		return "", fmt.Errorf("writing known_hosts: %w; temp file fallback: %w", err, tmpErr)
+	}
+	errf("Warning: can't write known_hosts in config dir (%v); using temp file %s\n", err, f.Name())
+	return f.Name(), nil
+}
+
+// writeKnownHostsIn writes want to confDir/tailscale/ssh_known_hosts
+// if it differs from what's there, and returns its path.
+func writeKnownHostsIn(confDir string, want []byte) (knownHostsFile string, err error) {
 	tsConfDir := filepath.Join(confDir, "tailscale")
 	if err := os.MkdirAll(tsConfDir, 0700); err != nil {
 		return "", err
 	}
 	knownHostsFile = filepath.Join(tsConfDir, "ssh_known_hosts")
-	want := genKnownHosts(st)
 	if cur, err := os.ReadFile(knownHostsFile); err != nil || !bytes.Equal(cur, want) {
 		if err := os.WriteFile(knownHostsFile, want, 0644); err != nil {
 			return "", err
