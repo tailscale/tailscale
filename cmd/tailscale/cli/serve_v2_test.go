@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -936,6 +937,56 @@ func TestServeDevConfigMutations(t *testing.T) {
 			steps: []step{{
 				command: cmd("funnel --https=10000 off"),
 				want:    &ipn.ServeConfig{},
+			}},
+		},
+		{
+			// A non-root, non-operator user gets access denied from
+			// tailscaled. For a path or Unix socket target the generic
+			// "set up an operator" advice is wrong, so the serve command
+			// replaces the error with one that says root is required.
+			name:         "access_denied_path_target_needs_root",
+			skipOn:       []string{"windows"},
+			initialState: fakeLocalServeClient{setErr: &local.AccessDeniedError{}},
+			steps: []step{
+				{
+					command: cmd("serve --bg " + filepath.Join(td, "foo")),
+					wantErr: func(err error) (badErrMsg string) {
+						if err == nil || !strings.Contains(err.Error(), "requires root") {
+							return fmt.Sprintf("want an error mentioning root; got %v", err)
+						}
+						if local.IsAccessDeniedError(err) {
+							return "error still reports as access denied, so the CLI would append operator advice"
+						}
+						return ""
+					},
+				},
+				{
+					command: cmd("serve --bg --tcp=80 unix:/tmp/foo.sock"),
+					wantErr: func(err error) (badErrMsg string) {
+						if err == nil || !strings.Contains(err.Error(), "requires root") {
+							return fmt.Sprintf("want an error mentioning root; got %v", err)
+						}
+						if local.IsAccessDeniedError(err) {
+							return "error still reports as access denied, so the CLI would append operator advice"
+						}
+						return ""
+					},
+				},
+			},
+		},
+		{
+			// Proxy targets do not need root, so the access denied error
+			// passes through unchanged and the operator advice still applies.
+			name:         "access_denied_proxy_target_passes_through",
+			initialState: fakeLocalServeClient{setErr: &local.AccessDeniedError{}},
+			steps: []step{{
+				command: cmd("serve --bg 3000"),
+				wantErr: func(err error) (badErrMsg string) {
+					if !local.IsAccessDeniedError(err) {
+						return fmt.Sprintf("want access denied error; got %v", err)
+					}
+					return ""
+				},
 			}},
 		},
 		{
