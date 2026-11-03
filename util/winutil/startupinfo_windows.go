@@ -84,7 +84,10 @@ func (sib *StartupInfoBuilder) Resolve() (startupInfo *windows.StartupInfo, inhe
 	createProcessFlags = windows.CREATE_UNICODE_ENVIRONMENT
 
 	if ln := uint32(len(sib.attrs)); ln > 0 {
-		attrCont, err := windows.NewProcThreadAttributeList(ln)
+		// Assign to the named result so that the deferred Delete below sees
+		// errors returned from the loop.
+		var attrCont *windows.ProcThreadAttributeListContainer
+		attrCont, err = windows.NewProcThreadAttributeList(ln)
 		if err != nil {
 			return nil, false, 0, err
 		}
