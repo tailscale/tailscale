@@ -253,7 +253,9 @@ func (r *KubeAPIServerTSServiceReconciler) maybeCleanup(ctx context.Context, ser
 		return fmt.Errorf("error deleting Tailscale Service: %w", err)
 	}
 
-	if err = cleanupCertResources(ctx, r.Client, r.tsNamespace, serviceName, pg); err != nil {
+	// Find the cert resources by label, because the state Secrets that hold
+	// the DNS name can already be gone.
+	if err = cleanupAllCertResources(ctx, r.Client, r.tsNamespace, pg.Name); err != nil {
 		return fmt.Errorf("failed to clean up cert resources: %w", err)
 	}
 

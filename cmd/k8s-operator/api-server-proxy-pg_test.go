@@ -264,7 +264,11 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionTrue, reasonKubeAPIServerProxyConfigured, "", 1, r.clock, r.logger)
 	pg.Status.URL = "https://" + updatedDomain
 
-	// Delete the ProxyGroup and verify Tailscale Service and cert resources are cleaned up.
+	// Delete the ProxyGroup and verify Tailscale Service and cert resources are
+	// cleaned up. Delete the state Secret first, as a Foreground delete does
+	// on older versions of the operator, so the cleanup cannot read the DNS
+	// name from it.
+	mustDeleteAll(t, fc, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "test-pg-0", Namespace: ns}})
 	if err := fc.Delete(t.Context(), pg); err != nil {
 		t.Fatalf("deleting ProxyGroup: %v", err)
 	}
