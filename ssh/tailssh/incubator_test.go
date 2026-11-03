@@ -261,6 +261,34 @@ func TestParseIncubatorArgsEnvFD(t *testing.T) {
 	}
 }
 
+// TestParseIncubatorArgsGroups verifies that --groups accepts an empty list,
+// which a user with no supplementary groups yields, but still rejects empty
+// entries within a list.
+func TestParseIncubatorArgsGroups(t *testing.T) {
+	for _, tt := range []struct {
+		groups string
+		want   []int
+	}{
+		{"", nil},
+		{"1000", []int{1000}},
+		{"1000,1001", []int{1000, 1001}},
+	} {
+		ia, err := parseIncubatorArgs([]string{"--groups=" + tt.groups})
+		if err != nil {
+			t.Errorf("--groups=%s: got error %v, want nil", tt.groups, err)
+			continue
+		}
+		if !slices.Equal(ia.gids, tt.want) {
+			t.Errorf("--groups=%s: got gids %v, want %v", tt.groups, ia.gids, tt.want)
+		}
+	}
+	for _, groups := range []string{"1000,x", "1000,,1001", "1000,"} {
+		if _, err := parseIncubatorArgs([]string{"--groups=" + groups}); err == nil {
+			t.Errorf("--groups=%s: got nil error, want rejection", groups)
+		}
+	}
+}
+
 // TestLoadForwardedEnvLegacyEncodedEnv covers the deprecated --encoded-env
 // compatibility path: an outdated parent tailscaled passes the accepted
 // environment as a quoted JSON argv flag, and the child must still decode it

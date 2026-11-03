@@ -355,12 +355,16 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 	flags.IntVar(&ia.envFD, "env-fd", -1, "file descriptor to read the forwarded environment from (JSON array of KEY=VALUE pairs)")
 	flags.Parse(args)
 
-	for g := range strings.SplitSeq(groups, ",") {
-		gid, err := strconv.Atoi(g)
-		if err != nil {
-			return ia, fmt.Errorf("unable to parse group id %q: %w", g, err)
+	// A user without supplementary groups gets an empty --groups=, which is
+	// no groups rather than a single empty group ID.
+	if groups != "" {
+		for g := range strings.SplitSeq(groups, ",") {
+			gid, err := strconv.Atoi(g)
+			if err != nil {
+				return ia, fmt.Errorf("unable to parse group id %q: %w", g, err)
+			}
+			ia.gids = append(ia.gids, gid)
 		}
-		ia.gids = append(ia.gids, gid)
 	}
 
 	// envFD comes from an ExtraFiles entry, so it must never name stdin/out/err
