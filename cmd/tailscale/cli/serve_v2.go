@@ -346,6 +346,10 @@ func (e *serveEnv) validateArgs(subcmd serveMode, args []string) error {
 		fmt.Fprint(e.stderr(), "\nPlease see https://tailscale.com/kb/1242/tailscale-serve for more information.\n")
 		return errHelpFunc(subcmd)
 	}
+	if subcmd == funnel && len(args) == 1 && args[0] == "on" {
+		fmt.Fprintln(e.stderr(), "Error: `on` is not a valid Funnel target. Use `tailscale funnel --bg <target>` instead.")
+		return errHelpFunc(subcmd)
+	}
 	if len(args) == 0 && e.tun {
 		return nil
 	}

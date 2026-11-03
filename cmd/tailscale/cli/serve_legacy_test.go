@@ -17,7 +17,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -74,29 +73,6 @@ func TestServeConfigMutations(t *testing.T) {
 		_, _, s.line, _ = runtime.Caller(1)
 		steps = append(steps, s)
 	}
-
-	// funnel
-	add(step{reset: true})
-	add(step{
-		command: cmd("funnel 443 on"),
-		want:    &ipn.ServeConfig{AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true}},
-	})
-	add(step{
-		command: cmd("funnel 443 on"),
-		want:    nil, // nothing to save
-	})
-	add(step{
-		command: cmd("funnel 443 off"),
-		want:    &ipn.ServeConfig{},
-	})
-	add(step{
-		command: cmd("funnel 443 off"),
-		want:    nil, // nothing to save
-	})
-	add(step{
-		command: cmd("funnel"),
-		wantErr: exactErr(flag.ErrHelp, "flag.ErrHelp"),
-	})
 
 	// https
 	add(step{reset: true})
@@ -532,53 +508,10 @@ func TestServeConfigMutations(t *testing.T) {
 			},
 		},
 	})
-	add(step{
-		command: cmd("funnel 443 on"),
-		want: &ipn.ServeConfig{
-			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true},
-			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-			},
-		},
-	})
-	add(step{ // serving on secondary port doesn't change funnel
+	add(step{ // serving on a secondary port preserves the primary handler
 		command: cmd("https:8443 /bar localhost:3001"),
 		want: &ipn.ServeConfig{
-			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true},
-			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-				"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/bar": {Proxy: "http://127.0.0.1:3001"},
-				}},
-			},
-		},
-	})
-	add(step{ // turn funnel on for secondary port
-		command: cmd("funnel 8443 on"),
-		want: &ipn.ServeConfig{
-			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true, "foo.test.ts.net:8443": true},
-			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-				"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/bar": {Proxy: "http://127.0.0.1:3001"},
-				}},
-			},
-		},
-	})
-	add(step{ // turn funnel off for primary port 443
-		command: cmd("funnel 443 off"),
-		want: &ipn.ServeConfig{
-			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:8443": true},
-			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
+			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
 				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
 					"/": {Proxy: "http://127.0.0.1:3000"},
@@ -592,8 +525,7 @@ func TestServeConfigMutations(t *testing.T) {
 	add(step{ // remove secondary port
 		command: cmd("https:8443 /bar off"),
 		want: &ipn.ServeConfig{
-			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:8443": true},
-			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
 				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
 					"/": {Proxy: "http://127.0.0.1:3000"},
@@ -604,8 +536,7 @@ func TestServeConfigMutations(t *testing.T) {
 	add(step{ // start a tcp forwarder on 8443
 		command: cmd("tcp:8443 tcp://localhost:5432"),
 		want: &ipn.ServeConfig{
-			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:8443": true},
-			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {TCPForward: "127.0.0.1:5432"}},
+			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {TCPForward: "127.0.0.1:5432"}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
 				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
 					"/": {Proxy: "http://127.0.0.1:3000"},
@@ -616,21 +547,13 @@ func TestServeConfigMutations(t *testing.T) {
 	add(step{ // remove primary port http handler
 		command: cmd("https:443 / off"),
 		want: &ipn.ServeConfig{
-			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:8443": true},
-			TCP:         map[uint16]*ipn.TCPPortHandler{8443: {TCPForward: "127.0.0.1:5432"}},
+			TCP: map[uint16]*ipn.TCPPortHandler{8443: {TCPForward: "127.0.0.1:5432"}},
 		},
 	})
 	add(step{ // remove tcp forwarder
 		command: cmd("tls-terminated-tcp:8443 off"),
-		want: &ipn.ServeConfig{
-			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:8443": true},
-		},
-	})
-	add(step{ // turn off funnel
-		command: cmd("funnel 8443 off"),
 		want:    &ipn.ServeConfig{},
 	})
-
 	// tricky steps
 	add(step{reset: true})
 	add(step{ // a directory with a trailing slash mount point
@@ -737,15 +660,8 @@ func TestServeConfigMutations(t *testing.T) {
 			testStderr:  io.Discard,
 		}
 		lastCount := lc.setCount
-		var cmd *ffcli.Command
-		var args []string
-		if st.command[0] == "funnel" {
-			cmd = newFunnelCommand(e)
-			args = st.command[1:]
-		} else {
-			cmd = newServeLegacyCommand(e)
-			args = st.command
-		}
+		cmd := newServeLegacyCommand(e)
+		args := st.command
 		if cmd.FlagSet == nil {
 			cmd.FlagSet = flag.NewFlagSet(cmd.Name, flag.ContinueOnError)
 			cmd.FlagSet.SetOutput(Stdout)
