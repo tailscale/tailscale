@@ -111,6 +111,41 @@ func synctestDrainPendingMessages(t *testing.T) {
 	}
 }
 
+func TestShutdownFlushesPendingLogs(t *testing.T) {
+	synctest.Test(t, synctestShutdownFlushesPendingLogs)
+}
+
+// A log written before Shutdown must be uploaded as part of Shutdown's final
+// flush, even if the background uploader hadn't gotten to it yet.
+//
+// See https://github.com/tailscale/tailscale/issues/5856.
+func synctestShutdownFlushesPendingLogs(t *testing.T) {
+	ts, logger := newTestLogtailServer(t)
+
+	// Write a log and immediately shut down, without waiting for the
+	// background uploader to pick it up.
+	logger.Logf("message")
+
+	if err := logger.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	var body strings.Builder
+drain:
+	for {
+		select {
+		case b := <-ts.uploaded:
+			body.Write(b)
+		default:
+			break drain
+		}
+	}
+
+	if !strings.Contains(body.String(), "message") {
+		t.Errorf("Shutdown did not flush the pending log; uploaded %q", body.String())
+	}
+}
+
 func TestEncodeAndUploadMessages(t *testing.T) { synctest.Test(t, synctestEncodeAndUploadMessages) }
 
 func synctestEncodeAndUploadMessages(t *testing.T) {
