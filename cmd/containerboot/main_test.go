@@ -355,27 +355,13 @@ func TestContainerBoot(t *testing.T) {
 							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp",
 							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
 						},
-						// Both address families of the destination need forwarding.
 						WantFiles: map[string]string{
 							"proc/sys/net/ipv4/ip_forward":          "1",
 							"proc/sys/net/ipv6/conf/all/forwarding": "1",
 						},
 					},
 					{
-						// The proxy needs a tailnet address of each family,
-						// otherwise no rule can be installed for one of the
-						// destinations.
-						Notify: &ipn.Notify{
-							State: new(ipn.Running),
-							SelfChange: &tailcfg.Node{
-								StableID: tailcfg.StableNodeID("myID"),
-								Name:     "test-node.test.ts.net.",
-								Addresses: []netip.Prefix{
-									netip.MustParsePrefix("100.64.0.1/32"),
-									netip.MustParsePrefix("fd7a:115c:a1e0::1/128"),
-								},
-							},
-						},
+						Notify: runningNotify,
 					},
 				},
 			}
