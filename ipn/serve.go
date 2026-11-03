@@ -162,6 +162,15 @@ type TCPPortHandler struct {
 	//
 	// This is only valid if TCPForward is non-empty.
 	ProxyProtocol int `json:",omitzero"`
+
+	// RedirectToHTTPSPort, if non-zero, means that tailscaled should answer
+	// plaintext HTTP requests on this port with a redirect to the same URL
+	// on HTTPS at the given port, where it serves HTTPS as configured by
+	// ServeConfig.Web. It is what "tailscale serve --https=443
+	// --http-redirect=80" sets on port 80.
+	//
+	// It is mutually exclusive with HTTPS, HTTP and TCPForward.
+	RedirectToHTTPSPort uint16 `json:",omitzero"`
 }
 
 // HTTPHandler is either a path or a proxy to serve.
@@ -343,7 +352,43 @@ func (sc *ServeConfig) IsTCPForwardingOnPort(port uint16, svcName tailcfg.Servic
 	} else if sc.TCP[port] == nil {
 		return false
 	}
-	return !sc.IsServingWeb(port, svcName)
+	return !sc.IsServingWeb(port, svcName) && !sc.IsRedirectToHTTPSOnPort(port, svcName)
+}
+
+// IsRedirectToHTTPSOnPort reports whether port answers plaintext HTTP with a
+// redirect to HTTPS, for the given service or (if svcName is empty) the
+// node.
+func (sc *ServeConfig) IsRedirectToHTTPSOnPort(port uint16, svcName tailcfg.ServiceName) bool {
+	h := sc.GetTCPPortHandler(port, svcName)
+	return h != nil && h.RedirectToHTTPSPort != 0
+}
+
+// SetRedirectToHTTPS makes port answer plaintext HTTP with a redirect to the
+// same URL on HTTPS at httpsPort, for the given service or (if svcName is
+// empty) the node.
+func (sc *ServeConfig) SetRedirectToHTTPS(port, httpsPort uint16, svcName tailcfg.ServiceName) {
+	h := &TCPPortHandler{RedirectToHTTPSPort: httpsPort}
+	if svcName == "" {
+		mak.Set(&sc.TCP, port, h)
+		return
+	}
+	svc, ok := sc.Services[svcName]
+	if !ok || svc == nil {
+		svc = new(ServiceConfig)
+		mak.Set(&sc.Services, svcName, svc)
+	}
+	mak.Set(&svc.TCP, port, h)
+}
+
+// removeRedirectsToHTTPSPort deletes every redirect in tcp that points at
+// httpsPort. It is what makes removing an HTTPS handler take the redirects
+// to it along: a redirect to a port that serves nothing is not worth keeping.
+func removeRedirectsToHTTPSPort(tcp map[uint16]*TCPPortHandler, httpsPort uint16) {
+	for port, h := range tcp {
+		if h != nil && h.RedirectToHTTPSPort == httpsPort {
+			delete(tcp, port)
+		}
+	}
 }
 
 // IsServingWeb reports whether ServeConfig is currently serving Web (HTTP/HTTPS)
@@ -545,6 +590,7 @@ func (sc *ServeConfig) RemoveWebHandler(host string, port uint16, mounts []strin
 	if len(sc.Web[hp].Handlers) == 0 {
 		delete(sc.Web, hp)
 		delete(sc.TCP, port)
+		removeRedirectsToHTTPSPort(sc.TCP, port)
 		if cleanupFunnel {
 			delete(sc.AllowFunnel, hp) // disable funnel if no mounts remain for the port
 		}
@@ -579,6 +625,7 @@ func (sc *ServeConfig) RemoveServiceWebHandler(svcName tailcfg.ServiceName, host
 	if len(svc.Web[hp].Handlers) == 0 {
 		delete(svc.Web, hp)
 		delete(svc.TCP, port)
+		removeRedirectsToHTTPSPort(svc.TCP, port)
 	}
 	if len(svc.Web) == 0 && len(svc.TCP) == 0 {
 		delete(sc.Services, svcName)
