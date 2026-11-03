@@ -21,6 +21,7 @@ import (
 
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/net/dns/resolver"
@@ -653,6 +654,9 @@ func toIPsOnly(resolvers []*dnstype.Resolver) (ret []netip.Addr) {
 // The "family" parameter should indicate what type of DNS query this is:
 // either "tcp" or "udp".
 func (m *Manager) Query(ctx context.Context, bs []byte, family string, from netip.AddrPort) ([]byte, error) {
+	if !buildfeatures.HasDNS {
+		return nil, feature.ErrUnavailable
+	}
 	select {
 	case <-m.ctx.Done():
 		return nil, net.ErrClosed
@@ -806,6 +810,10 @@ func (s *dnsTCPSession) handleReads() {
 // HandleTCPConn implements magicDNS over TCP, taking a connection and
 // servicing DNS requests sent down it.
 func (m *Manager) HandleTCPConn(conn net.Conn, srcAddr netip.AddrPort) {
+	if !buildfeatures.HasDNS {
+		conn.Close()
+		return
+	}
 	s := dnsTCPSession{
 		m:           m,
 		conn:        conn,
