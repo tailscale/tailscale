@@ -46,6 +46,7 @@ Only settings explicitly mentioned will be set. There are no default values.`,
 type setArgsT struct {
 	acceptRoutes               bool
 	acceptDNS                  bool
+	overrideDNS                bool
 	exitNodeIP                 string
 	exitNodeAllowLANAccess     bool
 	shieldsUp                  bool
@@ -77,6 +78,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.StringVar(&setArgs.profileName, "nickname", "", "nickname for the current account")
 	setf.BoolVar(&setArgs.acceptRoutes, "accept-routes", acceptRouteDefault(goos), "accept routes advertised by other Tailscale nodes")
 	setf.BoolVar(&setArgs.acceptDNS, "accept-dns", true, "accept DNS configuration from the admin panel")
+	setf.BoolVar(&setArgs.overrideDNS, "override-dns", true, "follow the admin console's 'Override DNS servers' setting; set to false to keep this device's local default resolvers while quad-100 keeps the full tailnet DNS configuration")
 	setf.StringVar(&setArgs.exitNodeIP, "exit-node", "", "Tailscale exit node (IP, base name, or auto:any) for internet traffic, or empty string to not use an exit node")
 	setf.BoolVar(&setArgs.exitNodeAllowLANAccess, "exit-node-allow-lan-access", false, "allow direct access to the local network when routing traffic via an exit node")
 	setf.BoolVar(&setArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
@@ -150,6 +152,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			ProfileName:            setArgs.profileName,
 			RouteAll:               setArgs.acceptRoutes,
 			CorpDNS:                setArgs.acceptDNS,
+			OverrideDNS:            opt.NewBool(setArgs.overrideDNS),
 			ExitNodeAllowLANAccess: setArgs.exitNodeAllowLANAccess,
 			ShieldsUp:              setArgs.shieldsUp,
 			RunSSH:                 setArgs.runSSH,

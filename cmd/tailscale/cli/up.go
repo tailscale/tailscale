@@ -948,6 +948,7 @@ func init() {
 
 	// The rest are 1:1:
 	addPrefFlagMapping("accept-dns", "CorpDNS")
+	addPrefFlagMapping("override-dns", "OverrideDNS")
 	addPrefFlagMapping("accept-routes", "RouteAll")
 	addPrefFlagMapping("advertise-tags", "AdvertiseTags")
 	addPrefFlagMapping("hostname", "Hostname")

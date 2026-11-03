@@ -336,6 +336,80 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			},
 		},
 		{
+			// "tailscale set --override-dns=false" negates the
+			// override locally: quad-100 keeps the global resolvers,
+			// and the OS does not get them.
+			name: "override_dns_negated",
+			nm: &netmap.NetworkMap{
+				DNS: tailcfg.DNSConfig{
+					Resolvers: []*dnstype.Resolver{
+						{Addr: "8.8.8.8"},
+					},
+				},
+			},
+			prefs: &ipn.Prefs{
+				CorpDNS:     true,
+				OverrideDNS: opt.NewBool(false),
+			},
+			want: &dns.Config{
+				AcceptDNS: true,
+				Hosts:     map[dnsname.FQDN][]netip.Addr{},
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
+				DefaultResolvers: []*dnstype.Resolver{
+					{Addr: "8.8.8.8"},
+				},
+				DefaultResolversLocalOnly: true,
+			},
+		},
+		{
+			// An explicit true is the same as following the tailnet.
+			name: "override_dns_explicit_true",
+			nm: &netmap.NetworkMap{
+				DNS: tailcfg.DNSConfig{
+					Resolvers: []*dnstype.Resolver{
+						{Addr: "8.8.8.8"},
+					},
+				},
+			},
+			prefs: &ipn.Prefs{
+				CorpDNS:     true,
+				OverrideDNS: opt.NewBool(true),
+			},
+			want: &dns.Config{
+				AcceptDNS: true,
+				Hosts:     map[dnsname.FQDN][]netip.Addr{},
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
+				DefaultResolvers: []*dnstype.Resolver{
+					{Addr: "8.8.8.8"},
+				},
+			},
+		},
+		{
+			// Fallback resolvers serve reachability, not policy:
+			// the local negation must not touch them.
+			name: "override_dns_keeps_fallbacks",
+			nm: &netmap.NetworkMap{
+				DNS: tailcfg.DNSConfig{
+					FallbackResolvers: []*dnstype.Resolver{
+						{Addr: "8.8.4.4"},
+					},
+				},
+			},
+			prefs: &ipn.Prefs{
+				CorpDNS:     true,
+				ExitNodeID:  "some-id",
+				OverrideDNS: opt.NewBool(false),
+			},
+			want: &dns.Config{
+				AcceptDNS: true,
+				Hosts:     map[dnsname.FQDN][]netip.Addr{},
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
+				DefaultResolvers: []*dnstype.Resolver{
+					{Addr: "8.8.4.4"},
+				},
+			},
+		},
+		{
 			name: "exit_nodes_need_fallbacks",
 			nm: &netmap.NetworkMap{
 				DNS: tailcfg.DNSConfig{
