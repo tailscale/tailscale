@@ -214,10 +214,9 @@ func newMonitorSessionServerFor(
 	if rule != nil {
 		sc.mappedLocalUser = rule.SSHUsers["test"]
 	}
-	// The bound user's groups, like clientAuth would have captured them
-	// (the incubator argv's --groups must be non-empty): for a conn bound
-	// to another uid use that user's own primary group, not the test
-	// process's (root-run) groups.
+	// The bound user's groups, like clientAuth would have captured them:
+	// for a conn bound to another uid use that user's own primary group,
+	// not the test process's (root-run) groups.
 	if um.Uid == strconv.Itoa(os.Getuid()) {
 		for _, g := range testGroups(t) {
 			sc.userGroupIDs = append(sc.userGroupIDs, strconv.Itoa(g))
