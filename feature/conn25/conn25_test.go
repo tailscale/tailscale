@@ -888,7 +888,7 @@ func makeSelfNode(t *testing.T, attrs []appctype.Conn25Attr, pools appctype.Conn
 			Name:       attr.Name,
 			Domains:    attr.Domains,
 			Connectors: attr.Connectors,
-			Mode:       "magicip",
+			Mode:       appctype.MagicIP,
 		})
 		if err != nil {
 			t.Fatalf("unexpected error in test setup at index %d: %v", i, err)
