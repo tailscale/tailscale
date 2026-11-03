@@ -16,12 +16,12 @@ import (
 )
 
 func TestAppDNSRoutes(t *testing.T) {
-	getBytesForAttr := func(name string, domains []string, tags []string) []byte {
+	getBytesForAttr := func(name string, domains []string, tags []string, mode appctype.Mode) []byte {
 		attr := appctype.AppConnectorAttr{
 			Name:       name,
 			Domains:    domains,
 			Connectors: tags,
-			Mode:       appctype.MagicIP,
+			Mode:       mode,
 		}
 		bs, err := json.Marshal(attr)
 		if err != nil {
@@ -29,12 +29,48 @@ func TestAppDNSRoutes(t *testing.T) {
 		}
 		return bs
 	}
-	appOneBytes := getBytesForAttr("app1", []string{"example.com"}, []string{"tag:one"})
-	appTwoBytes := getBytesForAttr("app2", []string{"a.example.com"}, []string{"tag:two"})
-	appThreeBytes := getBytesForAttr("app3", []string{"woo.b.example.com", "hoo.b.example.com"}, []string{"tag:three1", "tag:three2"})
-	appFourBytes := getBytesForAttr("app4", []string{"woo.b.example.com", "c.example.com"}, []string{"tag:four1", "tag:four2"})
-	appFiveBytes := getBytesForAttr("app5", []string{"*.example.com", "example.com"}, []string{"tag:one"})
-	appSixBytes := getBytesForAttr("app6", []string{"*.Example.com", "EXAMPLE.com", "EXAMPLE.COM"}, []string{"tag:one"})
+	appOneBytes := getBytesForAttr(
+		"app1",
+		[]string{"example.com"},
+		[]string{"tag:one"},
+		appctype.MagicIP,
+	)
+	appTwoBytes := getBytesForAttr(
+		"app2",
+		[]string{"a.example.com"},
+		[]string{"tag:two"},
+		appctype.MagicIP,
+	)
+	appThreeBytes := getBytesForAttr(
+		"app3",
+		[]string{"woo.b.example.com", "hoo.b.example.com"},
+		[]string{"tag:three1", "tag:three2"},
+		appctype.MagicIP,
+	)
+	appFourBytes := getBytesForAttr(
+		"app4",
+		[]string{"woo.b.example.com", "c.example.com"},
+		[]string{"tag:four1", "tag:four2"},
+		appctype.MagicIP,
+	)
+	appFiveBytes := getBytesForAttr(
+		"app5",
+		[]string{"*.example.com", "example.com"},
+		[]string{"tag:one"},
+		appctype.MagicIP,
+	)
+	appSixBytes := getBytesForAttr(
+		"app6",
+		[]string{"*.Example.com", "EXAMPLE.com", "EXAMPLE.COM"},
+		[]string{"tag:one"},
+		appctype.MagicIP,
+	)
+	subnetAppBytes := getBytesForAttr(
+		"subnet-app",
+		[]string{"subnet.example.com"},
+		[]string{"tag:one"},
+		appctype.Subnet,
+	)
 
 	resolver := func(appName string) []*dnstype.Resolver {
 		return []*dnstype.Resolver{{Addr: fmt.Sprintf("%s:%s", DNSAddrScheme, appName), UseWithExitNode: true}}
@@ -132,6 +168,19 @@ func TestAppDNSRoutes(t *testing.T) {
 				// *.example.com normalizes to example.com; a.example.com remains distinct.
 				"a.example.com": resolver("app2"),
 				"example.com":   resolver("app5"),
+			},
+		},
+		{
+			name:   "only-conn25-processed",
+			hasCap: true,
+			config: []tailcfg.RawMessage{
+				tailcfg.RawMessage(appOneBytes),
+				tailcfg.RawMessage(subnetAppBytes),
+			},
+			want: map[string][]*dnstype.Resolver{
+				// The app that's a subnet router should not show up here,
+				// since we only deal with conn25 apps.
+				"example.com": resolver("app1"),
 			},
 		},
 	} {
