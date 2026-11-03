@@ -16,10 +16,22 @@ fi
     repo_root="${BASH_SOURCE%/*}/../"
     cd "$repo_root"
 
+    # shellcheck source=lib/download.sh
+    . tool/lib/download.sh
+
     cachedir="$HOME/.cache/tailscale-node"
-    tarball="${cachedir}.tar.gz"
 
     read -r want_rev < "$(dirname "$0")/node.rev"
+
+    # Hashes are for the node v${want_rev} tar.gz files, from
+    # https://nodejs.org/dist/v${want_rev}/SHASUMS256.txt.
+    # Update these when bumping node.rev.
+    want_shas=(
+        darwin-arm64=e9404633bc02a5162c5c573b1e2490f5fb44648345d64a958b17e325729a5e42
+        darwin-x64=6698587713ab565a94a360e091df9f6d91c8fadda6d00f0cf6526e9b40bed250
+        linux-arm64=8cf30ff7250f9463b53c18f89c6c606dfda70378215b2c905d0a9a8b08bd45e0
+        linux-x64=9d942932535988091034dc94cc5f42b6dc8784d6366df3a36c4c9ccb3996f0c2
+    )
 
     got_rev=""
     if [[ -x "${cachedir}/bin/node" ]]; then
@@ -28,15 +40,15 @@ fi
     fi
 
     if [[ "$want_rev" != "$got_rev" ]]; then
-        rm -rf "$cachedir" "$tarball"
         if [[ -n "${IN_NIX_SHELL:-}" ]]; then
             nix_node="$(which -a node | grep /nix/store | head -1)"
             nix_node="${nix_node%/bin/node}"
             nix_node_rev="${nix_node##*-}"
             if [[ "$nix_node_rev" != "$want_rev" ]]; then
                 echo "Wrong node version in Nix, got $nix_node_rev want $want_rev" >&2
-		        exit 1
+                exit 1
             fi
+            rm -rf "$cachedir"
             ln -sf "$nix_node" "$cachedir"
         else
             # works for "linux" and "darwin"
@@ -48,15 +60,10 @@ fi
             if [ "$ARCH" = "aarch64" ]; then
                 ARCH="arm64"
             fi
-            mkdir -p "$cachedir"
-	    # When running on GitHub in CI, the below curl sometimes fails with
-	    # INTERNAL_ERROR after finishing the download. The most common cause
-	    # of INTERNAL_ERROR is glitches in intermediate hosts handling of
-	    # HTTP/2 forwarding, so forcing HTTP 1.1 often fixes the issue. See
-	    # https://github.com/tailscale/tailscale/issues/8988
-            curl -f -L --http1.1 -o "$tarball" "https://nodejs.org/dist/v${want_rev}/node-v${want_rev}-${OS}-${ARCH}.tar.gz"
-            (cd "$cachedir" && tar --strip-components=1 -xf "$tarball")
-            rm -f "$tarball"
+
+            want_hash=$(select_sha256 "${OS}-${ARCH}" "${want_shas[@]}")
+
+            download_tool --args=--strip-components=1 --verify-sha256="$want_hash" "https://nodejs.org/dist/v${want_rev}/node-v${want_rev}-${OS}-${ARCH}.tar.gz" "$cachedir"
         fi
     fi
 )
