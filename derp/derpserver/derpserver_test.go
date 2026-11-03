@@ -40,6 +40,7 @@ import (
 	"golang.org/x/time/rate"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derpconst"
+	"tailscale.com/tstest/tlstest"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -2980,4 +2981,253 @@ func TestUnknownFrameSizeLimit(t *testing.T) {
 			t.Fatalf("server did not close the connection: %v", err)
 		}
 	})
+}
+
+// newBenchWriterClient returns an sclient on s whose connection is one
+// end of a TCP loopback pair, so its writes are real write(2) calls,
+// with the other end drained. With useTLS the pair speaks TLS 1.3
+// with the tlstest ECDSA certificate, the key type production derpers
+// serve, and the sclient writes through the server side of it. The
+// returned writeCountingConn wraps the TCP connection beneath any TLS,
+// so it counts write(2) calls, which under TLS is TLS records. The
+// client has no reader; the caller drives its writer directly.
+func newBenchWriterClient(tb testing.TB, s *Server, useTLS bool) (*sclient, *writeCountingConn) {
+	tb.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		tb.Fatal(err)
+	}
+	defer ln.Close()
+	connOut, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tb.Cleanup(func() { connOut.Close() })
+	connIn, err := ln.Accept()
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tb.Cleanup(func() { connIn.Close() })
+
+	cc := &writeCountingConn{Conn: connOut}
+	var nc derp.Conn = cc
+	drain := connIn
+	if useTLS {
+		roots := x509.NewCertPool()
+		roots.AppendCertsFromPEM(tlstest.TestRootCA())
+		cli := tls.Client(connIn, &tls.Config{RootCAs: roots, ServerName: string(tlstest.Derper), MinVersion: tls.VersionTLS13})
+		drain = cli // its first Read runs the client side of the handshake
+		srv := tls.Server(cc, tlstest.Derper.ServerTLSConfig())
+		go io.Copy(io.Discard, drain)
+		if err := srv.Handshake(); err != nil {
+			tb.Fatalf("TLS handshake: %v", err)
+		}
+		nc = srv
+	} else {
+		go io.Copy(io.Discard, drain)
+	}
+
+	c := &sclient{
+		s:    s,
+		key:  key.NewNode().Public(),
+		nc:   nc,
+		logf: logger.Discard,
+	}
+	c.bw = &lazyBufioWriter{w: deadlineWriter{c}}
+	c.runWriterFunc = c.runWriter
+	return c, cc
+}
+
+// BenchmarkWriterBatch measures a client's writer draining a batch of
+// queued packets in one pass, as [sclient.runWriter] does after a
+// wake, over a loopback connection. Each op enqueues batch packets of
+// msgsize bytes and runs the writer inline until it parks.
+//
+// writes/op is the number of write(2) calls on the TCP connection per
+// pass. A pass flushes once when it has caught up, plus once more each
+// time the batch overflows the writer's bufio buffer
+// (bufioWriterSize), so writes/op above 1 is the cost of that buffer
+// being smaller than the batch. transport=tls is what production
+// connections pay: each flush is a TLS record, so ns/op includes the
+// encryption and writes/op counts records, which are also write(2)
+// calls. (crypto/tls also splits a connection's first few records
+// while it grows them from about 1 KiB, as in production, so a short
+// run shows writes/op a fraction above the buffer arithmetic.)
+// transport=tcp isolates the server's own work.
+func BenchmarkWriterBatch(b *testing.B) {
+	for _, transport := range []string{"tcp", "tls"} {
+		for _, size := range []int{100, 1300} {
+			for _, batch := range []int{1, 2, 4, 16} {
+				name := fmt.Sprintf("transport=%s/msgsize=%d/batch=%d", transport, size, batch)
+				b.Run(name, func(b *testing.B) { benchmarkWriterBatch(b, transport == "tls", size, batch) })
+			}
+		}
+	}
+}
+
+func benchmarkWriterBatch(b *testing.B, useTLS bool, size, batch int) {
+	s := New(key.NewNode(), logger.Discard)
+	defer s.Close()
+	if batch > s.perClientSendQueueDepth {
+		b.Fatalf("batch %d exceeds the send queue depth %d; the queue would drop", batch, s.perClientSendQueueDepth)
+	}
+
+	c, conn := newBenchWriterClient(b, s, useTLS)
+
+	src := key.NewNode().Public()
+	payload := bytes.Repeat([]byte{'x'}, size)
+
+	b.SetBytes(int64(batch * size))
+	b.ReportAllocs()
+	conn.writes.Store(0) // don't count the TLS handshake
+	b.ResetTimer()
+	for range b.N {
+		for range batch {
+			buf := s.getPacketBuf(size)
+			copy(*buf, payload)
+			p := pkt{bs: *buf, buf: buf, src: src, enqueuedAt: s.clock.Now()}
+			if _, _, ok := c.sendQueue.enqueue(s, p); !ok {
+				b.Fatal("enqueue failed")
+			}
+		}
+		// Run the writer inline, as the keepalive timer does
+		// ([sclient.onKeepAliveTimer]), so the pass is synchronous
+		// and drains exactly this batch before parking.
+		if !c.claimWriter(pendSendQueue) {
+			b.Fatal("writer was not parked")
+		}
+		c.runWriter()
+		if c.writeErr != nil {
+			b.Fatal(c.writeErr)
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(conn.writes.Load())/float64(b.N), "writes/op")
+}
+
+// BenchmarkSetWriteDeadline measures [sclient.setWriteDeadline] on a
+// TCP connection. steady calls it back to back, as [deadlineWriter]
+// does before every write: after the first call each finds at least
+// tcpWriteTimeout remaining and only reads the clock. refresh forgets
+// the recorded deadline before each call, so every call also modifies
+// the connection's runtime timer, which is what every frame used to
+// cost.
+func BenchmarkSetWriteDeadline(b *testing.B) {
+	for _, refresh := range []bool{false, true} {
+		name := "steady"
+		if refresh {
+			name = "refresh"
+		}
+		b.Run(name, func(b *testing.B) {
+			s := New(key.NewNode(), logger.Discard)
+			defer s.Close()
+			c, _ := newBenchWriterClient(b, s, false)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				if refresh {
+					c.writeDeadline = time.Time{}
+				}
+				c.setWriteDeadline()
+			}
+		})
+	}
+}
+
+// deadlineRecordingConn records the write deadlines set on it and
+// discards writes. Nothing else may be called; the embedded Conn is nil.
+type deadlineRecordingConn struct {
+	derp.Conn
+	deadlines []time.Time
+}
+
+func (c *deadlineRecordingConn) SetWriteDeadline(t time.Time) error {
+	c.deadlines = append(c.deadlines, t)
+	return nil
+}
+
+func (c *deadlineRecordingConn) Write(p []byte) (int, error) { return len(p), nil }
+
+// TestSetWriteDeadline checks that a write to the connection sets its
+// write deadline 2d out and then leaves it alone until less than d
+// remains, so a write always has at least d, and that zero disables
+// it while mesh peers get privilegedWriteTimeout.
+//
+// The deadline is wall-clock time, as the net poller enforces it, so
+// rather than a fake clock the test uses a timeout far longer than it
+// runs for and sets the writer's record of the deadline directly to
+// stage the cases.
+func TestSetWriteDeadline(t *testing.T) {
+	s := New(key.NewNode(), t.Logf)
+	defer s.Close()
+	const d = time.Hour
+	s.tcpWriteTimeout = d
+
+	conn := &deadlineRecordingConn{}
+	c := &sclient{s: s, key: key.NewNode().Public(), nc: conn, logf: t.Logf}
+	c.bw = &lazyBufioWriter{w: deadlineWriter{c}}
+
+	// flush writes a frame and flushes it, then checks whether that
+	// set a deadline (want > 0), and that any deadline set is want
+	// from now, give or take the call's own duration.
+	flush := func(what string, want time.Duration) {
+		t.Helper()
+		n := len(conn.deadlines)
+		before := time.Now()
+		if err := c.sendKeepAlive(); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.bw.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		after := time.Now()
+		switch got := conn.deadlines[n:]; {
+		case want == 0 && len(got) != 0:
+			t.Fatalf("%s: set deadline %v; want none", what, got)
+		case want != 0 && len(got) != 1:
+			t.Fatalf("%s: set %d deadlines; want 1", what, len(got))
+		case want != 0 && (got[0].Before(before.Add(want)) || got[0].After(after.Add(want))):
+			t.Fatalf("%s: set deadline %v; want %v from now", what, got[0], want)
+		}
+	}
+
+	flush("first write", 2*d)
+	flush("repeat with 2d remaining", 0)
+	c.writeDeadline = time.Now().Add(d + time.Minute)
+	flush("over d remaining", 0)
+	c.writeDeadline = time.Now().Add(d - time.Minute)
+	flush("under d remaining", 2*d)
+	c.writeDeadline = time.Now().Add(-time.Minute)
+	flush("deadline passed", 2*d)
+
+	s.tcpWriteTimeout = 0
+	flush("zero timeout", 0)
+
+	c.canMesh = true
+	c.writeDeadline = time.Time{}
+	flush("mesh peer", 2*privilegedWriteTimeout)
+}
+
+// TestLazyBufioWriterPoolSize checks that a lazyBufioWriter started
+// with a caller-provided bufio.Writer of some other size doesn't put
+// it into the shared pool on flush, and draws a pool-sized one next.
+func TestLazyBufioWriterPoolSize(t *testing.T) {
+	var sink bytes.Buffer
+	w := &lazyBufioWriter{w: &sink, lbw: bufio.NewWriterSize(&sink, 512)}
+	if _, err := w.Write([]byte("hi")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if got := sink.String(); got != "hi" {
+		t.Fatalf("wrote %q; want %q", got, "hi")
+	}
+	if w.lbw != nil {
+		t.Fatal("writer retained after flush")
+	}
+	if got := w.bw().Size(); got != bufioWriterSize {
+		t.Fatalf("next writer size = %d; want %d", got, bufioWriterSize)
+	}
 }

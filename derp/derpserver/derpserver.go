@@ -641,8 +641,10 @@ func (s *Server) SetTailscaledSocketPath(path string) {
 	s.localClient.UseSocketOnly = path != ""
 }
 
-// SetTCPWriteTimeout sets the timeout for writing to connected clients.
-// This timeout does not apply to mesh connections.
+// SetTCPWriteTimeout sets the timeout for writing to connected clients:
+// a write to a client that hasn't completed within d to 2d of starting
+// fails, and the client is disconnected (see [sclient.setWriteDeadline]).
+// Zero disables the timeout. It does not apply to mesh connections.
 // Defaults to 2 seconds.
 func (s *Server) SetTCPWriteTimeout(d time.Duration) {
 	s.tcpWriteTimeout = d
@@ -1174,7 +1176,10 @@ func (s *Server) accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter
 		return fmt.Errorf("client %v rejected: %v", clientKey, err)
 	}
 
-	// At this point we trust the client so we don't time out.
+	// At this point we trust the client, so the handshake deadline
+	// comes off. Writes from here on, starting with sendServerInfo,
+	// run under the writer's own deadline instead ([deadlineWriter],
+	// installed below); reads have no deadline.
 	nc.SetDeadline(time.Time{})
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -1196,6 +1201,10 @@ func (s *Server) accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter
 		peerGoneLim:    rate.NewLimiter(rate.Every(time.Second), 3),
 	}
 	c.runWriterFunc = c.runWriter // allocate the method value once, not per wake
+	// From here on, every write to the connection arms the write
+	// deadline. bw has no buffer attached (sendServerKey flushed), so
+	// the next one it draws is bound to the new writer.
+	bw.w = deadlineWriter{c}
 
 	if clientInfo != nil {
 		c.info = *clientInfo
@@ -2125,9 +2134,10 @@ type sclient struct {
 	// Owned by the writer goroutine, not thread-safe. Only one writer
 	// runs at a time, and [sclient.stopWriter] touches these only after
 	// the last one has exited.
-	sawSrc   map[key.NodePublic]set.Handle
-	bw       *lazyBufioWriter
-	writeErr error // the write error that stopped the writer, if any; logged by stopWriter
+	sawSrc        map[key.NodePublic]set.Handle
+	bw            *lazyBufioWriter
+	writeDeadline time.Time // the connection's write deadline as last set by setWriteDeadline
+	writeErr      error     // the write error that stopped the writer, if any; logged by stopWriter
 
 	// senderCardinality estimates the number of unique peers that have
 	// sent packets to this client. It is nil unless
@@ -2746,6 +2756,25 @@ func (c *sclient) writePending(pend writerPending) (frames int, carry writerPend
 	return frames, pend & queues, nil
 }
 
+// deadlineWriter is the io.Writer under a client's [lazyBufioWriter]:
+// each write to the connection, which is each flush of the buffer,
+// first arms the write deadline ([sclient.setWriteDeadline]).
+type deadlineWriter struct{ c *sclient }
+
+func (w deadlineWriter) Write(p []byte) (int, error) {
+	w.c.setWriteDeadline()
+	return w.c.nc.Write(p)
+}
+
+// setWriteDeadline makes sure the connection's write deadline is far
+// enough out for the write about to happen, so that a client that
+// stops reading fails its write and is disconnected rather than
+// holding the writer forever. The timeout is Server.tcpWriteTimeout,
+// or privilegedWriteTimeout for mesh peers; zero disables the
+// deadline.
+//
+// It must only be called from the writer goroutine (or, before the
+// writer first runs, from accept).
 func (c *sclient) setWriteDeadline() {
 	d := c.s.tcpWriteTimeout
 	if c.canMesh {
@@ -2767,22 +2796,36 @@ func (c *sclient) setWriteDeadline() {
 		// with a condition on c.canMesh.
 		return
 	}
+	// Setting the deadline modifies a runtime timer, which costs
+	// enough to show up per write. So rather than moving it out by
+	// d before every write, set it 2d out and leave it alone while
+	// at least d remains. A write then has between d and 2d to
+	// complete, and a busy client's writer touches the timer at most
+	// once per d instead of once per write.
+	//
+	// This is wall-clock time, not Server.clock: the net poller
+	// enforces the deadline against time.Now, so the bookkeeping has
+	// to use the same clock or a test clock would leave the real
+	// deadline unrefreshed.
+	now := time.Now()
+	if c.writeDeadline.Sub(now) >= d {
+		return
+	}
+	c.writeDeadline = now.Add(2 * d)
 	// Ignore the error from setting the write deadline. In practice,
 	// setting the deadline will only fail if the connection is closed
 	// or closing, so the subsequent Write() will fail anyway.
-	_ = c.nc.SetWriteDeadline(time.Now().Add(d))
+	_ = c.nc.SetWriteDeadline(c.writeDeadline)
 }
 
 // sendKeepAlive sends a keep-alive frame, without flushing.
 func (c *sclient) sendKeepAlive() error {
-	c.setWriteDeadline()
 	return derp.WriteFrameHeader(c.bw.bw(), derp.FrameKeepAlive, 0)
 }
 
 // sendPong sends a pong reply, without flushing.
 func (c *sclient) sendPong(data [8]byte) error {
 	c.s.sentPong.Add(1)
-	c.setWriteDeadline()
 	if err := derp.WriteFrameHeader(c.bw.bw(), derp.FramePong, uint32(len(data))); err != nil {
 		return err
 	}
@@ -2807,7 +2850,6 @@ func (c *sclient) sendPeerGone(peer key.NodePublic, reason derp.PeerGoneReasonTy
 	case derp.PeerGoneReasonNotHere:
 		c.s.peerGoneNotHereFrames.Add(1)
 	}
-	c.setWriteDeadline()
 	data := make([]byte, 0, peerGoneFrameLen)
 	data = peer.AppendTo(data)
 	data = append(data, byte(reason))
@@ -2821,7 +2863,6 @@ func (c *sclient) sendPeerGone(peer key.NodePublic, reason derp.PeerGoneReasonTy
 
 // sendPeerPresent sends a peerPresent frame, without flushing.
 func (c *sclient) sendPeerPresent(peer key.NodePublic, ipPort netip.AddrPort, flags derp.PeerPresentFlags, appName string) error {
-	c.setWriteDeadline()
 	frameLen := peerPresentBaseLen + len(appName)
 	if err := derp.WriteFrameHeader(c.bw.bw(), derp.FramePeerPresent, uint32(frameLen)); err != nil {
 		return err
@@ -2901,8 +2942,6 @@ func (c *sclient) sendPacket(srcKey key.NodePublic, contents []byte) (err error)
 			c.debugLogf("sendPacket from %s: %v", srcKey.ShortString(), err)
 		}
 	}()
-
-	c.setWriteDeadline()
 
 	withKey := !srcKey.IsZero()
 	pktLen := len(contents)
@@ -3347,15 +3386,33 @@ func (s *Server) ServeDebugTraffic(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// bufioWriterSize is the size of the pooled bufio.Writers that
+// lazyBufioWriter writes through. Each flush of the buffer becomes a
+// TLS record, and so a write(2), on the connection, so a writer pass
+// that drains several packets at once ([sclient.writePending]) writes
+// them as one record, where a buffer smaller than the batch would
+// overflow into a record every packet or two. 8 KiB takes up to six
+// full-size packets (each about 1.3 KiB framed) in one record, which
+// covers the batches seen in practice: most passes write one or two.
+//
+// The buffers are held only while a writer is active or blocked in a
+// write, and briefly by each handshake in progress (sendServerKey), so
+// the cost is per concurrently writing or connecting client, not per
+// connection; a stall that blocks many writers at once holds one per
+// stalled client for up to twice Server.tcpWriteTimeout. 16 KiB, one
+// max TLS record, would batch seven to twelve packets per write at
+// double that cost; BenchmarkWriterBatch shows the tradeoff.
+const bufioWriterSize = 8 << 10
+
 var bufioWriterPool = &sync.Pool{
 	New: func() any {
-		return bufio.NewWriterSize(io.Discard, 2<<10)
+		return bufio.NewWriterSize(io.Discard, bufioWriterSize)
 	},
 }
 
 // lazyBufioWriter is a bufio.Writer-like wrapping writer that lazily
 // allocates its actual bufio.Writer from a sync.Pool, releasing it to
-// the pool upon flush.
+// the pool upon flush if it is the pool's size (bufioWriterSize).
 //
 // We do this to reduce memory overhead; most DERP connections are
 // idle and the idle bufio.Writers were 30% of overall memory usage.
@@ -3382,8 +3439,15 @@ func (w *lazyBufioWriter) Flush() error {
 	}
 	err := w.lbw.Flush()
 
-	w.lbw.Reset(io.Discard)
-	bufioWriterPool.Put(w.lbw)
+	// Only writers of the pool's size go back to it. The first one
+	// may be the caller's (Accept's brw.Writer) of whatever size the
+	// caller chose, and a pool of mixed sizes would make the
+	// batching bufioWriterSize is for depend on which buffer a writer
+	// happened to draw.
+	if w.lbw.Size() == bufioWriterSize {
+		w.lbw.Reset(io.Discard)
+		bufioWriterPool.Put(w.lbw)
+	}
 	w.lbw = nil
 
 	return err

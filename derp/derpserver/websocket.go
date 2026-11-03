@@ -57,7 +57,9 @@ func AddWebSocketSupport(s *Server, base http.Handler) http.Handler {
 		}
 		counterWebSocketAccepts.Add(1)
 		wc := wsconn.NetConn(r.Context(), c, websocket.MessageBinary, r.RemoteAddr)
-		brw := bufio.NewReadWriter(bufio.NewReader(wc), bufio.NewWriter(wc))
+		// The nil Writer makes Accept's lazyBufioWriter pull a pooled
+		// buffer on demand, as the HTTP path does (see Handler).
+		brw := bufio.NewReadWriter(bufio.NewReader(wc), nil)
 		s.Accept(r.Context(), wc, brw, r.RemoteAddr)
 	})
 }

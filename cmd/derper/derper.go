@@ -97,7 +97,7 @@ var (
 	// tcpUserTimeout is intentionally short, so that hung connections are cleaned up promptly. DERPs should be nearby users.
 	tcpUserTimeout = flag.Duration("tcp-user-timeout", 15*time.Second, "TCP user timeout")
 	// tcpWriteTimeout is the timeout for writing to client TCP connections. It does not apply to mesh connections.
-	tcpWriteTimeout = flag.Duration("tcp-write-timeout", derpserver.DefaultTCPWiteTimeout, "TCP write timeout; 0 results in no timeout being set on writes")
+	tcpWriteTimeout = flag.Duration("tcp-write-timeout", derpserver.DefaultTCPWiteTimeout, "TCP write timeout; a write to a client fails if it hasn't completed within one to two times this; 0 results in no timeout being set on writes")
 	// tcpSaveSyn enables TCP_SAVE_SYN on the listen socket (Linux only), so
 	// that the kernel retains a copy of each client's SYN packet on the
 	// accepted connections. The DERP server then reads each SYN with
