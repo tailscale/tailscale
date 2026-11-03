@@ -21,6 +21,7 @@
             <string id="SINCE_V1_84">Tailscale version 1.84.0 and later</string>
             <string id="SINCE_V1_86">Tailscale version 1.86.0 and later</string>
             <string id="SINCE_V1_90">Tailscale version 1.90.0 and later</string>
+            <string id="SINCE_V1_106">Tailscale version 1.106.0 and later</string>
             <string id="Tailscale_Category">Tailscale</string>
             <string id="UI_Category">UI customization</string>
             <string id="Settings_Category">Settings</string>
@@ -210,6 +211,14 @@ If you disable this policy, the Admin Console item will always be hidden from th
 If you enable or don't configure this policy, the Network Devices submenu will be shown in the Tailscale menu.
 
 If you disable this policy, the Network Devices submenu will be hidden from the Tailscale menu. This does not affect other devices' visibility in the CLI.]]></string>
+            <string id="HiddenNetworkDevices">Hide categories of network devices</string>
+            <string id="HiddenNetworkDevices_Help"><![CDATA[This policy controls which categories of network devices are hidden in the Tailscale client UI.
+
+If enabled, select any combination of the three checkboxes.
+
+If disabled or not configured, no categories are hidden by this policy.
+
+Hiding a device from the UI does not remove it from the tailnet or block network connectivity.]]></string>
             <string id="TestMenu">Show the "Debug" submenu</string>
             <string id="TestMenu_Help"><![CDATA[This policy can be used to show or hide the Debug submenu of the Tailscale menu.
 
@@ -351,6 +360,11 @@ If the policy is unconfigured, state encryption will be enabled on newer client 
             <presentation id="AllowedSuggestedExitNodes">
                 <listBox refId="AllowedSuggestedExitNodesList">Target IDs:</listBox>
             </presentation>
+            <presentation id="HiddenNetworkDevices">
+  <checkBox refId="HideCurrentUser">Hide devices belonging to the current user</checkBox>
+  <checkBox refId="HideOtherUsers">Hide devices belonging to other users</checkBox>
+  <checkBox refId="HideTaggedDevices">Hide tagged devices</checkBox>
+</presentation>
             <presentation id="ManagedBy">
                 <textBox refId="ManagedByOrganization">
                     <label>Organization Name:</label>
