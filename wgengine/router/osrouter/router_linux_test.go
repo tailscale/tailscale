@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"net"
 	"net/netip"
 	"os"
 	"reflect"
@@ -2110,5 +2111,50 @@ func TestCleanUpOnlyTouchesTunInterface(t *testing.T) {
 	}
 	if !slices.Contains(fake.ips, "100.64.0.5/32 dev eth0") {
 		t.Errorf("non-Tailscale CGNAT addr on eth0 was wrongly removed; ips=%q", fake.ips)
+	}
+}
+
+func TestIPForwardingSysctls(t *testing.T) {
+	ifaces := []net.Interface{
+		{Name: "lo", Flags: net.FlagLoopback | net.FlagUp},
+		{Name: "eth0", Flags: net.FlagUp},
+		{Name: "eth0.100", Flags: net.FlagUp}, // VLAN: the name contains a dot
+	}
+
+	got := ipForwardingSysctls(ifaces)
+	want := []sysctlWrite{
+		{"net/ipv6/conf/default/accept_ra", "2"},
+		{"net/ipv6/conf/eth0/accept_ra", "2"},
+		{"net/ipv6/conf/eth0.100/accept_ra", "2"},
+		{"net/ipv4/ip_forward", "1"},
+		{"net/ipv6/conf/all/forwarding", "1"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ipForwardingSysctls() = %v, want %v", got, want)
+	}
+
+	// Enabling forwarding while accept_ra is still at its default of 1 makes
+	// the kernel stop accepting Router Advertisements, so every accept_ra
+	// write has to happen before forwarding is turned on.
+	lastAcceptRA, firstForwarding := -1, len(got)
+	for i, s := range got {
+		switch {
+		case strings.HasSuffix(s.path, "/accept_ra"):
+			lastAcceptRA = i
+		case s.path == "net/ipv4/ip_forward", strings.HasSuffix(s.path, "/forwarding"):
+			firstForwarding = min(firstForwarding, i)
+		}
+	}
+	if lastAcceptRA > firstForwarding {
+		t.Errorf("accept_ra written after forwarding was enabled: %v", got)
+	}
+}
+
+func TestSysctlKeyForPath(t *testing.T) {
+	// A VLAN interface name contains a dot, which is why per-interface sysctls
+	// are addressed by path rather than by translating dots in a key.
+	const path = "net/ipv6/conf/eth0.100/accept_ra"
+	if got, want := sysctlKeyForPath(path), "net.ipv6.conf.eth0.100.accept_ra"; got != want {
+		t.Errorf("sysctlKeyForPath(%q) = %q, want %q", path, got, want)
 	}
 }
