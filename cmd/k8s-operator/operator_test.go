@@ -215,147 +215,6 @@ func TestLoadBalancerClass(t *testing.T) {
 	expectEqual(t, fc, want)
 }
 
-// TestServiceClusterIPFamilies checks that the proxy for a Service is given all
-// of the Service's ClusterIPs and that the Service status advertises the
-// proxy's tailnet addresses of every family the Service has a ClusterIP for.
-func TestServiceClusterIPFamilies(t *testing.T) {
-	const (
-		tsIPv4 = "100.99.98.97"
-		tsIPv6 = "2c0a:8083:94d4:2012:3165:34a5:3616:5fdf"
-	)
-	tests := []struct {
-		name       string
-		clusterIP  string
-		clusterIPs []string
-		// wantTargetIP is the expected value of the proxy's TS_DEST_IP env
-		// var.
-		wantTargetIP string
-		// wantIngressIPs are the expected IPs in the LoadBalancer status.
-		wantIngressIPs []string
-	}{
-		{
-			name:           "dual_stack_ipv4_primary",
-			clusterIP:      "10.20.30.40",
-			clusterIPs:     []string{"10.20.30.40", "fd00::1234"},
-			wantTargetIP:   "10.20.30.40,fd00::1234",
-			wantIngressIPs: []string{tsIPv4, tsIPv6},
-		},
-		{
-			name:           "dual_stack_ipv6_primary",
-			clusterIP:      "fd00::1234",
-			clusterIPs:     []string{"fd00::1234", "10.20.30.40"},
-			wantTargetIP:   "fd00::1234,10.20.30.40",
-			wantIngressIPs: []string{tsIPv4, tsIPv6},
-		},
-		{
-			// Spec.ClusterIPs is not populated, only Spec.ClusterIP is set.
-			name:           "single_stack_ipv4_without_cluster_ips",
-			clusterIP:      "10.20.30.40",
-			wantTargetIP:   "10.20.30.40",
-			wantIngressIPs: []string{tsIPv4},
-		},
-		{
-			name:           "single_stack_ipv6",
-			clusterIP:      "fd00::1234",
-			clusterIPs:     []string{"fd00::1234"},
-			wantTargetIP:   "fd00::1234",
-			wantIngressIPs: []string{tsIPv6},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fc := fake.NewFakeClient()
-			ft := &fakeTSClient{}
-			zl := zap.Must(zap.NewDevelopment())
-			clock := tstest.NewClock(tstest.ClockOpts{})
-			sr := &ServiceReconciler{
-				Client: fc,
-				ssr: &tailscaleSTSReconciler{
-					Client:            fc,
-					clients:           tsclient.NewProvider(ft),
-					defaultTags:       []string{"tag:k8s"},
-					operatorNamespace: "operator-ns",
-					proxyImage:        "tailscale/tailscale",
-				},
-				logger:   zl.Sugar(),
-				clock:    clock,
-				recorder: record.NewFakeRecorder(100),
-			}
-
-			spec := corev1.ServiceSpec{
-				ClusterIP:         tt.clusterIP,
-				ClusterIPs:        tt.clusterIPs,
-				Type:              corev1.ServiceTypeLoadBalancer,
-				LoadBalancerClass: new("tailscale"),
-			}
-			mustCreate(t, fc, &corev1.Service{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test",
-					Namespace: "default",
-					UID:       "1234-UID",
-				},
-				Spec: spec,
-			})
-
-			expectReconciled(t, sr, "default", "test")
-
-			// The proxy must be told about every ClusterIP, so that it sets
-			// up forwarding for each IP family.
-			fullName, shortName := findGenName(t, fc, "default", "test", "svc")
-			opts := configOpts{
-				replicas:        new(int32(1)),
-				stsName:         shortName,
-				secretName:      fullName,
-				namespace:       "default",
-				parentType:      "svc",
-				hostname:        "default-test",
-				clusterTargetIP: tt.wantTargetIP,
-				app:             kubetypes.AppIngressProxy,
-			}
-			expectEqual(t, fc, expectedSecret(t, fc, opts))
-			expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-			expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
-
-			// Simulate the proxy Pod coming up with both an IPv4 and an IPv6
-			// tailnet address.
-			mustUpdate(t, fc, "operator-ns", fullName, func(s *corev1.Secret) {
-				if s.Data == nil {
-					s.Data = map[string][]byte{}
-				}
-				s.Data["device_id"] = []byte("ts-id-1234")
-				s.Data["device_fqdn"] = []byte("tailscale.device.name.")
-				s.Data["device_ips"] = []byte(fmt.Sprintf(`[%q, %q]`, tsIPv4, tsIPv6))
-			})
-			clock.Advance(time.Second)
-			expectReconciled(t, sr, "default", "test")
-
-			ingress := []corev1.LoadBalancerIngress{{Hostname: "tailscale.device.name"}}
-			for _, ip := range tt.wantIngressIPs {
-				ingress = append(ingress, corev1.LoadBalancerIngress{IP: ip})
-			}
-			want := &corev1.Service{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:       "test",
-					Namespace:  "default",
-					UID:        types.UID("1234-UID"),
-					Finalizers: []string{FinalizerName},
-				},
-				Spec: spec,
-				Status: corev1.ServiceStatus{
-					Conditions:   proxyCreatedCondition(clock),
-					LoadBalancer: corev1.LoadBalancerStatus{Ingress: ingress},
-				},
-			}
-
-			// Reconcile once more to make sure that nothing changes through
-			// side effects.
-			expectReconciled(t, sr, "default", "test")
-			expectEqual(t, fc, want)
-			expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
-		})
-	}
-}
-
 func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
@@ -2383,4 +2242,133 @@ func TestNodeHandlerForConnector(t *testing.T) {
 			t.Fatalf("expected no reconcile requests, got %v", got)
 		}
 	})
+}
+
+func TestServiceDualStackClusterIPs(t *testing.T) {
+	fc := fake.NewFakeClient()
+	ft := &fakeTSClient{}
+	zl := zap.Must(zap.NewDevelopment())
+	clock := tstest.NewClock(tstest.ClockOpts{})
+	sr := &ServiceReconciler{
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			clients:           tsclient.NewProvider(ft),
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger:   zl.Sugar(),
+		clock:    clock,
+		recorder: record.NewFakeRecorder(100),
+	}
+
+	mustCreate(t, fc, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			UID:       "1234-UID",
+			Annotations: map[string]string{
+				"tailscale.com/expose": "true",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP:  "10.20.30.40",
+			ClusterIPs: []string{"10.20.30.40", "fd7a:115c:a1e0::1234"},
+			Type:       corev1.ServiceTypeClusterIP,
+		},
+	})
+	expectReconciled(t, sr, "default", "test")
+
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
+	o := configOpts{
+		replicas:        new(int32(1)),
+		stsName:         shortName,
+		secretName:      fullName,
+		namespace:       "default",
+		parentType:      "svc",
+		hostname:        "default-test",
+		clusterTargetIP: "10.20.30.40,fd7a:115c:a1e0::1234",
+		app:             kubetypes.AppIngressProxy,
+	}
+	// TS_DEST_IP must contain both ClusterIPs, primary family first.
+	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
+
+	// Simulate the proxy coming up with a v4 and a v6 tailnet address.
+	mustUpdate(t, fc, "operator-ns", fullName, func(s *corev1.Secret) {
+		if s.Data == nil {
+			s.Data = map[string][]byte{}
+		}
+		s.Data["device_id"] = []byte("ts-id-1234")
+		s.Data["device_fqdn"] = []byte("tailscale.device.name.")
+		s.Data["device_ips"] = []byte(`["100.99.98.97", "fd7a:115c:a1e0::6c34:352"]`)
+	})
+	clock.Advance(time.Second)
+	expectReconciled(t, sr, "default", "test")
+
+	svc := &corev1.Service{}
+	if err := fc.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "test"}, svc); err != nil {
+		t.Fatal(err)
+	}
+	var gotIPs []string
+	for _, ing := range svc.Status.LoadBalancer.Ingress {
+		if ing.IP != "" {
+			gotIPs = append(gotIPs, ing.IP)
+		}
+	}
+	wantIPs := []string{"100.99.98.97", "fd7a:115c:a1e0::6c34:352"}
+	if diff := cmp.Diff(wantIPs, gotIPs); diff != "" {
+		t.Errorf("unexpected LoadBalancer ingress IPs (-want +got):\n%s", diff)
+	}
+}
+
+func TestServiceSingleStackClusterIPFallback(t *testing.T) {
+	fc := fake.NewFakeClient()
+	ft := &fakeTSClient{}
+	zl := zap.Must(zap.NewDevelopment())
+	clock := tstest.NewClock(tstest.ClockOpts{})
+	sr := &ServiceReconciler{
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			clients:           tsclient.NewProvider(ft),
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger:   zl.Sugar(),
+		clock:    clock,
+		recorder: record.NewFakeRecorder(100),
+	}
+
+	// ClusterIPs is empty and only ClusterIP is set: TS_DEST_IP must fall
+	// back to ClusterIP, with no commas.
+	mustCreate(t, fc, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			UID:       "1234-UID",
+			Annotations: map[string]string{
+				"tailscale.com/expose": "true",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.20.30.40",
+			Type:      corev1.ServiceTypeClusterIP,
+		},
+	})
+	expectReconciled(t, sr, "default", "test")
+
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
+	o := configOpts{
+		replicas:        new(int32(1)),
+		stsName:         shortName,
+		secretName:      fullName,
+		namespace:       "default",
+		parentType:      "svc",
+		hostname:        "default-test",
+		clusterTargetIP: "10.20.30.40",
+		app:             kubetypes.AppIngressProxy,
+	}
+	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 }
