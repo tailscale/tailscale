@@ -198,6 +198,9 @@ func (esr *egressSvcsReconciler) maybeProvision(ctx context.Context, svc *corev1
 		return err
 	}
 	upToDate := svcConfigurationUpToDate(svc, lg)
+	if !reflect.DeepEqual(clusterIPSvc.Spec.TrafficDistribution, egressTrafficDistribution(svc)) {
+		upToDate = false
+	}
 	if upToDate && clusterIPSvc.Name != "" {
 		// The configuration can still match while an expected-family EndpointSlice
 		// is missing - check expected EndpointSlices exist.
@@ -265,6 +268,7 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 	}
 
 	oldClusterIPSvc := clusterIPSvc.DeepCopy()
+	clusterIPSvc.Spec.TrafficDistribution = egressTrafficDistribution(svc)
 	// loop over ClusterIP Service ports, remove any that are not needed.
 	for i := len(clusterIPSvc.Spec.Ports) - 1; i >= 0; i-- {
 		pm := clusterIPSvc.Spec.Ports[i]
@@ -371,6 +375,13 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 		}
 		if _, err := createOrUpdate(ctx, esr.Client, esr.tsNamespace, eps, func(e *discoveryv1.EndpointSlice) {
 			e.Labels = eps.Labels
+			// Changing this annotation also triggers the EndpointSlice reconciler
+			// to refresh zone hints for existing ready endpoints.
+			if distribution := svc.Annotations[AnnotationTrafficDistribution]; distribution != "" {
+				mak.Set(&e.Annotations, AnnotationTrafficDistribution, distribution)
+			} else {
+				delete(e.Annotations, AnnotationTrafficDistribution)
+			}
 			e.AddressType = eps.AddressType
 			e.Ports = eps.Ports
 		}); err != nil {
@@ -503,6 +514,13 @@ func (esr *egressSvcsReconciler) clusterIPSvcForEgress(crl map[string]string) *c
 	}
 }
 
+func egressTrafficDistribution(svc *corev1.Service) *string {
+	if svc.Annotations[AnnotationTrafficDistribution] == "PreferSameZone" {
+		return new("PreferSameZone")
+	}
+	return nil
+}
+
 func (esr *egressSvcsReconciler) ensureEgressSvcCfgDeleted(ctx context.Context, svc *corev1.Service, logger *zap.SugaredLogger) error {
 	crl := egressSvcChildResourceLabels(svc)
 	cmName := pgEgressCMName(crl[labelProxyGroup])
@@ -612,6 +630,9 @@ func validateEgressService(svc *corev1.Service, pg *tsapi.ProxyGroup) []string {
 	}
 	if svc.Spec.Type != corev1.ServiceTypeExternalName {
 		violations = append(violations, fmt.Sprintf("unexpected egress Service type %s. The only supported type is ExternalName.", svc.Spec.Type))
+	}
+	if distribution := svc.Annotations[AnnotationTrafficDistribution]; distribution != "" && distribution != "PreferSameZone" {
+		violations = append(violations, fmt.Sprintf("unsupported value %q for %s", distribution, AnnotationTrafficDistribution))
 	}
 	if pg.Spec.Type != tsapi.ProxyGroupTypeEgress {
 		violations = append(violations, fmt.Sprintf("egress Service references ProxyGroup of type %s, must be type %s", pg.Spec.Type, tsapi.ProxyGroupTypeEgress))

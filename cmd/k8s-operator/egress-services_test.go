@@ -121,6 +121,20 @@ func TestTailscaleEgressServices(t *testing.T) {
 		expectReconciled(t, esr, "default", "test")
 		validateReadyService(t, fc, esr, svc, clock, zl, cm)
 	})
+	t.Run("service_prefer_same_zone", func(t *testing.T) {
+		svc.Annotations[AnnotationTrafficDistribution] = "PreferSameZone"
+		mustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
+			s.Annotations[AnnotationTrafficDistribution] = "PreferSameZone"
+		})
+		validateReadyService(t, fc, esr, svc, clock, zl, cm)
+	})
+	t.Run("service_remove_traffic_distribution", func(t *testing.T) {
+		delete(svc.Annotations, AnnotationTrafficDistribution)
+		mustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
+			delete(s.Annotations, AnnotationTrafficDistribution)
+		})
+		validateReadyService(t, fc, esr, svc, clock, zl, cm)
+	})
 
 	t.Run("endpointslice_deletion_recovery", func(t *testing.T) {
 		name := findGenNameForEgressSvcResources(t, fc, svc)
@@ -226,9 +240,10 @@ func clusterIPSvc(name string, extNSvc *corev1.Service) *corev1.Service {
 			Labels:       labels,
 		},
 		Spec: corev1.ServiceSpec{
-			Type:           corev1.ServiceTypeClusterIP,
-			IPFamilyPolicy: new(corev1.IPFamilyPolicyPreferDualStack),
-			Ports:          ports,
+			Type:                corev1.ServiceTypeClusterIP,
+			IPFamilyPolicy:      new(corev1.IPFamilyPolicyPreferDualStack),
+			TrafficDistribution: egressTrafficDistribution(extNSvc),
+			Ports:               ports,
 		},
 	}
 }
@@ -250,15 +265,20 @@ func endpointSlice(name string, extNSvc, clusterIPSvc *corev1.Service, addrType 
 	labels := egressSvcChildResourceLabels(extNSvc)
 	labels[discoveryv1.LabelManagedBy] = "tailscale.com"
 	labels[discoveryv1.LabelServiceName] = name
+	var annotations map[string]string
+	if distribution := extNSvc.Annotations[AnnotationTrafficDistribution]; distribution != "" {
+		annotations = map[string]string{AnnotationTrafficDistribution: distribution}
+	}
 	suffix := "ipv4"
 	if addrType == discoveryv1.AddressTypeIPv6 {
 		suffix = "ipv6"
 	}
 	return &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-%s", name, suffix),
-			Namespace: "operator-ns",
-			Labels:    labels,
+			Name:        fmt.Sprintf("%s-%s", name, suffix),
+			Namespace:   "operator-ns",
+			Labels:      labels,
+			Annotations: annotations,
 		},
 		Ports:       portsForEndpointSlice(clusterIPSvc),
 		AddressType: addrType,
