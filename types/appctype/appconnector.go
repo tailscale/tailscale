@@ -75,7 +75,26 @@ type AppConnectorAttr struct {
 	// These can either be "*" to match any advertising connector, or a
 	// tag of the form tag:<tag-name>.
 	Connectors []string `json:"connectors,omitempty"`
+	// Mode is the mode of operation of this app connector.
+	// See the constants below for which modes are defined and how they work.
+	// If this field is empty, subnet mode is assumed.
+	Mode Mode `json:"mode,omitzero"`
 }
+
+// Mode is the mode of operation of an app connector.
+type Mode string
+
+const (
+	// A subnet app connector directly advertises the IP addresses as subnet
+	// routes corresponding to the app's domains. This is broadly compatible
+	// with older clients but too coarse-grained for certain situations (eg.
+	// the domains of multiple apps sharing an IP address).
+	Subnet Mode = "subnet"
+	// A MagicIP app connector adds a layer of indirection to allow finer
+	// control of such situations, but requires recent client versions on both
+	// the connector and the client (conn25).
+	MagicIP Mode = "magicip"
+)
 
 // RouteInfo is a data structure used to persist the in memory state of an AppConnector
 // so that we can know, even after a restart, which routes came from ACLs and which were

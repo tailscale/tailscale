@@ -6111,6 +6111,10 @@ func (b *LocalBackend) reconfigAppConnectorLocked(selfNode tailcfg.NodeView, pre
 		routes  []netip.Prefix
 	)
 	for _, attr := range attrs {
+		// See feature/conn25 for configuration of MagicIP connectors.
+		if attr.Mode != "" && attr.Mode != appctype.Subnet {
+			continue
+		}
 		if slices.Contains(attr.Connectors, "*") || selfHasTag(attr.Connectors) {
 			domains = append(domains, attr.Domains...)
 			routes = append(routes, attr.Routes...)

@@ -3759,13 +3759,38 @@ func TestReconfigureAppConnector(t *testing.T) {
 		t.Fatal("expected app connector")
 	}
 
+	conn25Cfg := `{
+		"name": "example",
+		"domains": ["example.com"],
+		"connectors": ["tag:example"],
+		"mode": "magicip"
+	}`
+
+	nm := &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			Name: "example.ts.net",
+			Tags: []string{"tag:example"},
+			CapMap: (tailcfg.NodeCapMap)(map[nodecap.Cap][]tailcfg.RawMessage{
+				"tailscale.com/app-connectors": {tailcfg.RawMessage(conn25Cfg)},
+			}),
+		}).View(),
+	}
+
+	b.currentNode().SetNetMap(nm)
+
+	b.reconfigAppConnectorLocked(b.currentNode().Self(), b.pm.prefs)
+	b.appConnector.Wait(context.Background())
+	if b.appConnector.Domains().Len() != 0 {
+		t.Fatalf("expected no configured domains conn25 app")
+	}
+
 	appCfg := `{
 		"name": "example",
 		"domains": ["example.com"],
 		"connectors": ["tag:example"]
 	}`
 
-	nm := &netmap.NetworkMap{
+	nm = &netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{
 			Name: "example.ts.net",
 			Tags: []string{"tag:example"},
