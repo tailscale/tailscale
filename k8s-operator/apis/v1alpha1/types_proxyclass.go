@@ -329,6 +329,14 @@ type Metrics struct {
 	//
 	// Defaults to false.
 	Enable bool `json:"enable"`
+	// PortName is the name to use for the metrics port exposed on the Service and
+	// Pod containers. This allows customization when the default "metrics" name
+	// conflicts with other ports or monitoring configurations.
+	// The port name must be a valid DNS label (RFC 1123) and cannot exceed 15 characters.
+	// +optional
+	// +kubebuilder:validation:MaxLength=15
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	PortName string `json:"portName,omitempty"`
 	// Enable to create a Prometheus ServiceMonitor for scraping the proxy's Tailscale metrics.
 	// The ServiceMonitor will select the metrics Service that gets created when metrics are enabled.
 	// The ingested metrics for each Service monitor will have labels to identify the proxy:
