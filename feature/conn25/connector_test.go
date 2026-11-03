@@ -36,7 +36,7 @@ func TestConnectorExpireTransitIPs(t *testing.T) {
 	c := newConn25(logger.Discard)
 	c.reconfig(&config{
 		isConfigured: true,
-		appsByName:   map[string]appctype.Conn25Attr{appName: {}},
+		appsByName:   map[string]appctype.AppConnectorAttr{appName: {}},
 		ipSets:       ipSets{v4Transit: mustIPSetFromPrefix("0.0.0.0/15")},
 	})
 	clock := tstest.NewClock(tstest.ClockOpts{Start: time.Now()})
@@ -143,7 +143,7 @@ func TestConnectorDisallowedDestinations(t *testing.T) {
 	c := newConn25(logger.Discard)
 	c.reconfig(&config{
 		isConfigured: true,
-		appsByName:   map[string]appctype.Conn25Attr{appName: {}},
+		appsByName:   map[string]appctype.AppConnectorAttr{appName: {}},
 		ipSets: ipSets{
 			v4Magic:   mustIPSetFromPrefix("203.0.113.0/24"),
 			v4Transit: mustIPSetFromPrefix("198.51.100.0/24"),

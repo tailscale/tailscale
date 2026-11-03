@@ -585,9 +585,10 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			c := newConn25(logger.Discard)
 			c.reconfig(&config{
 				isConfigured: true,
-				appsByName: map[string]appctype.Conn25Attr{
+				appsByName: map[string]appctype.AppConnectorAttr{
 					appName: {
 						Name: appName,
+						Mode: appctype.MagicIP,
 					},
 				},
 				ipSets: ipSets{
@@ -899,12 +900,12 @@ func TestConfigFromNodeView(t *testing.T) {
 func TestGetAppsForDomainName(t *testing.T) {
 	defaultSN := makeSelfNode(
 		t,
-		[]appctype.Conn25Attr{
-			{Name: "one", Domains: []string{"*.example.com", "example.com"}, Connectors: []string{"tag:one"}},
-			{Name: "two", Domains: []string{"sub.example.com", "example.com"}, Connectors: []string{"tag:two"}},
-			{Name: "three", Domains: []string{"*.sub.example.com"}, Connectors: []string{"tag:three"}},
-			{Name: "four", Domains: []string{"a.sub.example.com"}, Connectors: []string{"tag:four"}},
-			{Name: "self-routed", Domains: []string{"*.wildcard.com", "exact-match.com"}, Connectors: []string{"tag:self-routed"}},
+		[]appctype.AppConnectorAttr{
+			{Name: "one", Domains: []string{"*.example.com", "example.com"}, Connectors: []string{"tag:one"}, Mode: appctype.MagicIP},
+			{Name: "two", Domains: []string{"sub.example.com", "example.com"}, Connectors: []string{"tag:two"}, Mode: appctype.MagicIP},
+			{Name: "three", Domains: []string{"*.sub.example.com"}, Connectors: []string{"tag:three"}, Mode: appctype.MagicIP},
+			{Name: "four", Domains: []string{"a.sub.example.com"}, Connectors: []string{"tag:four"}, Mode: appctype.MagicIP},
+			{Name: "self-routed", Domains: []string{"*.wildcard.com", "exact-match.com"}, Connectors: []string{"tag:self-routed"}, Mode: appctype.MagicIP},
 		},
 		appctype.Conn25PoolsAttr{},
 		[]string{"tag:self-routed"},
@@ -1000,16 +1001,11 @@ func TestGetAppsForDomainName(t *testing.T) {
 	}
 }
 
-func makeSelfNode(t *testing.T, attrs []appctype.Conn25Attr, pools appctype.Conn25PoolsAttr, tags []string) tailcfg.NodeView {
+func makeSelfNode(t *testing.T, attrs []appctype.AppConnectorAttr, pools appctype.Conn25PoolsAttr, tags []string) tailcfg.NodeView {
 	t.Helper()
 	cfg := make([]tailcfg.RawMessage, 0, len(attrs))
 	for i, attr := range attrs {
-		bs, err := json.Marshal(appctype.AppConnectorAttr{
-			Name:       attr.Name,
-			Domains:    attr.Domains,
-			Connectors: attr.Connectors,
-			Mode:       appctype.MagicIP,
-		})
+		bs, err := json.Marshal(attr)
 		if err != nil {
 			t.Fatalf("unexpected error in test setup at index %d: %v", i, err)
 		}
@@ -1499,10 +1495,11 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 			} else {
 				dnsResp = makeV6DNSResponse(t, tt.domain, tt.v6Addrs)
 			}
-			sn := makeSelfNode(t, []appctype.Conn25Attr{{
+			sn := makeSelfNode(t, []appctype.AppConnectorAttr{{
 				Name:       "app1",
 				Connectors: []string{"tag:woo"},
 				Domains:    tt.appDomains,
+				Mode:       appctype.MagicIP,
 			}}, arbitraryPools, tt.selfTags)
 
 			c := newConn25(logger.Discard)
@@ -1536,10 +1533,11 @@ func TestMapDNSResponseSetsExpiryBasedOnTTL(t *testing.T) {
 	configuredDomain := "example.com"
 	domainName := configuredDomain + "."
 	dnsMessageName := dnsmessage.MustNewName(domainName)
-	sn := makeSelfNode(t, []appctype.Conn25Attr{{
+	sn := makeSelfNode(t, []appctype.AppConnectorAttr{{
 		Name:       "app1",
 		Connectors: []string{"tag:woo"},
 		Domains:    []string{configuredDomain},
+		Mode:       appctype.MagicIP,
 	}}, arbitraryPools, nil)
 
 	c := newConn25(logger.Discard)
@@ -1637,10 +1635,11 @@ func TestMapDNSResponsePreservesTTL(t *testing.T) {
 	configuredDomain := "example.com"
 	domainName := configuredDomain + "."
 	dnsMessageName := dnsmessage.MustNewName(domainName)
-	sn := makeSelfNode(t, []appctype.Conn25Attr{{
+	sn := makeSelfNode(t, []appctype.AppConnectorAttr{{
 		Name:       "app1",
 		Connectors: []string{"tag:connector"},
 		Domains:    []string{configuredDomain},
+		Mode:       appctype.MagicIP,
 	}}, arbitraryPools, nil)
 	cfg := mustConfig(t, sn)
 
@@ -1951,10 +1950,11 @@ func TestAddressAssignmentIsHandled(t *testing.T) {
 	}
 	defer ext.Shutdown()
 
-	sn := makeSelfNode(t, []appctype.Conn25Attr{{
+	sn := makeSelfNode(t, []appctype.AppConnectorAttr{{
 		Name:       "app1",
 		Connectors: []string{"tag:woo"},
 		Domains:    []string{"example.com"},
+		Mode:       appctype.MagicIP,
 	}}, appctype.Conn25PoolsAttr{}, []string{})
 
 	cfg := mustConfig(t, sn)
@@ -2081,10 +2081,11 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 	configuredDomain := "example.com"
 	domainName := configuredDomain + "."
 	dnsMessageName := dnsmessage.MustNewName(domainName)
-	sn := makeSelfNode(t, []appctype.Conn25Attr{{
+	sn := makeSelfNode(t, []appctype.AppConnectorAttr{{
 		Name:       "app1",
 		Connectors: []string{"tag:connector"},
 		Domains:    []string{configuredDomain},
+		Mode:       appctype.MagicIP,
 	}}, appctype.Conn25PoolsAttr{
 		V4MagicIPPool:   []netipx.IPRange{v4RangeFrom("0", "10")},
 		V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")},
@@ -2634,10 +2635,11 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 func TestMapDNSResponseDropsUnhandledTypes(t *testing.T) {
 	configuredDomain := "example.com"
 	dnsMessageName := dnsmessage.MustNewName(configuredDomain + ".")
-	sn := makeSelfNode(t, []appctype.Conn25Attr{{
+	sn := makeSelfNode(t, []appctype.AppConnectorAttr{{
 		Name:       "app1",
 		Connectors: []string{"tag:connector"},
 		Domains:    []string{configuredDomain},
+		Mode:       appctype.MagicIP,
 	}}, arbitraryPools, []string{})
 	cfg := mustConfig(t, sn)
 
@@ -2700,10 +2702,11 @@ func TestMapDNSResponseWritesThroughNonAddressTypes(t *testing.T) {
 	configuredDomain := "example.com"
 	dnsMessageName := dnsmessage.MustNewName(configuredDomain + ".")
 	targetName := dnsmessage.MustNewName("target.example.net.")
-	sn := makeSelfNode(t, []appctype.Conn25Attr{{
+	sn := makeSelfNode(t, []appctype.AppConnectorAttr{{
 		Name:       "app1",
 		Connectors: []string{"tag:connector"},
 		Domains:    []string{configuredDomain},
+		Mode:       appctype.MagicIP,
 	}}, arbitraryPools, []string{})
 	cfg := mustConfig(t, sn)
 
@@ -2821,10 +2824,11 @@ func TestMapDNSResponseStoresConnectorAndToken(t *testing.T) {
 	const domain = "example.com."
 	ipOne := netip.MustParseAddr("1.0.0.1")
 	ipTwo := netip.MustParseAddr("1.0.0.2")
-	sn := makeSelfNode(t, []appctype.Conn25Attr{{
+	sn := makeSelfNode(t, []appctype.AppConnectorAttr{{
 		Name:       testAppName,
 		Connectors: []string{"tag:woo"},
 		Domains:    []string{"example.com"},
+		Mode:       appctype.MagicIP,
 	}}, arbitraryPools, nil)
 
 	c := newConn25(logger.Discard)
@@ -2875,10 +2879,11 @@ func TestMapDNSResponseStoresConnectorAndToken(t *testing.T) {
 func TestMapDNSResponseUpdatesToken(t *testing.T) {
 	const domain = "example.com."
 	dst := netip.MustParseAddr("1.0.0.1")
-	sn := makeSelfNode(t, []appctype.Conn25Attr{{
+	sn := makeSelfNode(t, []appctype.AppConnectorAttr{{
 		Name:       testAppName,
 		Connectors: []string{"tag:woo"},
 		Domains:    []string{"example.com"},
+		Mode:       appctype.MagicIP,
 	}}, arbitraryPools, nil)
 
 	c := newConn25(logger.Discard)
@@ -2954,10 +2959,11 @@ func TestMapDNSResponseUpdatesToken(t *testing.T) {
 func TestMapDNSResponsePassesThroughUnattributableResponses(t *testing.T) {
 	const domain = "example.com."
 	dst := netip.MustParseAddr("1.0.0.1")
-	sn := makeSelfNode(t, []appctype.Conn25Attr{{
+	sn := makeSelfNode(t, []appctype.AppConnectorAttr{{
 		Name:       testAppName,
 		Connectors: []string{"tag:woo"},
 		Domains:    []string{"example.com"},
+		Mode:       appctype.MagicIP,
 	}}, arbitraryPools, nil)
 
 	for _, tt := range []struct {
@@ -3073,16 +3079,18 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 	}
 	defer ext.Shutdown()
 
-	sn := makeSelfNode(t, []appctype.Conn25Attr{
+	sn := makeSelfNode(t, []appctype.AppConnectorAttr{
 		{
 			Name:       "app1",
 			Connectors: []string{"tag:woo"},
 			Domains:    []string{"woo.example.com"},
+			Mode:       appctype.MagicIP,
 		},
 		{
 			Name:       "app2",
 			Connectors: []string{"tag:hoo"},
 			Domains:    []string{"hoo.example.com"},
+			Mode:       appctype.MagicIP,
 		},
 	}, appctype.Conn25PoolsAttr{}, []string{})
 
@@ -3221,7 +3229,7 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 }
 
 func TestClientTransitIPForMagicIP(t *testing.T) {
-	sn := makeSelfNode(t, []appctype.Conn25Attr{{Name: "app1"}}, appctype.Conn25PoolsAttr{
+	sn := makeSelfNode(t, []appctype.AppConnectorAttr{{Name: "app1", Mode: appctype.MagicIP}}, appctype.Conn25PoolsAttr{
 		V4MagicIPPool: []netipx.IPRange{v4RangeFrom("0", "10")}, // 100.64.0.0 - 100.64.0.10
 		V6MagicIPPool: []netipx.IPRange{v6RangeFrom("0", "10")},
 	}, []string{})
@@ -3316,7 +3324,7 @@ func TestClientTransitIPForMagicIP(t *testing.T) {
 }
 
 func TestConnectorRealIPForTransitIPConnection(t *testing.T) {
-	sn := makeSelfNode(t, []appctype.Conn25Attr{{Name: "app1"}}, appctype.Conn25PoolsAttr{
+	sn := makeSelfNode(t, []appctype.AppConnectorAttr{{Name: "app1", Mode: appctype.MagicIP}}, appctype.Conn25PoolsAttr{
 		V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")}, // 100.64.0.40 - 100.64.0.50
 	}, []string{})
 	cfg := mustConfig(t, sn)
@@ -3388,10 +3396,11 @@ func TestConnectorRealIPForTransitIPConnection(t *testing.T) {
 }
 
 func TestGetMagicRange(t *testing.T) {
-	sn := makeSelfNode(t, []appctype.Conn25Attr{{
+	sn := makeSelfNode(t, []appctype.AppConnectorAttr{{
 		Name:       "app1",
 		Connectors: []string{"tag:woo"},
 		Domains:    []string{"example.com"},
+		Mode:       appctype.MagicIP,
 	}}, appctype.Conn25PoolsAttr{
 		V4MagicIPPool: []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("0.0.0.1"), netip.MustParseAddr("0.0.0.3"))},
 		V6MagicIPPool: []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("::1"), netip.MustParseAddr("::3"))},
@@ -3438,10 +3447,11 @@ func TestGetMagicRange(t *testing.T) {
 }
 
 func TestPickConnector(t *testing.T) {
-	exampleApp := appctype.Conn25Attr{
+	exampleApp := appctype.AppConnectorAttr{
 		Name:       "example",
 		Connectors: []string{"tag:example"},
 		Domains:    []string{"example.com"},
+		Mode:       appctype.MagicIP,
 	}
 
 	nvWithConnectorSet := func(id tailcfg.NodeID, isConnector bool, tags ...string) tailcfg.NodeView {
@@ -3477,13 +3487,13 @@ func TestPickConnector(t *testing.T) {
 	for _, tt := range []struct {
 		name       string
 		candidates []tailcfg.NodeView
-		app        appctype.Conn25Attr
+		app        appctype.AppConnectorAttr
 		want       []tailcfg.NodeView
 	}{
 		{
 			name:       "empty-everything",
 			candidates: []tailcfg.NodeView{},
-			app:        appctype.Conn25Attr{},
+			app:        appctype.AppConnectorAttr{},
 			want:       nil,
 		},
 		{
@@ -3495,7 +3505,7 @@ func TestPickConnector(t *testing.T) {
 		{
 			name:       "empty-app",
 			candidates: []tailcfg.NodeView{nv(1, "tag:example")},
-			app:        appctype.Conn25Attr{},
+			app:        appctype.AppConnectorAttr{},
 			want:       nil,
 		},
 		{
@@ -3548,10 +3558,11 @@ func TestPickConnector(t *testing.T) {
 		{
 			name:       "multi-matches",
 			candidates: []tailcfg.NodeView{nv(1, "tag:woo", "tag:hoo"), nv(2, "tag:woo", "tag:example"), nv(3, "tag:example1", "tag:example")},
-			app: appctype.Conn25Attr{
+			app: appctype.AppConnectorAttr{
 				Name:       "example2",
 				Connectors: []string{"tag:example1", "tag:example"},
 				Domains:    []string{"example.com"},
+				Mode:       appctype.MagicIP,
 			},
 			want: []tailcfg.NodeView{nv(2, "tag:woo", "tag:example"), nv(3, "tag:example1", "tag:example")},
 		},
@@ -3570,10 +3581,11 @@ func TestPickConnector(t *testing.T) {
 				nvWithConnectorSet(9, false),
 				nvWithConnectorSet(10, false),
 			},
-			app: appctype.Conn25Attr{
+			app: appctype.AppConnectorAttr{
 				Name:       "example2",
 				Connectors: []string{"tag:example1", "tag:example", "tag:example2"},
 				Domains:    []string{"example.com"},
+				Mode:       appctype.MagicIP,
 			},
 			want: []tailcfg.NodeView{
 				nv(1, "tag:example1", "tag:example"),
@@ -3657,10 +3669,11 @@ func TestMakeNameChecker(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			app := appctype.Conn25Attr{
+			app := appctype.AppConnectorAttr{
 				Name:       "testApp",
 				Domains:    tt.domains,
 				Connectors: []string{"tag:connector"},
+				Mode:       appctype.MagicIP,
 			}
 
 			checker := makeNameChecker(app)
@@ -3714,20 +3727,23 @@ func (fakePeerAPIHandler) Logf(format string, a ...any) {
 func TestHandleHookReplyToDNSQueries(t *testing.T) {
 	t.Parallel()
 
-	exampleApp := appctype.Conn25Attr{
+	exampleApp := appctype.AppConnectorAttr{
 		Name:       "example",
 		Connectors: []string{"tag:example"},
 		Domains:    []string{"example.com", "*.example.com"},
+		Mode:       appctype.MagicIP,
 	}
-	exactApp := appctype.Conn25Attr{
+	exactApp := appctype.AppConnectorAttr{
 		Name:       "exact",
 		Connectors: []string{"tag:exact"},
 		Domains:    []string{"exact.example.net"},
+		Mode:       appctype.MagicIP,
 	}
-	wildcardApp := appctype.Conn25Attr{
+	wildcardApp := appctype.AppConnectorAttr{
 		Name:       "wildcard",
 		Connectors: []string{"tag:wildcard"},
 		Domains:    []string{"*.wildcard.example.net"},
+		Mode:       appctype.MagicIP,
 	}
 
 	exampleAppPeerCap := tailcfg.PeerCapMap{
@@ -3753,7 +3769,7 @@ func TestHandleHookReplyToDNSQueries(t *testing.T) {
 	tests := []struct {
 		name                 string
 		noAdvertiseConnector bool
-		apps                 []appctype.Conn25Attr
+		apps                 []appctype.AppConnectorAttr
 		tags                 []string
 		peerCap              tailcfg.PeerCapMap
 		noQueryString        bool
@@ -3763,7 +3779,7 @@ func TestHandleHookReplyToDNSQueries(t *testing.T) {
 	}{
 		{
 			name:              "normal",
-			apps:              []appctype.Conn25Attr{exampleApp},
+			apps:              []appctype.AppConnectorAttr{exampleApp},
 			tags:              []string{"tag:example"},
 			peerCap:           exampleAppPeerCap,
 			requestedApp:      "example",
@@ -3788,7 +3804,7 @@ func TestHandleHookReplyToDNSQueries(t *testing.T) {
 		},
 		{
 			name:              "exact",
-			apps:              []appctype.Conn25Attr{exactApp},
+			apps:              []appctype.AppConnectorAttr{exactApp},
 			tags:              []string{"tag:exact"},
 			peerCap:           exactAppPeerCap,
 			requestedApp:      "exact",
@@ -3804,7 +3820,7 @@ func TestHandleHookReplyToDNSQueries(t *testing.T) {
 		},
 		{
 			name:              "wildcard",
-			apps:              []appctype.Conn25Attr{wildcardApp},
+			apps:              []appctype.AppConnectorAttr{wildcardApp},
 			tags:              []string{"tag:wildcard"},
 			peerCap:           wildcardAppPeerCap,
 			requestedApp:      "wildcard",
@@ -3820,7 +3836,7 @@ func TestHandleHookReplyToDNSQueries(t *testing.T) {
 		},
 		{
 			name:              "multi-example",
-			apps:              []appctype.Conn25Attr{exampleApp, exactApp, wildcardApp},
+			apps:              []appctype.AppConnectorAttr{exampleApp, exactApp, wildcardApp},
 			tags:              []string{"tag:example", "tag:exact", "tag:wildcard"},
 			peerCap:           allAppPeerCap,
 			requestedApp:      "example",
@@ -3837,7 +3853,7 @@ func TestHandleHookReplyToDNSQueries(t *testing.T) {
 		},
 		{
 			name:              "multi-exact",
-			apps:              []appctype.Conn25Attr{exampleApp, exactApp, wildcardApp},
+			apps:              []appctype.AppConnectorAttr{exampleApp, exactApp, wildcardApp},
 			tags:              []string{"tag:example", "tag:exact", "tag:wildcard"},
 			peerCap:           allAppPeerCap,
 			requestedApp:      "exact",
@@ -3853,7 +3869,7 @@ func TestHandleHookReplyToDNSQueries(t *testing.T) {
 		},
 		{
 			name:              "wildcard",
-			apps:              []appctype.Conn25Attr{exampleApp, exactApp, wildcardApp},
+			apps:              []appctype.AppConnectorAttr{exampleApp, exactApp, wildcardApp},
 			tags:              []string{"tag:example", "tag:exact", "tag:wildcard"},
 			peerCap:           allAppPeerCap,
 			requestedApp:      "wildcard",
@@ -3869,7 +3885,7 @@ func TestHandleHookReplyToDNSQueries(t *testing.T) {
 		},
 		{
 			name:              "restricted-grant",
-			apps:              []appctype.Conn25Attr{exampleApp},
+			apps:              []appctype.AppConnectorAttr{exampleApp},
 			tags:              []string{"tag:example"},
 			peerCap:           exampleAppPeerCapRestrictive,
 			requestedApp:      "example",
@@ -3887,7 +3903,7 @@ func TestHandleHookReplyToDNSQueries(t *testing.T) {
 		{
 			name:                 "not-advertised",
 			noAdvertiseConnector: true,
-			apps:                 []appctype.Conn25Attr{exampleApp},
+			apps:                 []appctype.AppConnectorAttr{exampleApp},
 			tags:                 []string{"tag:example"},
 			peerCap:              allAppPeerCap,
 			requestedApp:         "example",
@@ -3895,7 +3911,7 @@ func TestHandleHookReplyToDNSQueries(t *testing.T) {
 		},
 		{
 			name:              "no-apps",
-			apps:              []appctype.Conn25Attr{},
+			apps:              []appctype.AppConnectorAttr{},
 			tags:              []string{"tag:example"},
 			peerCap:           allAppPeerCap,
 			requestedApp:      "example",
@@ -3903,7 +3919,7 @@ func TestHandleHookReplyToDNSQueries(t *testing.T) {
 		},
 		{
 			name:              "not-connector-for-app",
-			apps:              []appctype.Conn25Attr{exampleApp, exactApp},
+			apps:              []appctype.AppConnectorAttr{exampleApp, exactApp},
 			tags:              []string{"tag:exact"},
 			peerCap:           allAppPeerCap,
 			requestedApp:      "example",
@@ -3911,7 +3927,7 @@ func TestHandleHookReplyToDNSQueries(t *testing.T) {
 		},
 		{
 			name:              "no-permission-for-app",
-			apps:              []appctype.Conn25Attr{exampleApp, exactApp},
+			apps:              []appctype.AppConnectorAttr{exampleApp, exactApp},
 			tags:              []string{"tag:example", "tag:exact"},
 			peerCap:           exampleAppPeerCap,
 			requestedApp:      "exact",
@@ -3919,7 +3935,7 @@ func TestHandleHookReplyToDNSQueries(t *testing.T) {
 		},
 		{
 			name:              "no-query-string",
-			apps:              []appctype.Conn25Attr{exampleApp},
+			apps:              []appctype.AppConnectorAttr{exampleApp},
 			tags:              []string{"tag:example"},
 			peerCap:           exampleAppPeerCap,
 			noQueryString:     true,
@@ -3996,10 +4012,11 @@ func TestExtraDNSRoutesHook(t *testing.T) {
 		t.Errorf("routes before self node known = %v, want nil", got)
 	}
 
-	selfNode := makeSelfNode(t, []appctype.Conn25Attr{{
+	selfNode := makeSelfNode(t, []appctype.AppConnectorAttr{{
 		Name:       "app1",
 		Connectors: []string{"tag:woo"},
 		Domains:    []string{"example.com", "*.wild.example.com"},
+		Mode:       appctype.MagicIP,
 	}}, appctype.Conn25PoolsAttr{}, nil)
 	ext.onSelfChange(selfNode)
 	ext.profileStateChange(ipn.LoginProfileView{}, testPrefsNotConnector, true)
