@@ -9,6 +9,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"net/netip"
 	"reflect"
 	"testing"
 	"time"
@@ -114,6 +115,9 @@ func TestNameserverReconciler(t *testing.T) {
 		TailscaleNamespace: tsNamespace,
 		Logger:             logger.Sugar(),
 		Clock:              clock,
+		LookupIP: func(context.Context, string, string, string) ([]netip.Addr, error) {
+			return []netip.Addr{netip.MustParseAddr("1.2.3.4")}, nil
+		},
 	})
 	mustReconcile(t, r, reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}})
 
@@ -197,6 +201,12 @@ func TestNameserverReconciler(t *testing.T) {
 			IP: "1.2.3.4",
 		}
 		dnsConfig.Status.Conditions = append(dnsConfig.Status.Conditions, metav1.Condition{
+			Type:               string(tsapi.DNSResolutionReady),
+			Status:             metav1.ConditionUnknown,
+			Reason:             "NoProbeRecord",
+			Message:            "Waiting for an operator-managed DNS record to check resolution from the operator Pod.",
+			LastTransitionTime: metav1.Time{Time: clock.Now().Truncate(time.Second)},
+		}, metav1.Condition{
 			Type:               string(tsapi.NameserverReady),
 			Status:             metav1.ConditionTrue,
 			Reason:             nameserver.ReasonNameserverCreated,

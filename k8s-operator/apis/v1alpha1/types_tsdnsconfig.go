@@ -154,3 +154,12 @@ type NameserverStatus struct {
 // NameserverReady is set to True if the nameserver has been successfully
 // deployed to cluster.
 const NameserverReady ConditionType = `NameserverReady`
+
+// DNSResolutionReady reports whether a sampled operator-managed DNS record
+// resolves to its expected addresses through the operator Pod's configured
+// resolver. It does not certify resolution from other workloads or namespaces.
+// It is Unknown if a failed resolver lookup cannot be compared with the
+// expected answer from the nameserver directly. It is False only for a
+// persistent resolver-path mismatch confirmed by a successful direct query.
+// It is independent of NameserverReady and does not gate DNS record creation.
+const DNSResolutionReady ConditionType = `DNSResolutionReady`
