@@ -19,23 +19,17 @@ import (
 )
 
 // ensureIPForwarding enables IPv4/IPv6 forwarding for the container.
-func ensureIPForwarding(root, clusterProxyTargetIP, tailnetTargetIP, tailnetTargetFQDN string, routes *string) error {
+// clusterProxyTargetIPs are the already parsed destination IPs of an ingress
+// proxy (see parseProxyTargetIPs); there can be one per IP family.
+func ensureIPForwarding(root string, clusterProxyTargetIPs []netip.Addr, tailnetTargetIP, tailnetTargetFQDN string, routes *string) error {
 	var (
 		v4Forwarding, v6Forwarding bool
 	)
-	if clusterProxyTargetIP != "" {
-		// clusterProxyTargetIP may be a comma-separated list of IPs, one per
-		// IP family (dual-stack Services).
-		for ipStr := range strings.SplitSeq(clusterProxyTargetIP, ",") {
-			proxyIP, err := netip.ParseAddr(strings.TrimSpace(ipStr))
-			if err != nil {
-				return fmt.Errorf("invalid cluster destination IP: %v", err)
-			}
-			if proxyIP.Is4() {
-				v4Forwarding = true
-			} else {
-				v6Forwarding = true
-			}
+	for _, proxyIP := range clusterProxyTargetIPs {
+		if proxyIP.Is4() {
+			v4Forwarding = true
+		} else {
+			v6Forwarding = true
 		}
 	}
 	if tailnetTargetIP != "" {
@@ -160,35 +154,45 @@ func installTSForwardingRuleForDestination(_ context.Context, dstFilter string, 
 }
 
 // installIngressForwardingRules installs ingress forwarding rules for each of
-// the comma-separated destination IPs in dstsStr (one per IP family for
-// dual-stack Services). A rule is installed for every destination, so that the
-// proxy is reachable over each of its tailnet addresses.
-func installIngressForwardingRules(ctx context.Context, dstsStr string, tsIPs []netip.Prefix, nfr linuxfw.NetfilterRunner) error {
-	for dstStr := range strings.SplitSeq(dstsStr, ",") {
-		dstStr = strings.TrimSpace(dstStr)
-		if dstStr == "" {
-			continue
+// the given destination IPs (one per IP family for dual-stack Services). A rule
+// is installed for every destination, so that the proxy is reachable over each
+// of its tailnet addresses.
+func installIngressForwardingRules(ctx context.Context, dsts []netip.Addr, tsIPs []netip.Prefix, nfr linuxfw.NetfilterRunner) error {
+	// The warning is about the destinations as a whole, so it has to be
+	// decided here and not for each destination on its own: a dual-stack
+	// Service has an IPv4 destination, so there is nothing to warn about even
+	// though the IPv6 one is handled in the same way as a single-stack one.
+	var dstHasIPv4, dstHasIPv6, proxyHasIPv4 bool
+	for _, dst := range dsts {
+		if dst.Is4() {
+			dstHasIPv4 = true
+		} else {
+			dstHasIPv6 = true
 		}
-		if err := installIngressForwardingRule(ctx, dstStr, tsIPs, nfr); err != nil {
+	}
+	for _, pfx := range tsIPs {
+		if pfx.IsSingleIP() && pfx.Addr().Is4() {
+			proxyHasIPv4 = true
+			break
+		}
+	}
+	if dstHasIPv6 && !dstHasIPv4 && proxyHasIPv4 {
+		log.Printf("Warning: proxy backend ClusterIP is an IPv6 address and the proxy has a IPv4 tailnet address. You might need to disable IPv4 address allocation for the proxy for forwarding to work. See https://github.com/tailscale/tailscale/issues/12156")
+	}
+
+	for _, dst := range dsts {
+		if err := installIngressForwardingRule(ctx, dst, tsIPs, nfr); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func installIngressForwardingRule(_ context.Context, dstStr string, tsIPs []netip.Prefix, nfr linuxfw.NetfilterRunner) error {
-	dst, err := netip.ParseAddr(dstStr)
-	if err != nil {
-		return err
-	}
+func installIngressForwardingRule(_ context.Context, dst netip.Addr, tsIPs []netip.Prefix, nfr linuxfw.NetfilterRunner) error {
 	var local netip.Addr
-	proxyHasIPv4Address := false
 	for _, pfx := range tsIPs {
 		if !pfx.IsSingleIP() {
 			continue
-		}
-		if pfx.Addr().Is4() {
-			proxyHasIPv4Address = true
 		}
 		if pfx.Addr().Is4() != dst.Is4() {
 			continue
@@ -196,11 +200,8 @@ func installIngressForwardingRule(_ context.Context, dstStr string, tsIPs []neti
 		local = pfx.Addr()
 		break
 	}
-	if proxyHasIPv4Address && dst.Is6() && !local.IsValid() {
-		log.Printf("Warning: proxy backend ClusterIP is an IPv6 address and the proxy has a IPv4 tailnet address. You might need to disable IPv4 address allocation for the proxy for forwarding to work. See https://github.com/tailscale/tailscale/issues/12156")
-	}
 	if !local.IsValid() {
-		return fmt.Errorf("no tailscale IP matching family of %s found in %v", dstStr, tsIPs)
+		return fmt.Errorf("no tailscale IP matching family of %s found in %v", dst, tsIPs)
 	}
 	if err := nfr.AddDNATRule(local, dst); err != nil {
 		return fmt.Errorf("installing ingress proxy rules: %w", err)

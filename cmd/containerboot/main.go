@@ -32,7 +32,9 @@
 //     previously advertised routes. To accept routes, use TS_EXTRA_ARGS to pass
 //     in --accept-routes.
 //   - TS_DEST_IP: proxy all incoming Tailscale traffic to the given
-//     destination defined by an IP address.
+//     destination defined by an IP address. For dual-stack destinations this
+//     can be a comma-separated list of IP addresses, at most one per IP
+//     family (for example "10.0.0.1,fd00::1").
 //   - TS_EXPERIMENTAL_DEST_DNS_NAME: proxy all incoming Tailscale traffic to the given
 //     destination defined by a DNS name. The DNS name will be periodically resolved and firewall rules updated accordingly.
 //     This is currently intended to be used by the Kubernetes operator (ExternalName Services).
@@ -429,7 +431,7 @@ func run() error {
 			return fmt.Errorf("unable to create tuntap device file: %w", err)
 		}
 		if cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.Routes != nil || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" {
-			if err := ensureIPForwarding(cfg.Root, cfg.ProxyTargetIP, cfg.TailnetTargetIP, cfg.TailnetTargetFQDN, cfg.Routes); err != nil {
+			if err := ensureIPForwarding(cfg.Root, cfg.ProxyTargetIPs, cfg.TailnetTargetIP, cfg.TailnetTargetFQDN, cfg.Routes); err != nil {
 				log.Printf("Failed to enable IP forwarding: %v", err)
 				log.Printf("To run tailscale as a proxy or router container, IP forwarding must be enabled.")
 				if cfg.InKubernetes {
@@ -906,9 +908,9 @@ runLoop:
 				}
 				currentEgressIPs = newCurentEgressIPs
 			}
-			if cfg.ProxyTargetIP != "" && len(addrs) != 0 && ipsHaveChanged {
+			if len(cfg.ProxyTargetIPs) != 0 && len(addrs) != 0 && ipsHaveChanged {
 				log.Printf("Installing proxy rules")
-				if err := installIngressForwardingRules(ctx, cfg.ProxyTargetIP, addrs, nfr); err != nil {
+				if err := installIngressForwardingRules(ctx, cfg.ProxyTargetIPs, addrs, nfr); err != nil {
 					return fmt.Errorf("installing ingress proxy rules: %w", err)
 				}
 			}
