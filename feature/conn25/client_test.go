@@ -33,7 +33,7 @@ func TestReserveIPs(t *testing.T) {
 	domainStr := "example.com."
 	cfg := &config{
 		isConfigured: true,
-		appsByName:   map[string]appctype.Conn25Attr{appName: {}},
+		appsByName:   map[string]appctype.AppConnectorAttr{appName: {}},
 		ipSets: ipSets{
 			v4Magic:   mustIPSetFromPrefix("100.64.0.0/24"),
 			v6Magic:   mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0100::/80"),
@@ -320,10 +320,11 @@ func TestReconfigDoesNotReissueInUseAddresses(t *testing.T) {
 	afterRangeV4 := mustRange("0.0.0.4", "0.0.0.7")
 	afterRangeV6 := mustRange("::4", "::7")
 	makeNodeFromMagicRange := func(v4, v6 netipx.IPRange) tailcfg.NodeView {
-		return makeSelfNode(t, []appctype.Conn25Attr{{
+		return makeSelfNode(t, []appctype.AppConnectorAttr{{
 			Name:       appName,
 			Connectors: []string{"tag:woo"},
 			Domains:    []string{"example.com"},
+			Mode:       appctype.MagicIP,
 		}}, appctype.Conn25PoolsAttr{
 			V4MagicIPPool:   []netipx.IPRange{v4},
 			V6MagicIPPool:   []netipx.IPRange{v6},
@@ -391,10 +392,11 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 	configuredDomain := "example.com"
 	domainName := configuredDomain + "."
 	dnsMessageName := dnsmessage.MustNewName(domainName)
-	sn := makeSelfNode(t, []appctype.Conn25Attr{{
+	sn := makeSelfNode(t, []appctype.AppConnectorAttr{{
 		Name:       "app1",
 		Connectors: []string{"tag:woo"},
 		Domains:    []string{configuredDomain},
+		Mode:       appctype.MagicIP,
 	}}, arbitraryPools, nil)
 
 	var ttlSecs uint32 = 300
