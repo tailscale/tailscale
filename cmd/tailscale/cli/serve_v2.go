@@ -537,6 +537,13 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			if local.IsPreconditionsFailedError(err) {
 				fmt.Fprintln(e.stderr(), "Another client is changing the serve config; please try again.")
 			}
+			if local.IsAccessDeniedError(err) && runtime.GOOS != "windows" && (parentSC.HasPathHandler() || parentSC.IsServingUnixAny()) {
+				// RunWithContext appends advice to configure an operator to
+				// access-denied errors. That does not help here: paths and
+				// Unix sockets require root. Return a plain error with the
+				// right advice instead.
+				return fmt.Errorf("%v\n\nServing a path or Unix socket requires root. Run this command with sudo.", err)
+			}
 			return err
 		}
 

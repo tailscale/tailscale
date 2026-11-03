@@ -882,6 +882,7 @@ func TestVerifyFunnelEnabled(t *testing.T) {
 type fakeLocalServeClient struct {
 	config               *ipn.ServeConfig
 	setCount             int                       // counts calls to SetServeConfig
+	setErr               error                     // if non-nil, returned by SetServeConfig
 	queryFeatureResponse *mockQueryFeatureResponse // mock response to QueryFeature calls
 	prefs                *ipn.Prefs                // fake preferences, used to test GetPrefs and SetPrefs
 	SOMarkInUse          bool                      // fake SO mark in use status
@@ -918,6 +919,9 @@ func (lc *fakeLocalServeClient) GetServeConfig(ctx context.Context) (*ipn.ServeC
 
 func (lc *fakeLocalServeClient) SetServeConfig(ctx context.Context, config *ipn.ServeConfig) error {
 	lc.setCount += 1
+	if lc.setErr != nil {
+		return lc.setErr
+	}
 	lc.config = config.Clone()
 	return nil
 }
