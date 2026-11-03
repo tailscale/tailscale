@@ -21,8 +21,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
 	"tailscale.com/util/must"
 )
 
@@ -38,37 +36,6 @@ func newPortmapNetwork(t *testing.T, svc NetworkService) (*Server, *network) {
 	s.StopUnsolicitedRAsForTest()
 	t.Cleanup(s.Close)
 	return s, nw.network
-}
-
-// sendToRouter sends payload from node 1 to the router's LAN IP on dstPort
-// and returns the UDP payload of the router's reply.
-func sendToRouter(t *testing.T, s *Server, dstPort uint16, payload []byte) []byte {
-	t.Helper()
-	se := newSideEffects(s)
-	routerIP := netip.MustParseAddr("192.168.0.1")
-	eth := &layers.Ethernet{SrcMAC: nodeMac(1).HWAddr(), DstMAC: routerMac(1).HWAddr()}
-	ip := mkIPLayer(layers.IPProtocolUDP, clientIPv4(1), routerIP)
-	udp := &layers.UDP{SrcPort: 40000, DstPort: layers.UDPPort(dstPort)}
-	if err := s.handleEthernetFrameFromVM(mustPacket(eth, ip, udp, gopacket.Payload(payload))); err != nil {
-		t.Fatal(err)
-	}
-	if len(se.got) != 1 {
-		t.Fatalf("got %d reply packets, want 1; logs:\n%s", len(se.got), strings.Join(se.logs, "\n"))
-	}
-	pkt := gopacket.NewPacket(se.got[0].eth, layers.LayerTypeEthernet, gopacket.Default)
-	ip4, _ := pkt.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
-	res, _ := pkt.Layer(layers.LayerTypeUDP).(*layers.UDP)
-	if ip4 == nil || res == nil {
-		t.Fatalf("reply is not IPv4/UDP:\n%v", pkt)
-	}
-	if src, _ := netip.AddrFromSlice(ip4.SrcIP); src != routerIP || uint16(res.SrcPort) != dstPort {
-		// The client drops replies that don't come from the gateway's port.
-		t.Errorf("reply from %v:%d, want %v:%d", src, res.SrcPort, routerIP, dstPort)
-	}
-	if dst, _ := netip.AddrFromSlice(ip4.DstIP); dst != clientIPv4(1) || res.DstPort != udp.SrcPort {
-		t.Errorf("reply to %v:%d, want %v:%d", dst, res.DstPort, clientIPv4(1), udp.SrcPort)
-	}
-	return res.Payload
 }
 
 func mustHex(s string) []byte {
@@ -140,19 +107,19 @@ var (
 func TestNATPMP(t *testing.T) {
 	s, n := newPortmapNetwork(t, NATPMP)
 	t.Run("external-address", func(t *testing.T) {
-		got := sendToRouter(t, s, pxpPort, natpmpAddrReq)
+		got := sendUDPToRouter(t, s, pxpPort, natpmpAddrReq)
 		// success, external address 2.1.1.1
 		checkReply(t, got, "00 80 00 00 ?? ?? ?? ?? 02 01 01 01")
 	})
 	t.Run("map-udp", func(t *testing.T) {
 		// MAP UDP of int port 60736 to any ext port for 7200s
-		got := sendToRouter(t, s, pxpPort, mustHex("00 01 00 00 ed 40 00 00 00 00 1c 20"))
+		got := sendUDPToRouter(t, s, pxpPort, mustHex("00 01 00 00 ed 40 00 00 00 00 1c 20"))
 		// success, MAP UDP of int port 60736 for 7200s
 		checkReply(t, got, "00 81 00 00 ?? ?? ?? ?? ed 40 ?? ?? 00 00 1c 20")
 		checkMapping(t, n, binary.BigEndian.Uint16(got[10:12]), netip.AddrPortFrom(clientIPv4(1), 60736))
 	})
 	t.Run("request-unsupported", func(t *testing.T) {
-		got := sendToRouter(t, s, pxpPort, pcpAnnounceReq)
+		got := sendUDPToRouter(t, s, pxpPort, pcpAnnounceReq)
 		// NAT-PMP unsupported version
 		checkReply(t, got, "00 00 00 01 ?? ?? ?? ??")
 	})
@@ -161,13 +128,13 @@ func TestNATPMP(t *testing.T) {
 func TestPCP(t *testing.T) {
 	s, n := newPortmapNetwork(t, PCP)
 	t.Run("announce", func(t *testing.T) {
-		got := sendToRouter(t, s, pxpPort, pcpAnnounceReq)
+		got := sendUDPToRouter(t, s, pxpPort, pcpAnnounceReq)
 		// ANNOUNCE success
 		checkReply(t, got, "02 80 00 00 00 00 00 00 ?? ?? ?? ?? 00 00 00 00 00 00 00 00 00 00 00 00")
 	})
 	t.Run("map-udp", func(t *testing.T) {
 		// MAP UDP of int 192.168.0.101:40768 to any ext IP and port for 7200s, with nonce 95bcb5d93d07ecbbc8b3bd4f
-		got := sendToRouter(t, s, pxpPort, mustHex("02 01 00 00 00 00 1c 20 00 00 00 00 00 00 00 00 00 00 ff ff c0 a8 00 65 "+
+		got := sendUDPToRouter(t, s, pxpPort, mustHex("02 01 00 00 00 00 1c 20 00 00 00 00 00 00 00 00 00 00 ff ff c0 a8 00 65 "+
 			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f 11 00 00 00 9f 40 00 00 00 00 00 00 00 00 00 00 00 00 ff ff 00 00 00 00"))
 		// success, MAP UDP of int port 40768 to ext IP 2.1.1.1 for 7200s, same nonce
 		checkReply(t, got, "02 81 00 00 00 00 1c 20 ?? ?? ?? ?? 00 00 00 00 00 00 00 00 00 00 00 00 "+
@@ -175,7 +142,7 @@ func TestPCP(t *testing.T) {
 		checkMapping(t, n, binary.BigEndian.Uint16(got[42:44]), netip.AddrPortFrom(clientIPv4(1), 40768))
 	})
 	t.Run("request-unsupported", func(t *testing.T) {
-		got := sendToRouter(t, s, pxpPort, natpmpAddrReq)
+		got := sendUDPToRouter(t, s, pxpPort, natpmpAddrReq)
 		// PCP unsupported version, error lifetime 1800s
 		checkReply(t, got, "02 80 00 01 00 00 07 08 ?? ?? ?? ?? 00 00 00 00 00 00 00 00 00 00 00 00")
 	})
@@ -190,7 +157,7 @@ func TestUPnP(t *testing.T) {
 			"ST: ssdp:all\r\n" +
 			"MAN: \"ssdp:discover\"\r\n" +
 			"MX: 2\r\n\r\n")
-		got := sendToRouter(t, s, ssdpPort, ssdpSearchReq)
+		got := sendUDPToRouter(t, s, ssdpPort, ssdpSearchReq)
 		res, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(got)), nil)
 		if err != nil {
 			t.Fatalf("parsing SSDP reply: %v\n%s", err, got)
