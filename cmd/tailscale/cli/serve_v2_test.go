@@ -894,6 +894,51 @@ func TestServeDevConfigMutations(t *testing.T) {
 			},
 		},
 		{
+			// The fake status only allows Funnel on ports 443 and 8443.
+			name: "funnel_port_not_allowed",
+			steps: []step{
+				{
+					command: cmd("funnel --bg --https=10000 3000"),
+					wantErr: func(err error) (badErrMsg string) {
+						if err == nil || !strings.Contains(err.Error(), "not allowed for funnel") {
+							return fmt.Sprintf("want a port-not-allowed error; got %v", err)
+						}
+						return ""
+					},
+				},
+				{
+					command: cmd("funnel --bg --tcp=10000 tcp://localhost:5432"),
+					wantErr: func(err error) (badErrMsg string) {
+						if err == nil || !strings.Contains(err.Error(), "not allowed for funnel") {
+							return fmt.Sprintf("want a port-not-allowed error; got %v", err)
+						}
+						return ""
+					},
+				},
+			},
+		},
+		{
+			// Turning Funnel off on a port that is no longer allowed must
+			// still work, so users can clean up configs made before the
+			// port check applied to the requested port.
+			name: "funnel_off_on_disallowed_port",
+			initialState: fakeLocalServeClient{
+				config: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{10000: {HTTPS: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:10000": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://127.0.0.1:3000"},
+						}},
+					},
+					AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:10000": true},
+				},
+			},
+			steps: []step{{
+				command: cmd("funnel --https=10000 off"),
+				want:    &ipn.ServeConfig{},
+			}},
+		},
+		{
 			name: "no_http_with_funnel",
 			steps: []step{
 				{

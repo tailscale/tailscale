@@ -407,13 +407,6 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			return errors.New("Error: --service flag is not supported with funnel")
 		}
 
-		if funnel {
-			// verify node has funnel capabilities
-			if err := e.verifyFunnelEnabled(ctx, 443); err != nil {
-				return err
-			}
-		}
-
 		if forService && !e.bg.Value {
 			return errors.New("Error: --service flag is only compatible with background mode")
 		}
@@ -460,6 +453,12 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		parentSC := sc
 
 		turnOff := len(args) > 0 && "off" == args[len(args)-1]
+		if funnel && !turnOff {
+			// Verify the node can use Funnel on the requested port.
+			if err := e.verifyFunnelEnabled(ctx, srvPort); err != nil {
+				return err
+			}
+		}
 		if !turnOff && srvType == serveTypeHTTPS {
 			// Running serve with https requires that the tailnet has enabled
 			// https cert provisioning. Send users through an interactive flow
