@@ -41,6 +41,17 @@ rules:
 - apiGroups: ["tailscale.com"]
   resources: ["dnsconfigs", "dnsconfigs/status"]
   verbs: ["get", "list", "watch", "update"]
+# Child resources are created with an ownerReference to their owner and
+# blockOwnerDeletion: true. Clusters that enable the OwnerReferencesPermissionEnforcement
+# admission plugin (OpenShift does by default) then require update on the owner's
+# finalizers subresource, otherwise every such create is rejected and the owner never
+# reconciles. Inert where the plugin is not enabled.
+- apiGroups: ["tailscale.com"]
+  resources: ["dnsconfigs/finalizers", "proxygroups/finalizers", "recorders/finalizers"]
+  verbs: ["update"]
+- apiGroups: [""]
+  resources: ["services/finalizers"]
+  verbs: ["update"]
 - apiGroups: ["tailscale.com"]
   resources: ["tailnets", "tailnets/status"]
   verbs: ["get", "list", "watch", "update"]
