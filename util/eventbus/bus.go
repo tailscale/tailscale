@@ -246,7 +246,9 @@ func (b *Bus) snapshotPublishQueue() []PublishedEvent {
 func (b *Bus) subscribe(t reflect.Type, q *subscribeState) (cancel func()) {
 	b.topicsMu.Lock()
 	defer b.topicsMu.Unlock()
-	b.topics[t] = append(b.topics[t], q)
+	// Topic slices are accessed by pump without holding a lock, so we
+	// have to replace the entire slice when subscribing.
+	b.topics[t] = append(slices.Clone(b.topics[t]), q)
 	return func() {
 		b.unsubscribe(t, q)
 	}
