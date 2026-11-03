@@ -85,6 +85,8 @@ import (
 // may return [io.EOF] to signal that the buffer is closed for writing
 // and no further bytes will ever be produced
 // (after any remaining buffered data has been consumed).
+//
+// ErrEmpty must be returned as is without any wrapping.
 var ErrEmpty = errors.New("ioqueue: buffer empty")
 
 // Buffer is an infinitely sized ring buffer.
@@ -246,7 +248,7 @@ type ioqueueError struct {
 }
 
 func wrapError(op string, err error) error {
-	if err == nil || err == io.EOF {
+	if err == nil || err == io.EOF || err == ErrEmpty {
 		return err
 	}
 	if e, ok := err.(*ioqueueError); ok {
