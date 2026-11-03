@@ -324,7 +324,7 @@ func TestReconfigDoesNotReissueInUseAddresses(t *testing.T) {
 			Name:       appName,
 			Connectors: []string{"tag:woo"},
 			Domains:    []string{"example.com"},
-			Mode:       "magicip",
+			Mode:       appctype.MagicIP,
 		}}, appctype.Conn25PoolsAttr{
 			V4MagicIPPool:   []netipx.IPRange{v4},
 			V6MagicIPPool:   []netipx.IPRange{v6},
@@ -396,7 +396,7 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 		Name:       "app1",
 		Connectors: []string{"tag:woo"},
 		Domains:    []string{configuredDomain},
-		Mode:       "magicip",
+		Mode:       appctype.MagicIP,
 	}}, arbitraryPools, nil)
 
 	var ttlSecs uint32 = 300
