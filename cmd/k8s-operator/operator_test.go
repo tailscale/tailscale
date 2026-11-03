@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"tailscale.com/ipn"
 	"tailscale.com/k8s-operator/apis/v1alpha1"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/tsclient"
@@ -323,6 +324,84 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 	expectMissing[appsv1.StatefulSet](t, fc, "operator-ns", shortName)
 	expectMissing[corev1.Service](t, fc, "operator-ns", shortName)
 	expectMissing[corev1.Secret](t, fc, "operator-ns", fullName)
+}
+
+// TestTailnetTargetFQDNAnnotationLongName tests that an egress Service whose
+// default hostname (<namespace>-<name>) is longer than a DNS label gets a
+// proxy with a truncated hostname instead of failing validation.
+func TestTailnetTargetFQDNAnnotationLongName(t *testing.T) {
+	fc := fake.NewFakeClient()
+	ft := &fakeTSClient{}
+	zl := zap.Must(zap.NewDevelopment())
+	const (
+		ns                = "tailscale-external-services"
+		name              = "harry1027133059-trefknee01-bee-oqggo-kinfe-0-g"
+		tailnetTargetFQDN = name + ".tailnet.ts.net."
+	)
+	clock := tstest.NewClock(tstest.ClockOpts{})
+	sr := &ServiceReconciler{
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			clients:           tsclient.NewProvider(ft),
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger:   zl.Sugar(),
+		clock:    clock,
+		recorder: record.NewFakeRecorder(10),
+	}
+
+	mustCreate(t, fc, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ns,
+			UID:       "1234-UID",
+			Annotations: map[string]string{
+				AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type:         corev1.ServiceTypeExternalName,
+			ExternalName: "placeholder",
+		},
+	})
+
+	expectReconciled(t, sr, ns, name)
+
+	fullName, shortName := findGenName(t, fc, ns, name, "svc")
+	sec := &corev1.Secret{}
+	if err := fc.Get(context.Background(), types.NamespacedName{Namespace: "operator-ns", Name: fullName}, sec); err != nil {
+		t.Fatalf("getting config Secret: %v", err)
+	}
+	var conf ipn.ConfigVAlpha
+	if err := json.Unmarshal([]byte(sec.StringData["cap-107.hujson"]), &conf); err != nil {
+		t.Fatalf("unmarshalling tailscaled config: %v", err)
+	}
+	const wantHostname = "tailscale-external-services-harry1027133059-trefknee01-0908ae76"
+	if conf.Hostname == nil || *conf.Hostname != wantHostname {
+		t.Errorf("tailscaled config hostname = %v, want %q", conf.Hostname, wantHostname)
+	}
+	want := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       name,
+			Namespace:  ns,
+			Finalizers: []string{"tailscale.com/finalizer"},
+			UID:        types.UID("1234-UID"),
+			Annotations: map[string]string{
+				AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ExternalName: fmt.Sprintf("%s.operator-ns.svc.cluster.local", shortName),
+			Type:         corev1.ServiceTypeExternalName,
+		},
+		Status: corev1.ServiceStatus{
+			Conditions: proxyCreatedCondition(clock),
+		},
+	}
+	expectEqual(t, fc, want)
 }
 
 func TestTailnetTargetIPAnnotation(t *testing.T) {

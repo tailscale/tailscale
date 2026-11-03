@@ -239,13 +239,13 @@ func metricsResourceLabels(opts *metricsOpts) map[string]string {
 		kubetypes.LabelManaged:   "true",
 		labelMetricsTarget:       opts.proxyStsName,
 		labelPromProxyType:       opts.proxyType,
-		labelPromProxyParentName: kube.TruncateLabelValue(opts.proxyLabels[LabelParentName]),
+		labelPromProxyParentName: kube.TruncateWithHash(opts.proxyLabels[LabelParentName]),
 	}
 	// Include namespace label for proxies created for a namespaced type.
 	if isNamespacedProxyType(opts.proxyType) {
-		lbls[labelPromProxyParentNamespace] = kube.TruncateLabelValue(opts.proxyLabels[LabelParentNamespace])
+		lbls[labelPromProxyParentNamespace] = kube.TruncateWithHash(opts.proxyLabels[LabelParentNamespace])
 	}
-	lbls[labelPromJob] = kube.TruncateLabelValue(promJobName(opts))
+	lbls[labelPromJob] = kube.TruncateWithHash(promJobName(opts))
 	return lbls
 }
 
@@ -262,11 +262,11 @@ func promJobName(opts *metricsOpts) string {
 func metricsSvcSelector(proxyLabels map[string]string, proxyType string) map[string]string {
 	sel := map[string]string{
 		labelPromProxyType:       proxyType,
-		labelPromProxyParentName: kube.TruncateLabelValue(proxyLabels[LabelParentName]),
+		labelPromProxyParentName: kube.TruncateWithHash(proxyLabels[LabelParentName]),
 	}
 	// Include namespace label for proxies created for a namespaced type.
 	if isNamespacedProxyType(proxyType) {
-		sel[labelPromProxyParentNamespace] = kube.TruncateLabelValue(proxyLabels[LabelParentNamespace])
+		sel[labelPromProxyParentNamespace] = kube.TruncateWithHash(proxyLabels[LabelParentNamespace])
 	}
 	return sel
 }

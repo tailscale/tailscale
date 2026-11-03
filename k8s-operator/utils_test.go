@@ -8,9 +8,11 @@ package kube
 import (
 	"strings"
 	"testing"
+
+	"tailscale.com/util/dnsname"
 )
 
-func TestTruncateLabelValue(t *testing.T) {
+func TestTruncateWithHash(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
@@ -43,36 +45,71 @@ func TestTruncateLabelValue(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := TruncateLabelValue(tt.input)
+			got := TruncateWithHash(tt.input)
 			if len(got) > 63 {
-				t.Errorf("TruncateLabelValue(%q) = %q (len %d), exceeds 63 chars", tt.input, got, len(got))
+				t.Errorf("TruncateWithHash(%q) = %q (len %d), exceeds 63 chars", tt.input, got, len(got))
 			}
 			if len(tt.input) <= 63 && got != tt.input {
-				t.Errorf("TruncateLabelValue(%q) = %q, want unchanged input", tt.input, got)
+				t.Errorf("TruncateWithHash(%q) = %q, want unchanged input", tt.input, got)
 			}
 			if len(tt.input) > 63 && got == tt.input {
-				t.Errorf("TruncateLabelValue(%q) was not truncated", tt.input)
+				t.Errorf("TruncateWithHash(%q) was not truncated", tt.input)
 			}
 		})
 	}
 }
 
-func TestTruncateLabelValueDeterministic(t *testing.T) {
+func TestTruncateWithHashDeterministic(t *testing.T) {
 	input := strings.Repeat("a", 100)
-	first := TruncateLabelValue(input)
+	first := TruncateWithHash(input)
 	for range 10 {
-		got := TruncateLabelValue(input)
+		got := TruncateWithHash(input)
 		if got != first {
 			t.Fatalf("non-deterministic: got %q, want %q", got, first)
 		}
 	}
 }
 
-func TestTruncateLabelValueUniqueness(t *testing.T) {
+func TestTruncateWithHashUniqueness(t *testing.T) {
 	// Two inputs sharing a long prefix but differing at the end should produce different outputs.
 	a := strings.Repeat("a", 100) + "-one"
 	b := strings.Repeat("a", 100) + "-two"
-	if TruncateLabelValue(a) == TruncateLabelValue(b) {
+	if TruncateWithHash(a) == TruncateWithHash(b) {
 		t.Errorf("collision: %q and %q produce the same truncated label", a, b)
+	}
+}
+
+func TestTruncateWithHashDNSLabel(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "short-hostname-unchanged",
+			input: "default-my-service",
+			want:  "default-my-service",
+		},
+		{
+			name:  "exactly-63-chars-unchanged",
+			input: strings.Repeat("a", 63),
+			want:  strings.Repeat("a", 63),
+		},
+		{
+			name:  "long-hostname-truncated",
+			input: "tailscale-external-services-harry1027133059-trefknee01-bee-oqggo-kinfe-0-g",
+			want:  "tailscale-external-services-harry1027133059-trefknee01-0908ae76",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := TruncateWithHash(tt.input)
+			if got != tt.want {
+				t.Errorf("TruncateWithHash(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+			if err := dnsname.ValidLabel(got); err != nil {
+				t.Errorf("TruncateWithHash(%q) = %q is not a valid DNS label: %v", tt.input, got, err)
+			}
+		})
 	}
 }
