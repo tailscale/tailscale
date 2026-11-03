@@ -44,9 +44,7 @@ func newWindowsImpl(includeLocalhost bool) osImpl {
 func (*windowsImpl) Close() error { return nil }
 
 func (im *windowsImpl) AppendListeningPorts(base []Port) ([]Port, error) {
-	// TODO(bradfitz): netstat.Get makes a bunch of garbage. Add an Append-style
-	// API to that package instead/additionally.
-	tab, err := netstat.Get()
+	tab, err := netstat.GetListeners()
 	if err != nil {
 		return nil, err
 	}

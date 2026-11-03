@@ -19,3 +19,23 @@ func TestGet(t *testing.T) {
 		t.Logf("Entry: %+v", e)
 	}
 }
+
+func BenchmarkGet(b *testing.B) {
+	benchmarkGet(b, Get)
+}
+
+func BenchmarkGetListeners(b *testing.B) {
+	benchmarkGet(b, GetListeners)
+}
+
+func benchmarkGet(b *testing.B, fn func() (*Table, error)) {
+	b.ReportAllocs()
+	for range b.N {
+		if _, err := fn(); err != nil {
+			if err == ErrNotImplemented {
+				b.Skip(err)
+			}
+			b.Fatal(err)
+		}
+	}
+}
