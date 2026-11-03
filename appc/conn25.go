@@ -38,7 +38,7 @@ func AppDNSRoutes(hasCap func(c nodecap.Cap) bool, self tailcfg.NodeView) map[st
 	for _, app := range apps {
 		// conn25 apps are provided under [AppConnectorAttrName] with the Mode
 		// field set to [appctype.AppConnectorModeMagicIP].
-		if app.Mode != appctype.AppConnectorModeMagicIP {
+		if app.Mode != appctype.MagicIP {
 			continue
 		}
 		for _, domain := range app.Domains {

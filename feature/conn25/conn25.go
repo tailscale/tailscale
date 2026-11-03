@@ -769,7 +769,7 @@ func configFromNodeView(n tailcfg.NodeView) (*config, error) {
 	}
 	var apps []appctype.Conn25Attr
 	for _, app := range unfilteredApps {
-		if app.Mode == appctype.AppConnectorModeMagicIP {
+		if app.Mode == appctype.MagicIP {
 			apps = append(apps, appctype.Conn25Attr{
 				Name:       app.Name,
 				Domains:    app.Domains,

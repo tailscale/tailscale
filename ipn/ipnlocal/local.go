@@ -6036,7 +6036,7 @@ func (b *LocalBackend) reconfigAppConnectorLocked(selfNode tailcfg.NodeView, pre
 	)
 	for _, attr := range attrs {
 		// See feature/conn25 for configuration of MagicIP connectors.
-		if attr.Mode == appctype.AppConnectorModeMagicIP {
+		if attr.Mode != "" && attr.Mode != appctype.Subnet {
 			continue
 		}
 		if slices.Contains(attr.Connectors, "*") || selfHasTag(attr.Connectors) {
