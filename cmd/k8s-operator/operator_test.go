@@ -2243,3 +2243,38 @@ func TestNodeHandlerForConnector(t *testing.T) {
 		}
 	})
 }
+
+func TestStateSecretHandlerForProxyGroup(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		labels map[string]string
+		want   []reconcile.Request
+	}{
+		{
+			name:   "state_secret",
+			labels: pgSecretLabels("test", kubetypes.LabelSecretTypeState),
+			want:   []reconcile.Request{{NamespacedName: types.NamespacedName{Name: "test"}}},
+		},
+		{
+			name:   "config_secret",
+			labels: pgSecretLabels("test", kubetypes.LabelSecretTypeConfig),
+		},
+		{
+			name: "unmanaged_secret",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-0",
+					Namespace: tsNamespace,
+					Labels:    tc.labels,
+				},
+			}
+			got := stateSecretHandlerForProxyGroup(t.Context(), secret)
+			if diff := cmp.Diff(got, tc.want); diff != "" {
+				t.Fatalf("unexpected reconcile requests (-got +want):\n%s", diff)
+			}
+		})
+	}
+}

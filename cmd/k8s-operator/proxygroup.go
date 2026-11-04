@@ -189,6 +189,21 @@ func (r *ProxyGroupReconciler) reconcilePG(ctx context.Context, tsClient tsclien
 		}
 	}
 
+	// State Secrets are precreated so that the operator can find and delete
+	// them when the ProxyGroup is deleted. Do this before anything that can
+	// block provisioning, so that the update removes the owner reference that
+	// older versions of the operator set.
+	stateSecrets := pgStateSecrets(pg, r.tsNamespace)
+	for _, sec := range stateSecrets {
+		if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, sec, func(s *corev1.Secret) {
+			s.ObjectMeta.Labels = sec.ObjectMeta.Labels
+			s.ObjectMeta.Annotations = sec.ObjectMeta.Annotations
+			s.ObjectMeta.OwnerReferences = sec.ObjectMeta.OwnerReferences
+		}); err != nil {
+			return r.notReadyErrf(pg, logger, "error provisioning state Secrets: %w", err)
+		}
+	}
+
 	proxyClassName := r.defaultProxyClass
 	if pg.Spec.ProxyClass != "" {
 		proxyClassName = pg.Spec.ProxyClass
@@ -334,18 +349,6 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, tsClient tscl
 			return notReady(reason, msg)
 		}
 		return r.notReadyErrf(pg, logger, "error provisioning config Secrets: %w", err)
-	}
-
-	// State secrets are precreated so we can use the ProxyGroup CR as their owner ref.
-	stateSecrets := pgStateSecrets(pg, r.tsNamespace)
-	for _, sec := range stateSecrets {
-		if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, sec, func(s *corev1.Secret) {
-			s.ObjectMeta.Labels = sec.ObjectMeta.Labels
-			s.ObjectMeta.Annotations = sec.ObjectMeta.Annotations
-			s.ObjectMeta.OwnerReferences = sec.ObjectMeta.OwnerReferences
-		}); err != nil {
-			return r.notReadyErrf(pg, logger, "error provisioning state Secrets: %w", err)
-		}
 	}
 
 	// auth mode kube-apiserver ProxyGroups use a statically created
@@ -604,9 +607,10 @@ func (r *ProxyGroupReconciler) cleanupDanglingResources(ctx context.Context, tsC
 	return nil
 }
 
-// maybeCleanup just deletes the device from the tailnet. All the kubernetes
-// resources linked to a ProxyGroup will get cleaned up via owner references
-// (which we can use because they are all in the same namespace).
+// maybeCleanup deletes the ProxyGroup's devices from the tailnet, then deletes
+// its state Secrets (see [pgStateSecrets]). The other Kubernetes resources
+// linked to a ProxyGroup get cleaned up via owner references (which we can use
+// because they are all in the same namespace).
 func (r *ProxyGroupReconciler) maybeCleanup(ctx context.Context, tsClient tsclient.Client, pg *tsapi.ProxyGroup) (bool, error) {
 	logger := r.logger(pg.Name)
 
@@ -632,6 +636,10 @@ func (r *ProxyGroupReconciler) maybeCleanup(ctx context.Context, tsClient tsclie
 	}
 	if err := maybeCleanupMetricsResources(ctx, mo, r.Client); err != nil {
 		return false, fmt.Errorf("error cleaning up metrics resources: %w", err)
+	}
+
+	if err := r.DeleteAllOf(ctx, &corev1.Secret{}, client.InNamespace(r.tsNamespace), client.MatchingLabels(pgSecretLabels(pg.Name, kubetypes.LabelSecretTypeState))); err != nil {
+		return false, fmt.Errorf("error deleting state Secrets: %w", err)
 	}
 
 	logger.Infof("cleaned up ProxyGroup resources")

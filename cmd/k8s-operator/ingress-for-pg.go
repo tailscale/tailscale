@@ -1014,6 +1014,30 @@ func cleanupCertResources(ctx context.Context, cl client.Client, tsNamespace str
 	return nil
 }
 
+// cleanupAllCertResources deletes the TLS Secrets and associated RBAC
+// resources for every domain of the ProxyGroup. It finds them by label, so it
+// does not need the ProxyGroup's state Secrets to work out the domain names.
+func cleanupAllCertResources(ctx context.Context, cl client.Client, tsNamespace, pgName string) error {
+	opts := []client.DeleteAllOfOption{
+		client.InNamespace(tsNamespace),
+		client.MatchingLabels{
+			kubetypes.LabelManaged: "true",
+			labelProxyGroup:        pgName,
+		},
+		client.HasLabels{labelDomain},
+	}
+	if err := cl.DeleteAllOf(ctx, &rbacv1.RoleBinding{}, opts...); err != nil {
+		return fmt.Errorf("error deleting cert RoleBindings for ProxyGroup %s: %w", pgName, err)
+	}
+	if err := cl.DeleteAllOf(ctx, &rbacv1.Role{}, opts...); err != nil {
+		return fmt.Errorf("error deleting cert Roles for ProxyGroup %s: %w", pgName, err)
+	}
+	if err := cl.DeleteAllOf(ctx, &corev1.Secret{}, opts...); err != nil {
+		return fmt.Errorf("error deleting cert Secrets for ProxyGroup %s: %w", pgName, err)
+	}
+	return nil
+}
+
 // requeueInterval returns a time duration between 5 and 10 minutes, which is
 // the period of time after which an HA Ingress, whose Tailscale Service has been newly
 // created or changed, needs to be requeued. This is to protect against

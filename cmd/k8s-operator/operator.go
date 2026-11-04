@@ -728,6 +728,7 @@ func runReconcilers(opts reconcilerOpts) {
 	nodeFilterForProxyGroup := handler.EnqueueRequestsFromMapFunc(nodeHandlerForProxyGroup(mgr.GetClient(), opts.defaultProxyClass, startlog))
 	saFilterForProxyGroup := handler.EnqueueRequestsFromMapFunc(serviceAccountHandlerForProxyGroup(mgr.GetClient(), startlog))
 	acmeSecretFilterForProxyGroup := handler.EnqueueRequestsFromMapFunc(acmeAccountsSecretHandlerForProxyGroup(mgr.GetClient(), opts.tailscaleNamespace, opts.sharedACMEAccountKey, startlog))
+	stateSecretFilterForProxyGroup := handler.EnqueueRequestsFromMapFunc(stateSecretHandlerForProxyGroup)
 	err = builder.ControllerManagedBy(mgr).
 		For(&tsapi.ProxyGroup{}).
 		Named("proxygroup-reconciler").
@@ -739,6 +740,8 @@ func runReconcilers(opts reconcilerOpts) {
 		// The shared ACME accounts Secret has no ProxyGroup owner ref, so
 		// watch it by name to react to its deletion/recreation.
 		Watches(&corev1.Secret{}, acmeSecretFilterForProxyGroup).
+		// State Secrets have no owner ref, so watch them by label.
+		Watches(&corev1.Secret{}, stateSecretFilterForProxyGroup).
 		Watches(&rbacv1.Role{}, ownedByProxyGroupFilter).
 		Watches(&rbacv1.RoleBinding{}, ownedByProxyGroupFilter).
 		Watches(&tsapi.ProxyClass{}, proxyClassFilterForProxyGroup).
@@ -1207,6 +1210,21 @@ func acmeAccountsSecretHandlerForProxyGroup(cl client.Client, tsNamespace string
 		}
 		return reqs
 	}
+}
+
+// stateSecretHandlerForProxyGroup enqueues the ProxyGroup that a state Secret
+// belongs to. State Secrets carry no owner reference, so the owner-based Secret
+// watch never matches them.
+func stateSecretHandlerForProxyGroup(_ context.Context, o client.Object) []reconcile.Request {
+	secret, ok := o.(*corev1.Secret)
+	if !ok || !isPGStateSecret(secret) {
+		return nil
+	}
+	pgName := secret.ObjectMeta.Labels[LabelParentName]
+	if pgName == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: pgName}}}
 }
 
 // serviceHandlerForIngress returns a handler for Service events for ingress
