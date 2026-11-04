@@ -842,11 +842,16 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 		if host, _, err := net.SplitHostPort(hostname); err == nil {
 			hostname = host
 		}
+		// DNS names are case-insensitive, and a trailing dot marks a name
+		// as fully qualified. Serve config keys are lowercase with no
+		// trailing dot, so normalize the Host header to match.
+		hostname = strings.ToLower(strings.TrimSuffix(hostname, "."))
 		if !strings.HasSuffix(hostname, tcd) {
 			hostname += tcd
 		}
 	} else {
-		hostname = r.TLS.ServerName
+		// TLS rejects a trailing dot in SNI but does not lowercase it.
+		hostname = strings.ToLower(r.TLS.ServerName)
 	}
 
 	sctx, ok := serveHTTPContextKey.ValueOk(r.Context())
@@ -1418,14 +1423,19 @@ func (b *LocalBackend) getTLSServeCertForPort(port uint16, forVIPService tailcfg
 		if cert, ok := b.getACMETLSALPNCert(hi); ok {
 			return cert, nil
 		}
-		_, ok := b.webServerConfig(hi.ServerName, forVIPService, port)
+		// Serve config keys and cert domains are lowercase; SNI is not
+		// guaranteed to be. The ACME challenge lookup above keeps the
+		// name as sent, since it is matched against the name the ACME
+		// server dials.
+		name := strings.ToLower(hi.ServerName)
+		_, ok := b.webServerConfig(name, forVIPService, port)
 		if !ok {
 			return nil, errors.New("no webserver configured for name/port")
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		pair, err := b.GetCertPEM(ctx, hi.ServerName)
+		pair, err := b.GetCertPEM(ctx, name)
 		if err != nil {
 			return nil, err
 		}
