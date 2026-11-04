@@ -31,6 +31,7 @@ import (
 
 	"tailscale.com/k8s-operator/apis/v1alpha1"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/net/dns/resolvconffile"
@@ -1981,7 +1982,7 @@ func Test_metricsResourceCreation(t *testing.T) {
 			LoadBalancerClass: new("tailscale"),
 		},
 	}
-	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}
+	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: tailscaled.ServiceMonitorCRD}}
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
 		WithObjects(pc, svc).
@@ -2049,7 +2050,7 @@ func Test_metricsResourceCreation(t *testing.T) {
 		pc.Spec.Metrics = nil
 	})
 	expectReconciled(t, sr, "default", "test")
-	expectMissing[corev1.Service](t, fc, "operator-ns", metricsResourceName(opts.stsName))
+	expectMissing[corev1.Service](t, fc, "operator-ns", tailscaled.MetricsResourceName(opts.stsName))
 	// ServiceMonitor gets garbage collected when Service gets deleted (it has OwnerReference of the Service
 	// object). We cannot test this using the fake client.
 }

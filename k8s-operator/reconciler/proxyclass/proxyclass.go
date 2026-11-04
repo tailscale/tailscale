@@ -37,6 +37,7 @@ import (
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler"
+	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstime"
 	"tailscale.com/util/clientmetric"
@@ -44,9 +45,6 @@ import (
 
 const (
 	reconcilerName = "proxyclass-reconciler"
-
-	// ServiceMonitorCRD is the name of the Prometheus ServiceMonitor CustomResourceDefinition.
-	ServiceMonitorCRD = "servicemonitors.monitoring.coreos.com"
 
 	// ReasonProxyClassValid is the condition reason used when a ProxyClass is valid and ready.
 	ReasonProxyClassValid = "ProxyClassValid"
@@ -237,12 +235,12 @@ func (r *Reconciler) validate(ctx context.Context, pc *tsapi.ProxyClass, logger 
 		}
 	}
 	if pc.Spec.Metrics != nil && pc.Spec.Metrics.ServiceMonitor != nil && pc.Spec.Metrics.ServiceMonitor.Enable {
-		found, err := hasServiceMonitorCRD(ctx, r.Client)
+		found, err := tailscaled.HasServiceMonitorCRD(ctx, r.Client)
 		if err != nil {
-			r.logger.Errorf("error retrieving %q CRD: %v", ServiceMonitorCRD, err)
+			r.logger.Errorf("error retrieving %q CRD: %v", tailscaled.ServiceMonitorCRD, err)
 			// best effort validation - don't error out here
 		} else if !found {
-			msg := fmt.Sprintf("ProxyClass defines that a ServiceMonitor custom resource should be created, but %q CRD was not found", ServiceMonitorCRD)
+			msg := fmt.Sprintf("ProxyClass defines that a ServiceMonitor custom resource should be created, but %q CRD was not found", tailscaled.ServiceMonitorCRD)
 			violations = append(violations, field.TypeInvalid(field.NewPath("spec", "metrics", "serviceMonitor"), "enable", msg))
 		}
 	}
@@ -269,16 +267,6 @@ func (r *Reconciler) validate(ctx context.Context, pc *tsapi.ProxyClass, logger 
 	return violations
 }
 
-func hasServiceMonitorCRD(ctx context.Context, cl client.Client) (bool, error) {
-	sm := &apiextensionsv1.CustomResourceDefinition{}
-	if err := cl.Get(ctx, types.NamespacedName{Name: ServiceMonitorCRD}, sm); apierrors.IsNotFound(err) {
-		return false, nil
-	} else if err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
 // maybeCleanup removes tailscale.com finalizer and ensures that the ProxyClass
 // is no longer counted towards k8s_proxyclass_resources.
 func (r *Reconciler) maybeCleanup(ctx context.Context, logger *zap.SugaredLogger, pc *tsapi.ProxyClass) error {
@@ -299,7 +287,7 @@ func proxyClassesWithServiceMonitor(cl client.Client, logger *zap.SugaredLogger)
 			return nil
 		}
 
-		if crd.Name != ServiceMonitorCRD {
+		if crd.Name != tailscaled.ServiceMonitorCRD {
 			logger.Warnf("ServiceMonitor CRD handler received an unexpected CRD %q", crd.Name)
 			return nil
 		}

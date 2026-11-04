@@ -21,6 +21,7 @@ import (
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler/proxyclass"
 	"tailscale.com/k8s-operator/reconciler/reconcilertest"
+	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/tstest"
 )
 
@@ -189,7 +190,7 @@ func TestProxyClass(t *testing.T) {
 	expectEvents(t, []string{"Warning ProxyClassInvalid " + wantMsg})
 
 	// 7. A ProxyClass with ServiceMonitor enabled in a cluster that has the ServiceMonitor CRD is valid.
-	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: proxyclass.ServiceMonitorCRD}}
+	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: tailscaled.ServiceMonitorCRD}}
 	mustCreate(t, crd)
 	mustReconcile(t, "test")
 	expectStatus(t, metav1.ConditionTrue, proxyclass.ReasonProxyClassValid, proxyclass.ReasonProxyClassValid)

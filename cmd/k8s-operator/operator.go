@@ -326,7 +326,7 @@ func runReconcilers(opts reconcilerOpts) {
 	// ServiceMonitor CRD applied after some of our resources that define ServiceMonitor creation. This selector
 	// ensures that we only watch the ServiceMonitor CRD and that we don't cache full contents of it.
 	serviceMonitorSelector := cache.ByObject{
-		Field:     fields.SelectorFromSet(fields.Set{"metadata.name": serviceMonitorCRD}),
+		Field:     fields.SelectorFromSet(fields.Set{"metadata.name": tailscaled.ServiceMonitorCRD}),
 		Transform: crdTransformer(startlog),
 	}
 
