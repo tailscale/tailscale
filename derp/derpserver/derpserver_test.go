@@ -40,6 +40,7 @@ import (
 	"golang.org/x/time/rate"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derpconst"
+	"tailscale.com/tstest/tlstest"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -2980,4 +2981,106 @@ func TestUnknownFrameSizeLimit(t *testing.T) {
 			t.Fatalf("server did not close the connection: %v", err)
 		}
 	})
+}
+
+func newBenchWriterClient(tb testing.TB, s *Server, useTLS bool) (*sclient, *writeCountingConn) {
+	tb.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		tb.Fatal(err)
+	}
+	defer ln.Close()
+	connOut, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tb.Cleanup(func() { connOut.Close() })
+	connIn, err := ln.Accept()
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tb.Cleanup(func() { connIn.Close() })
+
+	cc := &writeCountingConn{Conn: connOut}
+	var nc derp.Conn = cc
+	drain := connIn
+	if useTLS {
+		roots := x509.NewCertPool()
+		roots.AppendCertsFromPEM(tlstest.TestRootCA())
+		cli := tls.Client(connIn, &tls.Config{RootCAs: roots, ServerName: string(tlstest.Derper), MinVersion: tls.VersionTLS13})
+		drain = cli // its first Read runs the client side of the handshake
+		srv := tls.Server(cc, tlstest.Derper.ServerTLSConfig())
+		go io.Copy(io.Discard, drain)
+		if err := srv.Handshake(); err != nil {
+			tb.Fatalf("TLS handshake: %v", err)
+		}
+		nc = srv
+	} else {
+		go io.Copy(io.Discard, drain)
+	}
+
+	c := &sclient{
+		s:    s,
+		key:  key.NewNode().Public(),
+		nc:   nc,
+		bw:   &lazyBufioWriter{w: nc},
+		logf: logger.Discard,
+	}
+	c.runWriterFunc = c.runWriter
+	return c, cc
+}
+
+// BenchmarkWriterBatch measures a client's writer draining a batch of
+// queued packets in one pass, as [sclient.runWriter] does after a
+// wake, over a loopback connection. Each op enqueues batch packets of
+// msgsize bytes and runs the writer inline until it parks.
+func BenchmarkWriterBatch(b *testing.B) {
+	for _, transport := range []string{"tcp", "tls"} {
+		for _, size := range []int{100, 1300} {
+			for _, batch := range []int{1, 2, 4, 16} {
+				name := fmt.Sprintf("transport=%s/msgsize=%d/batch=%d", transport, size, batch)
+				b.Run(name, func(b *testing.B) { benchmarkWriterBatch(b, transport == "tls", size, batch) })
+			}
+		}
+	}
+}
+
+func benchmarkWriterBatch(b *testing.B, useTLS bool, size, batch int) {
+	s := New(key.NewNode(), logger.Discard)
+	defer s.Close()
+	if batch > s.perClientSendQueueDepth {
+		b.Fatalf("batch %d exceeds the send queue depth %d; the queue would drop", batch, s.perClientSendQueueDepth)
+	}
+
+	c, conn := newBenchWriterClient(b, s, useTLS)
+
+	src := key.NewNode().Public()
+	payload := bytes.Repeat([]byte{'x'}, size)
+
+	b.SetBytes(int64(batch * size))
+	b.ReportAllocs()
+	conn.writes.Store(0) // don't count the TLS handshake
+	b.ResetTimer()
+	for range b.N {
+		for range batch {
+			buf := s.getPacketBuf(size)
+			copy(*buf, payload)
+			p := pkt{bs: *buf, buf: buf, src: src, enqueuedAt: s.clock.Now()}
+			if _, _, ok := c.sendQueue.enqueue(s, p); !ok {
+				b.Fatal("enqueue failed")
+			}
+		}
+		// Run the writer inline, as the keepalive timer does
+		// ([sclient.onKeepAliveTimer]), so the pass is synchronous
+		// and drains exactly this batch before parking.
+		if !c.claimWriter(pendSendQueue) {
+			b.Fatal("writer was not parked")
+		}
+		c.runWriter()
+		if c.writeErr != nil {
+			b.Fatal(c.writeErr)
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(conn.writes.Load())/float64(b.N), "writes/op")
 }
