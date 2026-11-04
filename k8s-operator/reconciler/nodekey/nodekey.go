@@ -125,7 +125,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	} else if !done {
 		return reconcile.Result{RequeueAfter: shortRequeue}, nil
 	} else if err != nil {
-		return reconcile.Result{}, fmt.Errorf("failed to sign node key: %w", err)
+		return reconcile.Result{}, err
 	}
 
 	return reconcile.Result{}, nil
