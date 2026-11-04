@@ -46,6 +46,9 @@ func ParseRange(hdr string) (ranges []Range, ok bool) {
 	elems = strings.TrimLeft(elems, ","+ows)
 	for elem := range strings.SplitSeq(elems, ",") {
 		elem = strings.Trim(elem, ows) // per RFC 7230, section 7
+		if elem == "" {
+			continue // empty list elements are permitted per RFC 7230, section 7
+		}
 		switch {
 		case strings.HasPrefix(elem, "-"): // i.e., "-" suffix-length
 			n, ok := parseNumber(strings.TrimPrefix(elem, "-"))
