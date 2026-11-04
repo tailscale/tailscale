@@ -3347,9 +3347,14 @@ func (s *Server) ServeDebugTraffic(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// use 16KiB for the buffer to allow
+// batching more DERP frames into a single flush
+// within a single TLS record, reducing syscalls
+const bufioWriterSize = 16 << 10
+
 var bufioWriterPool = &sync.Pool{
 	New: func() any {
-		return bufio.NewWriterSize(io.Discard, 2<<10)
+		return bufio.NewWriterSize(io.Discard, bufioWriterSize)
 	},
 }
 
