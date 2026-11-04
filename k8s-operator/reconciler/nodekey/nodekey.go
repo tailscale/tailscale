@@ -35,8 +35,11 @@ import (
 const (
 	reconcilerName = "nodekey-reconciler"
 
-	shortRequeue = 5 * time.Second
-	longRequeue  = 60 * time.Second
+	// requeueInterval is how often to recheck a device that can't be signed yet for reasons outside its state
+	// Secret, such as an untrusted operator key or a device missing from the operator's netmap.
+	// Reconciles are typically triggered by a change to the device's state Secret; this serves as a polling
+	// fallback for instances where the key cannot be signed yet.
+	requeueInterval = 60 * time.Second
 )
 
 var errOperatorUntrusted = errors.New("operator key is not trusted by the network")
@@ -116,9 +119,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	if done, err := r.signNodeKey(ctx, logger, secret); errors.Is(err, errOperatorUntrusted) {
-		return reconcile.Result{RequeueAfter: longRequeue}, nil
+		return reconcile.Result{RequeueAfter: requeueInterval}, nil
 	} else if !done {
-		return reconcile.Result{RequeueAfter: shortRequeue}, nil
+		return reconcile.Result{RequeueAfter: requeueInterval}, nil
 	} else if err != nil {
 		return reconcile.Result{}, err
 	}
