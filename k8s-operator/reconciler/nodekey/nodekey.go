@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -83,9 +84,10 @@ func NewReconciler(options ReconcilerOptions) *Reconciler {
 // operator's lock key. If the network is not locked, it does nothing.
 type Reconciler struct {
 	client.Client
-	logger      *zap.SugaredLogger
-	localClient LocalClient
-	tsNamespace string
+	logger            *zap.SugaredLogger
+	localClient       LocalClient
+	tsNamespace       string
+	operatorUntrusted atomic.Bool
 }
 
 // Register the Reconciler onto the given manager.Manager implementation.
@@ -160,8 +162,16 @@ func (r *Reconciler) signNodeKey(ctx context.Context, logger *zap.SugaredLogger,
 	if !slices.ContainsFunc(lockStatus.TrustedKeys, func(k ipnstate.TKAKey) bool {
 		return lockStatus.PublicKey.Equal(k.Key)
 	}) {
-		logger.Warnf("Operator key is not trusted by the network. Add %q to the trusted signer keys", lockStatus.PublicKey.CLIString())
+		level := zap.DebugLevel
+		if r.operatorUntrusted.CompareAndSwap(false, true) {
+			// Only warn once when trust is lost; then debug.
+			level = zap.WarnLevel
+		}
+		logger.Logf(level, "Operator key is not trusted by the network. Add %q to the trusted signer keys", lockStatus.PublicKey.CLIString())
 		return reconcile.Result{RequeueAfter: requeueInterval}, nil
+	}
+	if r.operatorUntrusted.CompareAndSwap(true, false) {
+		logger.Infof("Operator key %q is now trusted by the network", lockStatus.PublicKey.CLIString())
 	}
 
 	devicePeer := findTKAPeerByStableID(lockStatus.FilteredPeers, deviceID)
