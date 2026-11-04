@@ -11,7 +11,6 @@ package nodekey
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -41,8 +40,6 @@ const (
 	// fallback for instances where the key cannot be signed yet.
 	requeueInterval = 60 * time.Second
 )
-
-var errOperatorUntrusted = errors.New("operator key is not trusted by the network")
 
 type (
 	// The LocalClient interface describes the subset of the operator's local tailscaled API used to inspect Tailnet
@@ -118,43 +115,32 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, nil
 	}
 
-	if done, err := r.signNodeKey(ctx, logger, secret); errors.Is(err, errOperatorUntrusted) {
-		return reconcile.Result{RequeueAfter: requeueInterval}, nil
-	} else if !done {
-		return reconcile.Result{RequeueAfter: requeueInterval}, nil
-	} else if err != nil {
-		return reconcile.Result{}, err
-	}
-
-	return reconcile.Result{}, nil
+	return r.signNodeKey(ctx, logger, secret)
 }
 
 // signNodeKey signs the device node key with the operator's lock key if the
 // network is locked. It does nothing if the network is not locked or if the
 // device node key is already signed.
-// If the device is not ready to be signed yet and should be requeued, it returns
-// false. If the device is already signed, the state secret is missing
-// required information, or an error occurs, it returns true.
-func (r *Reconciler) signNodeKey(ctx context.Context, logger *zap.SugaredLogger, secret *corev1.Secret) (bool, error) {
+func (r *Reconciler) signNodeKey(ctx context.Context, logger *zap.SugaredLogger, secret *corev1.Secret) (reconcile.Result, error) {
 	deviceID := tailcfg.StableNodeID(secret.Data[kubetypes.KeyDeviceID])
 	if deviceID.IsZero() {
 		logger.Debug("NodeID is empty. It may not be populated yet")
-		return true, nil
+		return reconcile.Result{}, nil
 	}
 
 	lockStatus, err := r.localClient.TailnetLockStatus(ctx)
 	if err != nil {
-		return true, fmt.Errorf("failed to get tailnet lock status: %w", err)
+		return reconcile.Result{}, fmt.Errorf("failed to get tailnet lock status: %w", err)
 	}
 
 	if !lockStatus.Enabled {
 		logger.Debugf("Tailnet is not locked, skipping node key signing")
-		return true, nil
+		return reconcile.Result{}, nil
 	}
 
 	if findTKAPeerByStableID(lockStatus.VisiblePeers, deviceID) != nil {
 		// Device is a visible peer, no need to sign its node key.
-		return true, nil
+		return reconcile.Result{}, nil
 	}
 
 	// Check if the operator's lock key is trusted.
@@ -162,38 +148,39 @@ func (r *Reconciler) signNodeKey(ctx context.Context, logger *zap.SugaredLogger,
 		return lockStatus.PublicKey.Equal(k.Key)
 	}) {
 		logger.Warnf("Operator key is not trusted by the network. Add %q to the trusted signer keys", lockStatus.PublicKey.CLIString())
-		return true, errOperatorUntrusted
+		return reconcile.Result{RequeueAfter: requeueInterval}, nil
 	}
 
 	devicePeer := findTKAPeerByStableID(lockStatus.FilteredPeers, deviceID)
 	if devicePeer == nil {
 		logger.Debugf("Device %q is not found in filtered peers list, deferring signing", deviceID)
-		return false, nil
+		return reconcile.Result{RequeueAfter: requeueInterval}, nil
 	}
 
 	nodeKeyEncoded := secret.Data[kubetypes.KeyNodeKey]
 	if len(nodeKeyEncoded) == 0 {
 		logger.Debugf("Device %q state secret does not contain the node key; waiting for update", deviceID)
 		// No requeue; wait for state secret watch to trigger.
-		return true, nil
+		return reconcile.Result{}, nil
 	}
 	var nodeKey key.NodePublic
 	if err := nodeKey.UnmarshalText(nodeKeyEncoded); err != nil {
-		return true, fmt.Errorf("failed to unmarshal device node key: %w", err)
+		return reconcile.Result{}, fmt.Errorf("failed to unmarshal device node key: %w", err)
 	}
 	if nodeKey != devicePeer.NodeKey {
 		logger.Warnf("Device %q peer key from control (%s) does not match key in device state (%s)", deviceID, devicePeer.NodeKey.ShortString(), nodeKey.ShortString())
-		return false, nil
+		// May be a lagging netmap update in the operator; requeue.
+		return reconcile.Result{RequeueAfter: requeueInterval}, nil
 	}
 
 	// Lock is enabled, but the device node key is not signed yet.
 	logger.Infof("Network is locked. Attempting to sign device node key with operator key %q", lockStatus.PublicKey.CLIString())
 
 	if err := r.localClient.TailnetLockSign(ctx, nodeKey, nil); err != nil {
-		return true, fmt.Errorf("failed to sign node key: %w", err)
+		return reconcile.Result{}, fmt.Errorf("failed to sign node key: %w", err)
 	}
 
-	return true, nil
+	return reconcile.Result{}, nil
 }
 
 func findTKAPeerByStableID(peers []*ipnstate.TKAPeer, deviceID tailcfg.StableNodeID) *ipnstate.TKAPeer {
