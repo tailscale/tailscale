@@ -2194,7 +2194,9 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		//
 		// Otherwise, it might briefly show the exit node as offline and display a warning,
 		// if the node wasn't online or wasn't advertising default routes in the previous netmap.
-		b.refreshExitNodeLocked()
+		if b.refreshExitNodeLocked() {
+			b.sendLocked(ipn.Notify{Prefs: new(b.pm.CurrentPrefs())})
+		}
 	}
 	if st.URL != "" {
 		b.logf("Received auth URL: %.20v...", st.URL)
@@ -2525,15 +2527,17 @@ var (
 func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bool) {
 	defer b.CheckDeadlocks()()
 
-	var notify *ipn.Notify // non-nil if we need to send a Notify
-	defer func() {
-		if notify != nil {
-			b.send(*notify)
-		}
-	}()
-
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	var notify *ipn.Notify // non-nil if we need to send a Notify
+	defer func() {
+		// Sent while b.mu is still held, so it reflects the state this
+		// delta produced and nothing newer.
+		if notify != nil {
+			b.sendLocked(*notify)
+		}
+	}()
 
 	cn := b.currentNode()
 	// Filter the mutations through tailnet lock before applying them.
@@ -2608,6 +2612,25 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		b.e.MarkDevicePeerForHandshake(k)
 	}
 
+	// This delta can change which exit node the prefs resolve to. An
+	// ExitNodeIP with no matching peer stays unresolved, and so does an
+	// AutoExitNode while no exit node is reachable. An unresolved exit
+	// node keeps traffic blackholed until it is resolved again. A selected
+	// auto exit node can also go offline or be removed. The full-netmap
+	// path resolves the exit node in
+	// [LocalBackend.setControlClientStatusLocked]. Resolve it here too,
+	// before the reconfig below, so the routes are installed once.
+	if b.exitNodeDeltaNeedsResolveLocked(muts, deltaRes.RemovedPeers) && b.resolveExitNodeLocked() {
+		// Deliver the new prefs in the same Notify as the peer changes
+		// below, so a GUI never sees prefs select a peer it has not been
+		// told about.
+		if notify == nil {
+			notify = &ipn.Notify{}
+		}
+		notify.Prefs = new(b.pm.CurrentPrefs())
+		needsAuthReconfig = true
+	}
+
 	// Force a full authReconfig + SetSelfNode on any peer add or
 	// remove. The WireGuard device itself no longer depends on this:
 	// the SyncDevicePeer calls above keep its peer set delta-correct,
@@ -2626,25 +2649,6 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 			}
 		}
 		b.authReconfigLocked()
-	}
-
-	// If auto exit nodes are enabled and our exit node went offline,
-	// we need to schedule picking a new one.
-	// TODO(nickkhyl): move the auto exit node logic to a feature package.
-	if prefs := b.pm.CurrentPrefs(); prefs.AutoExitNode().IsSet() {
-		exitNodeID := prefs.ExitNodeID()
-		for _, m := range muts {
-			mo, ok := m.(netmap.NodeMutationOnline)
-			if !ok || mo.Online {
-				continue
-			}
-			n, ok := cn.NodeByID(m.NodeIDBeingMutated())
-			if !ok || n.StableID() != exitNodeID {
-				continue
-			}
-			b.refreshExitNodeLocked()
-			break
-		}
 	}
 
 	// TODO(sfllaw): If [buildfeatures.HasRouteCheck] is enabled,
@@ -2685,7 +2689,9 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	// into full Nodes for watchers that asked for PeerChanges but not
 	// PeerPatches).
 	if peersUpsertedOrRemoved || mutationsAreWorthyOfTellingIPNBus(muts) {
-		notify = &ipn.Notify{}
+		if notify == nil {
+			notify = &ipn.Notify{}
+		}
 		for _, m := range muts {
 			switch m := m.(type) {
 			case netmap.NodeMutationUpsert:
@@ -2699,13 +2705,81 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		} else if !ok {
 			b.logf("[unexpected] got mutations worthy of telling IPN bus but failed to convert to peer changes")
 		}
-	} else if testenv.InTest() {
+	} else if testenv.InTest() && notify == nil {
 		// In tests, send an empty Notify as a wake-up so end-to-end
 		// integration tests in another repo can check on the status of
 		// LocalBackend after processing deltas.
 		notify = new(ipn.Notify)
 	}
 	return true
+}
+
+// exitNodeDeltaNeedsResolveLocked reports whether a delta can change the
+// result of [LocalBackend.resolveExitNodeInPrefsLocked]. muts are the
+// mutations that were applied, and removed are the stable IDs of the peers
+// they removed.
+//
+// An ExitNodeIP is resolved by one map lookup, so any upserted peer qualifies
+// while an ExitNodeIP is set. Resolving an AutoExitNode walks every peer, so
+// that only qualifies when the delta affects the selection. While no exit
+// node has been selected yet, an exit node being upserted or coming online
+// qualifies. Once one is selected, that exit node going offline, losing its
+// exit routes, or being removed qualifies.
+//
+// TODO(nickkhyl): move the auto exit node logic to a feature package.
+//
+// b.mu must be held.
+func (b *LocalBackend) exitNodeDeltaNeedsResolveLocked(muts []netmap.NodeMutation, removed []tailcfg.StableNodeID) bool {
+	if !buildfeatures.HasUseExitNode {
+		return false
+	}
+	cn := b.currentNode()
+	if cn.NetMap() == nil {
+		return false
+	}
+	prefs := b.pm.CurrentPrefs()
+	byIP := prefs.ExitNodeIP().IsValid()
+	auto := prefs.AutoExitNode().IsSet()
+	if !byIP && !auto {
+		return false
+	}
+	exitNodeID := prefs.ExitNodeID()
+	if auto && slices.Contains(removed, exitNodeID) {
+		return true
+	}
+	// The delta has already been applied, so the peer set is current. An
+	// auto exit node whose selected peer is not in it counts as unresolved,
+	// whether the prefs hold [ipn.UnresolvedExitNodeID] or a stale node ID.
+	_, selectedPresent := cn.PeerByStableID(exitNodeID)
+	autoUnresolved := auto && !selectedPresent
+	autoSelected := auto && selectedPresent
+	for _, m := range muts {
+		switch m := m.(type) {
+		case netmap.NodeMutationUpsert:
+			if byIP || (autoUnresolved && tsaddr.ContainsExitRoutes(m.Node.AllowedIPs())) {
+				return true
+			}
+			if autoSelected && m.Node.StableID() == exitNodeID &&
+				(!m.Node.Online().Get() || !tsaddr.ContainsExitRoutes(m.Node.AllowedIPs())) {
+				return true
+			}
+		case netmap.NodeMutationOnline:
+			if !auto {
+				continue
+			}
+			n, ok := cn.NodeByID(m.NodeIDBeingMutated())
+			if !ok {
+				continue
+			}
+			if autoUnresolved && m.Online && tsaddr.ContainsExitRoutes(n.AllowedIPs()) {
+				return true
+			}
+			if autoSelected && !m.Online && n.StableID() == exitNodeID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func netmapDeltaNeedsAuthReconfig(cn *nodeBackend, muts []netmap.NodeMutation) bool {
@@ -7358,25 +7432,33 @@ func (b *LocalBackend) RefreshExitNode() {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.refreshExitNodeLocked()
+	if b.refreshExitNodeLocked() {
+		b.sendLocked(ipn.Notify{Prefs: new(b.pm.CurrentPrefs())})
+	}
 }
 
 // refreshExitNodeLocked is like RefreshExitNode but requires b.mu be held.
-func (b *LocalBackend) refreshExitNodeLocked() {
+// If it reports true, the caller must send an [ipn.Notify] carrying
+// b.pm.CurrentPrefs().
+func (b *LocalBackend) refreshExitNodeLocked() (changed bool) {
 	syncs.RequiresMutex(&b.mu)
 
-	if b.resolveExitNodeLocked() {
-		b.authReconfigLocked()
+	if !b.resolveExitNodeLocked() {
+		return false
 	}
+	b.authReconfigLocked()
+	return true
 }
 
 // resolveExitNodeLocked determines which exit node to use based on the current prefs
 // and netmap. It updates the exit node ID in the prefs if needed, updates the
-// exit node ID in the hostinfo if needed, sends a notification to clients, and
-// returns true if the exit node has changed.
+// exit node ID in the hostinfo if needed, and reports whether the current
+// prefs changed as a result.
 //
-// It is the caller's responsibility to reconfigure routes and actually
-// start using the selected exit node, if needed.
+// If it reports true, the caller must send an [ipn.Notify] carrying
+// b.pm.CurrentPrefs(), reconfigure routes, and actually start using the
+// selected exit node, if needed. It reports false if the prefs could not
+// be saved, so the caller acts only on prefs that are in effect.
 //
 // b.mu must be held.
 func (b *LocalBackend) resolveExitNodeLocked() (changed bool) {
@@ -7387,9 +7469,10 @@ func (b *LocalBackend) resolveExitNodeLocked() (changed bool) {
 	}
 
 	nm := b.currentNode().NetMap()
-	prefs := b.pm.CurrentPrefs().AsStruct()
+	oldPrefs := b.pm.CurrentPrefs()
+	prefs := oldPrefs.AsStruct()
 	if !b.resolveExitNodeInPrefsLocked(prefs) {
-		return
+		return false
 	}
 
 	if err := b.pm.SetPrefs(prefs.View(), ipn.NetworkProfile{
@@ -7398,6 +7481,9 @@ func (b *LocalBackend) resolveExitNodeLocked() (changed bool) {
 		DisplayName:  nm.TailnetDisplayName(),
 	}); err != nil {
 		b.logf("failed to save exit node changes: %v", err)
+	}
+	if oldPrefs.Equals(b.pm.CurrentPrefs()) {
+		return false
 	}
 
 	// Send the resolved exit node to control via [tailcfg.Hostinfo].
@@ -7413,7 +7499,6 @@ func (b *LocalBackend) resolveExitNodeLocked() (changed bool) {
 		b.goTracker.Go(b.doSetHostinfoFilterServices)
 	}
 
-	b.sendToLocked(ipn.Notify{Prefs: new(prefs.View())}, allClients)
 	return true
 }
 
