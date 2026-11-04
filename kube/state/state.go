@@ -22,6 +22,8 @@ import (
 	"tailscale.com/kube/kubetypes"
 	klc "tailscale.com/kube/localclient"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
 )
 
 const (
@@ -30,6 +32,7 @@ const (
 	keyDeviceID   = ipn.StateKey(kubetypes.KeyDeviceID)
 	keyDeviceIPs  = ipn.StateKey(kubetypes.KeyDeviceIPs)
 	keyDeviceFQDN = ipn.StateKey(kubetypes.KeyDeviceFQDN)
+	keyNodeKey    = ipn.StateKey(kubetypes.KeyNodeKey)
 )
 
 // SetInitialKeys sets Pod UID and cap ver.
@@ -49,7 +52,7 @@ func SetInitialKeys(store ipn.StateStore, podUID string) error {
 // cancelled or it hits an error. It seeds the self node from the initial
 // status and then watches the IPN bus for SelfChange notifications, which
 // fire whenever the self node changes.
-func KeepKeysUpdated(ctx context.Context, store ipn.StateStore, lc klc.LocalClient) error {
+func KeepKeysUpdated(ctx context.Context, logf logger.Logf, store ipn.StateStore, lc klc.LocalClient) error {
 	w, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialStatus)
 	if err != nil {
 		return fmt.Errorf("error watching IPN bus: %w", err)
@@ -59,6 +62,7 @@ func KeepKeysUpdated(ctx context.Context, store ipn.StateStore, lc klc.LocalClie
 	var prevDeviceID tailcfg.StableNodeID
 	var prevFQDN string
 	var prevAddrs []netip.Prefix
+	var prevNodeKey key.NodePublic
 
 	// storeSelf writes the device ID, FQDN, and IP state keys derived
 	// from the given self node, skipping any whose value is unchanged
@@ -69,6 +73,23 @@ func KeepKeysUpdated(ctx context.Context, store ipn.StateStore, lc klc.LocalClie
 				return fmt.Errorf("failed to store device ID in state: %w", err)
 			}
 			prevDeviceID = deviceID
+		}
+
+		if self.Key() != prevNodeKey {
+			// The key supplied by control is used to detect changes,
+			// but we only trust the key supplied by the local client.
+			if ls, err := lc.TailnetLockStatus(ctx); err != nil {
+				logf("Failed to get tailnet lock status: %v", err)
+			} else if ls.NodeKey != nil {
+				nodeKeyEncoded, err := ls.NodeKey.MarshalText()
+				if err != nil {
+					return fmt.Errorf("failed to encode node key: %w", err)
+				}
+				if err := store.WriteState(keyNodeKey, nodeKeyEncoded); err != nil {
+					return fmt.Errorf("failed to store node key in state: %w", err)
+				}
+				prevNodeKey = self.Key()
+			}
 		}
 
 		if fqdn := self.Name(); fqdn != prevFQDN {
@@ -126,6 +147,7 @@ func selfNodeFromPeerStatus(ps *ipnstate.PeerStatus) tailcfg.NodeView {
 	n := &tailcfg.Node{
 		StableID: ps.ID,
 		Name:     ps.DNSName,
+		Key:      ps.PublicKey,
 	}
 	for _, ip := range ps.TailscaleIPs {
 		n.Addresses = append(n.Addresses, netip.PrefixFrom(ip, ip.BitLen()))

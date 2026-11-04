@@ -45,8 +45,8 @@ type (
 	// The LocalClient interface describes the subset of the operator's local tailscaled API used to inspect Tailnet
 	// Lock state and sign node keys.
 	LocalClient interface {
-		NetworkLockStatus(ctx context.Context) (*ipnstate.TailnetLockStatus, error)
-		NetworkLockSign(ctx context.Context, nodeKey key.NodePublic, verifier []byte) error
+		TailnetLockStatus(ctx context.Context) (*ipnstate.TailnetLockStatus, error)
+		TailnetLockSign(ctx context.Context, nodeKey key.NodePublic, rotationPublic []byte) error
 	}
 
 	// The ReconcilerOptions type contains configuration values for the Reconciler.
@@ -139,9 +139,9 @@ func (r *Reconciler) signNodeKey(ctx context.Context, logger *zap.SugaredLogger,
 		return true, nil
 	}
 
-	lockStatus, err := r.localClient.NetworkLockStatus(ctx)
+	lockStatus, err := r.localClient.TailnetLockStatus(ctx)
 	if err != nil {
-		return true, fmt.Errorf("failed to get network lock status: %w", err)
+		return true, fmt.Errorf("failed to get tailnet lock status: %w", err)
 	}
 
 	if !lockStatus.Enabled {
@@ -168,10 +168,25 @@ func (r *Reconciler) signNodeKey(ctx context.Context, logger *zap.SugaredLogger,
 		return false, nil
 	}
 
+	nodeKeyEncoded := secret.Data[kubetypes.KeyNodeKey]
+	if len(nodeKeyEncoded) == 0 {
+		logger.Debugf("Device %q state secret does not contain the node key; waiting for update", deviceID)
+		// No requeue; wait for state secret watch to trigger.
+		return true, nil
+	}
+	var nodeKey key.NodePublic
+	if err := nodeKey.UnmarshalText(nodeKeyEncoded); err != nil {
+		return true, fmt.Errorf("failed to unmarshal device node key: %w", err)
+	}
+	if nodeKey != devicePeer.NodeKey {
+		logger.Warnf("Device %q peer key from control (%s) does not match key in device state (%s)", deviceID, devicePeer.NodeKey.ShortString(), nodeKey.ShortString())
+		return false, nil
+	}
+
 	// Lock is enabled, but the device node key is not signed yet.
 	logger.Infof("Network is locked. Attempting to sign device node key with operator key %q", lockStatus.PublicKey.CLIString())
 
-	if err := r.localClient.NetworkLockSign(ctx, devicePeer.NodeKey, []byte(lockStatus.PublicKey.Verifier())); err != nil {
+	if err := r.localClient.TailnetLockSign(ctx, nodeKey, nil); err != nil {
 		return true, fmt.Errorf("failed to sign node key: %w", err)
 	}
 

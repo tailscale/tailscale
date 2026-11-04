@@ -154,6 +154,7 @@ import (
 	"tailscale.com/kube/metrics"
 	"tailscale.com/kube/services"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
 	"tailscale.com/util/backoff"
@@ -710,9 +711,10 @@ authLoop:
 
 	var (
 		startupTasksDone       = false
-		currentIPs             deephash.Sum // tailscale IPs assigned to device
-		currentDeviceID        deephash.Sum // device ID
-		currentDeviceEndpoints deephash.Sum // device FQDN and IPs
+		currentIPs             deephash.Sum   // tailscale IPs assigned to device
+		currentDeviceID        deephash.Sum   // device ID
+		currentDeviceEndpoints deephash.Sum   // device FQDN and IPs
+		currentNodeKey         key.NodePublic // node key last reported by control; change triggers re-read of the local key
 
 		currentEgressIPs deephash.Sum
 
@@ -873,6 +875,18 @@ runLoop:
 			if hasKubeStateStore(cfg) && deephash.Update(&currentDeviceID, &deviceID) {
 				if err := kc.storeDeviceID(ctx, deviceID); err != nil {
 					return fmt.Errorf("storing device ID in Kubernetes Secret: %w", err)
+				}
+			}
+			if hasKubeStateStore(cfg) && self.Key() != currentNodeKey {
+				// The key supplied by control is used to detect changes,
+				// but we only trust the key supplied by the local client.
+				if ls, err := client.TailnetLockStatus(ctx); err != nil {
+					log.Printf("Failed to retrieve tailnet lock status: %v", err)
+				} else if ls.NodeKey != nil {
+					if err := kc.storeNodeKey(ctx, *ls.NodeKey); err != nil {
+						return fmt.Errorf("storing node key in Kubernetes Secret: %w", err)
+					}
+					currentNodeKey = self.Key()
 				}
 			}
 			if cfg.TailnetTargetFQDN != "" {
