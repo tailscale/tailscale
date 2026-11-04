@@ -1521,14 +1521,14 @@ var fakeTailscaled []byte
 //go:embed test_tailscale.sh
 var fakeTailscale []byte
 
+// testLocalNodeKey is the node key the fake LocalAPI reports from tailscaled's local state.
+var testLocalNodeKey = key.NewNode().Public()
+
 // localAPI is a minimal fake tailscaled LocalAPI server that presents
 // just enough functionality for containerboot to function
 // correctly. In practice this means it only supports querying
 // tailscaled status, and panics on all other uses to make it very
 // obvious that something unexpected happened.
-// testLocalNodeKey is the node key the fake LocalAPI reports from tailscaled's local state.
-var testLocalNodeKey = key.NewNode().Public()
-
 type localAPI struct {
 	FSRoot string
 	Path   string // populated by Start
