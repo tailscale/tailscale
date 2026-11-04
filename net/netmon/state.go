@@ -62,16 +62,28 @@ func LocalAddresses() (regular, loopback []netip.Addr, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	return localAddresses(ifaces)
+}
+
+// localAddresses separates enumeration from policy so topology changes can be
+// tested without modifying the host's network interfaces.
+func localAddresses(ifaces []Interface) (regular, loopback []netip.Addr, err error) {
 	var regular4, regular6, linklocal4, ula6 []netip.Addr
 	for _, iface := range ifaces {
 		stdIf := iface.Interface
-		if !isUp(stdIf) || isProblematicInterface(stdIf) {
+		if stdIf == nil || !isUp(stdIf) || isProblematicInterface(stdIf) || isTailscaleInterface(stdIf.Name, nil) {
 			// Skip down interfaces and ones that are
 			// problematic that we don't want to try to
 			// send Tailscale traffic over.
 			continue
 		}
 		ifcIsLoopback := isLoopback(stdIf)
+		// RFC 6598 addresses can belong to the underlay (for example, campus
+		// Wi-Fi or an ISP). Permit them on Ethernet-like interfaces, including
+		// bridges/veths, but keep filtering them on unclassified L3 tunnels.
+		// A range check alone cannot identify a Tailscale interface.
+		allowCGNAT := stdIf.Flags&net.FlagBroadcast != 0 &&
+			stdIf.Flags&(net.FlagLoopback|net.FlagPointToPoint) == 0
 
 		addrs, err := iface.Addrs()
 		if err != nil {
@@ -86,12 +98,9 @@ func LocalAddresses() (regular, loopback []netip.Addr, err error) {
 					continue
 				}
 				ip = ip.Unmap()
-				// TODO(apenwarr): don't special case cgNAT.
-				// In the general wireguard case, it might
-				// very well be something we can route to
-				// directly, because both nodes are
-				// behind the same CGNAT router.
-				if tsaddr.IsTailscaleIP(ip) {
+				// Never advertise Tailscale's IPv6 ULA, or CGNAT addresses on
+				// loopback/point-to-point/unknown non-broadcast interfaces.
+				if tsaddr.IsTailscaleIP(ip) && (!ip.Is4() || !allowCGNAT) {
 					continue
 				}
 				if ip.IsLoopback() || ifcIsLoopback {
@@ -562,10 +571,11 @@ func hasTailscaleIP(pfxs []netip.Prefix) bool {
 func isTailscaleInterface(name string, ips []netip.Prefix) bool {
 	// Sandboxed macOS and Plan9 (and anything else that explicitly calls SetTailscaleInterfaceProps).
 	tsIfName, err := TailscaleInterfaceName()
-	if err == nil {
-		// If we've been told the Tailscale interface name, use that.
-		return name == tsIfName
+	if err == nil && name == tsIfName {
+		return true
 	}
+	// A registered custom name does not make other Tailscale interfaces
+	// safe underlays. Keep the conventional-name/address checks below.
 
 	// The sandboxed app should (as of 1.92) set the tun interface name via SetTailscaleInterfaceProps
 	// early in the startup process.  The non-sandboxed app does not.

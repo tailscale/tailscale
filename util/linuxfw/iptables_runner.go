@@ -641,7 +641,7 @@ func (i *iptablesRunner) DelConnmarkSaveRule() error {
 // to describe a rule accepting traffic on a particular port to iptables. It is
 // separated out here to avoid repetition in AddMagicsockPortRule and
 // RemoveMagicsockPortRule, since it is important that the same rule is passed
-// to Append() and Delete().
+// to Insert() and Delete().
 func buildMagicsockPortRule(port uint16) []string {
 	return []string{"-p", "udp", "--dport", strconv.FormatUint(uint64(port), 10), "-j", "ACCEPT"}
 }
@@ -663,7 +663,10 @@ func (i *iptablesRunner) AddMagicsockPortRule(port uint16, network string) error
 
 	args := buildMagicsockPortRule(port)
 
-	if err := ipt.Append("filter", "ts-input", args...); err != nil {
+	// Encrypted transport must reach magicsock before the CGNAT spoofing
+	// drop. Only this UDP destination port is exempt; other CGNAT traffic
+	// still traverses the existing INPUT and FORWARD protections.
+	if err := ipt.Insert("filter", "ts-input", 1, args...); err != nil {
 		return fmt.Errorf("adding %v in filter/ts-input: %w", args, err)
 	}
 
