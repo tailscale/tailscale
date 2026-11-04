@@ -11,7 +11,6 @@ import (
 
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
-	"tailscale.com/ipn/ipnstate"
 )
 
 // LocalClient is roughly a subset of the local.Client struct's methods, used
@@ -21,7 +20,6 @@ type LocalClient interface {
 	SetServeConfig(context.Context, *ipn.ServeConfig) error
 	EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn.Prefs, error)
 	CertDomains(ctx context.Context) ([]string, error)
-	TailnetLockStatus(ctx context.Context) (*ipnstate.TailnetLockStatus, error)
 	CertIssuer
 }
 
@@ -63,8 +61,4 @@ func (lc *localClient) CertPair(ctx context.Context, domain string) ([]byte, []b
 
 func (lc *localClient) CertDomains(ctx context.Context) ([]string, error) {
 	return lc.lc.CertDomains(ctx)
-}
-
-func (lc *localClient) TailnetLockStatus(ctx context.Context) (*ipnstate.TailnetLockStatus, error) {
-	return lc.lc.TailnetLockStatus(ctx)
 }

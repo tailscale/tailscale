@@ -118,20 +118,6 @@ func TestContainerBoot(t *testing.T) {
 			Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
 		},
 	}
-	// Control's view of the node key differs from the key the fake LocalAPI reports
-	runningNotifyWithNodeKey := &ipn.Notify{
-		State: new(ipn.Running),
-		SelfChange: &tailcfg.Node{
-			StableID:  tailcfg.StableNodeID("myID"),
-			Key:       key.NewNode().Public(),
-			Name:      "test-node.test.ts.net.",
-			Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
-		},
-	}
-	localNodeKeyText, err := testLocalNodeKey.MarshalText()
-	if err != nil {
-		t.Fatal(err)
-	}
 	type testCase struct {
 		Env           map[string]string
 		KubeSecret    map[string]string
@@ -512,43 +498,6 @@ func TestContainerBoot(t *testing.T) {
 							"device_ips":        `["100.64.0.1"]`,
 							kubetypes.KeyCapVer: capver,
 							kubetypes.KeyPodUID: "some-pod-uid",
-						},
-					},
-				},
-			}
-		},
-		"kube_storage_node_key": func(env *testEnv) testCase {
-			return testCase{
-				Env: map[string]string{
-					"KUBERNETES_SERVICE_HOST":       env.kube.Host,
-					"KUBERNETES_SERVICE_PORT_HTTPS": env.kube.Port,
-					"POD_UID":                       "some-pod-uid",
-				},
-				KubeSecret: map[string]string{
-					"authkey": "tskey-key",
-				},
-				Phases: []phase{
-					{
-						WantCmds: []string{
-							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=kube:tailscale --statedir=/tmp --tun=userspace-networking",
-							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
-						},
-						WantKubeSecret: map[string]string{
-							"authkey":           "tskey-key",
-							kubetypes.KeyCapVer: capver,
-							kubetypes.KeyPodUID: "some-pod-uid",
-						},
-					},
-					{
-						Notify: runningNotifyWithNodeKey,
-						WantKubeSecret: map[string]string{
-							"authkey":               "tskey-key",
-							kubetypes.KeyDeviceFQDN: "test-node.test.ts.net.",
-							kubetypes.KeyDeviceID:   "myID",
-							kubetypes.KeyDeviceIPs:  `["100.64.0.1"]`,
-							kubetypes.KeyNodeKey:    string(localNodeKeyText),
-							kubetypes.KeyCapVer:     capver,
-							kubetypes.KeyPodUID:     "some-pod-uid",
 						},
 					},
 				},
@@ -1521,9 +1470,6 @@ var fakeTailscaled []byte
 //go:embed test_tailscale.sh
 var fakeTailscale []byte
 
-// testLocalNodeKey is the node key the fake LocalAPI reports from tailscaled's local state.
-var testLocalNodeKey = key.NewNode().Public()
-
 // localAPI is a minimal fake tailscaled LocalAPI server that presents
 // just enough functionality for containerboot to function
 // correctly. In practice this means it only supports querying
@@ -1676,13 +1622,6 @@ func (lc *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			panic(fmt.Sprintf("unsupported method %q", r.Method))
 		}
 	// In the localAPI ServeHTTP method
-	case "/localapi/v0/tka/status":
-		if r.Method != "GET" {
-			panic(fmt.Sprintf("unsupported method %q", r.Method))
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(&ipnstate.TailnetLockStatus{NodeKey: &testLocalNodeKey})
-		return
 	case "/localapi/v0/disconnect-control":
 		if r.Method != "POST" {
 			panic(fmt.Sprintf("unsupported method %q", r.Method))

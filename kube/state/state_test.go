@@ -7,20 +7,16 @@ package state
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"net/netip"
-	"reflect"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/ipn"
-	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/store"
 	klc "tailscale.com/kube/localclient"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
 
@@ -108,26 +104,16 @@ func TestKeepStateKeysUpdated(t *testing.T) {
 		writeChan: make(chan string),
 	}
 
-	// Control's view of the node key differs from tailscaled's reported key.
-	// Only the local key will be written to state.
-	var (
-		controlNodeKey  = key.NewNode().Public()
-		localNodeKey    = key.NewNode().Public()
-		rotatedCtrlKey  = key.NewNode().Public()
-		rotatedLocalKey = key.NewNode().Public()
-	)
-
 	errs := make(chan error)
 	notifyChan := make(chan ipn.Notify)
 	lc := &klc.FakeLocalClient{
 		FakeIPNBusWatcher: klc.FakeIPNBusWatcher{
 			NotifyChan: notifyChan,
 		},
-		TailnetLockStatusResult: &ipnstate.TailnetLockStatus{NodeKey: &localNodeKey},
 	}
 
 	go func() {
-		err := KeepKeysUpdated(t.Context(), t.Logf, store, lc)
+		err := KeepKeysUpdated(t.Context(), store, lc)
 		if err != nil {
 			errs <- fmt.Errorf("keepStateKeysUpdated returned with error: %w", err)
 		}
@@ -135,7 +121,6 @@ func TestKeepStateKeysUpdated(t *testing.T) {
 
 	for _, tc := range []struct {
 		name     string
-		setup    func()
 		notify   ipn.Notify
 		expected []string
 	}{
@@ -149,14 +134,12 @@ func TestKeepStateKeysUpdated(t *testing.T) {
 			notify: ipn.Notify{
 				SelfChange: &tailcfg.Node{
 					StableID:  "TESTCTRL00000001",
-					Key:       controlNodeKey,
 					Name:      "test-node.test.ts.net",
 					Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32"), netip.MustParsePrefix("fd7a:115c:a1e0:ab12:4843:cd96:0:1/128")},
 				},
 			},
 			expected: []string{
 				fmt.Sprintf("%s=%s", keyDeviceID, "TESTCTRL00000001"),
-				fmt.Sprintf("%s=%s", keyNodeKey, localNodeKey.String()),
 				fmt.Sprintf("%s=%s", keyDeviceFQDN, "test-node.test.ts.net"),
 				fmt.Sprintf("%s=%s", keyDeviceIPs, `["100.64.0.1","fd7a:115c:a1e0:ab12:4843:cd96:0:1"]`),
 			},
@@ -166,7 +149,6 @@ func TestKeepStateKeysUpdated(t *testing.T) {
 			notify: ipn.Notify{
 				SelfChange: &tailcfg.Node{
 					StableID:  "TESTCTRL00000001",
-					Key:       controlNodeKey, // unchanged; node key will not be updated
 					Name:      "updated.test.ts.net",
 					Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.250/32")},
 				},
@@ -176,49 +158,8 @@ func TestKeepStateKeysUpdated(t *testing.T) {
 				fmt.Sprintf("%s=%s", keyDeviceIPs, `["100.64.0.250"]`),
 			},
 		},
-		{
-			name: "node_key_status_error",
-			setup: func() {
-				lc.TailnetLockStatusErr = errors.New("tailnet lock status unavailable")
-				lc.TailnetLockStatusResult = &ipnstate.TailnetLockStatus{NodeKey: &rotatedLocalKey}
-			},
-			notify: ipn.Notify{
-				SelfChange: &tailcfg.Node{
-					StableID:  "TESTCTRL00000001",
-					Key:       rotatedCtrlKey,
-					Name:      "rotated.test.ts.net",
-					Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.250/32")},
-				},
-			},
-			// The node key is skipped and the remaining keys are still written.
-			expected: []string{
-				fmt.Sprintf("%s=%s", keyDeviceFQDN, "rotated.test.ts.net"),
-			},
-		},
-		{
-			// After `node_key_status_error`, ensure the node key still gets written
-			// even though control's key hasn't changed.
-			name: "node_key_retried_on_next_update",
-			setup: func() {
-				lc.TailnetLockStatusErr = nil
-			},
-			notify: ipn.Notify{
-				SelfChange: &tailcfg.Node{
-					StableID:  "TESTCTRL00000001",
-					Key:       rotatedCtrlKey,
-					Name:      "rotated.test.ts.net",
-					Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.250/32")},
-				},
-			},
-			expected: []string{
-				fmt.Sprintf("%s=%s", keyNodeKey, rotatedLocalKey.String()),
-			},
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.setup != nil {
-				tc.setup()
-			}
 			notifyChan <- tc.notify
 			for _, expected := range tc.expected {
 				select {
@@ -247,23 +188,4 @@ func (f fakeStore) ReadState(key ipn.StateKey) ([]byte, error) {
 func (f fakeStore) WriteState(key ipn.StateKey, value []byte) error {
 	f.writeChan <- fmt.Sprintf("%s=%s", key, value)
 	return nil
-}
-
-func TestSelfNodeFromPeerStatus(t *testing.T) {
-	nodeKey := key.NewNode().Public()
-	ps := &ipnstate.PeerStatus{
-		ID:           "TESTCTRL00000001",
-		DNSName:      "test-node.test.ts.net",
-		PublicKey:    nodeKey,
-		TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.64.0.1"), netip.MustParseAddr("fd7a:115c:a1e0:ab12:4843:cd96:0:1")},
-	}
-	want := &tailcfg.Node{
-		StableID:  "TESTCTRL00000001",
-		Name:      "test-node.test.ts.net",
-		Key:       nodeKey,
-		Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32"), netip.MustParsePrefix("fd7a:115c:a1e0:ab12:4843:cd96:0:1/128")},
-	}
-	if got := selfNodeFromPeerStatus(ps).AsStruct(); !reflect.DeepEqual(got, want) {
-		t.Errorf("selfNodeFromPeerStatus() = %+v, want %+v", got, want)
-	}
 }

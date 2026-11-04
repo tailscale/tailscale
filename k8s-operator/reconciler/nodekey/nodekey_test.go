@@ -7,6 +7,7 @@ package nodekey_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -20,12 +21,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"tailscale.com/client/local"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler/nodekey"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/types/persist"
 )
 
 var _ nodekey.LocalClient = (*local.Client)(nil)
@@ -86,15 +89,22 @@ func TestReconciler_Reconcile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const deviceID tailcfg.StableNodeID = "fake-node-id"
-	nodeKey := key.NewNode().Public()
-	nodeKeyText, err := nodeKey.MarshalText()
-	if err != nil {
-		t.Fatal(err)
-	}
-	otherNodeKeyText, err := key.NewNode().Public().MarshalText()
-	if err != nil {
-		t.Fatal(err)
+	const (
+		deviceID tailcfg.StableNodeID = "fake-node-id"
+
+		profileKey = "profile-test"
+	)
+
+	nodePrivate := key.NewNode()
+	nodeKey := nodePrivate.Public()
+
+	// profile returns an IPN profile as tailscaled writes it to the state Secret.
+	profile := func(p *persist.Persist) []byte {
+		b, err := json.Marshal(ipn.Prefs{Persist: p})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
 	}
 
 	tests := []struct {
@@ -106,8 +116,6 @@ func TestReconciler_Reconcile(t *testing.T) {
 		wantErr        bool
 	}{
 		{
-			// The base Secret has no node_key, as written by proxy images that predate it. That must not matter
-			// in an unlocked tailnet.
 			name:           "unlocked",
 			mutateFn:       func(sec *corev1.Secret, _ *fakeLocalClient) {},
 			expectedResult: reconcile.Result{},
@@ -149,8 +157,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 		},
 		{
 			name: "locked_signed",
-			mutateFn: func(sec *corev1.Secret, lc *fakeLocalClient) {
-				sec.Data[kubetypes.KeyNodeKey] = nodeKeyText
+			mutateFn: func(_ *corev1.Secret, lc *fakeLocalClient) {
 				lc.lockStatus = lockedStatus(deviceID, nodeKey)
 			},
 			expectedResult: reconcile.Result{},
@@ -159,8 +166,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 		},
 		{
 			name: "locked_sign_error",
-			mutateFn: func(sec *corev1.Secret, lc *fakeLocalClient) {
-				sec.Data[kubetypes.KeyNodeKey] = nodeKeyText
+			mutateFn: func(_ *corev1.Secret, lc *fakeLocalClient) {
 				lc.lockStatus = lockedStatus(deviceID, nodeKey)
 				lc.signErr = errors.New("signing failed")
 			},
@@ -172,8 +178,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 		},
 		{
 			name: "locked_operator_untrusted",
-			mutateFn: func(sec *corev1.Secret, lc *fakeLocalClient) {
-				sec.Data[kubetypes.KeyNodeKey] = nodeKeyText
+			mutateFn: func(_ *corev1.Secret, lc *fakeLocalClient) {
 				lc.lockStatus = lockedStatus(deviceID, nodeKey)
 				lc.lockStatus.TrustedKeys = nil
 			},
@@ -183,8 +188,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 		},
 		{
 			name: "locked_device_not_filtered_peer",
-			mutateFn: func(sec *corev1.Secret, lc *fakeLocalClient) {
-				sec.Data[kubetypes.KeyNodeKey] = nodeKeyText
+			mutateFn: func(_ *corev1.Secret, lc *fakeLocalClient) {
 				lc.lockStatus = lockedStatus(deviceID, nodeKey)
 				lc.lockStatus.FilteredPeers = nil
 			},
@@ -194,8 +198,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 		},
 		{
 			name: "locked_device_visible_peer",
-			mutateFn: func(sec *corev1.Secret, lc *fakeLocalClient) {
-				sec.Data[kubetypes.KeyNodeKey] = nodeKeyText
+			mutateFn: func(_ *corev1.Secret, lc *fakeLocalClient) {
 				lc.lockStatus = lockedStatus(deviceID, nodeKey)
 				lc.lockStatus.VisiblePeers, lc.lockStatus.FilteredPeers = lc.lockStatus.FilteredPeers, nil
 			},
@@ -203,28 +206,43 @@ func TestReconciler_Reconcile(t *testing.T) {
 			expectedLookup: true,
 		},
 		{
-			name: "locked_missing_node_key",
-			mutateFn: func(_ *corev1.Secret, lc *fakeLocalClient) {
+			name: "missing_profile",
+			mutateFn: func(sec *corev1.Secret, lc *fakeLocalClient) {
+				delete(sec.Data, string(ipn.CurrentProfileStateKey))
 				lc.lockStatus = lockedStatus(deviceID, nodeKey)
 			},
-			// No requeue: the proxy writing node_key triggers a new reconcile via the Secret watch.
+			// No requeue: tailscaled writing its profile triggers a new reconcile via the Secret watch.
 			expectedResult: reconcile.Result{},
-			expectedLookup: true,
 		},
 		{
-			name: "locked_malformed_node_key",
+			name: "profile_without_persist",
 			mutateFn: func(sec *corev1.Secret, lc *fakeLocalClient) {
-				sec.Data[kubetypes.KeyNodeKey] = []byte("not-a-node-key")
+				sec.Data[profileKey] = profile(nil)
 				lc.lockStatus = lockedStatus(deviceID, nodeKey)
 			},
 			expectedResult: reconcile.Result{},
-			expectedLookup: true,
+		},
+		{
+			name: "profile_without_node_key",
+			mutateFn: func(sec *corev1.Secret, lc *fakeLocalClient) {
+				sec.Data[profileKey] = profile(&persist.Persist{})
+				lc.lockStatus = lockedStatus(deviceID, nodeKey)
+			},
+			expectedResult: reconcile.Result{},
+		},
+		{
+			name: "malformed_profile",
+			mutateFn: func(sec *corev1.Secret, lc *fakeLocalClient) {
+				sec.Data[profileKey] = []byte("not-a-profile")
+				lc.lockStatus = lockedStatus(deviceID, nodeKey)
+			},
+			expectedResult: reconcile.Result{},
 			wantErr:        true,
 		},
 		{
 			name: "locked_node_key_mismatch",
 			mutateFn: func(sec *corev1.Secret, lc *fakeLocalClient) {
-				sec.Data[kubetypes.KeyNodeKey] = otherNodeKeyText
+				sec.Data[profileKey] = profile(&persist.Persist{PrivateNodeKey: key.NewNode()})
 				lc.lockStatus = lockedStatus(deviceID, nodeKey)
 			},
 			// Keys can briefly disagree during rotation, so retry rather than error.
@@ -243,7 +261,9 @@ func TestReconciler_Reconcile(t *testing.T) {
 					},
 				},
 				Data: map[string][]byte{
-					kubetypes.KeyDeviceID: []byte(deviceID),
+					kubetypes.KeyDeviceID:              []byte(deviceID),
+					string(ipn.CurrentProfileStateKey): []byte(profileKey),
+					profileKey:                         profile(&persist.Persist{PrivateNodeKey: nodePrivate}),
 				},
 			}
 

@@ -8,19 +8,14 @@ import (
 	"fmt"
 
 	"tailscale.com/ipn"
-	"tailscale.com/ipn/ipnstate"
 )
-
-var _ LocalClient = (*FakeLocalClient)(nil)
 
 type FakeLocalClient struct {
 	FakeIPNBusWatcher
-	SetServeCalled          bool
-	EditPrefsCalls          []*ipn.MaskedPrefs
-	GetPrefsResult          *ipn.Prefs
-	CertDomainsResult       []string
-	TailnetLockStatusResult *ipnstate.TailnetLockStatus
-	TailnetLockStatusErr    error
+	SetServeCalled    bool
+	EditPrefsCalls    []*ipn.MaskedPrefs
+	GetPrefsResult    *ipn.Prefs
+	CertDomainsResult []string
 }
 
 func (m *FakeLocalClient) SetServeConfig(ctx context.Context, cfg *ipn.ServeConfig) error {
@@ -53,16 +48,6 @@ func (f *FakeLocalClient) CertPair(ctx context.Context, domain string) ([]byte, 
 
 func (f *FakeLocalClient) CertDomains(ctx context.Context) ([]string, error) {
 	return f.CertDomainsResult, nil
-}
-
-func (f *FakeLocalClient) TailnetLockStatus(context.Context) (*ipnstate.TailnetLockStatus, error) {
-	if f.TailnetLockStatusErr != nil {
-		return nil, f.TailnetLockStatusErr
-	}
-	if f.TailnetLockStatusResult == nil {
-		return &ipnstate.TailnetLockStatus{}, nil
-	}
-	return f.TailnetLockStatusResult, nil
 }
 
 type FakeIPNBusWatcher struct {

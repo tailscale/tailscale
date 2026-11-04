@@ -28,7 +28,6 @@ import (
 	"tailscale.com/kube/kubeclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/backoff"
 )
@@ -100,20 +99,6 @@ func (kc *kubeClient) storeHTTPSEndpoint(ctx context.Context, ep string) error {
 	s := &kubeapi.Secret{
 		Data: map[string][]byte{
 			kubetypes.KeyHTTPSEndpoint: []byte(ep),
-		},
-	}
-	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, fieldManager)
-}
-
-// storeNodeKey writes the node's public key to the 'node_key' data field of the client's state Secret.
-func (kc *kubeClient) storeNodeKey(ctx context.Context, nodeKey key.NodePublic) error {
-	encoded, err := nodeKey.MarshalText()
-	if err != nil {
-		return err
-	}
-	s := &kubeapi.Secret{
-		Data: map[string][]byte{
-			kubetypes.KeyNodeKey: encoded,
 		},
 	}
 	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, fieldManager)

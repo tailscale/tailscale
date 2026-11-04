@@ -266,7 +266,7 @@ func run(logger *zap.SugaredLogger) error {
 	reissueCh := make(chan struct{}, 1)
 	if podUID != "" {
 		group.Go(func() error {
-			return state.KeepKeysUpdated(ctx, logger.Infof, st, klc.New(lc))
+			return state.KeepKeysUpdated(ctx, st, klc.New(lc))
 		})
 
 		if kc != nil && stateSecretName != "" {

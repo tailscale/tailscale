@@ -42,7 +42,6 @@ const (
 	KeyDeviceID       = "device_id"        // node stable ID of the device
 	KeyDeviceFQDN     = "device_fqdn"      // device's tailnet hostname
 	KeyDeviceIPs      = "device_ips"       // device's tailnet IPs
-	KeyNodeKey        = "node_key"         // device's node public key
 	KeyPodUID         = "pod_uid"          // Pod UID
 	KeyCapVer         = "tailscale_capver" // tailcfg.CurrentCapabilityVersion of this proxy instance.
 	KeyReissueAuthkey = "reissue_authkey"  // Proxies will set this to the authkey that failed, or "no-authkey", if they can't log in.

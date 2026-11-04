@@ -11,6 +11,7 @@ package nodekey
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/kube/kubetypes"
@@ -33,6 +35,8 @@ import (
 
 const (
 	reconcilerName = "nodekey-reconciler"
+
+	currentProfileKey = "_current-profile"
 
 	// requeueInterval is how often to recheck a device that can't be signed yet for reasons outside its state
 	// Secret, such as an untrusted operator key or a device missing from the operator's netmap.
@@ -128,6 +132,15 @@ func (r *Reconciler) signNodeKey(ctx context.Context, logger *zap.SugaredLogger,
 		return reconcile.Result{}, nil
 	}
 
+	nodeKey, err := getDeviceKey(secret)
+	if err != nil {
+		return reconcile.Result{}, err
+	} else if nodeKey.IsZero() {
+		logger.Debugf("Device %q state Secret does not contain a node key in its IPN profile; waiting for update", deviceID)
+		// No requeue; wait for state Secret watch to trigger.
+		return reconcile.Result{}, nil
+	}
+
 	lockStatus, err := r.localClient.TailnetLockStatus(ctx)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to get tailnet lock status: %w", err)
@@ -157,16 +170,6 @@ func (r *Reconciler) signNodeKey(ctx context.Context, logger *zap.SugaredLogger,
 		return reconcile.Result{RequeueAfter: requeueInterval}, nil
 	}
 
-	nodeKeyEncoded := secret.Data[kubetypes.KeyNodeKey]
-	if len(nodeKeyEncoded) == 0 {
-		logger.Debugf("Device %q state secret does not contain the node key; waiting for update", deviceID)
-		// No requeue; wait for state secret watch to trigger.
-		return reconcile.Result{}, nil
-	}
-	var nodeKey key.NodePublic
-	if err := nodeKey.UnmarshalText(nodeKeyEncoded); err != nil {
-		return reconcile.Result{}, fmt.Errorf("failed to unmarshal device node key: %w", err)
-	}
 	if nodeKey != devicePeer.NodeKey {
 		logger.Warnf("Device %q peer key from control (%s) does not match key in device state (%s)", deviceID, devicePeer.NodeKey.ShortString(), nodeKey.ShortString())
 		// May be a lagging netmap update in the operator; requeue.
@@ -190,6 +193,30 @@ func findTKAPeerByStableID(peers []*ipnstate.TKAPeer, deviceID tailcfg.StableNod
 		}
 	}
 	return nil
+}
+
+// getDeviceKey returns the node's public key from the IPN profile that
+// tailscaled stores in its state Secret. It returns a zero key if the
+// profile has not been written yet.
+func getDeviceKey(secret *corev1.Secret) (key.NodePublic, error) {
+	currentProfile, ok := secret.Data[currentProfileKey]
+	if !ok {
+		return key.NodePublic{}, nil
+	}
+	profileBytes := secret.Data[string(currentProfile)]
+	if len(profileBytes) == 0 {
+		return key.NodePublic{}, nil
+	}
+	var prefs ipn.Prefs
+	if err := json.Unmarshal(profileBytes, &prefs); err != nil {
+		return key.NodePublic{}, fmt.Errorf("failed to extract node profile info from state Secret %s: %w", secret.Name, err)
+	}
+	if prefs.Persist == nil {
+		return key.NodePublic{}, nil
+	}
+	nodeKey, _ := prefs.Persist.PublicNodeKeyOK()
+
+	return nodeKey, nil
 }
 
 // managedSecretHandler filters Secret events to only those which are managed
