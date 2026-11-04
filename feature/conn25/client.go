@@ -200,8 +200,10 @@ func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip
 		transitPool.returnAddr(tip)
 		return nil, err
 	}
-	err = c.enqueueAddressAssignment(as)
-	if err != nil {
+	if err := c.enqueueAddressAssignment(as); err != nil {
+		c.assignments.remove(as)
+		magicPool.returnAddr(mip)
+		transitPool.returnAddr(tip)
 		return nil, err
 	}
 	return as, nil
