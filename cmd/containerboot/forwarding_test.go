@@ -17,6 +17,14 @@ import (
 	"tailscale.com/util/linuxfw"
 )
 
+// noIPv6NATRunner wraps a NetfilterRunner and reports that the host does not
+// support IPv6 NAT.
+type noIPv6NATRunner struct {
+	linuxfw.NetfilterRunner
+}
+
+func (noIPv6NATRunner) HasIPV6NAT() bool { return false }
+
 func TestInstallIngressForwardingRulesWarning(t *testing.T) {
 	const warning = "https://github.com/tailscale/tailscale/issues/12156"
 
@@ -29,6 +37,7 @@ func TestInstallIngressForwardingRulesWarning(t *testing.T) {
 		name        string
 		dsts        []netip.Addr
 		tsIPs       []netip.Prefix
+		noIPv6NAT   bool
 		wantWarning bool
 		wantErr     bool
 	}{
@@ -53,6 +62,8 @@ func TestInstallIngressForwardingRulesWarning(t *testing.T) {
 			wantWarning: true,
 		},
 		{
+			// The only destination cannot be served, so no rule is
+			// installed and an error is returned.
 			name:        "v6_service_v4_only_proxy",
 			dsts:        []netip.Addr{v6},
 			tsIPs:       []netip.Prefix{tsV4},
@@ -70,10 +81,29 @@ func TestInstallIngressForwardingRulesWarning(t *testing.T) {
 			tsIPs: []netip.Prefix{tsV4, tsV6},
 		},
 		{
-			name:    "dual_stack_service_v4_only_proxy",
-			dsts:    []netip.Addr{v4, v6},
-			tsIPs:   []netip.Prefix{tsV4},
-			wantErr: true,
+			// The IPv6 destination is skipped (the proxy has no IPv6
+			// tailnet address), but the IPv4 one is still served.
+			name:  "dual_stack_service_v4_only_proxy",
+			dsts:  []netip.Addr{v4, v6},
+			tsIPs: []netip.Prefix{tsV4},
+		},
+		{
+			// The IPv6 destination is skipped (the host has no IPv6 NAT),
+			// but the IPv4 one is still served.
+			name:      "dual_stack_service_dual_stack_proxy_no_ipv6_nat",
+			dsts:      []netip.Addr{v4, v6},
+			tsIPs:     []netip.Prefix{tsV4, tsV6},
+			noIPv6NAT: true,
+		},
+		{
+			// The only destination cannot be served, so no rule is
+			// installed and an error is returned.
+			name:        "v6_service_dual_stack_proxy_no_ipv6_nat",
+			dsts:        []netip.Addr{v6},
+			tsIPs:       []netip.Prefix{tsV4, tsV6},
+			noIPv6NAT:   true,
+			wantWarning: true,
+			wantErr:     true,
 		},
 	}
 	for _, tt := range tests {
@@ -83,6 +113,9 @@ func TestInstallIngressForwardingRulesWarning(t *testing.T) {
 			t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
 			nfr := linuxfw.NewFakeIPTablesRunner()
+			if tt.noIPv6NAT {
+				nfr = noIPv6NATRunner{nfr}
+			}
 			err := installIngressForwardingRules(context.Background(), tt.dsts, tt.tsIPs, nfr)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("installIngressForwardingRules() error = %v, wantErr %v", err, tt.wantErr)
