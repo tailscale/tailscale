@@ -154,9 +154,15 @@ func installTSForwardingRuleForDestination(_ context.Context, dstFilter string, 
 }
 
 // installIngressForwardingRules installs ingress forwarding rules for each of
-// the given destination IPs (one per IP family for dual-stack Services). A rule
-// is installed for every destination, so that the proxy is reachable over each
-// of its tailnet addresses.
+// the given destination IPs (one per IP family for dual-stack Services), so
+// that the proxy is reachable over each of its tailnet addresses.
+//
+// A destination that cannot be served is skipped and the reason is logged: this
+// is the case if the proxy has no tailnet IP of the destination's family (for
+// example when IPv4 is turned off for the proxy), or if the destination is IPv6
+// and the host does not support IPv6 NAT. This way the other family keeps
+// working, as it did before dual-stack destinations were supported. An error is
+// only returned if no rule could be installed at all.
 func installIngressForwardingRules(ctx context.Context, dsts []netip.Addr, tsIPs []netip.Prefix, nfr linuxfw.NetfilterRunner) error {
 	// The warning is about the destinations as a whole, so it has to be
 	// decided here and not for each destination on its own: a dual-stack
@@ -180,12 +186,36 @@ func installIngressForwardingRules(ctx context.Context, dsts []netip.Addr, tsIPs
 		log.Printf("Warning: proxy backend ClusterIP is an IPv6 address and the proxy has a IPv4 tailnet address. You might need to disable IPv4 address allocation for the proxy for forwarding to work. See https://github.com/tailscale/tailscale/issues/12156")
 	}
 
+	var rulesInstalled bool
 	for _, dst := range dsts {
+		if !hasTailnetIPOfFamily(dst, tsIPs) {
+			log.Printf("Skipping ingress forwarding rule for destination %v: the proxy has no tailnet IP of the same address family: %v", dst, tsIPs)
+			continue
+		}
+		if dst.Is6() && !nfr.HasIPV6NAT() {
+			log.Printf("Skipping ingress forwarding rule for destination %v: the host does not support IPv6 NAT", dst)
+			continue
+		}
 		if err := installIngressForwardingRule(ctx, dst, tsIPs, nfr); err != nil {
 			return err
 		}
+		rulesInstalled = true
+	}
+	if len(dsts) != 0 && !rulesInstalled {
+		return fmt.Errorf("no ingress forwarding rules could be installed for destinations %v: tailnet IPs are %v, host supports IPv6 NAT: %v", dsts, tsIPs, nfr.HasIPV6NAT())
 	}
 	return nil
+}
+
+// hasTailnetIPOfFamily reports whether tsIPs contains a single tailnet IP of
+// the same address family as dst.
+func hasTailnetIPOfFamily(dst netip.Addr, tsIPs []netip.Prefix) bool {
+	for _, pfx := range tsIPs {
+		if pfx.IsSingleIP() && pfx.Addr().Is4() == dst.Is4() {
+			return true
+		}
+	}
+	return false
 }
 
 func installIngressForwardingRule(_ context.Context, dst netip.Addr, tsIPs []netip.Prefix, nfr linuxfw.NetfilterRunner) error {
