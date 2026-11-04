@@ -232,3 +232,44 @@ func (c *closingPipeConn) Close() error {
 	}
 	return c.Conn.Close()
 }
+
+// This test verifies that in userspace-networking mode
+// a user dial to an address that matches a Tailscale route
+// but that no netstack peer claims it is refused.
+func TestUserDialTailscaleRouteWithoutPeer(t *testing.T) {
+	tests := []struct {
+		name           string
+		useNetstackFor func(netip.Addr) bool
+		wantErr        bool
+	}{
+		{"userspace_refused", func(netip.Addr) bool { return false }, true},
+		{"tun_uses_peer_dialer", nil, false},
+	}
+	// A loopback listener stands in for a destination reachable from the
+	// host's network; the connect completes without an Accept.
+	for _, laddr := range []string{"127.0.0.1:0", "[::1]:0"} {
+		ln, err := net.Listen("tcp", laddr)
+		if err != nil {
+			t.Logf("skipping %v: %v", laddr, err)
+			continue
+		}
+		defer ln.Close()
+		for _, tt := range tests {
+			t.Run(tt.name+"/"+laddr, func(t *testing.T) {
+				d := &Dialer{UseNetstackForIP: tt.useNetstackFor}
+				rt := &bart.Table[bool]{}
+				rt.Insert(netip.MustParsePrefix("0.0.0.0/0"), true)
+				rt.Insert(netip.MustParsePrefix("::/0"), true)
+				d.routes.Store(rt)
+
+				c, err := d.UserDial(context.Background(), "tcp", ln.Addr().String())
+				if c != nil {
+					c.Close()
+				}
+				if gotErr := err != nil; gotErr != tt.wantErr {
+					t.Errorf("UserDial err = %v, wantErr %v", err, tt.wantErr)
+				}
+			})
+		}
+	}
+}
