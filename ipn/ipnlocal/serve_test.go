@@ -1361,12 +1361,14 @@ func newTestBackend(t *testing.T, opts ...any) *LocalBackend {
 	sys.Set(e)
 	sys.Set(new(mem.Store))
 
+	// Create temp dir before setting up the backend and the shutdown to ensure
+	// cleanup can happen nicely with the full file system.
+	dir := t.TempDir()
 	b, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(b.Shutdown)
-	dir := t.TempDir()
 	b.SetVarRoot(dir)
 
 	pm := must.Get(newProfileManager(new(mem.Store), logf, health.NewTracker(bus)))
