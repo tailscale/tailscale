@@ -63,7 +63,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 			mutateFn: func(sec *corev1.Secret) {
 				delete(sec.Data, kubetypes.KeyDeviceID)
 			},
-			expectedResult: reconcile.Result{RequeueAfter: 5 * time.Second},
+			// No requeue: the proxy writing device_id triggers a new reconcile via the Secret watch.
+			expectedResult: reconcile.Result{},
 		},
 		{
 			name: "missing_secret",
@@ -80,13 +81,6 @@ func TestReconciler_Reconcile(t *testing.T) {
 					Time: time.Now(),
 				}
 				sec.ObjectMeta.Finalizers = []string{"finalizer"}
-			},
-			expectedResult: reconcile.Result{},
-		},
-		{
-			name: "unmanaged_secret",
-			mutateFn: func(sec *corev1.Secret) {
-				delete(sec.Labels, kubetypes.LabelManaged)
 			},
 			expectedResult: reconcile.Result{},
 		},

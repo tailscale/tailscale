@@ -106,7 +106,7 @@ func TestReconciler_signNodeKey(t *testing.T) {
 			mutationFn: func(_ *fakeLocalClient, sec *corev1.Secret) {
 				delete(sec.Data, kubetypes.KeyDeviceID)
 			},
-			expectedDone:  false,
+			expectedDone:  true,
 			expectedError: nil,
 			expectedLogs:  []string{"NodeID is empty. It may not be populated yet"},
 		},
@@ -188,10 +188,23 @@ func TestManagedSecretHandler(t *testing.T) {
 		wantQueue bool
 	}{
 		{
+			// No secret type label, as on the state Secrets of standalone proxies.
 			name:      "managed_secret_in_operator_namespace",
 			namespace: ns,
 			labels:    map[string]string{kubetypes.LabelManaged: "true"},
 			wantQueue: true,
+		},
+		{
+			name:      "managed_state_secret",
+			namespace: ns,
+			labels:    map[string]string{kubetypes.LabelManaged: "true", kubetypes.LabelSecretType: kubetypes.LabelSecretTypeState},
+			wantQueue: true,
+		},
+		{
+			name:      "managed_config_secret",
+			namespace: ns,
+			labels:    map[string]string{kubetypes.LabelManaged: "true", kubetypes.LabelSecretType: kubetypes.LabelSecretTypeConfig},
+			wantQueue: false,
 		},
 		{
 			name:      "managed_secret_in_other_namespace",

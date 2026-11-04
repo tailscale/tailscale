@@ -115,11 +115,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, nil
 	}
 
-	if !reconciler.IsManagedResource(secret) {
-		logger.Debugf("secret is not managed by the tailscale operator, skipping")
-		return reconcile.Result{}, nil
-	}
-
 	if done, err := r.signNodeKey(ctx, logger, secret); errors.Is(err, errOperatorUntrusted) {
 		return reconcile.Result{RequeueAfter: longRequeue}, nil
 	} else if !done {
@@ -134,13 +129,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 // signNodeKey signs the device node key with the operator's lock key if the
 // network is locked. It does nothing if the network is not locked or if the
 // device node key is already signed.
-// If the device is not ready to be signed yet and should be retried, it returns
-// false. If the device is signed or an error occurs, it returns true.
+// If the device is not ready to be signed yet and should be requeued, it returns
+// false. If the device is already signed, the state secret is missing
+// required information, or an error occurs, it returns true.
 func (r *Reconciler) signNodeKey(ctx context.Context, logger *zap.SugaredLogger, secret *corev1.Secret) (bool, error) {
 	deviceID := tailcfg.StableNodeID(secret.Data[kubetypes.KeyDeviceID])
 	if deviceID.IsZero() {
 		logger.Debug("NodeID is empty. It may not be populated yet")
-		return false, nil
+		return true, nil
 	}
 
 	lockStatus, err := r.localClient.NetworkLockStatus(ctx)
@@ -192,13 +188,18 @@ func findTKAPeerByStableID(peers []*ipnstate.TKAPeer, deviceID tailcfg.StableNod
 }
 
 // managedSecretHandler filters Secret events to only those which are managed
-// by the operator within the given namespace.
+// by the operator within the given namespace and may hold proxy state. Secrets
+// labeled with a secret type other than "state" are skipped; unlabeled Secrets
+// are kept, as the state Secrets of standalone proxies carry no secret type label.
 func managedSecretHandler(ns string) handler.MapFunc {
 	return func(_ context.Context, o client.Object) []reconcile.Request {
 		if o.GetNamespace() != ns {
 			return nil
 		}
 		if !reconciler.IsManagedResource(o) {
+			return nil
+		}
+		if t, ok := o.GetLabels()[kubetypes.LabelSecretType]; ok && t != kubetypes.LabelSecretTypeState {
 			return nil
 		}
 		return []reconcile.Request{
