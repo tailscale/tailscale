@@ -25,6 +25,7 @@ import (
 
 	"tailscale.com/ipn"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
@@ -359,7 +360,7 @@ func TestTailscaleIngressWithServiceMonitor(t *testing.T) {
 			}},
 		},
 	}
-	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}
+	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: tailscaled.ServiceMonitorCRD}}
 
 	// Create fake client with ProxyClass, IngressClass, Ingress with metrics ProxyClass, and Service
 	ing := ingress()
@@ -453,7 +454,7 @@ func TestTailscaleIngressWithServiceMonitor(t *testing.T) {
 		proxyClass.Spec.Metrics = nil
 	})
 	expectReconciled(t, ingR, "default", "test")
-	expectMissing[corev1.Service](t, fc, "operator-ns", metricsResourceName(shortName))
+	expectMissing[corev1.Service](t, fc, "operator-ns", tailscaled.MetricsResourceName(shortName))
 	// ServiceMonitor gets garbage collected when the Service is deleted - we cannot test that here.
 }
 

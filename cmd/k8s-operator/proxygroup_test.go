@@ -938,7 +938,7 @@ func TestProxyGroup(t *testing.T) {
 		reissuer: tailscaled.NewReissuer(),
 	}
 
-	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}
+	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: tailscaled.ServiceMonitorCRD}}
 	opts := configOpts{
 		proxyType:          "proxygroup",
 		stsName:            pg.Name,
@@ -1103,7 +1103,7 @@ func TestProxyGroup(t *testing.T) {
 		if diff := cmp.Diff(tsClient.deleted, []string{"nodeid-1", "unreported-2", "unreported-0"}); diff != "" {
 			t.Fatalf("unexpected deleted devices (-got +want):\n%s", diff)
 		}
-		expectMissing[corev1.Service](t, reconciler, "tailscale", metricsResourceName(pg.Name))
+		expectMissing[corev1.Service](t, reconciler, "tailscale", tailscaled.MetricsResourceName(pg.Name))
 		// The fake client does not clean up objects whose owner has been
 		// deleted, so we can't test for the owned resources getting deleted.
 	})
