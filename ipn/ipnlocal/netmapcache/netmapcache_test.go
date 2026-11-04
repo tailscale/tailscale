@@ -513,6 +513,9 @@ func diffNetMaps(got, want *netmap.NetworkMap) string {
 	)
 }
 
+func (t testStore) Clear(context.Context) error { return nil }
+func (t testStore) Close(context.Context) error { return nil }
+
 func eqViewsSlice[T any](eqVal func(x, y T) bool) func(a, b views.Slice[T]) bool {
 	return func(a, b views.Slice[T]) bool {
 		if a.Len() != b.Len() {

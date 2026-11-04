@@ -78,7 +78,12 @@ func (b *LocalBackend) ensureDiskCacheLocked() error {
 		return err
 	}
 	if c := b.diskCache; c.cache == nil || c.dir != dir {
-		b.diskCache.cache = netmapcache.NewCache(netmapcache.FileStore(dir))
+		b.closeDiskCacheLocked() // if we changed the dir, close the previous cache.
+		store, err := netmapcache.NewStore(dir)
+		if err != nil {
+			return fmt.Errorf("unable to open store: %s", err)
+		}
+		b.diskCache.cache = netmapcache.NewCache(store)
 		b.diskCache.dir = dir
 	}
 	return nil
@@ -94,7 +99,13 @@ func (b *LocalBackend) loadDiskCacheLocked() (om *netmap.NetworkMap, ok bool) {
 		return nil, false
 	}
 	if c := b.diskCache; c.cache == nil || c.dir != dir {
-		b.diskCache.cache = netmapcache.NewCache(netmapcache.FileStore(dir))
+		b.closeDiskCacheLocked() // if we changed the dir, close the previous cache.
+		store, err := netmapcache.NewStore(dir)
+		if err != nil {
+			b.logf("unable to open store: %s", err)
+			return nil, false
+		}
+		b.diskCache.cache = netmapcache.NewCache(store)
 		b.diskCache.dir = dir
 	}
 	nm, err := b.diskCache.cache.Load(b.currentNode().Context())
@@ -114,28 +125,27 @@ func (b *LocalBackend) discardDiskCacheLocked() {
 	if b.diskCache.cache == nil {
 		return // nothing to do, we do not have a cache
 	}
-	// Reaching here, we have a cache directory that needs to be purged.
-	// Log errors but do not fail for them.
+	// Reaching here, we have a cache that needs to be purged.
+	// Log errors but do not fail for them. Clear both the configured store and
+	// the fallback FileStore. This could be the same store twice, in which case
+	// the second clear will do nothing.
+	if err := b.diskCache.cache.Clear(b.currentUser.Context()); err != nil {
+		b.logf("clearing netmap cache: %v", err)
+	}
 	store := netmapcache.FileStore(b.diskCache.dir)
-	if err := b.clearStoreLocked(b.currentNode().Context(), store); err != nil {
+	if err := store.Clear(b.currentUser.Context()); err != nil {
 		b.logf("clearing netmap cache: %v", err)
 	}
 	b.diskCache = diskCache{} // drop in-memory state
 }
 
-// clearStoreLocked discards all the keys in the specified store.
-func (b *LocalBackend) clearStoreLocked(ctx context.Context, store netmapcache.Store) error {
-	var errs []error
-	for key, err := range store.List(ctx, "") {
-		if err != nil {
-			errs = append(errs, fmt.Errorf("list cache contest: %w", err))
-			break
-		}
-		if err := store.Remove(ctx, key); err != nil {
-			errs = append(errs, fmt.Errorf("discard cache key %q: %w", key, err))
-		}
+func (b *LocalBackend) closeDiskCacheLocked() {
+	if b.diskCache.cache == nil {
+		return // nothing to do, we do not have a cache
 	}
-	return errors.Join(errs...)
+	if err := b.diskCache.cache.Close(b.currentUser.Context()); err != nil {
+		b.logf("error closing cache: %v", err)
+	}
 }
 
 // ClearNetmapCache discards stored netmap caches (if any) for profiles for the
@@ -151,13 +161,21 @@ func (b *LocalBackend) ClearNetmapCache(ctx context.Context) error {
 
 	var errs []error
 	for _, p := range b.pm.Profiles() {
+		// Reaching here, we have a cache that needs to be purged.
+		// Log errors but do not fail for them. Clear both the configured store and
+		// the fallback FileStore. This could be the same store twice, in which case
+		// the second clear will do nothing.
+		if err := b.diskCache.cache.Clear(b.currentUser.Context()); err != nil {
+			b.logf("clearing netmap cache: %v", err)
+		}
 		store := netmapcache.FileStore(b.profileDataPathLocked(p.ID(), "netmap-cache"))
-		err := b.clearStoreLocked(ctx, store)
+		err := store.Clear(ctx)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("clear netmap cache for profile %q: %w", p.ID(), err))
 		}
 	}
 
+	b.closeDiskCacheLocked()
 	b.diskCache = diskCache{} // drop in-memory state
 	return errors.Join(errs...)
 }

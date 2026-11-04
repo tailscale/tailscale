@@ -10,16 +10,11 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	jsonv1 "encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"iter"
-	"os"
-	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 
 	"tailscale.com/feature/buildfeatures"
@@ -121,63 +116,6 @@ func (c *Cache) removeUnwantedKeys(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
-}
-
-// FileStore implements the [Store] interface using a directory of files, in
-// which each key is encoded as a filename in the directory.
-// The caller is responsible to ensure the directory path exists before
-// using the store methods.
-type FileStore string
-
-// List implements part of the [Store] interface.
-func (s FileStore) List(ctx context.Context, prefix string) iter.Seq2[string, error] {
-	return func(yield func(string, error) bool) {
-		des, err := os.ReadDir(string(s))
-		if os.IsNotExist(err) {
-			return // nothing to read
-		} else if err != nil {
-			yield("", err)
-			return
-		}
-
-		// os.ReadDir reports entries already sorted, and the encoding preserves that.
-		for _, de := range des {
-			key, err := hex.DecodeString(de.Name())
-			if err != nil {
-				yield("", err)
-				return
-			}
-			name := string(key)
-			if !strings.HasPrefix(name, prefix) {
-				continue
-			} else if !yield(name, nil) {
-				return
-			}
-		}
-	}
-}
-
-// Load implements part of the [Store] interface.
-func (s FileStore) Load(ctx context.Context, key string) ([]byte, error) {
-	data, err := os.ReadFile(filepath.Join(string(s), hex.EncodeToString([]byte(key))))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("key %q not found: %w", key, ErrKeyNotFound)
-	}
-	return data, err
-}
-
-// Store implements part of the [Store] interface.
-func (s FileStore) Store(ctx context.Context, key string, value []byte) error {
-	return os.WriteFile(filepath.Join(string(s), hex.EncodeToString([]byte(key))), value, 0600)
-}
-
-// Remove implements part of the [Store] interface.
-func (s FileStore) Remove(ctx context.Context, key string) error {
-	err := os.Remove(filepath.Join(string(s), hex.EncodeToString([]byte(key))))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	return err
 }
 
 // cacheKey is a type wrapper for strings used as cache keys.
@@ -424,6 +362,14 @@ func (c *Cache) readJSON(ctx context.Context, key cacheKey, value any) error {
 	return nil
 }
 
+func (c *Cache) Clear(ctx context.Context) error {
+	return c.store.Clear(ctx)
+}
+
+func (c *Cache) Close(ctx context.Context) error {
+	return c.store.Close(ctx)
+}
+
 // Store is the interface to persistent key-value storage used by a [Cache].
 type Store interface {
 	// List lists all the stored keys having the specified prefixes, in
@@ -445,6 +391,12 @@ type Store interface {
 	// Remove removes the specified key from the store. If the key does not exist,
 	// Remove reports success (nil).
 	Remove(ctx context.Context, key string) error
+
+	// Clear removes all entries from the store. If the store does not exist,
+	Clear(ctx context.Context) error
+
+	// Close closes the Store.
+	Close(ctx context.Context) error
 }
 
 // cacheDigest computes a string digest of the specified data, for use in
