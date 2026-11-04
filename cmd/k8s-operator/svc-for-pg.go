@@ -407,11 +407,17 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 			return false, fmt.Errorf("error getting DNS name for Service: %w", err)
 		}
 
-		lbs = []corev1.LoadBalancerIngress{
-			{
+		for _, mapping := range []*ingressservices.Mapping{cfg.IPv4Mapping, cfg.IPv6Mapping} {
+			if mapping == nil {
+				continue
+			}
+			if !mapping.TailscaleServiceIP.IsValid() {
+				return false, fmt.Errorf("Tailscale Service has no address matching Kubernetes Service address %s", mapping.ClusterIP)
+			}
+			lbs = append(lbs, corev1.LoadBalancerIngress{
 				Hostname: dnsName,
-				IP:       tsSvcIPv4.String(),
-			},
+				IP:       mapping.TailscaleServiceIP.String(),
+			})
 		}
 
 		conditionStatus = metav1.ConditionTrue

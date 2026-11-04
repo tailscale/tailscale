@@ -649,3 +649,86 @@ func TestProxyGroupFromServiceFinalizers(t *testing.T) {
 		})
 	}
 }
+
+func TestServicePGReconciler_LoadBalancerAddressFamilies(t *testing.T) {
+	const vip6 = "fd7a:115c:a1e0::1234"
+	for _, tt := range []struct {
+		name       string
+		clusterIPs []string
+		want       []string
+	}{
+		{"ipv4", []string{"10.0.0.1"}, []string{vipTestIP}},
+		{"ipv6", []string{"fd00::1"}, []string{vip6}},
+		{"dual-stack", []string{"10.0.0.1", "fd00::1"}, []string{vipTestIP, vip6}},
+		{"ipv6-primary-dual-stack", []string{"fd00::1", "10.0.0.1"}, []string{vipTestIP, vip6}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r, state, fc, ft, _ := setupServiceTest(t)
+			svc, _ := setupTestService(t, "family-test", "", "10.0.0.1", fc, state)
+			expectReconciled(t, r, svc.Namespace, svc.Name)
+			serviceName := "svc:default-family-test"
+			tsSvc := ft.vipServices[serviceName]
+			tsSvc.Addrs = []string{vipTestIP, vip6}
+			ft.vipServices[serviceName] = tsSvc
+			cfg := ingressservices.Config{}
+			mustUpdate(t, fc, svc.Namespace, svc.Name, func(s *corev1.Service) {
+				s.Spec.ClusterIP = tt.clusterIPs[0]
+				s.Spec.ClusterIPs = tt.clusterIPs
+				s.Spec.IPFamilies = nil
+				for _, cip := range tt.clusterIPs {
+					ip := netip.MustParseAddr(cip)
+					if ip.Is4() {
+						s.Spec.IPFamilies = append(s.Spec.IPFamilies, corev1.IPv4Protocol)
+						cfg.IPv4Mapping = &ingressservices.Mapping{ClusterIP: ip, TailscaleServiceIP: netip.MustParseAddr(vipTestIP)}
+					} else {
+						s.Spec.IPFamilies = append(s.Spec.IPFamilies, corev1.IPv6Protocol)
+						cfg.IPv6Mapping = &ingressservices.Mapping{ClusterIP: ip, TailscaleServiceIP: netip.MustParseAddr(vip6)}
+					}
+				}
+			})
+			pr := prefs{}
+			pr.Config.NodeID = "family-test"
+			pr.Config.UserProfile.LoginName = "proxy.test.ts.net"
+			pr.AdvertiseServices = []string{serviceName}
+			profile, err := json.Marshal(pr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mustUpdate(t, fc, state.Namespace, state.Name, func(s *corev1.Secret) {
+				s.Labels = pgSecretLabels("test-pg", kubetypes.LabelSecretTypeState)
+				mak.Set(&s.Data, currentProfileKey, []byte("family-profile"))
+				mak.Set(&s.Data, "family-profile", profile)
+			})
+			status := ingressservices.Status{Configs: ingressservices.Configs{serviceName: cfg}, PodIPv4: "4.3.2.1"}
+			data, err := json.Marshal(status)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mustUpdate(t, fc, state.Namespace, state.Name, func(s *corev1.Secret) {
+				mak.Set(&s.Data, ingressservices.IngressConfigKey, data)
+			})
+			expectReconciled(t, r, svc.Namespace, svc.Name)
+			got := new(corev1.Service)
+			if err := fc.Get(t.Context(), client.ObjectKeyFromObject(svc), got); err != nil {
+				t.Fatal(err)
+			}
+			var ips []string
+			for _, ing := range got.Status.LoadBalancer.Ingress {
+				ips = append(ips, ing.IP)
+			}
+			if !slices.Equal(ips, tt.want) {
+				t.Fatalf("status addresses = %v, want %v", ips, tt.want)
+			}
+			mustUpdate(t, fc, state.Namespace, state.Name, func(s *corev1.Secret) {
+				delete(s.Data, currentProfileKey)
+			})
+			expectReconciled(t, r, svc.Namespace, svc.Name)
+			if err := fc.Get(t.Context(), client.ObjectKeyFromObject(svc), got); err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Status.LoadBalancer.Ingress) != 0 {
+				t.Fatalf("unready proxy retained status: %v", got.Status.LoadBalancer.Ingress)
+			}
+		})
+	}
+}
