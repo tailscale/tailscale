@@ -103,7 +103,7 @@ func main() {
 		loginServer           = strings.TrimSuffix(defaultEnv("OPERATOR_LOGIN_SERVER", ""), "/")
 		ingressClassName      = defaultEnv("OPERATOR_INGRESS_CLASS_NAME", "tailscale")
 		operatorSAName        = defaultEnv("OPERATOR_SERVICE_ACCOUNT_NAME", "operator")
-		autoSignNodeKeys      = defaultBool("OPERATOR_AUTO_SIGN_NODE_KEYS", true)
+		autoSignNodeKeys      = defaultBool("OPERATOR_AUTO_SIGN_NODE_KEYS", false)
 	)
 
 	var opts []kzap.Opts
