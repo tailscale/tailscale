@@ -1874,6 +1874,7 @@ func TestReconciler_AppliesProxyClass(t *testing.T) {
 				},
 			},
 		},
+		Status: readyProxyClassStatus(),
 	}
 
 	fc := reconcilertest.NewClientBuilder().WithInterceptorFuncs(reconcilertest.ApplyPatchInterceptor()).
@@ -1944,5 +1945,15 @@ func TestReconciler_AppliesProxyClass(t *testing.T) {
 	// The ProxyClass does not set a security context, so the default NET_ADMIN capability must survive.
 	if !hasCapability(c, "NET_ADMIN") {
 		t.Errorf("expected container to keep the NET_ADMIN capability, got security context %+v", c.SecurityContext)
+	}
+}
+
+// readyProxyClassStatus returns a ready status; the fake client leaves Generation at 0, so ObservedGeneration is too.
+func readyProxyClassStatus() tsapi.ProxyClassStatus {
+	return tsapi.ProxyClassStatus{
+		Conditions: []metav1.Condition{{
+			Type:   string(tsapi.ProxyClassReady),
+			Status: metav1.ConditionTrue,
+		}},
 	}
 }

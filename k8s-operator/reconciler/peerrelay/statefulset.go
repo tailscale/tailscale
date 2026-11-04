@@ -101,6 +101,19 @@ var managedLabelKeys = []string{
 	reconciler.LabelParentName,
 }
 
+func (r *Reconciler) metricsOptions(pr *tsapi.PeerRelay) tailscaled.MetricsOptions {
+	return tailscaled.MetricsOptions{
+		StatefulSetName: resourceName(pr.Name),
+		Namespace:       r.tailscaleNamespace,
+		PodLabels:       peerRelayLabels(pr.Name),
+		ProxyType:       parentTypePeerRelay,
+		ParentName:      pr.Name,
+
+		// Lets the Service watch enqueue this PeerRelay when its metrics Service changes.
+		Labels: peerRelayLabels(pr.Name),
+	}
+}
+
 func (r *Reconciler) getProxyClass(ctx context.Context, pr *tsapi.PeerRelay) (*tsapi.ProxyClass, error) {
 	if pr.Spec.ProxyClass == "" {
 		return nil, nil

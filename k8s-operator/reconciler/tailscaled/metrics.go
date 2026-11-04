@@ -44,6 +44,7 @@ type MetricsOptions struct {
 	StatefulSetName string            // name of the proxy's StatefulSet; not needed by EnsureMetricsResourcesDeleted
 	Namespace       string            // namespace of the proxy's StatefulSet
 	PodLabels       map[string]string // labels that select the proxy's Pods
+	Labels          map[string]string // extra labels for the metrics Service and ServiceMonitor
 	ProxyType       string            // value of the ts_proxy_type label
 	ParentName      string            // name of the resource the proxy was created for
 	ParentNamespace string            // namespace of the resource the proxy was created for; empty if cluster scoped
@@ -274,7 +275,7 @@ func metricsResourceLabels(opts MetricsOptions) map[string]string {
 		lbls[labelPromProxyParentNamespace] = tsoperator.TruncateLabelValue(opts.ParentNamespace)
 	}
 	lbls[labelPromJob] = tsoperator.TruncateLabelValue(promJobName(opts))
-	return lbls
+	return mergeMapKeys(lbls, opts.Labels)
 }
 
 // promJobName constructs the value of the Prometheus job label that will apply to all metrics for a ServiceMonitor.
