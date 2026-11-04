@@ -6,6 +6,8 @@
 package main
 
 import (
+	"encoding/json"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
 )
@@ -26,6 +29,8 @@ func TestEgressPodReadiness(t *testing.T) {
 	tests := []struct {
 		name      string
 		objs      []client.Object
+		podIPs    []string               // defaults to dual-stack
+		status    *egressservices.Status // defaults to a status for podIPs
 		wantReady bool
 	}{
 		{
@@ -41,12 +46,51 @@ func TestEgressPodReadiness(t *testing.T) {
 			wantReady: true,
 		},
 		{
+			name: "pod_is_endpoint_in_both_families",
+			objs: []client.Object{
+				newSvc("svc"),
+				newEps("svc", discoveryv1.AddressTypeIPv4, podUID),
+				newEps("svc", discoveryv1.AddressTypeIPv6, podUID),
+			},
+			wantReady: true,
+		},
+		{
 			name: "pod_is_endpoint_in_one_family_only",
 			objs: []client.Object{
 				newSvc("svc"),
 				newEps("svc", discoveryv1.AddressTypeIPv4),
 				newEps("svc", discoveryv1.AddressTypeIPv6, podUID),
 			},
+		},
+		{
+			name: "single_stack_pod_is_endpoint_in_its_family",
+			objs: []client.Object{
+				newSvc("svc"),
+				newEps("svc", discoveryv1.AddressTypeIPv4, podUID),
+				newEps("svc", discoveryv1.AddressTypeIPv6),
+			},
+			podIPs:    []string{"10.0.0.2"},
+			wantReady: true,
+		},
+		{
+			name: "single_stack_pod_is_not_endpoint_in_its_family",
+			objs: []client.Object{
+				newSvc("svc"),
+				newEps("svc", discoveryv1.AddressTypeIPv4),
+				newEps("svc", discoveryv1.AddressTypeIPv6),
+			},
+			podIPs: []string{"fd00::2"},
+		},
+		{
+			// A proxy older than v1.102 reports only PodIPv4, so egress-eps-reconciler never adds it to the IPv6
+			// EndpointSlice.
+			name: "dual_stack_pod_proxy_reports_ipv4_only",
+			objs: []client.Object{
+				newSvc("svc"),
+				newEps("svc", discoveryv1.AddressTypeIPv4, podUID),
+				newEps("svc", discoveryv1.AddressTypeIPv6),
+			},
+			status:    &egressservices.Status{PodIPv4: "10.0.0.2"},
 			wantReady: true,
 		},
 		{
@@ -63,6 +107,32 @@ func TestEgressPodReadiness(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			podIPs := tt.podIPs
+			if podIPs == nil {
+				podIPs = []string{"10.0.0.2", "fd00::2"}
+			}
+			status := tt.status
+			if status == nil {
+				status = &egressservices.Status{}
+				for _, ip := range podIPs {
+					if netip.MustParseAddr(ip).Is4() {
+						status.PodIPv4 = ip
+					} else {
+						status.PodIPv6 = ip
+					}
+				}
+			}
+			statusBS, err := json.Marshal(status)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stateS := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "operator-ns",
+					Name:      "pod",
+				},
+				Data: map[string][]byte{egressservices.KeyEgressServices: statusBS},
+			}
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Namespace: "operator-ns",
@@ -79,6 +149,9 @@ func TestEgressPodReadiness(t *testing.T) {
 					}},
 				},
 			}
+			for _, ip := range podIPs {
+				pod.Status.PodIPs = append(pod.Status.PodIPs, corev1.PodIP{IP: ip})
+			}
 			pg := &tsapi.ProxyGroup{
 				ObjectMeta: metav1.ObjectMeta{Name: "dev"},
 				Spec: tsapi.ProxyGroupSpec{
@@ -90,7 +163,7 @@ func TestEgressPodReadiness(t *testing.T) {
 			// works. Without this code we would not be able to update Pod's status further down.
 			fc := fake.NewClientBuilder().
 				WithScheme(tsapi.GlobalScheme).
-				WithObjects(append(tt.objs, pod, pg)...).
+				WithObjects(append(tt.objs, pod, pg, stateS)...).
 				WithStatusSubresource(&corev1.Pod{}).
 				Build()
 			zl, _ := zap.NewDevelopment()

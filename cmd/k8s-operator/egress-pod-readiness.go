@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 
@@ -21,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstime"
 	"tailscale.com/util/set"
@@ -48,8 +50,8 @@ type egressPodsReconciler struct {
 //
 // The endpoints for each egress service's ClusterIP Service are configured by the operator itself using custom
 // EndpointSlices (egress-eps-reconciler), which only adds a Pod once the Pod's state Secret shows that the proxy has
-// set up routing for that egress service. So a Pod is ready once it is an endpoint in an EndpointSlice of every
-// egress service for the ProxyGroup.
+// set up routing for that egress service. So a Pod is ready once, for every egress service for the ProxyGroup, it is
+// an endpoint in the EndpointSlice of each IP family that the proxy reports an address for in its state Secret.
 func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
 	lg := er.logger.With("Pod", req.NamespacedName)
 	lg.Debugf("starting reconcile")
@@ -116,25 +118,74 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 	if err := er.List(ctx, epsList, client.InNamespace(er.tsNamespace), client.MatchingLabels(lbls)); err != nil {
 		return res, fmt.Errorf("failed to list EndpointSlices: %w", err)
 	}
+	// Each egress service has an EndpointSlice per IP family. A Pod must be an endpoint in the EndpointSlice of
+	// every family that the proxy reports, else it can be marked ready while only one family routes to it. A proxy
+	// older than v1.102 does not report an IPv6 address, so egress-eps-reconciler never adds it to an IPv6
+	// EndpointSlice. Requiring the families that the Pod has addresses for would block such a Pod forever.
+	families, err := er.reportedFamilies(ctx, pod)
+	if err != nil {
+		return res, fmt.Errorf("error determining IP families reported by proxy: %w", err)
+	}
 	routed := make(set.Set[string])
+	missing := make(set.Set[string])
 	for _, eps := range epsList.Items {
+		svcName := eps.Labels[discoveryv1.LabelServiceName]
 		// egress-eps-reconciler sets the endpoint's hostname to the Pod's UID.
 		if slices.ContainsFunc(eps.Endpoints, func(ep discoveryv1.Endpoint) bool {
 			return ep.Hostname != nil && *ep.Hostname == string(pod.UID)
 		}) {
-			routed.Add(eps.Labels[discoveryv1.LabelServiceName])
+			routed.Add(svcName)
+			continue
+		}
+		if families.Contains(eps.AddressType) {
+			missing.Add(svcName)
 		}
 	}
-	if slices.ContainsFunc(svcs.Items, func(svc corev1.Service) bool {
-		return !routed.Contains(svc.Name)
-	}) {
-		lg.Info("Pod is not yet added as an endpoint for all egress targets, waiting...")
+	var waiting []string
+	for _, svc := range svcs.Items {
+		if !routed.Contains(svc.Name) || missing.Contains(svc.Name) {
+			waiting = append(waiting, svc.Name)
+		}
+	}
+	if len(waiting) > 0 {
+		lg.Infof("Pod is not yet added as an endpoint for egress Services %q, waiting...", waiting)
 		return reconcile.Result{RequeueAfter: shortRequeue}, nil
 	}
 	if err := er.setPodReady(ctx, pod, lg); err != nil {
 		return res, fmt.Errorf("error setting Pod as ready: %w", err)
 	}
 	return res, nil
+}
+
+// reportedFamilies returns the IP families that the proxy reports addresses for in the egress services status in its
+// state Secret. It returns an empty set if the proxy has not yet written the status.
+func (er *egressPodsReconciler) reportedFamilies(ctx context.Context, pod *corev1.Pod) (set.Set[discoveryv1.AddressType], error) {
+	families := make(set.Set[discoveryv1.AddressType])
+	stateS := &corev1.Secret{}
+	err := er.Get(ctx, types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}, stateS)
+	switch {
+	case apierrors.IsNotFound(err):
+		return families, nil
+	case err != nil:
+		return nil, fmt.Errorf("error retrieving state Secret: %w", err)
+	}
+
+	svcStatusBS := stateS.Data[egressservices.KeyEgressServices]
+	if len(svcStatusBS) == 0 {
+		return families, nil
+	}
+
+	svcStatus := &egressservices.Status{}
+	if err := json.Unmarshal(svcStatusBS, svcStatus); err != nil {
+		return nil, fmt.Errorf("error unmarshalling egress service status: %w", err)
+	}
+	if svcStatus.PodIPv4 != "" {
+		families.Add(discoveryv1.AddressTypeIPv4)
+	}
+	if svcStatus.PodIPv6 != "" {
+		families.Add(discoveryv1.AddressTypeIPv6)
+	}
+	return families, nil
 }
 
 func (er *egressPodsReconciler) setPodReady(ctx context.Context, pod *corev1.Pod, lg *zap.SugaredLogger) error {
