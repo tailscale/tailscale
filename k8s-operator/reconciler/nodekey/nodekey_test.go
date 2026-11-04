@@ -286,7 +286,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 				Logger:             zl.Sugar(),
 			})
 
-			result, err := r.Reconcile(context.TODO(), request)
+			result, err := r.Reconcile(t.Context(), request)
 			if gotErr := err != nil; gotErr != tt.wantErr {
 				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)
 			}

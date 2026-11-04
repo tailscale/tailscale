@@ -6,7 +6,6 @@
 package nodekey
 
 import (
-	"context"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -66,7 +65,7 @@ func TestManagedSecretHandler(t *testing.T) {
 				},
 			}
 
-			reqs := managedSecretHandler(ns)(context.TODO(), secret)
+			reqs := managedSecretHandler(ns)(t.Context(), secret)
 			if !tt.wantQueue {
 				if len(reqs) != 0 {
 					t.Fatalf("expected no requests, got %v", reqs)
