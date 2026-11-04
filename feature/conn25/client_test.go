@@ -212,6 +212,95 @@ func TestReserveAddressesNoLeakOnFailure(t *testing.T) {
 	}
 }
 
+// TestReserveAddressesRollbackOnQueueFull checks that an assignment that
+// couldn't be enqueued isn't left behind. The connector never learns about such
+// an assignment, and nothing will tell it later, so keeping it would mean every
+// later lookup for the same domain/dst returns a mapping the connector can't
+// use.
+func TestReserveAddressesRollbackOnQueueFull(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		dst  netip.Addr
+	}{
+		{
+			name: "v4",
+			dst:  netip.MustParseAddr("0.0.0.1"),
+		},
+		{
+			name: "v6",
+			dst:  netip.MustParseAddr("::1"),
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			const appName = "a"
+			domain := must.Get(dnsname.ToFQDN("example.com."))
+			c := newConn25(t.Logf).client
+			c.v4MagicIPPool = newIPPool(mustIPSetFromPrefix("100.64.0.0/24"))
+			c.v6MagicIPPool = newIPPool(mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0100::/80"))
+			c.v4TransitIPPool = newIPPool(mustIPSetFromPrefix("169.254.0.0/24"))
+			c.v6TransitIPPool = newIPPool(mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0200::/80"))
+
+			magicPool, transitPool := c.v4MagicIPPool, c.v4TransitIPPool
+			if tt.dst.Is6() {
+				magicPool, transitPool = c.v6MagicIPPool, c.v6TransitIPPool
+			}
+
+			// Nothing reads this channel, so the first enqueue fills it and the
+			// second one fails.
+			c.addrsCh = make(chan addrs, 1)
+			if _, err := c.reserveAddresses(appName, "filler.example.com.", tt.dst, 10, testConnectorPeer, ""); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := c.reserveAddresses(appName, domain, tt.dst, 10, testConnectorPeer, "")
+			if !errors.Is(err, errQueueFull) {
+				t.Fatalf("want errQueueFull, got %v", err)
+			}
+
+			// Only the filler assignment should remain, in every index.
+			if got := len(c.assignments.byMagicIP); got != 1 {
+				t.Errorf("want 1 entry in byMagicIP, got %d", got)
+			}
+			if got := len(c.assignments.byTransitIP); got != 1 {
+				t.Errorf("want 1 entry in byTransitIP, got %d", got)
+			}
+			if got := len(c.assignments.byDomainDst); got != 1 {
+				t.Errorf("want 1 entry in byDomainDst, got %d", got)
+			}
+			if got := c.assignments.byExpiresAt.Len(); got != 1 {
+				t.Errorf("want 1 entry in byExpiresAt, got %d", got)
+			}
+			if _, ok := c.assignments.lookupByDomainDst(domain, tt.dst); ok {
+				t.Error("dropped assignment is still reachable by domain/dst")
+			}
+
+			// Both addresses should be back in their pools.
+			if got := magicPool.inUseCount(); got != 1 {
+				t.Errorf("magic pool has %d addresses in use, want 1 (the filler)", got)
+			}
+			if got := transitPool.inUseCount(); got != 1 {
+				t.Errorf("transit pool has %d addresses in use, want 1 (the filler)", got)
+			}
+
+			// Once there's room again, the next attempt gets a fresh
+			// assignment and actually enqueues it.
+			<-c.addrsCh
+			as, err := c.reserveAddresses(appName, domain, tt.dst, 10, testConnectorPeer, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case queued := <-c.addrsCh:
+				if queued.connectorAddr.transit != as.connectorAddr.transit {
+					t.Errorf("queued transit IP %v, want %v", queued.connectorAddr.transit, as.connectorAddr.transit)
+				}
+			default:
+				t.Error("reservation after rollback didn't enqueue an assignment")
+			}
+		})
+	}
+}
+
 func TestTransitIPConnMapping(t *testing.T) {
 	conn25 := newConn25(t.Logf)
 
