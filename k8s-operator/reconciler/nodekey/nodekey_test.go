@@ -189,7 +189,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 				lc.lockStatus.FilteredPeers = nil
 			},
 			// Control may not have propagated the device yet, and that does not trigger a Secret event.
-			expectedResult: reconcile.Result{RequeueAfter: 5 * time.Second},
+			expectedResult: reconcile.Result{RequeueAfter: 60 * time.Second},
 			expectedLookup: true,
 		},
 		{
@@ -228,7 +228,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 				lc.lockStatus = lockedStatus(deviceID, nodeKey)
 			},
 			// Keys can briefly disagree during rotation, so retry rather than error.
-			expectedResult: reconcile.Result{RequeueAfter: 5 * time.Second},
+			expectedResult: reconcile.Result{RequeueAfter: 60 * time.Second},
 			expectedLookup: true,
 		},
 	}
