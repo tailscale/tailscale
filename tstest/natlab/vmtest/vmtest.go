@@ -473,7 +473,7 @@ type Node struct {
 	snatSubnetRoutes *bool // nil means default (true)
 	webServerPort    int
 	sshPort          int        // host port for SSH debug access (cloud VMs only)
-	dnsMode          DNSMode    // desired Linux DNS backend to provision; "" means the image default
+	dnsMode          DNSMode    // desired DNS backend to provision; "" means the image default
 	qmpPath          string     // socket path for talking to the QEMU process for the node
 	dhcpClient       DHCPClient // DHCP client for the vnet NIC; "" means the image default
 }
@@ -562,6 +562,12 @@ func (e *Env) AddNode(name string, opts ...any) *Node {
 
 	if n.systemdUnit && (n.os.IsGokrazy || n.os.GOOS() != "linux") {
 		e.t.Fatalf("SystemdUnit is only supported on Linux cloud VMs; node %s is %s", name, n.os.Name)
+	}
+
+	// FreeBSD has a provisioning recipe for DNSOpenresolv only. See
+	// writeFreeBSDDNSModeSetup.
+	if n.os.GOOS() == "freebsd" && n.dnsMode != DNSDefault && n.dnsMode != DNSOpenresolv {
+		e.t.Fatalf("AddNode(%q): DNSMode %q is not supported on FreeBSD", name, n.dnsMode)
 	}
 
 	// macOS VMs require a macOS arm64 host (Apple Virtualization.framework via
@@ -657,16 +663,17 @@ const (
 	// so tailscaled selects the "direct" manager (rewrites resolv.conf itself).
 	DNSDirect DNSMode = "direct"
 
-	// DNSOpenresolv masks systemd-resolved and installs upstream openresolv
-	// (which no cloud image ships), so tailscaled selects the "openresolv"
-	// manager. Its key directory is created empty, so unless [WithDHCPClient]
-	// selects a client whose resolv.conf hook registers a snippet, the only
-	// one ever registered is Tailscale's own. Before the fix for
-	// tailscale/tailscale#20825, tailscaled handled an empty key directory
-	// wrong: openresolv reports "no snippets" by exiting 2, and net/dns
-	// treated that non-zero exit as a hard failure.
+	// DNSOpenresolv provisions the guest so tailscaled selects the
+	// "openresolv" manager, with openresolv's snippet directory present but
+	// empty. Unless [WithDHCPClient] selects a client whose resolv.conf hook
+	// registers a snippet, the only one ever registered is Tailscale's own.
 	//
-	// openresolv's sources are vendored into the tree; see openresolv.go.
+	// On Linux, this masks systemd-resolved and installs upstream openresolv,
+	// which no Linux cloud image ships. Its sources are vendored into the
+	// tree. See openresolv.go.
+	//
+	// On FreeBSD, this uses the openresolv in the base system and
+	// deregisters the snippets dhclient added. See writeFreeBSDDNSModeSetup.
 	DNSOpenresolv DNSMode = "openresolv"
 )
 
@@ -712,9 +719,9 @@ func SNATSubnetRoutes(v bool) nodeOptSNATSubnetRoutes { return nodeOptSNATSubnet
 // The webserver responds with "Hello world I am <nodename> from <sourceIP>" on all requests.
 func WebServer(port int) nodeOptWebServer { return nodeOptWebServer(port) }
 
-// WithDNSMode returns a NodeOption that provisions the (Linux) node so
-// tailscaled selects the given DNS backend. Only meaningful for Linux cloud
-// images; ignored for gokrazy/macOS. See [DNSMode].
+// WithDNSMode returns a NodeOption that provisions the node so tailscaled
+// selects the given DNS backend. Only meaningful for Linux cloud images and
+// FreeBSD; ignored for gokrazy/macOS. See [DNSMode].
 func WithDNSMode(m DNSMode) nodeOptDNSMode { return nodeOptDNSMode(m) }
 
 // WithDHCPClient returns a NodeOption that provisions the node so the given
@@ -1181,13 +1188,18 @@ func (e *Env) ClientMetrics(n *Node) ClientMetrics {
 // net/dns/manager_linux.go.
 const dnsBackendMetricPrefix = "dns_manager_linux_mode_"
 
-// DNSBackend returns the Linux DNS backend ("mode") the node's tailscaled
-// selected (e.g. "systemd-resolved", "direct"). tailscaled sets a single gauge
+// DNSBackend returns the DNS backend ("mode") the node's tailscaled selected
+// (e.g. "systemd-resolved", "direct"). On Linux, tailscaled sets a single gauge
 // named dns_manager_linux_mode_<mode> to 1 for its selected mode (see
-// net/dns/manager_linux.go); this finds that gauge and returns <mode>. It fails
-// the test if none is set (non-Linux node, or DNS not yet configured).
+// net/dns/manager_linux.go); this finds that gauge and returns <mode>. FreeBSD
+// publishes no such gauge, so there this reads the backend from tailscaled's
+// log instead. It fails the test if the backend cannot be determined
+// (unsupported OS, or DNS not yet configured).
 func (e *Env) DNSBackend(n *Node) string {
 	e.t.Helper()
+	if n.os.GOOS() == "freebsd" {
+		return e.freebsdDNSBackend(n)
+	}
 	for name, m := range e.ClientMetrics(n) {
 		mode, ok := strings.CutPrefix(name, dnsBackendMetricPrefix)
 		if !ok || m.Value != 1 {
@@ -1201,7 +1213,39 @@ func (e *Env) DNSBackend(n *Node) string {
 	return ""
 }
 
-// AssertDNSBackend fails the test unless the node's selected Linux DNS backend
+// freebsdTailscaledLog is where the FreeBSD recipe sends tailscaled's output.
+// See generateFreeBSDUserData.
+const freebsdTailscaledLog = "/var/log/tailscaled.log"
+
+// freebsdDNSBackends maps the OSConfigurator type that net/dns logs when it
+// picks a backend to the mode name net/dns/manager_linux.go uses for the same
+// backend, so [Env.DNSBackend] returns one vocabulary on both OSes.
+var freebsdDNSBackends = map[string]string{
+	"dns.directManager":     "direct",
+	"dns.openresolvManager": "openresolv",
+	"dns.resolvconfManager": "debian-resolvconf",
+}
+
+// freebsdDNSBackend returns the DNS backend a FreeBSD node's tailscaled
+// selected, read from the "using <type>" line in its log.
+func (e *Env) freebsdDNSBackend(n *Node) string {
+	e.t.Helper()
+	// The type is logged with %T, so a pointer receiver shows up with a
+	// leading "*".
+	cmd := "grep -oE 'using [*]?dns\\.[A-Za-z]+' " + freebsdTailscaledLog + " | tail -n 1"
+	out, err := e.SSHExec(n, cmd)
+	if err != nil {
+		e.t.Fatalf("Node %q: no DNS backend logged in %s (DNS not yet configured?): %v (%s)", n.Name(), freebsdTailscaledLog, err, strings.TrimSpace(out))
+	}
+	typ := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(out), "using "), "*")
+	mode, ok := freebsdDNSBackends[typ]
+	if !ok {
+		e.t.Fatalf("Node %q: unknown DNS backend %q in %s", n.Name(), typ, freebsdTailscaledLog)
+	}
+	return mode
+}
+
+// AssertDNSBackend fails the test unless the node's selected DNS backend
 // matches want (see [Env.DNSBackend] for the mode strings). Use it in distro
 // tests to prove the node exercises the intended DNS manager.
 func (e *Env) AssertDNSBackend(n *Node, want string) {

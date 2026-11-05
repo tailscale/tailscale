@@ -73,8 +73,8 @@ func assertDhcpcdLease(t *testing.T, env *vmtest.Env, n *vmtest.Node, nameserver
 func TestDhcpcdOpenresolvDNS(t *testing.T) {
 	env, node := newDhcpcdEnv(t)
 	assertOpenresolvResolvConf(t, env, node,
-		[]string{orSignature, orQuad100},
+		[]string{vmtest.OpenresolvSignature, orQuad100},
 		[]string{vnet.FakeDNSIPv4().String()},
 	)
-	assertResolves(t, env, node, orUpstreamOnlyName, orUpstreamOnlyIP)
+	assertResolves(t, env, node, vmtest.Ubuntu2404, orUpstreamOnlyName, orUpstreamOnlyIP)
 }
