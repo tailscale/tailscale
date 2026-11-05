@@ -3522,7 +3522,7 @@ func TestShouldRebind(t *testing.T) {
 	}
 }
 
-func TestMaybeRebindOnError(t *testing.T) {
+func TestMaybeRebindOnWriteError(t *testing.T) {
 	tstest.PanicOnLog()
 	tstest.ResourceCheck(t)
 
@@ -3541,7 +3541,7 @@ func TestMaybeRebindOnError(t *testing.T) {
 			defer conn.Close()
 
 			before := metricRebindCalls.Value()
-			conn.maybeRebindOnError(rebindErr)
+			conn.maybeRebindOnWriteError(rebindErr)
 			after := metricRebindCalls.Value()
 			if before+1 != after {
 				t.Errorf("should rebind on %#v", rebindErr)
@@ -3558,7 +3558,7 @@ func TestMaybeRebindOnError(t *testing.T) {
 				lastRebindTime := time.Now().Add(-1 * time.Second)
 				conn.lastErrRebind.Store(lastRebindTime)
 				before := metricRebindCalls.Value()
-				conn.maybeRebindOnError(err)
+				conn.maybeRebindOnWriteError(err)
 				after := metricRebindCalls.Value()
 				if before != after {
 					t.Errorf("should not rebind within 5 seconds of last")
@@ -3568,7 +3568,7 @@ func TestMaybeRebindOnError(t *testing.T) {
 				// rebind time.
 				time.Sleep(6 * time.Second)
 
-				conn.maybeRebindOnError(err)
+				conn.maybeRebindOnWriteError(err)
 				newTime := conn.lastErrRebind.Load()
 				if newTime == lastRebindTime {
 					t.Errorf("expected a rebind to occur")
@@ -3578,6 +3578,75 @@ func TestMaybeRebindOnError(t *testing.T) {
 				}
 			}
 		})
+	})
+}
+
+func TestMaybeRebindOnReadError(t *testing.T) {
+	for _, tt := range []struct {
+		errno  error
+		rebind bool
+	}{
+		{syscall.EBADF, runtime.GOOS != "windows"},
+		{syscall.Errno(10009), runtime.GOOS == "windows"}, // WSAEBADF
+		{syscall.ECONNRESET, false},
+	} {
+		t.Run(tt.errno.Error(), func(t *testing.T) {
+			c := newTestConn(t)
+			defer c.Close()
+			before := metricRebindCalls.Value()
+			c.maybeRebindOnReadError(readErr(tt.errno))
+			var want int64
+			if tt.rebind {
+				want = 1
+			}
+			if got := metricRebindCalls.Value() - before; got != want {
+				t.Errorf("rebinds = %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestMaybeRebind(t *testing.T) {
+	t.Run("closing", func(t *testing.T) {
+		c := newTestConn(t)
+		defer c.Close()
+		c.closing.Store(true)
+		before := metricRebindCalls.Value()
+		if c.maybeRebind("test") {
+			t.Error("maybeRebind while closing = true, want false")
+		}
+		if got := metricRebindCalls.Value() - before; got != 0 {
+			t.Errorf("rebinds = %d, want 0", got)
+		}
+		if !c.lastErrRebind.Load().IsZero() {
+			t.Error("lastErrRebind updated while closing")
+		}
+	})
+
+	t.Run("concurrent", func(t *testing.T) {
+		c := newTestConn(t)
+		defer c.Close()
+		before := metricRebindCalls.Value()
+		const n = 10
+		var wg sync.WaitGroup
+		var won atomic.Int32
+		start := make(chan struct{})
+		for range n {
+			wg.Go(func() {
+				<-start
+				if c.maybeRebind("test") {
+					won.Add(1)
+				}
+			})
+		}
+		close(start)
+		wg.Wait()
+		if got := won.Load(); got != 1 {
+			t.Errorf("%d of %d concurrent maybeRebind calls rebound, want 1", got, n)
+		}
+		if got := metricRebindCalls.Value() - before; got != 1 {
+			t.Errorf("rebinds = %d, want 1", got)
+		}
 	})
 }
 

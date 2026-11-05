@@ -12,6 +12,12 @@ import (
 	"syscall"
 )
 
+// IsBadSocketError reports whether err indicates that the socket itself is no
+// longer valid.
+func IsBadSocketError(err error) bool {
+	return errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.ENOTSOCK)
+}
+
 // Reports whether err resulted from reading or writing to a closed or broken pipe.
 func IsClosedPipeError(err error) bool {
 	// EPIPE/ENOTCONN are common errors when a send fails due to a closed

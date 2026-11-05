@@ -29,3 +29,11 @@ func TestIsClosedPipeError(t *testing.T) {
 		}
 	}
 }
+
+func TestIsBadSocketError(t *testing.T) {
+	for _, err := range []error{nil, errors.New("unknown error"), fs.ErrClosed} {
+		if IsBadSocketError(err) {
+			t.Errorf("IsBadSocketError(%v) = true, want false", err)
+		}
+	}
+}
