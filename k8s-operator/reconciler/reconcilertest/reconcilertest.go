@@ -176,6 +176,19 @@ func ExpectReconciled(t *testing.T, r reconcile.Reconciler, ns, name string) {
 	}
 }
 
+// ExpectRequeue runs a single reconcile for ns/name and asserts it succeeded and asked to be requeued after a delay,
+// i.e. the reconciler is waiting for something it does not control.
+func ExpectRequeue(t *testing.T, r reconcile.Reconciler, ns, name string) {
+	t.Helper()
+	res, err := r.Reconcile(t.Context(), request(ns, name))
+	if err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected timed requeue, got success")
+	}
+}
+
 func request(ns, name string) reconcile.Request {
 	return reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: name}}
 }

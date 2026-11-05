@@ -479,7 +479,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, tsClient tscl
 	mo := &metricsOpts{
 		tsNamespace:  r.tsNamespace,
 		proxyStsName: pg.Name,
-		proxyLabels:  pgLabels(pg.Name, nil),
+		proxyLabels:  reconciler.ProxyGroupLabels(pg.Name, nil),
 		proxyType:    "proxygroup",
 	}
 	if err := reconcileMetricsResources(ctx, logger, mo, proxyClass, r.Client); err != nil {
@@ -515,7 +515,7 @@ func (r *ProxyGroupReconciler) maybeUpdateStatus(ctx context.Context, logger *za
 
 	pg.Status.Devices = devices
 
-	desiredReplicas := int(pgReplicas(pg))
+	desiredReplicas := int(reconciler.ProxyGroupReplicas(pg))
 
 	// Set ProxyGroupAvailable condition.
 	status := metav1.ConditionFalse
@@ -590,10 +590,10 @@ func (r *ProxyGroupReconciler) maybeReplaceStatefulSet(ctx context.Context, ss *
 func (r *ProxyGroupReconciler) ensureNodePortServiceCreated(ctx context.Context, pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass) (map[string]uint16, *uint16, error) {
 	return staticendpoints.EnsureNodePortServices(ctx, r.Client, staticendpoints.Config{
 		Namespace:      r.tsNamespace,
-		ParentType:     proxyTypeProxyGroup,
+		ParentType:     reconciler.ParentTypeProxyGroup,
 		ParentName:     pg.Name,
 		ProxyClassName: pc.Name,
-		Replicas:       pgReplicas(pg),
+		Replicas:       reconciler.ProxyGroupReplicas(pg),
 		PortRanges:     pc.Spec.StaticEndpoints.NodePort.Ports,
 		MakeService: func(_ int32, name string) *corev1.Service {
 			return pgNodePortService(pg, name, r.tsNamespace)
@@ -611,7 +611,7 @@ func (r *ProxyGroupReconciler) cleanupDanglingResources(ctx context.Context, tsC
 	}
 
 	for _, m := range metadata {
-		if m.ordinal+1 <= pgReplicas(pg) {
+		if m.ordinal+1 <= reconciler.ProxyGroupReplicas(pg) {
 			continue
 		}
 
@@ -650,7 +650,7 @@ func (r *ProxyGroupReconciler) cleanupDanglingResources(ctx context.Context, tsC
 	if pc != nil && pc.Spec.StaticEndpoints == nil {
 		labels := map[string]string{
 			kubetypes.LabelManaged: "true",
-			LabelParentType:        proxyTypeProxyGroup,
+			LabelParentType:        reconciler.ParentTypeProxyGroup,
 			LabelParentName:        pg.Name,
 		}
 		if err := r.DeleteAllOf(ctx, &corev1.Service{}, client.InNamespace(r.tsNamespace), client.MatchingLabels(labels)); err != nil {
@@ -684,7 +684,7 @@ func (r *ProxyGroupReconciler) maybeCleanup(ctx context.Context, tsClient tsclie
 	}
 
 	mo := &metricsOpts{
-		proxyLabels: pgLabels(pg.Name, nil),
+		proxyLabels: reconciler.ProxyGroupLabels(pg.Name, nil),
 		tsNamespace: r.tsNamespace,
 		proxyType:   "proxygroup",
 	}
@@ -711,8 +711,8 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(
 	svcToNodePorts map[string]uint16,
 ) (endpoints map[string][]netip.AddrPort, err error) {
 	logger := r.logger(pg.Name)
-	endpoints = make(map[string][]netip.AddrPort, pgReplicas(pg)) // keyed by Service name.
-	for i := range pgReplicas(pg) {
+	endpoints = make(map[string][]netip.AddrPort, reconciler.ProxyGroupReplicas(pg)) // keyed by Service name.
+	for i := range reconciler.ProxyGroupReplicas(pg) {
 		logger = logger.With("Pod", fmt.Sprintf("%s-%d", pg.Name, i))
 		cfgSecret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
@@ -793,7 +793,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(
 						// as containerboot does for ingress-pg-reconciler.
 						IssueCerts: opt.NewBool(i == 0),
 					},
-					LocalPort:          new(uint16(defaultLocalAddrPort)),
+					LocalPort:          new(uint16(tailscaled.HealthCheckPort)),
 					HealthCheckEnabled: opt.NewBool(true),
 				},
 			}
@@ -958,7 +958,7 @@ func (r *ProxyGroupReconciler) ensureStateAddedForProxyGroup(pg *tsapi.ProxyGrou
 	gaugeIngressProxyGroupResources.Set(int64(r.ingressProxyGroups.Len()))
 	gaugeAPIServerProxyGroupResources.Set(int64(r.apiServerProxyGroups.Len()))
 
-	r.reissuer.EnsureState(pg.Name, int(pgReplicas(pg)))
+	r.reissuer.EnsureState(pg.Name, int(reconciler.ProxyGroupReplicas(pg)))
 }
 
 // ensureStateRemovedForProxyGroup ensures the gauge metric for the ProxyGroup resource type is updated when the

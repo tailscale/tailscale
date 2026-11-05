@@ -30,6 +30,7 @@ import (
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
@@ -337,7 +338,7 @@ func TestValidateIngress(t *testing.T) {
 			Namespace: "default",
 			UID:       types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationProxyGroup: "test-pg",
+				reconciler.AnnotationProxyGroup: "test-pg",
 			},
 		},
 		Spec: networkingv1.IngressSpec{
@@ -398,7 +399,7 @@ func TestValidateIngress(t *testing.T) {
 					Name:      baseIngress.Name,
 					Namespace: baseIngress.Namespace,
 					Annotations: map[string]string{
-						AnnotationTags: "tag:invalid!",
+						reconciler.AnnotationTags: "tag:invalid!",
 					},
 				},
 			},
@@ -471,7 +472,7 @@ func TestValidateIngress(t *testing.T) {
 					Name:      "existing-ingress",
 					Namespace: "default",
 					Annotations: map[string]string{
-						AnnotationProxyGroup: "test-pg",
+						reconciler.AnnotationProxyGroup: "test-pg",
 					},
 				},
 				Spec: networkingv1.IngressSpec{
@@ -1001,10 +1002,10 @@ func populateTLSSecret(t *testing.T, c client.Client, pgName, domain string) {
 			Name:      domain,
 			Namespace: "operator-ns",
 			Labels: map[string]string{
-				kubetypes.LabelManaged:    "true",
-				labelProxyGroup:           pgName,
-				labelDomain:               domain,
-				kubetypes.LabelSecretType: kubetypes.LabelSecretTypeCerts,
+				kubetypes.LabelManaged:     "true",
+				reconciler.LabelProxyGroup: pgName,
+				labelDomain:                domain,
+				kubetypes.LabelSecretType:  kubetypes.LabelSecretTypeCerts,
 			},
 		},
 		Type: corev1.SecretTypeTLS,

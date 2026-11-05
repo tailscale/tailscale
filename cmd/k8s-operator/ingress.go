@@ -229,7 +229,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 
 	crl := childResourceLabels(ing.Name, ing.Namespace, "ingress")
 	var tags []string
-	if tstr, ok := ing.Annotations[AnnotationTags]; ok {
+	if tstr, ok := ing.Annotations[reconciler.AnnotationTags]; ok {
 		tags = strings.Split(tstr, ",")
 	}
 	hostname := hostnameForIngress(ing)
@@ -296,7 +296,7 @@ func (a *IngressReconciler) shouldExpose(ing *networkingv1.Ingress) bool {
 	return ing != nil &&
 		ing.Spec.IngressClassName != nil &&
 		*ing.Spec.IngressClassName == a.ingressClassName &&
-		ing.Annotations[AnnotationProxyGroup] == ""
+		ing.Annotations[reconciler.AnnotationProxyGroup] == ""
 }
 
 // validateIngressClass attempts to validate that 'tailscale' IngressClass
