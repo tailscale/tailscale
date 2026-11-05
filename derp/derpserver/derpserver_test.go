@@ -3084,3 +3084,158 @@ func benchmarkWriterBatch(b *testing.B, useTLS bool, size, batch int) {
 	b.StopTimer()
 	b.ReportMetric(float64(conn.writes.Load())/float64(b.N), "writes/op")
 }
+
+// deadlineRecordingConn records the write deadlines set on it and
+// counts and discards writes. Nothing else may be called; the embedded
+// Conn is nil.
+type deadlineRecordingConn struct {
+	derp.Conn
+	deadlines []time.Time
+	writes    int
+}
+
+func (c *deadlineRecordingConn) SetWriteDeadline(t time.Time) error {
+	c.deadlines = append(c.deadlines, t)
+	return nil
+}
+
+func (c *deadlineRecordingConn) Write(p []byte) (int, error) {
+	c.writes++
+	return len(p), nil
+}
+
+// TestWriteTimeout checks that each write to the connection, and
+// nothing else, sets a write deadline of the client's timeout from
+// now, however many frames the write carries; that a zero timeout sets
+// no deadline; and that mesh peers get privilegedWriteTimeout.
+func TestWriteTimeout(t *testing.T) {
+	s := New(key.NewNode(), t.Logf)
+	defer s.Close()
+	const d = time.Hour
+	s.tcpWriteTimeout = d
+
+	// batch makes a client, writes frames keep-alive frames on it and
+	// flushes them, then checks that they took at least minWrites
+	// writes and that each write set a deadline timeout from now, give
+	// or take the call's own duration, or none if timeout is zero.
+	batch := func(what string, canMesh bool, frames, minWrites int, timeout time.Duration) {
+		t.Helper()
+		conn := &deadlineRecordingConn{}
+		c := &sclient{
+			s:       s,
+			key:     key.NewNode().Public(),
+			nc:      conn,
+			bw:      &lazyBufioWriter{w: conn},
+			canMesh: canMesh,
+			logf:    t.Logf,
+		}
+		if err := c.bw.setWriteTimeout(conn, s.writeTimeout(canMesh)); err != nil {
+			t.Fatal(err)
+		}
+		before := time.Now()
+		for range frames {
+			if err := c.sendKeepAlive(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := c.bw.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		after := time.Now()
+		if conn.writes < minWrites {
+			t.Fatalf("%s: %d writes; want at least %d", what, conn.writes, minWrites)
+		}
+		want := conn.writes
+		if timeout == 0 {
+			want = 0
+		}
+		if len(conn.deadlines) != want {
+			t.Fatalf("%s: set %d deadlines over %d writes; want %d", what, len(conn.deadlines), conn.writes, want)
+		}
+		for _, got := range conn.deadlines {
+			if got.Before(before.Add(timeout)) || got.After(after.Add(timeout)) {
+				t.Fatalf("%s: set deadline %v; want %v from now", what, got, timeout)
+			}
+		}
+	}
+
+	batch("one frame", false, 1, 1, d)
+	batch("many frames", false, 100, 1, d)
+	// A keep-alive frame is a 5 byte header, so this many overflow
+	// the buffer at least once before the flush.
+	batch("buffer overflow", false, bufioWriterSize/5+1, 2, d)
+	batch("mesh peer", true, 1, 1, privilegedWriteTimeout)
+
+	s.tcpWriteTimeout = 0
+	batch("zero timeout", false, 1, 1, 0)
+	batch("zero timeout, mesh peer", true, 1, 1, privilegedWriteTimeout)
+}
+
+// BenchmarkWriteTimeout measures what moving the write deadline from
+// each frame to each flush saves: a batch of keep-alive frames written
+// through a client's buffered writer and flushed to a TCP connection,
+// setting the deadline once per frame (what the server did before) or
+// once per flush (what [deadlineWriter] does). The frames fit one
+// buffer, so both do one connection write per flush and differ only in
+// deadline calls.
+func BenchmarkWriteTimeout(b *testing.B) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer ln.Close()
+	nc, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer nc.Close()
+	drain, err := ln.Accept()
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer drain.Close()
+	go io.Copy(io.Discard, drain)
+
+	s := New(key.NewNode(), logger.Discard)
+	defer s.Close()
+
+	for _, frames := range []int{1, 16, 128} {
+		for _, perFrame := range []bool{true, false} {
+			name := fmt.Sprintf("frames=%d/deadline=", frames)
+			if perFrame {
+				name += "per-frame"
+			} else {
+				name += "per-flush"
+			}
+			b.Run(name, func(b *testing.B) {
+				c := &sclient{
+					s:    s,
+					key:  key.NewNode().Public(),
+					nc:   nc,
+					bw:   &lazyBufioWriter{w: nc},
+					logf: logger.Discard,
+				}
+				timeout := s.writeTimeout(false)
+				if !perFrame {
+					if err := c.bw.setWriteTimeout(nc, timeout); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.ReportAllocs()
+				for range b.N {
+					for range frames {
+						if perFrame {
+							nc.SetWriteDeadline(time.Now().Add(timeout))
+						}
+						if err := c.sendKeepAlive(); err != nil {
+							b.Fatal(err)
+						}
+					}
+					if err := c.bw.Flush(); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}

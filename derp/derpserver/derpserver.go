@@ -1174,8 +1174,14 @@ func (s *Server) accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter
 		return fmt.Errorf("client %v rejected: %v", clientKey, err)
 	}
 
-	// At this point we trust the client so we don't time out.
+	// At this point we trust the client so we don't time out the
+	// connection as a whole. Instead each write from here on, starting
+	// with the ServerInfo frame below, gets the client's own timeout.
 	nc.SetDeadline(time.Time{})
+	canMesh := s.isMeshPeer(clientInfo)
+	if err := bw.setWriteTimeout(nc, s.writeTimeout(canMesh)); err != nil {
+		return fmt.Errorf("set write timeout: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -1191,7 +1197,7 @@ func (s *Server) accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter
 		ctx:            ctx,
 		remoteIPPort:   remoteIPPort,
 		connectedAt:    s.clock.Now(),
-		canMesh:        s.isMeshPeer(clientInfo),
+		canMesh:        canMesh,
 		isNotIdealConn: IdealNodeContextKey.Value(ctx) != "",
 		peerGoneLim:    rate.NewLimiter(rate.Every(time.Second), 3),
 	}
@@ -2746,9 +2752,10 @@ func (c *sclient) writePending(pend writerPending) (frames int, carry writerPend
 	return frames, pend & queues, nil
 }
 
-func (c *sclient) setWriteDeadline() {
-	d := c.s.tcpWriteTimeout
-	if c.canMesh {
+// writeTimeout returns how long each write to a client's
+// connection gets before it fails, or zero for no limit.
+func (s *Server) writeTimeout(canMesh bool) time.Duration {
+	if canMesh {
 		// Trusted peers get more tolerance.
 		//
 		// The "canMesh" is a bit of a misnomer; mesh peers typically run over a
@@ -2757,32 +2764,36 @@ func (c *sclient) setWriteDeadline() {
 		// use the private mesh key to subscribe to connect/disconnect events
 		// and might hit throttling and need more time to get the initial dump
 		// of connected peers.
-		d = privilegedWriteTimeout
+		return privilegedWriteTimeout
 	}
-	if d == 0 {
-		// A zero value should disable the write deadline per
-		// --tcp-write-timeout docs. The flag should only be applicable for
-		// non-mesh connections, again per its docs. If mesh happened to use a
-		// zero value constant above it would be a bug, so we don't bother
-		// with a condition on c.canMesh.
-		return
-	}
+	return s.tcpWriteTimeout
+}
+
+// deadlineWriter writes to a client's connection, giving each write
+// a timeout to complete within. It sits under the client's buffered writer, so
+// each write is a flush of that buffer.
+// See [lazyBufioWriter.setWriteTimeout].
+type deadlineWriter struct {
+	nc      derp.Conn
+	timeout time.Duration // non-zero
+}
+
+func (w *deadlineWriter) Write(p []byte) (int, error) {
 	// Ignore the error from setting the write deadline. In practice,
 	// setting the deadline will only fail if the connection is closed
 	// or closing, so the subsequent Write() will fail anyway.
-	_ = c.nc.SetWriteDeadline(time.Now().Add(d))
+	_ = w.nc.SetWriteDeadline(time.Now().Add(w.timeout))
+	return w.nc.Write(p)
 }
 
 // sendKeepAlive sends a keep-alive frame, without flushing.
 func (c *sclient) sendKeepAlive() error {
-	c.setWriteDeadline()
 	return derp.WriteFrameHeader(c.bw.bw(), derp.FrameKeepAlive, 0)
 }
 
 // sendPong sends a pong reply, without flushing.
 func (c *sclient) sendPong(data [8]byte) error {
 	c.s.sentPong.Add(1)
-	c.setWriteDeadline()
 	if err := derp.WriteFrameHeader(c.bw.bw(), derp.FramePong, uint32(len(data))); err != nil {
 		return err
 	}
@@ -2807,7 +2818,6 @@ func (c *sclient) sendPeerGone(peer key.NodePublic, reason derp.PeerGoneReasonTy
 	case derp.PeerGoneReasonNotHere:
 		c.s.peerGoneNotHereFrames.Add(1)
 	}
-	c.setWriteDeadline()
 	data := make([]byte, 0, peerGoneFrameLen)
 	data = peer.AppendTo(data)
 	data = append(data, byte(reason))
@@ -2821,7 +2831,6 @@ func (c *sclient) sendPeerGone(peer key.NodePublic, reason derp.PeerGoneReasonTy
 
 // sendPeerPresent sends a peerPresent frame, without flushing.
 func (c *sclient) sendPeerPresent(peer key.NodePublic, ipPort netip.AddrPort, flags derp.PeerPresentFlags, appName string) error {
-	c.setWriteDeadline()
 	frameLen := peerPresentBaseLen + len(appName)
 	if err := derp.WriteFrameHeader(c.bw.bw(), derp.FramePeerPresent, uint32(frameLen)); err != nil {
 		return err
@@ -2901,8 +2910,6 @@ func (c *sclient) sendPacket(srcKey key.NodePublic, contents []byte) (err error)
 			c.debugLogf("sendPacket from %s: %v", srcKey.ShortString(), err)
 		}
 	}()
-
-	c.setWriteDeadline()
 
 	withKey := !srcKey.IsZero()
 	pktLen := len(contents)
@@ -3375,6 +3382,23 @@ func (w *lazyBufioWriter) bw() *bufio.Writer {
 		w.lbw.Reset(w.w)
 	}
 	return w.lbw
+}
+
+// setWriteTimeout makes nc the underlying writer and gives each write
+// to it, from now on, timeout to complete; zero leaves writes without
+// a deadline. It first flushes anything buffered, through the previous
+// writer, so it's safe to call between batches but not concurrently
+// with a writer.
+func (w *lazyBufioWriter) setWriteTimeout(nc derp.Conn, timeout time.Duration) error {
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if timeout == 0 {
+		w.w = nc
+		return nil
+	}
+	w.w = &deadlineWriter{nc: nc, timeout: timeout}
+	return nil
 }
 
 func (w *lazyBufioWriter) Available() int { return w.bw().Available() }
