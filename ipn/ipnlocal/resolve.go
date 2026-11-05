@@ -47,8 +47,7 @@ func (b *LocalBackend) lookupPeerByIP(ip netip.Addr) (key.NodePublic, bool) {
 // [wgengine.Engine.SetPeerConfigFunc] callback, backing wireguard-go's
 // lazy peer creation and per-delta peer sync.
 func (b *LocalBackend) peerConfig(k key.NodePublic) (_ wgcfg.PeerConfig, ok bool) {
-	ips, ok := b.currentNode().PeerAllowedIPs(k)
-	return wgcfg.PeerConfig{AllowedIPs: ips}, ok
+	return b.currentNode().PeerWGConfig(k)
 }
 
 // resolveMagicDNS resolves a MagicDNS hostname to the owning node's IP

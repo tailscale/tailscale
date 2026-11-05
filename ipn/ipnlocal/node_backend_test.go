@@ -391,27 +391,27 @@ func TestNodeBackendDiscoChanged(t *testing.T) {
 
 	// A brand-new peer is not a disco change.
 	d1 := newDisco()
-	if got, _ := nb.SetNetMap(mkNetMap(d1)); len(got) != 0 {
-		t.Errorf("SetNetMap(new peer) discoChanged = %v; want none", got)
+	if got := nb.SetNetMap(mkNetMap(d1)); len(got.DiscoChanged) != 0 {
+		t.Errorf("SetNetMap(new peer) discoChanged = %v; want none", got.DiscoChanged)
 	}
 
 	// A changed disco key requires a session reset.
 	d2 := newDisco()
-	if got, _ := nb.SetNetMap(mkNetMap(d2)); !slices.Contains(got, nk) {
-		t.Errorf("SetNetMap(changed disco) discoChanged = %v; want %v", got, nk)
+	if got := nb.SetNetMap(mkNetMap(d2)); !got.DiscoChanged.Contains(nk) {
+		t.Errorf("SetNetMap(changed disco) discoChanged = %v; want %v", got.DiscoChanged, nk)
 	}
 
 	// An unchanged disco key does not.
-	if got, _ := nb.SetNetMap(mkNetMap(d2)); len(got) != 0 {
-		t.Errorf("SetNetMap(same disco) discoChanged = %v; want none", got)
+	if got := nb.SetNetMap(mkNetMap(d2)); len(got.DiscoChanged) != 0 {
+		t.Errorf("SetNetMap(same disco) discoChanged = %v; want none", got.DiscoChanged)
 	}
 
 	// Transitions to or from a zero disco key never reset.
-	if got, _ := nb.SetNetMap(mkNetMap(key.DiscoPublic{})); len(got) != 0 {
-		t.Errorf("SetNetMap(to zero disco) discoChanged = %v; want none", got)
+	if got := nb.SetNetMap(mkNetMap(key.DiscoPublic{})); len(got.DiscoChanged) != 0 {
+		t.Errorf("SetNetMap(to zero disco) discoChanged = %v; want none", got.DiscoChanged)
 	}
-	if got, _ := nb.SetNetMap(mkNetMap(d1)); len(got) != 0 {
-		t.Errorf("SetNetMap(from zero disco) discoChanged = %v; want none", got)
+	if got := nb.SetNetMap(mkNetMap(d1)); len(got.DiscoChanged) != 0 {
+		t.Errorf("SetNetMap(from zero disco) discoChanged = %v; want none", got.DiscoChanged)
 	}
 }
 
@@ -454,6 +454,148 @@ func TestNodeBackendDiscoChangedDelta(t *testing.T) {
 	nk2 := key.NewNode().Public()
 	if got := apply(netmap.NodeMutationUpsert{Node: mkNode(nk2, newDisco())}); len(got) != 0 {
 		t.Errorf("upsert(rotated node key) discoChanged = %v; want none", got)
+	}
+}
+
+func TestNodeBackendHandshakeChanged(t *testing.T) {
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+
+	nk := key.NewNode().Public()
+	dk := key.NewDisco().Public()
+	mkNetMap := func(hybrid bool, remoteDisabled bool) *netmap.NetworkMap {
+		cap := 100
+		if hybrid {
+			cap = 151 // first capver to support hybrid handshakes
+		}
+		var disable tailcfg.NodeCapMap
+		if remoteDisabled {
+			disable = tailcfg.NodeCapMap{
+				nodecap.DisableHybridHandshakes: nil,
+			}
+		}
+
+		n := &tailcfg.Node{
+			ID:       1,
+			Key:      nk,
+			DiscoKey: dk,
+			HomeDERP: 1,
+			Cap:      tailcfg.CapabilityVersion(cap),
+			CapMap:   disable,
+		}
+		return &netmap.NetworkMap{Peers: []tailcfg.NodeView{n.View()}}
+	}
+	empty := &netmap.NetworkMap{}
+
+	tests := []struct {
+		name       string
+		before     *netmap.NetworkMap
+		after      *netmap.NetworkMap
+		wantChange bool
+	}{
+		{"add classical peer", empty, mkNetMap(false, false), false},
+		{"delete classical peer", mkNetMap(false, false), empty, false},
+		{"add hybrid peer", empty, mkNetMap(true, false), false},
+		{"delete hybrid peer", mkNetMap(true, false), empty, false},
+		{"classical to hybrid", mkNetMap(false, false), mkNetMap(true, false), true},
+		{"hybrid to classical", mkNetMap(true, false), mkNetMap(false, false), true},
+		{"disable classical peer", mkNetMap(false, false), mkNetMap(false, true), false},
+		{"enable classical peer", mkNetMap(false, true), mkNetMap(false, false), false},
+		{"disable hybrid peer", mkNetMap(true, false), mkNetMap(true, true), true},
+		{"enable hybrid peer", mkNetMap(true, true), mkNetMap(true, false), true},
+		{"classical to disabled hybrid", mkNetMap(false, false), mkNetMap(true, true), false},
+		{"disabled hybrid to classical", mkNetMap(true, true), mkNetMap(false, false), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nb.SetNetMap(tt.before)
+			got := nb.SetNetMap(tt.after)
+			if tt.wantChange {
+				if len(got.HandshakeTypeChanged) != 1 || !got.HandshakeTypeChanged.Contains(nk) {
+					t.Errorf("SetNetMap(%v) HandshakeTypeChanged = %v, want %v", tt.name, got.HandshakeTypeChanged, nk)
+				}
+			} else {
+				if len(got.HandshakeTypeChanged) != 0 {
+					t.Errorf("SetNetMap(%v) HandshakeTypeChanged = %v, want none", tt.name, got.HandshakeTypeChanged)
+				}
+			}
+		})
+	}
+}
+
+func TestNodeBackendHandshakeChangedDelta(t *testing.T) {
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+
+	nk := key.NewNode().Public()
+	dk := key.NewDisco().Public()
+	mkNode := func(hybrid bool, remoteDisabled bool) tailcfg.NodeView {
+		cap := 100
+		if hybrid {
+			cap = 151 // first capver to support hybrid handshakes
+		}
+		var disable tailcfg.NodeCapMap
+		if remoteDisabled {
+			disable = tailcfg.NodeCapMap{
+				nodecap.DisableHybridHandshakes: nil,
+			}
+		}
+
+		return (&tailcfg.Node{
+			ID:       1,
+			Key:      nk,
+			DiscoKey: dk,
+			HomeDERP: 1,
+			Cap:      tailcfg.CapabilityVersion(cap),
+			CapMap:   disable,
+		}).View()
+	}
+	upsert := func(hybrid bool, remoteDisabled bool) netmap.NodeMutationUpsert {
+		return netmap.NodeMutationUpsert{Node: mkNode(hybrid, remoteDisabled)}
+	}
+	rm := netmap.MakeNodeMutationRemove(1)
+
+	mkNetmap := func(hybrid bool, remoteDisabled bool) *netmap.NetworkMap {
+		return &netmap.NetworkMap{Peers: []tailcfg.NodeView{mkNode(hybrid, remoteDisabled)}}
+	}
+	empty := &netmap.NetworkMap{}
+
+	tests := []struct {
+		name       string
+		before     *netmap.NetworkMap
+		after      netmap.NodeMutation
+		wantChange bool
+	}{
+		{"add classical peer", empty, upsert(false, false), false},
+		{"add hybrid peer", empty, upsert(true, false), false},
+		{"delete classical peer", mkNetmap(false, false), rm, false},
+		{"delete hybrid peer", mkNetmap(true, false), rm, false},
+		{"classical to hybrid", mkNetmap(false, false), upsert(true, false), true},
+		{"hybrid to classical", mkNetmap(true, false), upsert(false, false), true},
+		{"disable classical", mkNetmap(false, false), upsert(false, true), false},
+		{"enable classical", mkNetmap(false, true), upsert(false, false), false},
+		{"disable hybrid", mkNetmap(true, false), upsert(true, true), true},
+		{"enable hybrid", mkNetmap(true, true), upsert(true, false), true},
+		{"classical to disabled hybrid", mkNetmap(false, false), upsert(true, true), false},
+		{"disabled hybrid to classical", mkNetmap(true, true), upsert(false, false), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nb.SetNetMap(tt.before)
+			got, handled := nb.UpdateNetmapDelta([]netmap.NodeMutation{tt.after})
+			if !handled {
+				t.Fatal("UpdateNetmapDelta not handled")
+			}
+			if tt.wantChange {
+				if len(got.HandshakeTypeChanged) != 1 || !got.HandshakeTypeChanged.Contains(nk) {
+					t.Errorf("UpdateNetmapDelta(%v) HandshakeTypeChanged = %v, want %v", tt.name, got.HandshakeTypeChanged, nk)
+				}
+			} else {
+				if len(got.HandshakeTypeChanged) != 0 {
+					t.Errorf("UpdateNetmapDelta(%v) HandshakeTypeChanged = %v, want none", tt.name, got.HandshakeTypeChanged)
+				}
+			}
+		})
 	}
 }
 
