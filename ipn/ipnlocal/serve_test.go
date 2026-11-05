@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,6 +42,7 @@ import (
 	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
+	"tailscale.com/tstest/tlstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
@@ -2453,5 +2455,116 @@ func TestReverseProxyRechecksTailscaledSocketPerDial(t *testing.T) {
 	}
 	if _, err := rp.lb.dialServeUnixSocket(t.Context(), rp.socketPath); !errors.Is(err, ErrProxyToTailscaledSocket) {
 		t.Fatalf("dial after the symlink swap = %v; want ErrProxyToTailscaledSocket", err)
+	}
+}
+
+// TestServeWebHandlerHostNormalization checks that a request is matched
+// to its serve config regardless of how the client spells the name. DNS
+// names are case-insensitive and may carry a trailing dot, while serve
+// config keys are always lowercase with no trailing dot. For plain HTTP
+// the name comes from the Host header. For HTTPS it comes from SNI, which
+// cannot carry a trailing dot but is not lowercased by TLS. (#21538, #21986)
+func TestServeWebHandlerHostNormalization(t *testing.T) {
+	b := newTestBackend(t)
+	b.pm.currentProfile = (&ipn.LoginProfile{
+		ID:             "id0",
+		NetworkProfile: ipn.NetworkProfile{MagicDNSName: "example.ts.net"},
+	}).View()
+	conf := &ipn.ServeConfig{
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			"svelte.example.ts.net:12075": {
+				Handlers: map[string]*ipn.HTTPHandler{"/": {Text: "hello"}},
+			},
+		},
+	}
+	if err := b.SetServeConfig(conf, ""); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		host     string // Host header for plain HTTP; SNI for HTTPS
+		tls      bool
+		wantCode int
+	}{
+		{host: "svelte.example.ts.net:12075", wantCode: http.StatusOK},
+		{host: "svelte:12075", wantCode: http.StatusOK},
+		{host: "svelte.example.ts.net.:12075", wantCode: http.StatusOK},
+		{host: "svelte.example.ts.net.", wantCode: http.StatusOK},
+		{host: "svelte.:12075", wantCode: http.StatusOK},
+		{host: "Svelte.Example.TS.net:12075", wantCode: http.StatusOK},
+		{host: "SVELTE:12075", wantCode: http.StatusOK},
+		{host: "other.example.ts.net:12075", wantCode: http.StatusNotFound},
+		{host: "svelte.example.ts.net..:12075", wantCode: http.StatusNotFound},
+		{host: "svelte.example.ts.net", tls: true, wantCode: http.StatusOK},
+		{host: "Svelte.Example.TS.net", tls: true, wantCode: http.StatusOK},
+		{host: "other.example.ts.net", tls: true, wantCode: http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		name := tt.host
+		if tt.tls {
+			name = "tls/" + name
+		}
+		t.Run(name, func(t *testing.T) {
+			req := &http.Request{Host: tt.host, URL: &url.URL{Path: "/"}, RequestURI: "/"}
+			if tt.tls {
+				req.TLS = &tls.ConnectionState{ServerName: tt.host}
+			}
+			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(), &serveHTTPContext{
+				DestPort: 12075,
+				SrcAddr:  netip.MustParseAddrPort("100.64.0.2:1234"),
+			}))
+			w := httptest.NewRecorder()
+			b.serveWebHandler(w, req)
+			if w.Code != tt.wantCode {
+				t.Errorf("%s: got %d, want %d", name, w.Code, tt.wantCode)
+			}
+		})
+	}
+}
+
+// TestGetTLSServeCertForPortLowercasesSNI checks that the serve TLS cert
+// callback lowercases the SNI before both the serve config lookup and the
+// cert lookup. Cert domains are lowercase and matched exactly, so passing
+// the SNI through as sent made a mixed-case ClientHello fail the handshake.
+func TestGetTLSServeCertForPortLowercasesSNI(t *testing.T) {
+	b := newTestBackend(t)
+	conf := &ipn.ServeConfig{
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			"svelte.example.ts.net:443": {
+				Handlers: map[string]*ipn.HTTPHandler{"/": {Text: "hello"}},
+			},
+		},
+	}
+	if err := b.SetServeConfig(conf, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotDomain string
+	restore := HookGetCertPEM.SetForTest(func(_ context.Context, _ *LocalBackend, domain string, _ time.Duration) (*TLSCertKeyPair, error) {
+		gotDomain = domain
+		if domain != "svelte.example.ts.net" {
+			return nil, fmt.Errorf("invalid domain %q", domain)
+		}
+		d := tlstest.Domain(domain)
+		return &TLSCertKeyPair{CertPEM: d.CertPEM(), KeyPEM: d.KeyPEM()}, nil
+	})
+	defer restore()
+
+	getCert := b.getTLSServeCertForPort(443, "")
+	for _, sni := range []string{"svelte.example.ts.net", "Svelte.Example.TS.net"} {
+		gotDomain = ""
+		cert, err := getCert(&tls.ClientHelloInfo{ServerName: sni})
+		if err != nil {
+			t.Errorf("SNI %q: %v", sni, err)
+			continue
+		}
+		if gotDomain != "svelte.example.ts.net" {
+			t.Errorf("SNI %q: cert looked up for %q", sni, gotDomain)
+		}
+		if cert == nil || cert.Leaf == nil || !slices.Contains(cert.Leaf.DNSNames, "svelte.example.ts.net") {
+			t.Errorf("SNI %q: unexpected cert %+v", sni, cert)
+		}
+	}
+	if _, err := getCert(&tls.ClientHelloInfo{ServerName: "Other.Example.TS.net"}); err == nil {
+		t.Error("unconfigured name: got cert, want error")
 	}
 }
