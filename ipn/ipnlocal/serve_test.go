@@ -1388,6 +1388,7 @@ func TestServeFileOrDirectory(t *testing.T) {
 	writeFile("subdir/file-a", "this is A")
 	writeFile("subdir/file-b", "this is B")
 	writeFile("subdir/file-c", "this is C")
+	writeFile("subdir/nested/index.html", "this is nested index")
 
 	contains := func(subs ...string) func([]byte, *http.Response) error {
 		return func(resBody []byte, res *http.Response) error {
@@ -1441,7 +1442,9 @@ func TestServeFileOrDirectory(t *testing.T) {
 		{"/subdir/", "/", contains("file-a", "file-b", "file-c")},
 		{"/subdir/nested", "/", isRedirect("/subdir/nested/")},
 		{"//subdir/nested", "/", isRedirect("/subdir/nested/")},
+		{"/subdir/nested/index.html", "/", isRedirect("/subdir/nested/")},
 		{"/subdir/file-a", "/", contains("this is A")},
+		{"/subdir/file-a/", "/", isRedirect("/subdir/file-a")},
 		{"/subdir/file-z", "/", isStatus(404)},
 
 		{"/doc", "/doc/", isRedirect("/doc/")},
@@ -1453,8 +1456,9 @@ func TestServeFileOrDirectory(t *testing.T) {
 		{"/doc/subdir", "/doc/", isRedirect("/doc/subdir/")},
 		{"/doc/subdir/", "/doc/", contains("file-a", "file-b", "file-c")},
 		{"/doc/subdir/nested", "/doc/", isRedirect("/doc/subdir/nested/")},
+		{"/doc/subdir/nested/index.html", "/doc/", isRedirect("/doc/subdir/nested/")},
 		{"/doc/subdir/file-a", "/doc/", contains("this is A")},
-		{"/doc/subdir/file-a/", "/doc/", isRedirect("/doc/subdir/file-a/../file-a")},
+		{"/doc/subdir/file-a/", "/doc/", isRedirect("/doc/subdir/file-a")},
 		{"/doc/subdir/file-z", "/doc/", isStatus(404)},
 	}
 	for _, tt := range tests {

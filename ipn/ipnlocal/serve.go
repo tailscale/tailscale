@@ -1338,7 +1338,7 @@ func (b *LocalBackend) serveFileOrDirectory(w http.ResponseWriter, r *http.Reque
 // flushing HTTP headers, rewrites any Location header to be under the mount
 // point. http.FileServer sends redirects relative to the (prefix-stripped)
 // request URL, so a relative Location is resolved against the original request
-// path; any other Location is prefixed with the mount point.
+// path.
 type fixLocationHeaderResponseWriter struct {
 	http.ResponseWriter
 	mountPoint string
@@ -1349,15 +1349,22 @@ type fixLocationHeaderResponseWriter struct {
 func (w *fixLocationHeaderResponseWriter) fix() {
 	h := w.ResponseWriter.Header()
 	if v := h.Get("Location"); v != "" {
-		if !strings.HasPrefix(v, "/") && strings.HasPrefix(w.reqPath, w.mountPoint) {
-			// Relative to the directory of the original request path, which
-			// keeps any parent directories below the mount point.
-			loc := w.reqPath[:strings.LastIndex(w.reqPath, "/")+1] + v
+		if ref, err := url.Parse(v); err == nil && ref.Scheme == "" && ref.Host == "" && !strings.HasPrefix(v, "/") && strings.HasPrefix(w.reqPath, w.mountPoint) {
+			// Resolve against the original request path, which keeps any
+			// parent directories below the mount point and removes dot
+			// segments. The query string, if any, is carried along.
+			u := (&url.URL{Path: w.reqPath}).ResolveReference(ref)
+			loc := u.EscapedPath()
+			if u.RawQuery != "" {
+				loc += "?" + u.RawQuery
+			}
 			// Collapse leading slashes so a request path like "//foo"
 			// can't produce a protocol-relative Location.
 			h.Set("Location", "/"+strings.TrimLeft(loc, "/"))
 			return
 		}
+		// Not expected from http.FileServer, which only sends relative
+		// Locations; kept as a safety net.
 		h.Set("Location", w.mountPoint+v)
 	}
 }
