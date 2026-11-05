@@ -55,6 +55,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/rands"
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/zstdframe"
 	"tailscale.com/version"
 )
@@ -617,6 +618,7 @@ type TestNode struct {
 
 	dir          string // temp dir for sock & state
 	configFile   string // or empty for none
+	syspolicy    map[pkey.Key]any
 	sockFile     string
 	stateFile    string
 	upFlagGOOS   string // if non-empty, sets TS_DEBUG_UP_FLAG_GOOS for cmd/tailscale CLI
@@ -638,6 +640,19 @@ func (n *TestNode) writeBlankEnvFile() string {
 		t.Fatalf("writing %s: %v", path, err)
 	}
 	return path
+}
+
+// writeSyspolicy writes the node's syspolicy settings to path as JSON.
+func (n *TestNode) writeSyspolicy(path string) {
+	t := n.env.t
+	t.Helper()
+	b, err := json.Marshal(n.syspolicy)
+	if err != nil {
+		t.Fatalf("encoding syspolicy: %v", err)
+	}
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatalf("writing %s: %v", path, err)
+	}
 }
 
 // TestNodeOpt represents an option that can be passed to NewTestNode.
@@ -1017,6 +1032,12 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 	if n.configFile != "" {
 		cmd.Args = append(cmd.Args, "--config="+n.configFile)
 	}
+	// Always pass the node's own policy file, so tailscaled never reads the machine-wide one.
+	syspolicyFile := filepath.Join(n.dir, "syspolicy.json")
+	if n.syspolicy != nil {
+		n.writeSyspolicy(syspolicyFile)
+	}
+	cmd.Args = append(cmd.Args, "--syspolicy-file="+syspolicyFile)
 	if n.encryptState {
 		cmd.Args = append(cmd.Args, "--encrypt-state")
 	}
