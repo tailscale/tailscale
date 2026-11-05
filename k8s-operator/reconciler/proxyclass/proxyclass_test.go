@@ -16,11 +16,11 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler/proxyclass"
+	"tailscale.com/k8s-operator/reconciler/reconcilertest"
 	"tailscale.com/tstest"
 )
 
@@ -51,8 +51,7 @@ func TestProxyClass(t *testing.T) {
 			},
 		},
 	}
-	fc := fake.NewClientBuilder().
-		WithScheme(tsapi.GlobalScheme).
+	fc := reconcilertest.NewClientBuilder().
 		WithObjects(pc).
 		WithStatusSubresource(pc).
 		Build()
@@ -118,16 +117,7 @@ func TestProxyClass(t *testing.T) {
 		if err := fc.Get(context.Background(), types.NamespacedName{Name: "test"}, got); err != nil {
 			t.Fatalf("Get: %v", err)
 		}
-		var cond *metav1.Condition
-		for i := range got.Status.Conditions {
-			if got.Status.Conditions[i].Type == string(tsapi.ProxyClassReady) {
-				cond = &got.Status.Conditions[i]
-				break
-			}
-		}
-		if cond == nil {
-			t.Fatalf("ProxyClassReady condition not set")
-		}
+		cond := reconcilertest.Condition(t, got.Status.Conditions, tsapi.ProxyClassReady)
 		if cond.Status != wantStatus {
 			t.Errorf("condition Status: got %q, want %q", cond.Status, wantStatus)
 		}
@@ -337,8 +327,7 @@ func TestProxyClassValidation(t *testing.T) {
 				objs = append(objs, existingPC)
 			}
 
-			fc := fake.NewClientBuilder().
-				WithScheme(tsapi.GlobalScheme).
+			fc := reconcilertest.NewClientBuilder().
 				WithObjects(objs...).
 				WithStatusSubresource(pc, existingPC).
 				Build()
@@ -365,16 +354,7 @@ func TestProxyClassValidation(t *testing.T) {
 				t.Fatalf("Get: %v", err)
 			}
 
-			var ready *metav1.Condition
-			for i := range got.Status.Conditions {
-				if got.Status.Conditions[i].Type == string(tsapi.ProxyClassReady) {
-					ready = &got.Status.Conditions[i]
-					break
-				}
-			}
-			if ready == nil {
-				t.Fatal("Ready condition not set")
-			}
+			ready := reconcilertest.Condition(t, got.Status.Conditions, tsapi.ProxyClassReady)
 
 			wantStatus := metav1.ConditionTrue
 			if !tc.valid {

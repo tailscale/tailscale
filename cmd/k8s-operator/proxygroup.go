@@ -34,6 +34,7 @@ import (
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/k8s-operator/reconciler/staticendpoints"
 	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/k8s-operator/tsclient"
@@ -56,9 +57,6 @@ const (
 	reasonProxyGroupInvalid            = "ProxyGroupInvalid"
 	reasonProxyGroupTailnetUnavailable = "ProxyGroupTailnetUnavailable"
 	reasonACMEAccountsPendingDeletion  = "ACMEAccountsPendingDeletion"
-
-	// Copied from k8s.io/apiserver/pkg/registry/generic/registry/store.go@cccad306d649184bf2a0e319ba830c53f65c445c
-	optimisticLockErrorMsg = "the object has been modified; please apply your changes to the latest version and try again"
 
 	// The minimum tailcfg.CapabilityVersion that deployed clients are expected
 	// to support to be compatible with the current ProxyGroup controller.
@@ -150,7 +148,7 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		}
 
 		if done, err := r.maybeCleanup(ctx, tsClient, pg); err != nil {
-			if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+			if reconciler.IsOptimisticLockError(err) {
 				logger.Infof("optimistic lock error, retrying: %s", err)
 				return reconcile.Result{}, nil
 			}
@@ -475,7 +473,7 @@ func (r *ProxyGroupReconciler) maybeUpdateStatus(ctx context.Context, logger *za
 	defer func() {
 		if !apiequality.Semantic.DeepEqual(*oldPGStatus, pg.Status) {
 			if updateErr := r.Client.Status().Update(ctx, pg); updateErr != nil {
-				if strings.Contains(updateErr.Error(), optimisticLockErrorMsg) {
+				if reconciler.IsOptimisticLockError(updateErr) {
 					logger.Infof("optimistic lock error updating status, retrying: %s", updateErr)
 					updateErr = nil
 				}
@@ -992,7 +990,7 @@ func getNodeMetadata(ctx context.Context, pg *tsapi.ProxyGroup, cl client.Client
 			stateSecret: &secret,
 		}
 
-		prefs, ok, err := getDevicePrefs(&secret)
+		prefs, ok, err := tailscaled.PrefsFromStateSecret(&secret)
 		if err != nil {
 			return nil, err
 		}
@@ -1101,7 +1099,7 @@ func sharedACMEAccountEnabled(pg *tsapi.ProxyGroup, operatorDefault bool) bool {
 
 func (r *ProxyGroupReconciler) notReadyErrf(pg *tsapi.ProxyGroup, logger *zap.SugaredLogger, format string, a ...any) (map[string][]netip.AddrPort, *notReadyReason, error) {
 	err := fmt.Errorf(format, a...)
-	if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+	if reconciler.IsOptimisticLockError(err) {
 		msg := fmt.Sprintf("optimistic lock error, retrying: %s", err.Error())
 		logger.Info(msg)
 		return notReady(reasonProxyGroupCreating, msg)
