@@ -1352,7 +1352,10 @@ func (w *fixLocationHeaderResponseWriter) fix() {
 		if !strings.HasPrefix(v, "/") && strings.HasPrefix(w.reqPath, w.mountPoint) {
 			// Relative to the directory of the original request path, which
 			// keeps any parent directories below the mount point.
-			h.Set("Location", w.reqPath[:strings.LastIndex(w.reqPath, "/")+1]+v)
+			loc := w.reqPath[:strings.LastIndex(w.reqPath, "/")+1] + v
+			// Collapse leading slashes so a request path like "//foo"
+			// can't produce a protocol-relative Location.
+			h.Set("Location", "/"+strings.TrimLeft(loc, "/"))
 			return
 		}
 		h.Set("Location", w.mountPoint+v)

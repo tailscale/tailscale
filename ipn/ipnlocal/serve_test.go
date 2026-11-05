@@ -1440,6 +1440,7 @@ func TestServeFileOrDirectory(t *testing.T) {
 		{"/subdir", "/", isRedirect("/subdir/")},
 		{"/subdir/", "/", contains("file-a", "file-b", "file-c")},
 		{"/subdir/nested", "/", isRedirect("/subdir/nested/")},
+		{"//subdir/nested", "/", isRedirect("/subdir/nested/")},
 		{"/subdir/file-a", "/", contains("this is A")},
 		{"/subdir/file-z", "/", isStatus(404)},
 
@@ -1453,6 +1454,7 @@ func TestServeFileOrDirectory(t *testing.T) {
 		{"/doc/subdir/", "/doc/", contains("file-a", "file-b", "file-c")},
 		{"/doc/subdir/nested", "/doc/", isRedirect("/doc/subdir/nested/")},
 		{"/doc/subdir/file-a", "/doc/", contains("this is A")},
+		{"/doc/subdir/file-a/", "/doc/", isRedirect("/doc/subdir/file-a/../file-a")},
 		{"/doc/subdir/file-z", "/doc/", isStatus(404)},
 	}
 	for _, tt := range tests {
