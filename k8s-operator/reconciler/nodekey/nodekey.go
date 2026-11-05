@@ -10,6 +10,7 @@
 package nodekey
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -22,9 +23,12 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -92,11 +96,15 @@ type Reconciler struct {
 
 // Register the Reconciler onto the given manager.Manager implementation.
 func (r *Reconciler) Register(mgr manager.Manager) error {
-	secretFilter := handler.EnqueueRequestsFromMapFunc(managedSecretHandler(r.tsNamespace))
 	return builder.
 		ControllerManagedBy(mgr).
 		Named(reconcilerName).
-		Watches(&corev1.Secret{}, secretFilter).
+		WatchesRawSource(source.Kind(
+			mgr.GetCache(),
+			&corev1.Secret{},
+			handler.TypedEnqueueRequestsFromMapFunc(managedSecretHandler(r.tsNamespace)),
+			predicateSigningInputsChanged(),
+		)).
 		Complete(r)
 }
 
@@ -153,8 +161,8 @@ func (r *Reconciler) signNodeKey(ctx context.Context, logger *zap.SugaredLogger,
 		return reconcile.Result{}, nil
 	}
 
-	if findTKAPeerByStableID(lockStatus.VisiblePeers, deviceID) != nil {
-		// Device is a visible peer, no need to sign its node key.
+	if peer := findTKAPeerByStableID(lockStatus.VisiblePeers, deviceID); peer != nil && peer.NodeKey == nodeKey {
+		// Device is visible with this key, no need to sign it.
 		return reconcile.Result{}, nil
 	}
 
@@ -233,19 +241,44 @@ func getDeviceKey(secret *corev1.Secret) (key.NodePublic, error) {
 // by the operator within the given namespace and may hold proxy state. Secrets
 // labeled with a secret type other than "state" are skipped; unlabeled Secrets
 // are kept, as the state Secrets of standalone proxies carry no secret type label.
-func managedSecretHandler(ns string) handler.MapFunc {
-	return func(_ context.Context, o client.Object) []reconcile.Request {
-		if o.GetNamespace() != ns {
+func managedSecretHandler(ns string) handler.TypedMapFunc[*corev1.Secret, reconcile.Request] {
+	return func(_ context.Context, secret *corev1.Secret) []reconcile.Request {
+		if secret.GetNamespace() != ns {
 			return nil
 		}
-		if !reconciler.IsManagedResource(o) {
+		if !reconciler.IsManagedResource(secret) {
 			return nil
 		}
-		if t, ok := o.GetLabels()[kubetypes.LabelSecretType]; ok && t != kubetypes.LabelSecretTypeState {
+		if t, ok := secret.GetLabels()[kubetypes.LabelSecretType]; ok && t != kubetypes.LabelSecretTypeState {
 			return nil
 		}
 		return []reconcile.Request{
-			{NamespacedName: client.ObjectKeyFromObject(o)},
+			{NamespacedName: client.ObjectKeyFromObject(secret)},
 		}
+	}
+}
+
+// predicateSigningInputsChanged returns typed predicate functions that admit
+// only Secret updates that change an input relevant to signing: the device ID,
+// node key, or the proxy pod's UID (recreation).
+func predicateSigningInputsChanged() predicate.TypedPredicate[*corev1.Secret] {
+	return predicate.TypedFuncs[*corev1.Secret]{
+		UpdateFunc: func(e event.TypedUpdateEvent[*corev1.Secret]) bool {
+			// The pod UID changes when a proxy pod is recreated, so recreating the pod
+			// rechecks the device. A signature can become invalid without the key
+			// changing (e.g. if its signing key was revoked), so this makes recreating
+			// the pod a way to recover (re-sign).
+			for _, k := range []string{kubetypes.KeyDeviceID, kubetypes.KeyPodUID} {
+				if !bytes.Equal(e.ObjectOld.Data[k], e.ObjectNew.Data[k]) {
+					return true
+				}
+			}
+
+			oldKey, oldErr := getDeviceKey(e.ObjectOld)
+			newKey, newErr := getDeviceKey(e.ObjectNew)
+
+			// Admit parse errors so the reconcile surfaces them.
+			return oldErr != nil || newErr != nil || oldKey != newKey
+		},
 	}
 }

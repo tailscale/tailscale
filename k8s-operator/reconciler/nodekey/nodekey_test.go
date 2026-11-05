@@ -206,6 +206,16 @@ func TestReconciler_Reconcile(t *testing.T) {
 			expectedLookup: true,
 		},
 		{
+			name: "locked_visible_peer_key_mismatch",
+			mutateFn: func(_ *corev1.Secret, lc *fakeLocalClient) {
+				lc.lockStatus = lockedStatus(deviceID, key.NewNode().Public())
+				lc.lockStatus.VisiblePeers, lc.lockStatus.FilteredPeers = lc.lockStatus.FilteredPeers, nil
+			},
+			// Control still shows the device's previous, signed key; retry until the netmap catches up.
+			expectedResult: reconcile.Result{RequeueAfter: 60 * time.Second},
+			expectedLookup: true,
+		},
+		{
 			name: "missing_profile",
 			mutateFn: func(sec *corev1.Secret, lc *fakeLocalClient) {
 				delete(sec.Data, string(ipn.CurrentProfileStateKey))
