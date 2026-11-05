@@ -301,6 +301,52 @@ func TestReserveAddressesRollbackOnQueueFull(t *testing.T) {
 	}
 }
 
+func TestResetDrainsQueuedAssignments(t *testing.T) {
+	const appName = "a"
+	conn25 := newConn25(t.Logf)
+	conn25.reconfig(&config{
+		isConfigured: true,
+		appsByName:   map[string]appctype.AppConnectorAttr{appName: {}},
+		ipSets: ipSets{
+			v4Magic:   mustIPSetFromPrefix("100.64.0.0/24"),
+			v6Magic:   mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0100::/80"),
+			v4Transit: mustIPSetFromPrefix("169.254.0.0/24"),
+			v6Transit: mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0200::/80"),
+		},
+	})
+	c := conn25.client
+
+	// Nothing reads the channel, so these assignments stay queued.
+	for _, dst := range []netip.Addr{netip.MustParseAddr("0.0.0.1"), netip.MustParseAddr("::1")} {
+		if _, err := c.reserveAddresses(appName, "example.com.", dst, 10, testConnectorPeer, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := len(c.addrsCh); got != 2 {
+		t.Fatalf("want 2 queued assignments before reset, got %d", got)
+	}
+
+	c.reset()
+
+	if got := len(c.addrsCh); got != 0 {
+		t.Errorf("want empty send queue after reset, got %d queued assignments", got)
+	}
+
+	// The channel is still usable afterwards.
+	as, err := c.reserveAddresses(appName, "example.com.", netip.MustParseAddr("0.0.0.1"), 10, testConnectorPeer, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case queued := <-c.addrsCh:
+		if queued.connectorAddr.transit != as.connectorAddr.transit {
+			t.Errorf("queued transit IP %v, want %v", queued.connectorAddr.transit, as.connectorAddr.transit)
+		}
+	default:
+		t.Error("reservation after reset didn't enqueue an assignment")
+	}
+}
+
 func TestTransitIPConnMapping(t *testing.T) {
 	conn25 := newConn25(t.Logf)
 

@@ -97,6 +97,20 @@ func (c *client) reset() {
 	c.v6TransitIPPool = newIPPool(ipSets.v6Transit)
 	c.assignments = addrAssignments{clock: c.assignments.clock}
 	c.byConnKey = nil
+
+	// Drop any assignments still waiting to be sent. They describe the state
+	// we just cleared, so delivering them would register transit IPs with
+	// connectors that this client no longer knows anything about.
+	for {
+		select {
+		case _, ok := <-c.addrsCh:
+			if !ok {
+				return
+			}
+		default:
+			return
+		}
+	}
 }
 
 // reserveAddresses tries to make an assignment of addrs from the address pools
