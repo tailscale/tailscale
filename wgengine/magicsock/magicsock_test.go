@@ -3228,7 +3228,7 @@ func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 			for _, epd := range test.ep {
 				endpoint.endpointState[epd.addrPort] = &endpointState{}
 			}
-			udpAddr, _, shouldPing := endpoint.addrForSendLocked(testTime)
+			udpAddr, _, shouldPing := endpoint.addrForSendLocked(testTime, false)
 			if udpAddr.ap.IsValid() != test.validAddr {
 				t.Errorf("udpAddr validity is incorrect; got %v, want %v", udpAddr.ap.IsValid(), test.validAddr)
 			}
@@ -3255,7 +3255,7 @@ func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 				state.recentPong = 0
 			}
 
-			udpAddr, _, shouldPing = endpoint.addrForSendLocked(secondPingTime)
+			udpAddr, _, shouldPing = endpoint.addrForSendLocked(secondPingTime, false)
 			if udpAddr != test.want {
 				t.Errorf("udpAddr returned is not expected: got %v, want %v", udpAddr, test.want)
 			}
