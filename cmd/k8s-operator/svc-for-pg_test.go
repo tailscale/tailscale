@@ -27,6 +27,7 @@ import (
 
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/ingressservices"
 	"tailscale.com/kube/kubetypes"
@@ -93,7 +94,7 @@ func TestServicePGReconciler_UpdateHostname(t *testing.T) {
 
 	hostname := "foobarbaz"
 	mustUpdate(t, fc, svc.Namespace, svc.Name, func(s *corev1.Service) {
-		mak.Set(&s.Annotations, AnnotationHostname, hostname)
+		mak.Set(&s.Annotations, reconciler.AnnotationHostname, hostname)
 	})
 
 	// NOTE: we need to update the ingress config Secret because there is no containerboot in the fake proxy Pod
@@ -579,7 +580,7 @@ func TestServicePGReconciler_CleanupOnAnnotationRemoved(t *testing.T) {
 
 	// Remove the ProxyGroup annotation.
 	mustUpdate(t, fc, svc.Namespace, svc.Name, func(s *corev1.Service) {
-		delete(s.Annotations, AnnotationProxyGroup)
+		delete(s.Annotations, reconciler.AnnotationProxyGroup)
 	})
 	expectReconciled(t, svcPGR, "default", svc.Name)
 

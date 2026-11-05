@@ -32,6 +32,7 @@ import (
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/k8s-operator/reconciler/proxyclass"
 	"tailscale.com/k8s-operator/reconciler/staticendpoints"
 	"tailscale.com/k8s-operator/reconciler/tailscaled"
@@ -1238,7 +1239,7 @@ func TestProxyGroupTypes(t *testing.T) {
 	})
 
 	zl, _ := zap.NewDevelopment()
-	reconciler := &ProxyGroupReconciler{
+	pgr := &ProxyGroupReconciler{
 		tsNamespace:          tsNamespace,
 		tsProxyImage:         testProxyImage,
 		Client:               fc,
@@ -1262,8 +1263,8 @@ func TestProxyGroupTypes(t *testing.T) {
 		}
 		mustCreate(t, fc, pg)
 
-		expectReconciled(t, reconciler, "", pg.Name)
-		verifyProxyGroupCounts(t, reconciler, 0, 1, 0)
+		expectReconciled(t, pgr, "", pg.Name)
+		verifyProxyGroupCounts(t, pgr, 0, 1, 0)
 
 		sts := &appsv1.StatefulSet{}
 		if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
@@ -1313,7 +1314,7 @@ func TestProxyGroupTypes(t *testing.T) {
 			PreStop: &corev1.LifecycleHandler{
 				HTTPGet: &corev1.HTTPGetAction{
 					Path: kubetypes.EgessServicesPreshutdownEP,
-					Port: intstr.FromInt(defaultLocalAddrPort),
+					Port: intstr.FromInt(tailscaled.HealthCheckPort),
 				},
 			},
 		}
@@ -1324,9 +1325,9 @@ func TestProxyGroupTypes(t *testing.T) {
 			t.Errorf("unexpected deletion grace period seconds %d, want %d", *sts.Spec.Template.DeletionGracePeriodSeconds, deletionGracePeriodSeconds)
 		}
 		if !slices.ContainsFunc(sts.Spec.Template.Spec.ReadinessGates, func(r corev1.PodReadinessGate) bool {
-			return r.ConditionType == tsEgressReadinessGate
+			return r.ConditionType == reconciler.EgressReadinessGate
 		}) {
-			t.Errorf("expected egress readiness gate %q to be set, got %v", tsEgressReadinessGate, sts.Spec.Template.Spec.ReadinessGates)
+			t.Errorf("expected egress readiness gate %q to be set, got %v", reconciler.EgressReadinessGate, sts.Spec.Template.Spec.ReadinessGates)
 		}
 	})
 	t.Run("egress_type_no_lifecycle_hook_when_local_addr_port_set", func(t *testing.T) {
@@ -1354,7 +1355,7 @@ func TestProxyGroupTypes(t *testing.T) {
 				},
 			}
 		})
-		expectReconciled(t, reconciler, "", pg.Name)
+		expectReconciled(t, pgr, "", pg.Name)
 
 		sts := &appsv1.StatefulSet{}
 		if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
@@ -1365,7 +1366,7 @@ func TestProxyGroupTypes(t *testing.T) {
 			t.Error("lifecycle hook was set when TS_LOCAL_ADDR_PORT was configured via ProxyClass")
 		}
 		if slices.ContainsFunc(sts.Spec.Template.Spec.ReadinessGates, func(r corev1.PodReadinessGate) bool {
-			return r.ConditionType == tsEgressReadinessGate
+			return r.ConditionType == reconciler.EgressReadinessGate
 		}) {
 			t.Error("egress readiness gate was set when TS_LOCAL_ADDR_PORT was configured via ProxyClass")
 		}
@@ -1389,8 +1390,8 @@ func TestProxyGroupTypes(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		expectReconciled(t, reconciler, "", pg.Name)
-		verifyProxyGroupCounts(t, reconciler, 1, 2, 0)
+		expectReconciled(t, pgr, "", pg.Name)
+		verifyProxyGroupCounts(t, pgr, 1, 2, 0)
 
 		sts := &appsv1.StatefulSet{}
 		if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
@@ -1467,7 +1468,7 @@ func TestProxyGroupTypes(t *testing.T) {
 	})
 
 	t.Run("ingress_type_shared_acme_opt_out", func(t *testing.T) {
-		// The reconciler has sharedACMEAccountKey=true, so ingress PGs
+		// The pgr has sharedACMEAccountKey=true, so ingress PGs
 		// default to shared. Explicit tailscale.com/share-acme-account=false
 		// must opt this PG out: no shared-Secret env vars, no Role
 		// access to the shared Secret, and TS_DEBUG_ACME_FORCE_RENEWAL
@@ -1488,7 +1489,7 @@ func TestProxyGroupTypes(t *testing.T) {
 		if err := fc.Create(t.Context(), pg); err != nil {
 			t.Fatal(err)
 		}
-		expectReconciled(t, reconciler, "", pg.Name)
+		expectReconciled(t, pgr, "", pg.Name)
 
 		sts := &appsv1.StatefulSet{}
 		if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
@@ -1538,8 +1539,8 @@ func TestProxyGroupTypes(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		expectReconciled(t, reconciler, "", pg.Name)
-		verifyProxyGroupCounts(t, reconciler, 2, 2, 1)
+		expectReconciled(t, pgr, "", pg.Name)
+		verifyProxyGroupCounts(t, pgr, 2, 2, 1)
 
 		sts := &appsv1.StatefulSet{}
 		if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
@@ -2243,7 +2244,7 @@ func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.Prox
 	// The state Secrets are created before the ProxyClass is checked, so
 	// they exist even when the other resources do not.
 	var expectedSecrets []string
-	for i := range pgReplicas(pg) {
+	for i := range reconciler.ProxyGroupReplicas(pg) {
 		expectedSecrets = append(expectedSecrets, fmt.Sprintf("%s-%d", pg.Name, i))
 		if shouldExist {
 			expectedSecrets = append(expectedSecrets, pgConfigSecretName(pg.Name, i))
@@ -2273,7 +2274,7 @@ func expectSecrets(t *testing.T, fc client.WithWatch, expected []string) {
 func addNodeIDToStateSecrets(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyGroup) {
 	t.Helper()
 	const key = "profile-abc"
-	for i := range pgReplicas(pg) {
+	for i := range reconciler.ProxyGroupReplicas(pg) {
 		bytes, err := json.Marshal(map[string]any{
 			"Config": map[string]any{
 				"NodeID": fmt.Sprintf("nodeid-%d", i),

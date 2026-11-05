@@ -10,10 +10,15 @@ package reconciler
 import (
 	"context"
 	"fmt"
+	"maps"
+	"net/netip"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
 
+	"go.uber.org/zap"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -21,8 +26,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/net/dns/resolvconffile"
+	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/util/set"
 )
 
@@ -46,6 +55,44 @@ const (
 	// has been modified since it was read. The API server does not give us a typed error for the conflict in all
 	// cases, so callers match on the message via IsOptimisticLockError.
 	optimisticLockErrorMsg = "the object has been modified; please apply your changes to the latest version and try again"
+)
+
+// Annotations that users can set on Services (and, for some of them, Ingresses) to configure how the operator exposes
+// them.
+const (
+	// AnnotationTailnetTargetIP is the tailnet IP address that cluster traffic sent to the Service is forwarded to.
+	AnnotationTailnetTargetIP = "tailscale.com/tailnet-ip"
+
+	// AnnotationTailnetTargetFQDN is the MagicDNS name of the tailnet node that cluster traffic sent to the Service is
+	// forwarded to.
+	AnnotationTailnetTargetFQDN = "tailscale.com/tailnet-fqdn"
+
+	// AnnotationProxyGroup is the name of the ProxyGroup whose proxies expose the annotated resource.
+	AnnotationProxyGroup = "tailscale.com/proxy-group"
+
+	// AnnotationHostname is the tailnet hostname for the proxy of the annotated resource.
+	AnnotationHostname = "tailscale.com/hostname"
+
+	// AnnotationTags is a comma-separated list of tags for the proxy of the annotated resource.
+	AnnotationTags = "tailscale.com/tags"
+)
+
+// LabelProxyGroup is set on resources that the operator creates for a Service or Ingress exposed on a ProxyGroup. Its
+// value is the name of the ProxyGroup.
+const LabelProxyGroup = "tailscale.com/proxy-group"
+
+const (
+	// ParentTypeProxyGroup is the LabelParentType value on resources that the operator creates for a ProxyGroup.
+	ParentTypeProxyGroup = "proxygroup"
+
+	// EgressReadinessGate is the Pod readiness gate on egress ProxyGroup Pods. The egress Pod reconciler sets the
+	// condition once the Pod can route traffic to all egress services of its ProxyGroup.
+	EgressReadinessGate = "tailscale.com/egress-services"
+)
+
+const (
+	resolvConfPath       = "/etc/resolv.conf"
+	defaultClusterDomain = "cluster.local"
 )
 
 // IsOptimisticLockError reports whether err was caused by an optimistic locking conflict, i.e. the object being
@@ -300,4 +347,168 @@ func GetSingleObject[T any, O PtrObject[T]](ctx context.Context, c client.Client
 		return nil, err
 	}
 	return ret, nil
+}
+
+// ValidateService returns the problems with the Tailscale configuration of svc. It checks the tailnet target
+// annotations, the tailnet hostname, and the tags. It returns an empty slice if svc is valid.
+func ValidateService(svc *corev1.Service) []string {
+	violations := make([]string, 0)
+	if svc.Spec.ClusterIP == "None" {
+		violations = append(violations, "headless Services are not supported.")
+	}
+	if svc.Annotations[AnnotationTailnetTargetFQDN] != "" && svc.Annotations[AnnotationTailnetTargetIP] != "" {
+		violations = append(violations, fmt.Sprintf("only one of annotations %s and %s can be set", AnnotationTailnetTargetIP, AnnotationTailnetTargetFQDN))
+	}
+	if fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]; fqdn != "" {
+		if !isMagicDNSName(fqdn) {
+			violations = append(violations, fmt.Sprintf("invalid value of annotation %s: %q does not appear to be a valid MagicDNS name", AnnotationTailnetTargetFQDN, fqdn))
+		}
+	}
+	if ipStr := svc.Annotations[AnnotationTailnetTargetIP]; ipStr != "" {
+		ip, err := netip.ParseAddr(ipStr)
+		if err != nil {
+			violations = append(violations, fmt.Sprintf("invalid value of annotation %s: %q could not be parsed as a valid IP Address, error: %s", AnnotationTailnetTargetIP, ipStr, err))
+		} else if !ip.IsValid() {
+			violations = append(violations, fmt.Sprintf("parsed IP address in annotation %s: %q is not valid", AnnotationTailnetTargetIP, ipStr))
+		}
+	}
+
+	svcName := NameForService(svc)
+	if err := dnsname.ValidLabel(svcName); err != nil {
+		if _, ok := svc.Annotations[AnnotationHostname]; ok {
+			violations = append(violations, fmt.Sprintf("invalid Tailscale hostname specified %q: %s", svcName, err))
+		} else {
+			violations = append(violations, fmt.Sprintf("invalid Tailscale hostname %q, use %q annotation to override: %s", svcName, AnnotationHostname, err))
+		}
+	}
+	violations = append(violations, TagViolations(svc)...)
+	return violations
+}
+
+// NameForService returns the tailnet hostname for the proxy of svc. It is the value of AnnotationHostname if set, or
+// <namespace>-<name> otherwise.
+func NameForService(svc *corev1.Service) string {
+	if h, ok := svc.Annotations[AnnotationHostname]; ok {
+		return h
+	}
+	return svc.Namespace + "-" + svc.Name
+}
+
+// TagViolations returns a problem for each tag in the AnnotationTags annotation of obj that is not a valid tag. It
+// returns nil if obj is nil or does not have the annotation.
+func TagViolations(obj client.Object) []string {
+	var violations []string
+	if obj == nil {
+		return nil
+	}
+	tags, ok := obj.GetAnnotations()[AnnotationTags]
+	if !ok {
+		return nil
+	}
+
+	for tag := range strings.SplitSeq(tags, ",") {
+		tag = strings.TrimSpace(tag)
+		if err := tailcfg.CheckTag(tag); err != nil {
+			violations = append(violations, fmt.Sprintf("invalid tag %q: %v", tag, err))
+		}
+	}
+	return violations
+}
+
+// isMagicDNSName reports whether name is a full tailnet node FQDN (with or
+// without final dot).
+func isMagicDNSName(name string) bool {
+	validMagicDNSName := regexp.MustCompile(`^[a-zA-Z0-9-]+\.[a-zA-Z0-9-]+\.ts\.net\.?$`)
+	return validMagicDNSName.MatchString(name)
+}
+
+// ClusterDomainOption configures ClusterDomain.
+type ClusterDomainOption func(*clusterDomainOptions)
+
+type clusterDomainOptions struct {
+	resolvConfPath string
+}
+
+// WithResolvConfPath sets the resolver config file that ClusterDomain parses. Only tests need it. The operator uses
+// the resolver config of its own Pod.
+func WithResolvConfPath(path string) ClusterDomainOption {
+	return func(o *clusterDomainOptions) { o.resolvConfPath = path }
+}
+
+// ClusterDomain determines and retrieves cluster domain i.e
+// (cluster.local) in which this Pod is running by parsing search domains in
+// /etc/resolv.conf. If an error is encountered at any point during the process,
+// defaults cluster domain to 'cluster.local'.
+func ClusterDomain(namespace string, logger *zap.SugaredLogger, opts ...ClusterDomainOption) string {
+	o := clusterDomainOptions{resolvConfPath: resolvConfPath}
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	logger.Infof("attempting to retrieve cluster domain..")
+	conf, err := resolvconffile.ParseFile(o.resolvConfPath)
+	if err != nil {
+		// Vast majority of clusters use the cluster.local domain, so it
+		// is probably better to fall back to that than error out.
+		logger.Warn("error parsing /etc/resolv.conf to determine cluster domain, defaulting to 'cluster.local'.")
+		return defaultClusterDomain
+	}
+	return clusterDomainFromResolverConf(conf, namespace, logger)
+}
+
+// clusterDomainFromResolverConf attempts to retrieve cluster domain from the provided resolver config.
+// It expects the first three search domains in the resolver config to be ['<namespace>.svc.<cluster-domain>, svc.<cluster-domain>, <cluster-domain>, ...]
+// If the first three domains match the expected structure, it returns the third.
+// If the domains don't match the expected structure or an error is encountered, it defaults to 'cluster.local' domain.
+func clusterDomainFromResolverConf(conf *resolvconffile.Config, namespace string, logger *zap.SugaredLogger) string {
+	if len(conf.SearchDomains) < 3 {
+		logger.Warnf(" resolver config contains only %d search domains, at least three expected.\nDefaulting cluster domain to 'cluster.local'.", len(conf.SearchDomains))
+		return defaultClusterDomain
+	}
+	first := conf.SearchDomains[0]
+	if !strings.HasPrefix(string(first), namespace+".svc") {
+		logger.Warnf("first search domain in resolver config is %s; expected %s.\nDefaulting cluster domain to 'cluster.local'.", first, namespace+".svc.<cluster-domain>")
+		return defaultClusterDomain
+	}
+	second := conf.SearchDomains[1]
+	if !strings.HasPrefix(string(second), "svc") {
+		logger.Warnf("second search domain in resolver config is %s; expected 'svc.<cluster-domain>'.\nDefaulting cluster domain to 'cluster.local'.", second)
+		return defaultClusterDomain
+	}
+	// Trim the trailing dot for backwards compatibility purposes as the
+	// cluster domain was previously hardcoded to 'cluster.local' without a
+	// trailing dot.
+	probablyClusterDomain := strings.TrimPrefix(second.WithoutTrailingDot(), "svc.")
+	third := conf.SearchDomains[2]
+	if !strings.EqualFold(third.WithoutTrailingDot(), probablyClusterDomain) {
+		logger.Warnf("expected resolver config to contain serch domains <namespace>.svc.<cluster-domain>, svc.<cluster-domain>, <cluster-domain>; got %s %s %s\n. Defaulting cluster domain to 'cluster.local'.", first, second, third)
+		return defaultClusterDomain
+	}
+	logger.Infof("Cluster domain %q extracted from resolver config", probablyClusterDomain)
+	return probablyClusterDomain
+}
+
+// ProxyGroupLabels returns the labels for a resource that the operator creates for the named ProxyGroup. The result
+// holds customLabels plus the standard labels for a managed child of the ProxyGroup. The standard labels take
+// precedence.
+func ProxyGroupLabels(pgName string, customLabels map[string]string) map[string]string {
+	labels := make(map[string]string, len(customLabels)+3)
+	maps.Copy(labels, customLabels)
+	maps.Copy(labels, Labels(ParentTypeProxyGroup, pgName, ""))
+	return labels
+}
+
+// ProxyGroupReplicas returns the number of replicas for pg. It is 2 if pg does not set the replicas.
+func ProxyGroupReplicas(pg *tsapi.ProxyGroup) int32 {
+	if pg.Spec.Replicas != nil {
+		return *pg.Spec.Replicas
+	}
+
+	return 2
+}
+
+// ProxyGroupEgressConfigMapName returns the name of the ConfigMap that holds the egress service configuration for the
+// named egress ProxyGroup.
+func ProxyGroupEgressConfigMapName(pgName string) string {
+	return fmt.Sprintf("%s-egress-config", pgName)
 }

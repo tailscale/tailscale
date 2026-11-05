@@ -7,7 +7,6 @@ package main
 
 import (
 	"fmt"
-	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,6 +20,8 @@ import (
 	"sigs.k8s.io/yaml"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
+	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/ingressservices"
 	"tailscale.com/kube/kubetypes"
@@ -40,7 +41,7 @@ func pgNodePortService(pg *tsapi.ProxyGroup, name string, namespace string) *cor
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            name,
 			Namespace:       namespace,
-			Labels:          pgLabels(pg.Name, nil),
+			Labels:          reconciler.ProxyGroupLabels(pg.Name, nil),
 			OwnerReferences: pgOwnerReference(pg),
 		},
 		Spec: corev1.ServiceSpec{
@@ -85,12 +86,12 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 	ss.ObjectMeta = metav1.ObjectMeta{
 		Name:            pg.Name,
 		Namespace:       namespace,
-		Labels:          pgLabels(pg.Name, nil),
+		Labels:          reconciler.ProxyGroupLabels(pg.Name, nil),
 		OwnerReferences: pgOwnerReference(pg),
 	}
-	ss.Spec.Replicas = new(pgReplicas(pg))
+	ss.Spec.Replicas = new(reconciler.ProxyGroupReplicas(pg))
 	ss.Spec.Selector = &metav1.LabelSelector{
-		MatchLabels: pgLabels(pg.Name, nil),
+		MatchLabels: reconciler.ProxyGroupLabels(pg.Name, nil),
 	}
 
 	// Template config.
@@ -98,18 +99,18 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 	tmpl.ObjectMeta = metav1.ObjectMeta{
 		Name:                       pg.Name,
 		Namespace:                  namespace,
-		Labels:                     pgLabels(pg.Name, nil),
+		Labels:                     reconciler.ProxyGroupLabels(pg.Name, nil),
 		DeletionGracePeriodSeconds: new(int64(10)),
 	}
 	tmpl.Spec.ServiceAccountName = pg.Name
 	tmpl.Spec.InitContainers[0].Image = image
-	proxyConfigVolName := pgEgressCMName(pg.Name)
+	proxyConfigVolName := reconciler.ProxyGroupEgressConfigMapName(pg.Name)
 	if pg.Spec.Type == tsapi.ProxyGroupTypeIngress {
 		proxyConfigVolName = pgIngressCMName(pg.Name)
 	}
 	tmpl.Spec.Volumes = func() []corev1.Volume {
 		var volumes []corev1.Volume
-		for i := range pgReplicas(pg) {
+		for i := range reconciler.ProxyGroupReplicas(pg) {
 			volumes = append(volumes, corev1.Volume{
 				Name: fmt.Sprintf("tailscaledconfig-%d", i),
 				VolumeSource: corev1.VolumeSource{
@@ -143,7 +144,7 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 		// TODO(tomhjp): Read config directly from the secret instead. The
 		// mounts change on scaling up/down which causes unnecessary restarts
 		// for pods that haven't meaningfully changed.
-		for i := range pgReplicas(pg) {
+		for i := range reconciler.ProxyGroupReplicas(pg) {
 			mounts = append(mounts, corev1.VolumeMount{
 				Name:      fmt.Sprintf("tailscaledconfig-%d", i),
 				ReadOnly:  true,
@@ -292,7 +293,7 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 			PreStop: &corev1.LifecycleHandler{
 				HTTPGet: &corev1.HTTPGetAction{
 					Path: kubetypes.EgessServicesPreshutdownEP,
-					Port: intstr.FromInt(defaultLocalAddrPort),
+					Port: intstr.FromInt(tailscaled.HealthCheckPort),
 				},
 			},
 		}
@@ -301,15 +302,15 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 		ss.Spec.Template.DeletionGracePeriodSeconds = new(deletionGracePeriodSeconds)
 
 		// Add a readiness gate so that kubelet does not mark a replica Pod as
-		// ready before egressPodsReconciler has confirmed that cluster traffic
+		// ready before egress.PodReconciler has confirmed that cluster traffic
 		// for all egress services is being routed to it. Because StatefulSet
 		// rolling updates only restart the next replica once the previous one
 		// is ready, this prevents a window during updates where every replica
 		// has been recreated but none is yet serving traffic, which would drop
 		// cluster egress traffic. The reconciler sets the corresponding
-		// condition; see egress-pod-readiness.go.
+		// condition; see k8s-operator/reconciler/egress/pods.go.
 		tmpl.Spec.ReadinessGates = append(tmpl.Spec.ReadinessGates, corev1.PodReadinessGate{
-			ConditionType: tsEgressReadinessGate,
+			ConditionType: reconciler.EgressReadinessGate,
 		})
 	}
 
@@ -321,19 +322,19 @@ func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string, por
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            pg.Name,
 			Namespace:       namespace,
-			Labels:          pgLabels(pg.Name, nil),
+			Labels:          reconciler.ProxyGroupLabels(pg.Name, nil),
 			OwnerReferences: pgOwnerReference(pg),
 		},
 		Spec: appsv1.StatefulSetSpec{
-			Replicas: new(pgReplicas(pg)),
+			Replicas: new(reconciler.ProxyGroupReplicas(pg)),
 			Selector: &metav1.LabelSelector{
-				MatchLabels: pgLabels(pg.Name, nil),
+				MatchLabels: reconciler.ProxyGroupLabels(pg.Name, nil),
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:                       pg.Name,
 					Namespace:                  namespace,
-					Labels:                     pgLabels(pg.Name, nil),
+					Labels:                     reconciler.ProxyGroupLabels(pg.Name, nil),
 					DeletionGracePeriodSeconds: new(int64(10)),
 				},
 				Spec: corev1.PodSpec{
@@ -428,7 +429,7 @@ func pgServiceAccount(pg *tsapi.ProxyGroup, namespace string) *corev1.ServiceAcc
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            pg.Name,
 			Namespace:       namespace,
-			Labels:          pgLabels(pg.Name, nil),
+			Labels:          reconciler.ProxyGroupLabels(pg.Name, nil),
 			OwnerReferences: pgOwnerReference(pg),
 		},
 	}
@@ -439,7 +440,7 @@ func pgRole(pg *tsapi.ProxyGroup, namespace string, shareACMEAccount bool) *rbac
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            pg.Name,
 			Namespace:       namespace,
-			Labels:          pgLabels(pg.Name, nil),
+			Labels:          reconciler.ProxyGroupLabels(pg.Name, nil),
 			OwnerReferences: pgOwnerReference(pg),
 		},
 		Rules: []rbacv1.PolicyRule{
@@ -460,7 +461,7 @@ func pgRole(pg *tsapi.ProxyGroup, namespace string, shareACMEAccount bool) *rbac
 					"update",
 				},
 				ResourceNames: func() (secrets []string) {
-					for i := range pgReplicas(pg) {
+					for i := range reconciler.ProxyGroupReplicas(pg) {
 						secrets = append(secrets,
 							pgConfigSecretName(pg.Name, i), // Config with auth key.
 							pgPodName(pg.Name, i),          // State.
@@ -493,7 +494,7 @@ func pgRoleBinding(pg *tsapi.ProxyGroup, namespace string) *rbacv1.RoleBinding {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            pg.Name,
 			Namespace:       namespace,
-			Labels:          pgLabels(pg.Name, nil),
+			Labels:          reconciler.ProxyGroupLabels(pg.Name, nil),
 			OwnerReferences: pgOwnerReference(pg),
 		},
 		Subjects: []rbacv1.Subject{
@@ -565,7 +566,7 @@ func isAuthAPIServerProxy(pg *tsapi.ProxyGroup) bool {
 // them to find the tailnet devices, so a foreground delete must not remove
 // them first. ProxyGroupReconciler.maybeCleanup deletes them.
 func pgStateSecrets(pg *tsapi.ProxyGroup, namespace string) (secrets []*corev1.Secret) {
-	for i := range pgReplicas(pg) {
+	for i := range reconciler.ProxyGroupReplicas(pg) {
 		secrets = append(secrets, &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      pgStateSecretName(pg.Name, i),
@@ -583,9 +584,9 @@ func pgEgressCM(pg *tsapi.ProxyGroup, namespace string) (*corev1.ConfigMap, []by
 	hpBs := []byte(strconv.Itoa(hp))
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            pgEgressCMName(pg.Name),
+			Name:            reconciler.ProxyGroupEgressConfigMapName(pg.Name),
 			Namespace:       namespace,
-			Labels:          pgLabels(pg.Name, nil),
+			Labels:          reconciler.ProxyGroupLabels(pg.Name, nil),
 			OwnerReferences: pgOwnerReference(pg),
 		},
 		BinaryData: map[string][]byte{egressservices.KeyHEPPings: hpBs},
@@ -597,39 +598,20 @@ func pgIngressCM(pg *tsapi.ProxyGroup, namespace string) *corev1.ConfigMap {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            pgIngressCMName(pg.Name),
 			Namespace:       namespace,
-			Labels:          pgLabels(pg.Name, nil),
+			Labels:          reconciler.ProxyGroupLabels(pg.Name, nil),
 			OwnerReferences: pgOwnerReference(pg),
 		},
 	}
 }
 
 func pgSecretLabels(pgName, secretType string) map[string]string {
-	return pgLabels(pgName, map[string]string{
+	return reconciler.ProxyGroupLabels(pgName, map[string]string{
 		kubetypes.LabelSecretType: secretType, // "config" or "state".
 	})
 }
 
-func pgLabels(pgName string, customLabels map[string]string) map[string]string {
-	labels := make(map[string]string, len(customLabels)+3)
-	maps.Copy(labels, customLabels)
-
-	labels[kubetypes.LabelManaged] = "true"
-	labels[LabelParentType] = "proxygroup"
-	labels[LabelParentName] = pgName
-
-	return labels
-}
-
 func pgOwnerReference(owner *tsapi.ProxyGroup) []metav1.OwnerReference {
 	return []metav1.OwnerReference{*metav1.NewControllerRef(owner, tsapi.SchemeGroupVersion.WithKind("ProxyGroup"))}
-}
-
-func pgReplicas(pg *tsapi.ProxyGroup) int32 {
-	if pg.Spec.Replicas != nil {
-		return *pg.Spec.Replicas
-	}
-
-	return 2
 }
 
 func pgPodName(pgName string, i int32) string {
@@ -652,10 +634,6 @@ func pgStateSecretName(pgName string, i int32) string {
 	return fmt.Sprintf("%s-%d", pgName, i)
 }
 
-func pgEgressCMName(pg string) string {
-	return fmt.Sprintf("%s-egress-config", pg)
-}
-
 // hasLocalAddrPortSet returns true if the proxyclass has the TS_LOCAL_ADDR_PORT env var set. For egress ProxyGroups,
 // currently (2025-01-26) this means that the ProxyGroup does not support graceful failover.
 func hasLocalAddrPortSet(proxyClass *tsapi.ProxyClass) bool {
@@ -670,7 +648,7 @@ func hasLocalAddrPortSet(proxyClass *tsapi.ProxyClass) bool {
 // hepPings returns the number of times a health check endpoint exposed by a Service fronting ProxyGroup replicas should
 // be pinged to ensure that all currently configured backend replicas are hit.
 func hepPings(pg *tsapi.ProxyGroup) int {
-	rc := pgReplicas(pg)
+	rc := reconciler.ProxyGroupReplicas(pg)
 	// Assuming a Service implemented using round robin load balancing, number-of-replica-times should be enough, but in
 	// practice, we cannot assume that the requests will be load balanced perfectly.
 	return int(rc) * 3

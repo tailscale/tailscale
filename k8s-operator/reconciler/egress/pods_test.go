@@ -3,7 +3,7 @@
 
 //go:build !plan9
 
-package main
+package egress_test
 
 import (
 	"encoding/json"
@@ -16,9 +16,11 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
+	"tailscale.com/k8s-operator/reconciler/egress"
+	"tailscale.com/k8s-operator/reconciler/reconcilertest"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
@@ -139,13 +141,13 @@ func TestEgressPodReadiness(t *testing.T) {
 					Name:      "pod",
 					UID:       podUID,
 					Labels: map[string]string{
-						LabelParentType: "proxygroup",
-						LabelParentName: "dev",
+						reconciler.LabelParentType: "proxygroup",
+						reconciler.LabelParentName: "dev",
 					},
 				},
 				Spec: corev1.PodSpec{
 					ReadinessGates: []corev1.PodReadinessGate{{
-						ConditionType: tsEgressReadinessGate,
+						ConditionType: reconciler.EgressReadinessGate,
 					}},
 				},
 			}
@@ -161,36 +163,35 @@ func TestEgressPodReadiness(t *testing.T) {
 			}
 			// We need to pass a Pod object to WithStatusSubresource because of some quirks in how the fake client
 			// works. Without this code we would not be able to update Pod's status further down.
-			fc := fake.NewClientBuilder().
-				WithScheme(tsapi.GlobalScheme).
+			fc := reconcilertest.NewClientBuilder().
 				WithObjects(append(tt.objs, pod, pg, stateS)...).
 				WithStatusSubresource(&corev1.Pod{}).
 				Build()
 			zl, _ := zap.NewDevelopment()
 			cl := tstest.NewClock(tstest.ClockOpts{})
-			rec := &egressPodsReconciler{
-				tsNamespace: "operator-ns",
-				Client:      fc,
-				logger:      zl.Sugar(),
-				clock:       cl,
-			}
+			rec := egress.NewPodReconciler(egress.ReconcilerOptions{
+				Client:             fc,
+				TailscaleNamespace: "operator-ns",
+				Logger:             zl.Sugar(),
+				Clock:              cl,
+			})
 
 			if !tt.wantReady {
-				expectRequeue(t, rec, "operator-ns", pod.Name)
-				expectEqual(t, fc, pod)
+				reconcilertest.ExpectRequeue(t, rec, "operator-ns", pod.Name)
+				reconcilertest.ExpectEqual(t, fc, pod)
 				return
 			}
-			expectReconciled(t, rec, "operator-ns", pod.Name)
+			reconcilertest.ExpectReconciled(t, rec, "operator-ns", pod.Name)
 			pod.Status.Conditions = append(pod.Status.Conditions, corev1.PodCondition{
-				Type:               tsEgressReadinessGate,
+				Type:               reconciler.EgressReadinessGate,
 				Status:             corev1.ConditionTrue,
 				LastTransitionTime: metav1.Time{Time: cl.Now().Truncate(time.Second)},
 			})
-			expectEqual(t, fc, pod)
+			reconcilertest.ExpectEqual(t, fc, pod)
 
 			// A subsequent reconcile should not change the Pod.
-			expectReconciled(t, rec, "operator-ns", pod.Name)
-			expectEqual(t, fc, pod)
+			reconcilertest.ExpectReconciled(t, rec, "operator-ns", pod.Name)
+			reconcilertest.ExpectEqual(t, fc, pod)
 		})
 	}
 }
@@ -232,8 +233,8 @@ func newEps(svcName string, addrType discoveryv1.AddressType, podUIDs ...string)
 // "dev" ProxyGroup.
 func egressLabels() map[string]string {
 	return map[string]string{
-		kubetypes.LabelManaged: "true",
-		labelProxyGroup:        "dev",
-		labelSvcType:           typeEgress,
+		kubetypes.LabelManaged:     "true",
+		reconciler.LabelProxyGroup: "dev",
+		"tailscale.com/svc-type":   "egress",
 	}
 }

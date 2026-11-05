@@ -27,12 +27,11 @@ import (
 
 	"tailscale.com/k8s-operator/apis/v1alpha1"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
-	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
 )
 
@@ -66,7 +65,7 @@ func TestLoadBalancerClass(t *testing.T) {
 			// on it being set.
 			UID: "1234-UID",
 			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: "invalid.example.com",
+				reconciler.AnnotationTailnetTargetFQDN: "invalid.example.com",
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -89,7 +88,7 @@ func TestLoadBalancerClass(t *testing.T) {
 			Namespace: "default",
 			UID:       types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: "invalid.example.com",
+				reconciler.AnnotationTailnetTargetFQDN: "invalid.example.com",
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -245,7 +244,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 			// on it being set.
 			UID: "1234-UID",
 			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
+				reconciler.AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -280,7 +279,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 			Finalizers: []string{"tailscale.com/finalizer"},
 			UID:        types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
+				reconciler.AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -302,7 +301,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 	tailnetTargetFQDN = "bar.baz.ts.net"
 	mustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
 		s.ObjectMeta.Annotations = map[string]string{
-			AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
+			reconciler.AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
 		}
 	})
 
@@ -355,7 +354,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 			// on it being set.
 			UID: "1234-UID",
 			Annotations: map[string]string{
-				AnnotationTailnetTargetIP: tailnetTargetIP,
+				reconciler.AnnotationTailnetTargetIP: tailnetTargetIP,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -390,7 +389,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 			Finalizers: []string{"tailscale.com/finalizer"},
 			UID:        types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationTailnetTargetIP: tailnetTargetIP,
+				reconciler.AnnotationTailnetTargetIP: tailnetTargetIP,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -412,7 +411,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 	tailnetTargetIP = "100.77.77.77"
 	mustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
 		s.ObjectMeta.Annotations = map[string]string{
-			AnnotationTailnetTargetIP: tailnetTargetIP,
+			reconciler.AnnotationTailnetTargetIP: tailnetTargetIP,
 		}
 	})
 
@@ -461,7 +460,7 @@ func TestTailnetTargetIPAnnotation_IPCouldNotBeParsed(t *testing.T) {
 
 			UID: "1234-UID",
 			Annotations: map[string]string{
-				AnnotationTailnetTargetIP: tailnetTargetIP,
+				reconciler.AnnotationTailnetTargetIP: tailnetTargetIP,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -481,7 +480,7 @@ func TestTailnetTargetIPAnnotation_IPCouldNotBeParsed(t *testing.T) {
 			Namespace: "default",
 			UID:       types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationTailnetTargetIP: tailnetTargetIP,
+				reconciler.AnnotationTailnetTargetIP: tailnetTargetIP,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -529,7 +528,7 @@ func TestTailnetTargetIPAnnotation_InvalidIP(t *testing.T) {
 
 			UID: "1234-UID",
 			Annotations: map[string]string{
-				AnnotationTailnetTargetIP: tailnetTargetIP,
+				reconciler.AnnotationTailnetTargetIP: tailnetTargetIP,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -549,7 +548,7 @@ func TestTailnetTargetIPAnnotation_InvalidIP(t *testing.T) {
 			Namespace: "default",
 			UID:       types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationTailnetTargetIP: tailnetTargetIP,
+				reconciler.AnnotationTailnetTargetIP: tailnetTargetIP,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -1498,37 +1497,6 @@ func TestProxyFirewallMode(t *testing.T) {
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 }
 
-func Test_isMagicDNSName(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want bool
-	}{
-		{
-			name: "foo-tail4567-ts-net",
-			in:   "foo.tail4567.ts.net",
-			want: true,
-		},
-		{
-			name: "foo-tail4567-ts-net-trailing-dot",
-			in:   "foo.tail4567.ts.net.",
-			want: true,
-		},
-		{
-			name: "foo-tail4567",
-			in:   "foo.tail4567",
-			want: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isMagicDNSName(tt.in); got != tt.want {
-				t.Errorf("isMagicDNSName(%q) = %v, want %v", tt.in, got, tt.want)
-			}
-		})
-	}
-}
-
 func Test_HeadlessService(t *testing.T) {
 	fc := fake.NewFakeClient()
 	zl := zap.Must(zap.NewDevelopment())
@@ -1750,72 +1718,6 @@ func Test_serviceHandlerForIngress_multipleIngressClasses(t *testing.T) {
 
 	if diff := cmp.Diff(got, want); diff != "" {
 		t.Fatalf("unexpected reconcile requests (-got +want):\n%s", diff)
-	}
-}
-
-func Test_clusterDomainFromResolverConf(t *testing.T) {
-	zl := zap.Must(zap.NewDevelopment())
-	tests := []struct {
-		name      string
-		conf      *resolvconffile.Config
-		namespace string
-		want      string
-	}{
-		{
-			name: "success-custom-domain",
-			conf: &resolvconffile.Config{
-				SearchDomains: []dnsname.FQDN{toFQDN(t, "foo.svc.department.org.io"), toFQDN(t, "svc.department.org.io"), toFQDN(t, "department.org.io")},
-			},
-			namespace: "foo",
-			want:      "department.org.io",
-		},
-		{
-			name: "success-default-domain",
-			conf: &resolvconffile.Config{
-				SearchDomains: []dnsname.FQDN{toFQDN(t, "foo.svc.cluster.local."), toFQDN(t, "svc.cluster.local."), toFQDN(t, "cluster.local.")},
-			},
-			namespace: "foo",
-			want:      "cluster.local",
-		},
-		{
-			name: "only-two-search-domains",
-			conf: &resolvconffile.Config{
-				SearchDomains: []dnsname.FQDN{toFQDN(t, "svc.department.org.io"), toFQDN(t, "department.org.io")},
-			},
-			namespace: "foo",
-			want:      "cluster.local",
-		},
-		{
-			name: "first-search-domain-mismatch",
-			conf: &resolvconffile.Config{
-				SearchDomains: []dnsname.FQDN{toFQDN(t, "foo.bar.department.org.io"), toFQDN(t, "svc.department.org.io"), toFQDN(t, "some.other.fqdn")},
-			},
-			namespace: "foo",
-			want:      "cluster.local",
-		},
-		{
-			name: "second-search-domain-mismatch",
-			conf: &resolvconffile.Config{
-				SearchDomains: []dnsname.FQDN{toFQDN(t, "foo.svc.department.org.io"), toFQDN(t, "foo.department.org.io"), toFQDN(t, "some.other.fqdn")},
-			},
-			namespace: "foo",
-			want:      "cluster.local",
-		},
-		{
-			name: "third-search-domain-mismatch",
-			conf: &resolvconffile.Config{
-				SearchDomains: []dnsname.FQDN{toFQDN(t, "foo.svc.department.org.io"), toFQDN(t, "svc.department.org.io"), toFQDN(t, "some.other.fqdn")},
-			},
-			namespace: "foo",
-			want:      "cluster.local",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := clusterDomainFromResolverConf(tt.conf, tt.namespace, zl.Sugar()); got != tt.want {
-				t.Errorf("clusterDomainFromResolverConf() = %v, want %v", got, tt.want)
-			}
-		})
 	}
 }
 
@@ -2114,14 +2016,14 @@ func Test_servicesFromIngressProxyGroup(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "svc-1",
 			Namespace:   "ns-1",
-			Annotations: map[string]string{AnnotationProxyGroup: "ingress-pg"},
+			Annotations: map[string]string{reconciler.AnnotationProxyGroup: "ingress-pg"},
 		},
 	}
 	svcForOtherPG := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "svc-2",
 			Namespace:   "ns-2",
-			Annotations: map[string]string{AnnotationProxyGroup: "other-pg"},
+			Annotations: map[string]string{reconciler.AnnotationProxyGroup: "other-pg"},
 		},
 	}
 	fc := fake.NewClientBuilder().
@@ -2145,15 +2047,6 @@ func Test_servicesFromIngressProxyGroup(t *testing.T) {
 	if gotReqs := h(t.Context(), egressPG); len(gotReqs) != 0 {
 		t.Errorf("servicesFromIngressProxyGroup(egress-pg) = %v, want none", gotReqs)
 	}
-}
-
-func toFQDN(t *testing.T, s string) dnsname.FQDN {
-	t.Helper()
-	fqdn, err := dnsname.ToFQDN(s)
-	if err != nil {
-		t.Fatalf("error coverting %q to dnsname.FQDN: %v", s, err)
-	}
-	return fqdn
 }
 
 func proxyCreatedCondition(clock tstime.Clock) []metav1.Condition {
