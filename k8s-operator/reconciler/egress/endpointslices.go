@@ -3,7 +3,7 @@
 
 //go:build !plan9
 
-package main
+package egress
 
 import (
 	"context"
@@ -20,24 +20,54 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/kube/egressservices"
 )
 
-// egressEpsReconciler reconciles EndpointSlices for tailnet services exposed to cluster via egress ProxyGroup proxies.
-type egressEpsReconciler struct {
+const endpointSliceReconcilerName = "egress-eps-reconciler"
+
+// EndpointSliceReconciler reconciles EndpointSlices for tailnet services exposed to cluster via egress ProxyGroup proxies.
+type EndpointSliceReconciler struct {
 	client.Client
 	logger      *zap.SugaredLogger
 	tsNamespace string
+}
+
+// NewEndpointSliceReconciler returns a new instance of the EndpointSliceReconciler type. It watches the EndpointSlices
+// for egress services, and the egress Services, ProxyGroup Pods and ProxyGroup state Secrets that decide their
+// endpoints.
+func NewEndpointSliceReconciler(options ReconcilerOptions) *EndpointSliceReconciler {
+	return &EndpointSliceReconciler{
+		Client:      options.Client,
+		logger:      options.Logger.Named(endpointSliceReconcilerName),
+		tsNamespace: options.TailscaleNamespace,
+	}
+}
+
+// Register the EndpointSliceReconciler onto the given manager.Manager implementation.
+func (er *EndpointSliceReconciler) Register(mgr manager.Manager) error {
+	cl := mgr.GetClient()
+	return builder.
+		ControllerManagedBy(mgr).
+		Named(endpointSliceReconcilerName).
+		Watches(&discoveryv1.EndpointSlice{}, handler.EnqueueRequestsFromMapFunc(egressEpsHandler)).
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(egressEpsFromPGPods(cl, er.tsNamespace))).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(egressEpsFromPGStateSecrets(cl, er.tsNamespace))).
+		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(epsFromExternalNameService(cl, er.logger, er.tsNamespace))).
+		Complete(er)
 }
 
 // Reconcile reconciles an EndpointSlice for a tailnet service. It updates the EndpointSlice with the endpoints of
 // those ProxyGroup Pods that are ready to route traffic to the tailnet service.
 // It compares tailnet service state stored in egress proxy state Secrets by containerboot with the desired
 // configuration stored in proxy-cfg ConfigMap to determine if the endpoint is ready.
-func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
+func (er *EndpointSliceReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
 	lg := er.logger.With("Service", req.NamespacedName)
 	lg.Debugf("starting reconcile")
 	defer lg.Debugf("reconcile finished")
@@ -60,8 +90,8 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	// resources are set up for this tailnet service.
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      eps.Labels[LabelParentName],
-			Namespace: eps.Labels[LabelParentNamespace],
+			Name:      eps.Labels[reconciler.LabelParentName],
+			Namespace: eps.Labels[reconciler.LabelParentNamespace],
 		},
 	}
 	err = er.Get(ctx, client.ObjectKeyFromObject(svc), svc)
@@ -82,7 +112,7 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	lg = lg.With("tailnet-service-name", tailnetSvc)
 
 	// Retrieve the desired tailnet service configuration from the ConfigMap.
-	proxyGroupName := eps.Labels[labelProxyGroup]
+	proxyGroupName := eps.Labels[reconciler.LabelProxyGroup]
 	_, cfgs, err := egressSvcsConfigs(ctx, er.Client, proxyGroupName, er.tsNamespace)
 	if err != nil {
 		return res, fmt.Errorf("error retrieving tailnet services configuration: %w", err)
@@ -103,7 +133,7 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	// Check which Pods in ProxyGroup are ready to route traffic to this
 	// egress service.
 	podList := &corev1.PodList{}
-	if err := er.List(ctx, podList, client.MatchingLabels(pgLabels(proxyGroupName, nil))); err != nil {
+	if err := er.List(ctx, podList, client.MatchingLabels(reconciler.ProxyGroupLabels(proxyGroupName, nil))); err != nil {
 		return res, fmt.Errorf("error listing Pods for ProxyGroup %s: %w", proxyGroupName, err)
 	}
 	newEndpoints := make([]discoveryv1.Endpoint, 0)
@@ -169,7 +199,7 @@ func podIPForFamily(pod *corev1.Pod, addrType discoveryv1.AddressType) (string, 
 // podIsReadyToRouteTraffic returns true if it appears that the proxy Pod has configured firewall rules to be able to
 // route traffic to the given tailnet service. It retrieves the proxy's state Secret and compares the tailnet service
 // status written there to the desired service configuration.
-func (er *egressEpsReconciler) podIsReadyToRouteTraffic(ctx context.Context, pod corev1.Pod, cfg *egressservices.Config, tailnetSvcName string, addrType discoveryv1.AddressType, lg *zap.SugaredLogger) (bool, error) {
+func (er *EndpointSliceReconciler) podIsReadyToRouteTraffic(ctx context.Context, pod corev1.Pod, cfg *egressservices.Config, tailnetSvcName string, addrType discoveryv1.AddressType, lg *zap.SugaredLogger) (bool, error) {
 	lg = lg.With("proxy_pod", pod.Name)
 	lg.Debug("checking whether proxy is ready to route to egress service")
 	if !pod.DeletionTimestamp.IsZero() {

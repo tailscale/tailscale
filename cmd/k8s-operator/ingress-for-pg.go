@@ -34,6 +34,7 @@ import (
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
@@ -116,7 +117,7 @@ func (r *HAIngressReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	hostname := hostnameForIngress(ing)
 	logger = logger.With("hostname", hostname)
 
-	pgName := ing.Annotations[AnnotationProxyGroup]
+	pgName := ing.Annotations[reconciler.AnnotationProxyGroup]
 	pg := &tsapi.ProxyGroup{}
 
 	err = r.Get(ctx, client.ObjectKey{Name: pgName}, pg)
@@ -176,7 +177,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	}
 
 	// We only act on services that are annotated as using a proxy group.
-	pgName := ing.Annotations[AnnotationProxyGroup]
+	pgName := ing.Annotations[reconciler.AnnotationProxyGroup]
 	if pgName == "" {
 		return false, nil
 	}
@@ -333,7 +334,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 
 	// 4. Ensure that the Tailscale Service exists and is up to date.
 	tags := r.defaultTags
-	if tstr, ok := ing.Annotations[AnnotationTags]; ok {
+	if tstr, ok := ing.Annotations[reconciler.AnnotationTags]; ok {
 		tags = strings.Split(tstr, ",")
 	}
 
@@ -665,7 +666,7 @@ func (r *HAIngressReconciler) shouldExpose(ing *networkingv1.Ingress) bool {
 	isTSIngress := ing != nil &&
 		ing.Spec.IngressClassName != nil &&
 		*ing.Spec.IngressClassName == r.ingressClassName
-	pgAnnot := ing.Annotations[AnnotationProxyGroup]
+	pgAnnot := ing.Annotations[reconciler.AnnotationProxyGroup]
 	return isTSIngress && pgAnnot != ""
 }
 
@@ -679,7 +680,7 @@ func (r *HAIngressReconciler) validateIngress(ctx context.Context, ing *networki
 	var errs []error
 
 	// Validate tags if present
-	violations := tagViolations(ing)
+	violations := reconciler.TagViolations(ing)
 	if len(violations) > 0 {
 		errs = append(errs, fmt.Errorf("Ingress contains invalid tags: %v", strings.Join(violations, ",")))
 	}
@@ -1022,8 +1023,8 @@ func cleanupAllCertResources(ctx context.Context, cl client.Client, tsNamespace,
 	opts := []client.DeleteAllOfOption{
 		client.InNamespace(tsNamespace),
 		client.MatchingLabels{
-			kubetypes.LabelManaged: "true",
-			labelProxyGroup:        pgName,
+			kubetypes.LabelManaged:     "true",
+			reconciler.LabelProxyGroup: pgName,
 		},
 		client.HasLabels{labelDomain},
 	}
@@ -1130,9 +1131,9 @@ func certSecret(pgName, namespace, domain string, parent client.Object) *corev1.
 
 func certResourceLabels(pgName, domain string) map[string]string {
 	return map[string]string{
-		kubetypes.LabelManaged: "true",
-		labelProxyGroup:        pgName,
-		labelDomain:            tsoperator.TruncateLabelValue(domain),
+		kubetypes.LabelManaged:     "true",
+		reconciler.LabelProxyGroup: pgName,
+		labelDomain:                tsoperator.TruncateLabelValue(domain),
 	}
 }
 
@@ -1158,23 +1159,4 @@ func hasCerts(ctx context.Context, cl client.Client, ns string, svc tailcfg.Serv
 	key := secret.Data[corev1.TLSPrivateKeyKey]
 
 	return len(cert) > 0 && len(key) > 0, nil
-}
-
-func tagViolations(obj client.Object) []string {
-	var violations []string
-	if obj == nil {
-		return nil
-	}
-	tags, ok := obj.GetAnnotations()[AnnotationTags]
-	if !ok {
-		return nil
-	}
-
-	for tag := range strings.SplitSeq(tags, ",") {
-		tag = strings.TrimSpace(tag)
-		if err := tailcfg.CheckTag(tag); err != nil {
-			violations = append(violations, fmt.Sprintf("invalid tag %q: %v", tag, err))
-		}
-	}
-	return violations
 }

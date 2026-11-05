@@ -123,7 +123,7 @@ func (r *KubeAPIServerTSServiceReconciler) maybeProvision(ctx context.Context, s
 		// Update the condition based on how many pods are advertising the service
 		conditionStatus := metav1.ConditionFalse
 		conditionReason := reasonKubeAPIServerProxyNoBackends
-		conditionMessage := fmt.Sprintf("%d/%d proxy backends ready and advertising", podsAdvertising, pgReplicas(pg))
+		conditionMessage := fmt.Sprintf("%d/%d proxy backends ready and advertising", podsAdvertising, reconciler.ProxyGroupReplicas(pg))
 
 		pg.Status.URL = ""
 		if podsAdvertising > 0 {

@@ -63,14 +63,7 @@ const (
 
 	// Annotations settable by users on services.
 	AnnotationExpose             = "tailscale.com/expose"
-	AnnotationTags               = "tailscale.com/tags"
-	AnnotationHostname           = "tailscale.com/hostname"
 	annotationTailnetTargetIPOld = "tailscale.com/ts-tailnet-target-ip"
-	AnnotationTailnetTargetIP    = "tailscale.com/tailnet-ip"
-	// MagicDNS name of tailnet node.
-	AnnotationTailnetTargetFQDN = "tailscale.com/tailnet-fqdn"
-
-	AnnotationProxyGroup = "tailscale.com/proxy-group"
 
 	// AnnotationShareACMEAccount opts a single ProxyGroup into ("true")
 	// or out of ("false") using the shared per-tailnet ACME account key.
@@ -115,10 +108,8 @@ const (
 	proxyTypeIngressService  = "ingress_service"
 	proxyTypeIngressResource = "ingress_resource"
 	proxyTypeConnector       = "connector"
-	proxyTypeProxyGroup      = "proxygroup"
 
 	envVarTSLocalAddrPort = "TS_LOCAL_ADDR_PORT"
-	defaultLocalAddrPort  = 9002 // metrics and health check port
 
 	letsEncryptStagingEndpoint = "https://acme-staging-v02.api.letsencrypt.org/directory"
 
@@ -1515,13 +1506,6 @@ func defaultEnv(envName, defVal string) string {
 		return defVal
 	}
 	return v
-}
-
-func nameForService(svc *corev1.Service) string {
-	if h, ok := svc.Annotations[AnnotationHostname]; ok {
-		return h
-	}
-	return svc.Namespace + "-" + svc.Name
 }
 
 // markedForDeletion reports whether obj has a deletion timestamp, i.e. the API server is waiting on finalizers

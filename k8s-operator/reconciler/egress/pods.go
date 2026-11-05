@@ -3,7 +3,7 @@
 
 //go:build !plan9
 
-package main
+package egress
 
 import (
 	"context"
@@ -18,30 +18,55 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstime"
 	"tailscale.com/util/set"
 )
 
-const tsEgressReadinessGate = "tailscale.com/egress-services"
+const podReconcilerName = "egress-pods-readiness-reconciler"
 
-// egressPodsReconciler is responsible for setting tailscale.com/egress-services condition on egress ProxyGroup Pods.
+// PodReconciler is responsible for setting tailscale.com/egress-services condition on egress ProxyGroup Pods.
 // The condition is used as a readiness gate for the Pod, meaning that kubelet will not mark the Pod as ready before the
 // condition is set. The ProxyGroup StatefulSet updates are rolled out in such a way that no Pod is restarted, before
 // the previous Pod is marked as ready, so ensuring that the Pod does not get marked as ready when it is not yet able to
 // route traffic for egress service prevents downtime during restarts caused by no available endpoints left because
 // every Pod has been recreated and is not yet added to endpoints.
 // https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#pod-readiness-gate
-type egressPodsReconciler struct {
+type PodReconciler struct {
 	client.Client
 	logger      *zap.SugaredLogger
 	tsNamespace string
 	clock       tstime.Clock
+}
+
+// NewPodReconciler returns a new instance of the PodReconciler type. It watches ProxyGroup Pods and the EndpointSlices
+// for egress services.
+func NewPodReconciler(options ReconcilerOptions) *PodReconciler {
+	return &PodReconciler{
+		Client:      options.Client,
+		logger:      options.Logger.Named(podReconcilerName),
+		tsNamespace: options.TailscaleNamespace,
+		clock:       clockOrDefault(options.Clock),
+	}
+}
+
+// Register the PodReconciler onto the given manager.Manager implementation.
+func (er *PodReconciler) Register(mgr manager.Manager) error {
+	return builder.
+		ControllerManagedBy(mgr).
+		Named(podReconcilerName).
+		Watches(&discoveryv1.EndpointSlice{}, handler.EnqueueRequestsFromMapFunc(podsFromEgressEps(mgr.GetClient(), er.logger, er.tsNamespace))).
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(egressPodsHandler)).
+		Complete(er)
 }
 
 // Reconcile reconciles an egress ProxyGroup Pods on changes to those Pods and ProxyGroup EndpointSlices. It ensures
@@ -52,7 +77,7 @@ type egressPodsReconciler struct {
 // EndpointSlices (egress-eps-reconciler), which only adds a Pod once the Pod's state Secret shows that the proxy has
 // set up routing for that egress service. So a Pod is ready once, for every egress service for the ProxyGroup, it is
 // an endpoint in the EndpointSlice of each IP family that the proxy reports an address for in its state Secret.
-func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
+func (er *PodReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
 	lg := er.logger.With("Pod", req.NamespacedName)
 	lg.Debugf("starting reconcile")
 	defer lg.Debugf("reconcile finished")
@@ -70,7 +95,7 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 		return res, nil
 	}
 
-	if pod.Labels[LabelParentType] != proxyTypeProxyGroup {
+	if pod.Labels[reconciler.LabelParentType] != reconciler.ParentTypeProxyGroup {
 		lg.Warn("reconciler called for a Pod that is not a ProxyGroup Pod")
 		return res, nil
 	}
@@ -78,13 +103,13 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 	// If the Pod does not have the readiness gate set, there is no need to add the readiness condition. In practice
 	// this will happen if the user has configured custom TS_LOCAL_ADDR_PORT, thus disabling the graceful failover.
 	if !slices.ContainsFunc(pod.Spec.ReadinessGates, func(r corev1.PodReadinessGate) bool {
-		return r.ConditionType == tsEgressReadinessGate
+		return r.ConditionType == reconciler.EgressReadinessGate
 	}) {
 		lg.Debug("Pod does not have egress readiness gate set, skipping")
 		return res, nil
 	}
 
-	proxyGroupName := pod.Labels[LabelParentName]
+	proxyGroupName := pod.Labels[reconciler.LabelParentName]
 	pg := new(tsapi.ProxyGroup)
 	if err := er.Get(ctx, types.NamespacedName{Name: proxyGroupName}, pg); err != nil {
 		return res, fmt.Errorf("error getting ProxyGroup %q: %w", proxyGroupName, err)
@@ -97,9 +122,9 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 
 	// Get all ClusterIP Services for all egress targets exposed to cluster via this ProxyGroup.
 	lbls := map[string]string{
-		kubetypes.LabelManaged: "true",
-		labelProxyGroup:        proxyGroupName,
-		labelSvcType:           typeEgress,
+		kubetypes.LabelManaged:     "true",
+		reconciler.LabelProxyGroup: proxyGroupName,
+		labelSvcType:               typeEgress,
 	}
 	svcs := &corev1.ServiceList{}
 	if err := er.List(ctx, svcs, client.InNamespace(er.tsNamespace), client.MatchingLabels(lbls)); err != nil {
@@ -107,7 +132,7 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 	}
 
 	idx := xslices.IndexFunc(pod.Status.Conditions, func(c corev1.PodCondition) bool {
-		return c.Type == tsEgressReadinessGate
+		return c.Type == reconciler.EgressReadinessGate
 	})
 	if idx != -1 {
 		lg.Debugf("Pod is already ready, do nothing")
@@ -159,7 +184,7 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 
 // reportedFamilies returns the IP families that the proxy reports addresses for in the egress services status in its
 // state Secret. It returns an empty set if the proxy has not yet written the status.
-func (er *egressPodsReconciler) reportedFamilies(ctx context.Context, pod *corev1.Pod) (set.Set[discoveryv1.AddressType], error) {
+func (er *PodReconciler) reportedFamilies(ctx context.Context, pod *corev1.Pod) (set.Set[discoveryv1.AddressType], error) {
 	families := make(set.Set[discoveryv1.AddressType])
 	stateS := &corev1.Secret{}
 	err := er.Get(ctx, types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}, stateS)
@@ -188,15 +213,15 @@ func (er *egressPodsReconciler) reportedFamilies(ctx context.Context, pod *corev
 	return families, nil
 }
 
-func (er *egressPodsReconciler) setPodReady(ctx context.Context, pod *corev1.Pod, lg *zap.SugaredLogger) error {
+func (er *PodReconciler) setPodReady(ctx context.Context, pod *corev1.Pod, lg *zap.SugaredLogger) error {
 	if slices.ContainsFunc(pod.Status.Conditions, func(c corev1.PodCondition) bool {
-		return c.Type == tsEgressReadinessGate
+		return c.Type == reconciler.EgressReadinessGate
 	}) {
 		return nil
 	}
 	lg.Infof("Pod is ready to route traffic to all egress targets")
 	pod.Status.Conditions = append(pod.Status.Conditions, corev1.PodCondition{
-		Type:               tsEgressReadinessGate,
+		Type:               reconciler.EgressReadinessGate,
 		Status:             corev1.ConditionTrue,
 		LastTransitionTime: metav1.Time{Time: er.clock.Now()},
 	})

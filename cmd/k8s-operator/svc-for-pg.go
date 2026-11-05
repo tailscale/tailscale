@@ -134,7 +134,7 @@ func (r *HAServiceReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 		return res, fmt.Errorf("failed to get Service: %w", err)
 	}
 
-	pgName := svc.Annotations[AnnotationProxyGroup]
+	pgName := svc.Annotations[reconciler.AnnotationProxyGroup]
 	if pgName == "" {
 		// If we hold a finalizer, the annotation was removed after we
 		// provisioned this Service and we still need to clean up; recover the
@@ -175,7 +175,7 @@ func (r *HAServiceReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 		return res, fmt.Errorf("failed to get tailscale client: %w", err)
 	}
 
-	hostname := nameForService(svc)
+	hostname := reconciler.NameForService(svc)
 	logger = logger.With("hostname", hostname)
 
 	if !svc.DeletionTimestamp.IsZero() || !r.isTailscaleService(svc) {
@@ -275,7 +275,7 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 	// appears that the Tailscale Service has been created by a non-operator actor).
 	updatedAnnotations, err := ownerAnnotations(r.operatorID, existingTSSvc)
 	if err != nil {
-		instr := fmt.Sprintf("To proceed, you can either manually delete the existing Tailscale Service or choose a different hostname with the '%s' annotaion", AnnotationHostname)
+		instr := fmt.Sprintf("To proceed, you can either manually delete the existing Tailscale Service or choose a different hostname with the '%s' annotaion", reconciler.AnnotationHostname)
 		msg := fmt.Sprintf("error ensuring ownership of Tailscale Service %s: %v. %s", hostname, err, instr)
 		logger.Warn(msg)
 		r.recorder.Event(svc, corev1.EventTypeWarning, "InvalidTailscaleService", msg)
@@ -284,7 +284,7 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 	}
 
 	tags := r.defaultTags
-	if tstr, ok := svc.Annotations[AnnotationTags]; ok && tstr != "" {
+	if tstr, ok := svc.Annotations[reconciler.AnnotationTags]; ok && tstr != "" {
 		tags = strings.Split(tstr, ",")
 	}
 
@@ -402,7 +402,7 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 	conditionStatus := metav1.ConditionFalse
 	conditionType := tsapi.IngressSvcConfigured
 	conditionReason := reasonIngressSvcNoBackendsConfigured
-	conditionMessage := fmt.Sprintf("%d/%d proxy backends ready and advertising", count, pgReplicas(pg))
+	conditionMessage := fmt.Sprintf("%d/%d proxy backends ready and advertising", count, reconciler.ProxyGroupReplicas(pg))
 	if count != 0 {
 		dnsName, err := dnsNameForService(ctx, r.Client, serviceName, pg, r.tsNamespace)
 		if err != nil {
@@ -494,7 +494,7 @@ func (r *HAServiceReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 	for tsSvcName, cfg := range config {
 		found := false
 		for _, svc := range svcList.Items {
-			if strings.EqualFold(fmt.Sprintf("svc:%s", nameForService(&svc)), tsSvcName) {
+			if strings.EqualFold(fmt.Sprintf("svc:%s", reconciler.NameForService(&svc)), tsSvcName) {
 				found = true
 				break
 			}
@@ -550,7 +550,7 @@ func (r *HAServiceReconciler) deleteFinalizer(ctx context.Context, svc *corev1.S
 }
 
 func (r *HAServiceReconciler) isTailscaleService(svc *corev1.Service) bool {
-	proxyGroup := svc.Annotations[AnnotationProxyGroup]
+	proxyGroup := svc.Annotations[reconciler.AnnotationProxyGroup]
 	return r.shouldExpose(svc) && proxyGroup != ""
 }
 
@@ -871,7 +871,7 @@ func (r *HAServiceReconciler) validateService(ctx context.Context, svc *corev1.S
 		errs = append(errs, fmt.Errorf("ProxyGroup %q is of type %q but must be of type %q",
 			pg.Name, pg.Spec.Type, tsapi.ProxyGroupTypeIngress))
 	}
-	if violations := validateService(svc); len(violations) > 0 {
+	if violations := reconciler.ValidateService(svc); len(violations) > 0 {
 		errs = append(errs, fmt.Errorf("invalid Service: %s", strings.Join(violations, ", ")))
 	}
 	svcList := &corev1.ServiceList{}
@@ -879,7 +879,7 @@ func (r *HAServiceReconciler) validateService(ctx context.Context, svc *corev1.S
 		errs = append(errs, fmt.Errorf("error listing Services: %w", err))
 		return errors.Join(errs...)
 	}
-	svcName := nameForService(svc)
+	svcName := reconciler.NameForService(svc)
 	for _, s := range svcList.Items {
 		if s.UID == svc.UID {
 			continue
@@ -893,7 +893,7 @@ func (r *HAServiceReconciler) validateService(ctx context.Context, svc *corev1.S
 		if !r.isTailscaleService(&s) {
 			continue
 		}
-		if nameForService(&s) != svcName {
+		if reconciler.NameForService(&s) != svcName {
 			continue
 		}
 		// Two ProxyGroups joined to different tailnets each have their own
@@ -902,7 +902,7 @@ func (r *HAServiceReconciler) validateService(ctx context.Context, svc *corev1.S
 		// duplicate report when the tailnets differ; if the lookup fails
 		// fall through and flag the collision so a genuine duplicate isn't
 		// silently allowed.
-		otherPGName := s.Annotations[AnnotationProxyGroup]
+		otherPGName := s.Annotations[reconciler.AnnotationProxyGroup]
 		if otherPGName != "" && otherPGName != pg.Name {
 			otherPG := &tsapi.ProxyGroup{}
 			if err := r.Get(ctx, client.ObjectKey{Name: otherPGName}, otherPG); err == nil && otherPG.Spec.Tailnet != pg.Spec.Tailnet {
