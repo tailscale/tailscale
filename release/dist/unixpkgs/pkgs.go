@@ -219,31 +219,37 @@ func (t *debTarget) Build(b *dist.Build) ([]string, error) {
 			Type:        files.TypeFile,
 			Source:      ts,
 			Destination: "/usr/bin/tailscale",
+			FileInfo:    &files.ContentFileInfo{Mode: 0755},
 		},
 		&files.Content{
 			Type:        files.TypeFile,
 			Source:      tsd,
 			Destination: "/usr/sbin/tailscaled",
+			FileInfo:    &files.ContentFileInfo{Mode: 0755},
 		},
 		&files.Content{
 			Type:        files.TypeFile,
 			Source:      filepath.Join(tailscaledDir, "tailscaled.service"),
 			Destination: "/lib/systemd/system/tailscaled.service",
+			FileInfo:    &files.ContentFileInfo{Mode: 0644},
 		},
 		&files.Content{
 			Type:        files.TypeFile,
 			Source:      filepath.Join(tailscaledDir, "tailscale-online.target"),
 			Destination: "/lib/systemd/system/tailscale-online.target",
+			FileInfo:    &files.ContentFileInfo{Mode: 0644},
 		},
 		&files.Content{
 			Type:        files.TypeFile,
 			Source:      filepath.Join(tailscaledDir, "tailscale-wait-online.service"),
 			Destination: "/lib/systemd/system/tailscale-wait-online.service",
+			FileInfo:    &files.ContentFileInfo{Mode: 0644},
 		},
 		&files.Content{
 			Type:        files.TypeConfigNoReplace,
 			Source:      filepath.Join(tailscaledDir, "tailscaled.defaults"),
 			Destination: "/etc/default/tailscaled",
+			FileInfo:    &files.ContentFileInfo{Mode: 0644},
 		},
 	}, 0, "deb", false, time.Time{})
 	if err != nil {
@@ -366,31 +372,37 @@ func (t *rpmTarget) Build(b *dist.Build) ([]string, error) {
 			Type:        files.TypeFile,
 			Source:      ts,
 			Destination: "/usr/bin/tailscale",
+			FileInfo:    &files.ContentFileInfo{Mode: 0755},
 		},
 		&files.Content{
 			Type:        files.TypeFile,
 			Source:      tsd,
 			Destination: "/usr/sbin/tailscaled",
+			FileInfo:    &files.ContentFileInfo{Mode: 0755},
 		},
 		&files.Content{
 			Type:        files.TypeFile,
 			Source:      filepath.Join(tailscaledDir, "tailscaled.service"),
 			Destination: "/lib/systemd/system/tailscaled.service",
+			FileInfo:    &files.ContentFileInfo{Mode: 0644},
 		},
 		&files.Content{
 			Type:        files.TypeFile,
 			Source:      filepath.Join(tailscaledDir, "tailscale-online.target"),
 			Destination: "/lib/systemd/system/tailscale-online.target",
+			FileInfo:    &files.ContentFileInfo{Mode: 0644},
 		},
 		&files.Content{
 			Type:        files.TypeFile,
 			Source:      filepath.Join(tailscaledDir, "tailscale-wait-online.service"),
 			Destination: "/lib/systemd/system/tailscale-wait-online.service",
+			FileInfo:    &files.ContentFileInfo{Mode: 0644},
 		},
 		&files.Content{
 			Type:        files.TypeConfigNoReplace,
 			Source:      filepath.Join(tailscaledDir, "tailscaled.defaults"),
 			Destination: "/etc/default/tailscaled",
+			FileInfo:    &files.ContentFileInfo{Mode: 0644},
 		},
 		// SELinux policy on e.g. CentOS 8 forbids writing to /var/cache.
 		// Creating an empty directory at install time resolves this issue.
