@@ -53,8 +53,6 @@ func TestReceiveFuncRetriesErrors(t *testing.T) {
 		syscall.Errno(10051),
 		syscall.EADDRNOTAVAIL,
 		syscall.Errno(10049),
-		syscall.EBADF,
-		syscall.ENOTSOCK,
 		syscall.ECONNRESET,
 		syscall.ECONNREFUSED,
 		errors.New("unexpected error"),

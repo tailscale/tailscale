@@ -397,7 +397,8 @@ type Conn struct {
 	getPeerByKey func(key.NodePublic) (_ wgint.Peer, ok bool)
 
 	// lastErrRebind tracks the last time a rebind was performed after
-	// experiencing a write error, and is used to throttle the rate of rebinds.
+	// experiencing a read or write error, and is used to throttle the rate of
+	// rebinds.
 	lastErrRebind syncs.AtomicValue[time.Time]
 
 	// appliedDisableUDPGRO and appliedDisableUDPGSO cache the last UDP offload
@@ -1591,7 +1592,7 @@ func (c *Conn) sendUDPBatch(flow int, addr epAddr, buffs [][]byte, offset int) (
 			c.logf("magicsock: %s", errGSO.Error())
 			err = errGSO.RetryErr
 		} else {
-			c.maybeRebindOnError(err)
+			c.maybeRebindOnWriteError(err)
 		}
 	}
 	return err == nil, err
@@ -1610,7 +1611,7 @@ func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte, isDisco bool, isGeneveEncap
 		} else {
 			metricSendUDPError.Add(1)
 		}
-		c.maybeRebindOnError(err)
+		c.maybeRebindOnWriteError(err)
 	} else {
 		if sent && !isDisco {
 			switch {
@@ -1636,22 +1637,40 @@ func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte, isDisco bool, isGeneveEncap
 	return
 }
 
-// maybeRebindOnError performs a rebind and restun if the error is one that is
-// known to be healed by a rebind, and the rebind is not throttled.
-func (c *Conn) maybeRebindOnError(err error) {
+// maybeRebindOnWriteError performs a rebind and restun if the error is one that is
+// known to be healed by a rebind, and the rebind is not currently throttled.
+func (c *Conn) maybeRebindOnWriteError(err error) {
 	ok, reason := shouldRebind(err)
 	if !ok {
 		return
 	}
+	c.maybeRebind(reason)
+}
 
-	if c.lastErrRebind.Load().Before(time.Now().Add(-5 * time.Second)) {
-		c.logf("magicsock: performing rebind due to %q", reason)
-		c.lastErrRebind.Store(time.Now())
-		c.Rebind()
-		go c.ReSTUN(reason)
-	} else {
-		c.logf("magicsock: not performing %q rebind due to throttle", reason)
+// maybeRebindOnReadError rebinds and restuns if err indicates the socket is no
+// longer valid and the rebind is not currently throttled.
+func (c *Conn) maybeRebindOnReadError(err error) {
+	if neterror.IsBadSocketError(err) {
+		c.maybeRebind("bad-socket")
 	}
+}
+
+// maybeRebind rebinds and restuns unless c is closing or another error-driven
+// rebind happened within the last errRebindInterval.
+func (c *Conn) maybeRebind(reason string) {
+	if c.closing.Load() {
+		c.logf("magicsock: not performing %q rebind, conn is closing", reason)
+		return
+	}
+	last := c.lastErrRebind.Load()
+	now := time.Now()
+	if now.Sub(last) < errRebindInterval || !c.lastErrRebind.CompareAndSwap(last, now) {
+		c.logf("magicsock: not performing %q rebind due to throttle", reason)
+		return
+	}
+	c.logf("magicsock: performing rebind due to %q", reason)
+	c.Rebind()
+	go c.ReSTUN(reason)
 }
 
 // sendUDPNetcheck sends b via UDP to addr. It is used exclusively by netcheck.
@@ -1759,6 +1778,9 @@ type udpReceiveConfig struct {
 }
 
 const (
+	// errRebindInterval is the minimum time between error-driven rebinds.
+	errRebindInterval = 5 * time.Second
+
 	// readErrRetryDelay paces a [conn.ReceiveFunc]'s read errors.
 	readErrRetryDelay = 100 * time.Millisecond
 
@@ -1817,6 +1839,7 @@ func (c *Conn) mkReceiveFunc(cfg udpReceiveConfig) conn.ReceiveFunc {
 					healthItem.SetBroken(true)
 				}
 				c.logf("magicsock: %s: read error: %v", name, err)
+				c.maybeRebindOnReadError(err)
 
 				select {
 				case <-c.connCtx.Done():
@@ -3916,6 +3939,10 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 	// from the perspective of ruc receive functions.
 	ruc.mu.Lock()
 	defer ruc.mu.Unlock()
+
+	if c.closing.Load() {
+		return net.ErrClosed
+	}
 
 	if !hasUDPTransport {
 		ruc.setConnLocked(nil, c.udpSockets, "", c.controlKnobs)
