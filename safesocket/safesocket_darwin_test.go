@@ -4,10 +4,13 @@
 package safesocket
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"golang.org/x/sys/unix"
 	"tailscale.com/tstest"
 )
 
@@ -169,6 +172,64 @@ func TestMacosSameuserproof(t *testing.T) {
 	// and makes some assumptions about the user.  But we can make sure
 	// the file exists
 	assertFileCount(t, dir, 1, "sameuserproof-")
+}
+
+// TestMacsysSameuserproofModeUnderUmask verifies that the macsys
+// sameuserproof file ends up group-readable even when the process umask would
+// otherwise strip that bit. Without an explicit chmod, a umask of 0077 leaves
+// the file 0600 and no member of the admin group can read the token.
+func TestMacsysSameuserproofModeUnderUmask(t *testing.T) {
+	dir := t.TempDir()
+
+	tstest.Replace(t, &ssd.isMacSysExt, func() bool { return true })
+	tstest.Replace(t, &ssd.checkConn, false)
+	tstest.Replace(t, &ssd.sharedDir, dir)
+
+	oldMask := unix.Umask(0077)
+	defer unix.Umask(oldMask)
+
+	const (
+		wantToken = "token"
+		wantPort  = 123
+	)
+	if err := initSameUserProofToken(dir, wantPort, wantToken); err != nil {
+		t.Fatalf("initSameUserProofToken: %v", err)
+	}
+
+	fi, err := os.Stat(filepath.Join(dir, fmt.Sprintf("sameuserproof-%d", wantPort)))
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got, want := fi.Mode().Perm(), os.FileMode(0640); got != want {
+		t.Errorf("mode: got %v, want %v", got, want)
+	}
+}
+
+// TestInitSameUserProofTokenBadDir verifies that a bad sharedDir is reported
+// rather than silently ignored. This guard previously compared the ReadDir
+// error against os.ErrNotExist with ==, which never matched.
+func TestInitSameUserProofTokenBadDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "does-not-exist")
+
+	tstest.Replace(t, &ssd.isMacSysExt, func() bool { return true })
+	tstest.Replace(t, &ssd.checkConn, false)
+
+	if err := initSameUserProofToken(dir, 123, "token"); err == nil {
+		t.Error("initSameUserProofToken: got nil error for a nonexistent sharedDir, want an error")
+	}
+}
+
+// TestAdminGroupGID verifies that the admin group resolves by name. On stock
+// macOS this is gid 80, which is also the fallback, so this mainly asserts
+// that the lookup path does not return something nonsensical.
+func TestAdminGroupGID(t *testing.T) {
+	if got := adminGroupGID(); got != 80 {
+		// Not a hard failure: a directory-bound host may legitimately differ.
+		t.Logf("adminGroupGID = %d, not the stock macOS gid 80", got)
+	}
+	if got := adminGroupGID(); got <= 0 {
+		t.Errorf("adminGroupGID: got %d, want a positive gid", got)
+	}
 }
 
 func assertFileCount(t *testing.T, dir string, want int, prefix string) {
