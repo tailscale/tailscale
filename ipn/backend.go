@@ -614,10 +614,11 @@ func (n Notify) String() string {
 
 // PartialFile represents an in-progress incoming file transfer.
 type PartialFile struct {
-	Name         string    // e.g. "foo.jpg"
-	Started      time.Time // time transfer started
-	DeclaredSize int64     // or -1 if unknown
-	Received     int64     // bytes copied thus far
+	Name         string               // e.g. "foo.jpg"
+	PeerID       tailcfg.StableNodeID `json:",omitempty"` // identifier of the peer sending this file
+	Started      time.Time            // time transfer started
+	DeclaredSize int64                // or -1 if unknown
+	Received     int64                // bytes copied thus far
 
 	// PartialPath is set non-empty in "direct" file mode to the
 	// in-progress '*.partial' file's path when the peerapi isn't
