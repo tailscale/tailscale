@@ -89,6 +89,29 @@ enum wgpeer_attribute {
 };
 #define WGPEER_A_MAX (__WGPEER_A_LAST - 1)
 
+/* tswg additions; see WGDEVICE_A_TSWG. */
+#define WGPEER_A_TSWG 64 /* NLA_NESTED, of enum tswgpeer_attribute */
+
+enum tswgpeer_flag {
+	/*
+	 * Don't update the peer's endpoint from incoming packets once it has
+	 * one; only userspace changes it. Upstream WireGuard roams to the
+	 * source of the latest authenticated packet, which would fight
+	 * tailscaled's path selection (a packet arriving via DERP would steal
+	 * the endpoint from a good direct path). If the peer has no endpoint
+	 * yet, the first authenticated packet still sets one.
+	 */
+	TSWGPEER_F_NO_ROAM = 1,
+};
+
+enum tswgpeer_attribute {
+	TSWGPEER_A_UNSPEC,
+	TSWGPEER_A_FLAGS, /* NLA_U32 of enum tswgpeer_flag; set replaces all */
+
+	__TSWGPEER_A_LAST
+};
+#define TSWGPEER_A_MAX (__TSWGPEER_A_LAST - 1)
+
 enum wgallowedip_attribute {
 	WGALLOWEDIP_A_UNSPEC,
 	WGALLOWEDIP_A_FAMILY,

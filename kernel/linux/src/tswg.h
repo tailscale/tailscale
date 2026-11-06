@@ -10,6 +10,7 @@
 #include <linux/types.h>
 
 struct wg_device;
+struct wg_peer;
 struct sock;
 struct sk_buff;
 struct nlattr;
@@ -26,5 +27,7 @@ u32 tswg_socket_flags(struct wg_device *wg);
 int tswg_set_device(struct wg_device *wg, struct nlattr *attr,
 		    struct netlink_ext_ack *extack);
 int tswg_get_device(struct sk_buff *skb, struct wg_device *wg);
+int tswg_set_peer(struct wg_peer *peer, struct nlattr *attr);
+int tswg_get_peer(struct sk_buff *skb, struct wg_peer *peer);
 
 #endif /* _TSWG_H */

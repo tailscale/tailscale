@@ -21,7 +21,15 @@ const struct nla_policy wireguard_wgallowedip_nl_policy[WGALLOWEDIP_A_FLAGS + 1]
 	[WGALLOWEDIP_A_FLAGS] = NLA_POLICY_MASK(NLA_U32, 0x1),
 };
 
-const struct nla_policy wireguard_wgpeer_nl_policy[WGPEER_A_PROTOCOL_VERSION + 1] = {
+/*
+ * TSWG: not generated. Hand-written policy for the nested WGPEER_A_TSWG
+ * attribute; see the TODO in DESIGN.md about forking the YNL spec.
+ */
+const struct nla_policy tswg_peer_nl_policy[TSWGPEER_A_MAX + 1] = {
+	[TSWGPEER_A_FLAGS] = NLA_POLICY_MASK(NLA_U32, TSWGPEER_F_NO_ROAM),
+};
+
+const struct nla_policy wireguard_wgpeer_nl_policy[WGPEER_A_TSWG + 1] = { /* TSWG */
 	[WGPEER_A_PUBLIC_KEY] = NLA_POLICY_EXACT_LEN(WG_KEY_LEN),
 	[WGPEER_A_PRESHARED_KEY] = NLA_POLICY_EXACT_LEN(WG_KEY_LEN),
 	[WGPEER_A_FLAGS] = NLA_POLICY_MASK(NLA_U32, 0x7),
@@ -32,6 +40,7 @@ const struct nla_policy wireguard_wgpeer_nl_policy[WGPEER_A_PROTOCOL_VERSION + 1
 	[WGPEER_A_TX_BYTES] = { .type = NLA_U64, },
 	[WGPEER_A_ALLOWEDIPS] = NLA_POLICY_NESTED_ARRAY(wireguard_wgallowedip_nl_policy),
 	[WGPEER_A_PROTOCOL_VERSION] = { .type = NLA_U32, },
+	[WGPEER_A_TSWG] = NLA_POLICY_NESTED(tswg_peer_nl_policy), /* TSWG */
 };
 
 /* WG_CMD_GET_DEVICE - dump */

@@ -114,7 +114,8 @@ get_peer(struct wg_peer *peer, struct sk_buff *skb, struct dump_ctx *ctx)
 				      WGPEER_A_UNSPEC) ||
 		    nla_put_u64_64bit(skb, WGPEER_A_RX_BYTES, peer->rx_bytes,
 				      WGPEER_A_UNSPEC) ||
-		    nla_put_u32(skb, WGPEER_A_PROTOCOL_VERSION, 1))
+		    nla_put_u32(skb, WGPEER_A_PROTOCOL_VERSION, 1) ||
+		    tswg_get_peer(skb, peer))
 			goto err;
 
 		read_lock_bh(&peer->endpoint_lock);
@@ -418,6 +419,13 @@ static int set_peer(struct wg_device *wg, struct nlattr **attrs)
 		up_write(&peer->handshake.lock);
 	}
 
+	/* TSWG: before the endpoint, so that pinning and setting it are one step. */
+	if (attrs[WGPEER_A_TSWG]) {
+		ret = tswg_set_peer(peer, attrs[WGPEER_A_TSWG]);
+		if (ret < 0)
+			goto out;
+	}
+
 	if (attrs[WGPEER_A_ENDPOINT]) {
 		struct sockaddr *addr = nla_data(attrs[WGPEER_A_ENDPOINT]);
 		size_t len = nla_len(attrs[WGPEER_A_ENDPOINT]);
@@ -570,11 +578,11 @@ int wg_set_device_doit(struct sk_buff *skb, struct genl_info *info)
 skip_set_private_key:
 
 	if (info->attrs[WGDEVICE_A_PEERS]) {
-		struct nlattr *attr, *peer[WGPEER_A_MAX + 1];
+		struct nlattr *attr, *peer[WGPEER_A_TSWG + 1]; /* TSWG */
 		int rem;
 
 		nla_for_each_nested(attr, info->attrs[WGDEVICE_A_PEERS], rem) {
-			ret = nla_parse_nested(peer, WGPEER_A_MAX, attr,
+			ret = nla_parse_nested(peer, WGPEER_A_TSWG, attr,
 					       NULL, NULL);
 			if (ret < 0)
 				goto out;
@@ -629,6 +637,43 @@ int tswg_set_device(struct wg_device *wg, struct nlattr *attr,
 		if (ret)
 			return ret;
 	}
+	return 0;
+}
+
+/* TSWG: tswg_set_peer applies the nested WGPEER_A_TSWG attribute to peer. */
+int tswg_set_peer(struct wg_peer *peer, struct nlattr *attr)
+{
+	struct nlattr *tb[TSWGPEER_A_MAX + 1];
+	int ret;
+
+	ret = nla_parse_nested(tb, TSWGPEER_A_MAX, attr, tswg_peer_nl_policy,
+			       NULL);
+	if (ret < 0)
+		return ret;
+	if (tb[TSWGPEER_A_FLAGS]) {
+		u32 flags = nla_get_u32(tb[TSWGPEER_A_FLAGS]);
+
+		WRITE_ONCE(peer->tswg_no_roam, !!(flags & TSWGPEER_F_NO_ROAM));
+	}
+	return 0;
+}
+
+/* TSWG: tswg_get_peer adds peer's WGPEER_A_TSWG attribute to skb. */
+int tswg_get_peer(struct sk_buff *skb, struct wg_peer *peer)
+{
+	struct nlattr *nest;
+	u32 flags = 0;
+
+	if (READ_ONCE(peer->tswg_no_roam))
+		flags |= TSWGPEER_F_NO_ROAM;
+	nest = nla_nest_start(skb, WGPEER_A_TSWG);
+	if (!nest)
+		return -EMSGSIZE;
+	if (nla_put_u32(skb, TSWGPEER_A_FLAGS, flags)) {
+		nla_nest_cancel(skb, nest);
+		return -EMSGSIZE;
+	}
+	nla_nest_end(skb, nest);
 	return 0;
 }
 

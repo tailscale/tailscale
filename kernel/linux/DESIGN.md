@@ -241,9 +241,33 @@ Details and decisions:
 
 Upstream WireGuard roams a peer's endpoint to the source of the latest
 authenticated packet. That fights disco's path selection: a packet that
-arrives via DERP would steal the endpoint from a good direct path. tswg
-adds a per-peer flag (or device-wide default) that disables auto-roaming;
-tailscaled sets endpoints explicitly.
+arrives via DERP would steal the endpoint from a good direct path.
+Implemented 2026-11-06:
+
+* A per-peer flag, `TSWGPEER_F_NO_ROAM`, in `TSWGPEER_A_FLAGS` nested in
+  `WGPEER_A_TSWG` (= 64, like the device attribute). Setting
+  `TSWGPEER_A_FLAGS` replaces all of the peer's tswg flags. Dumps report
+  it. Go: `tswg.PeerConfig.NoRoam` and `tswg.Peer.NoRoam`.
+* Upstream learns endpoints in three places: on a valid handshake
+  initiation and a valid handshake response (via
+  `wg_socket_set_peer_endpoint_from_skb`) and on each authenticated data
+  packet (`wg_packet_consume_data_done` calls
+  `wg_socket_set_peer_endpoint` directly). `tswg_peer_may_roam()` (in
+  `peer.h`) gates the learned updates, not `wg_socket_set_peer_endpoint`
+  itself, which netlink also uses for explicit updates.
+* With the flag set, the first authenticated packet still sets the
+  endpoint if the peer doesn't have one yet; after that only userspace
+  changes it. That keeps a peer reachable if it contacts us before
+  tailscaled has given it an endpoint.
+* The flag is applied before `WGPEER_A_ENDPOINT` in the same request, so
+  pinning and setting an endpoint are one step.
+* Per-peer rather than device-wide, for now. tailscaled will set it on
+  every peer; a device-wide default is easy to add if per-peer turns out
+  to be a hassle.
+* Pinning also stops learning the local source address that upstream
+  records alongside the endpoint (for replying from the same local IP on
+  multihomed hosts); the kernel picks the source address by routing, as
+  in userspace Tailscale.
 
 Changing a peer's endpoint does not re-key or reset the noise session in
 upstream WireGuard either; that is already fine.
@@ -423,7 +447,7 @@ Everything else:
       detaches; a new fd reattaches (`TestTSWG{Gokrazy,Ubuntu}SharedSocket`).
 - [ ] tailscaled: keep the shared sockets in systemd's fd store across
       restarts.
-- [ ] Per-peer no-auto-roam flag.
+- [x] Per-peer no-auto-roam flag (`TestTSWG{Gokrazy,Ubuntu}NoRoam`).
 - [ ] Loopback DERP endpoints; vmtest with DERP-only path.
 - [ ] tailscaled integration (wgengine backend that programs tswg) on a
       tailscale.com branch.

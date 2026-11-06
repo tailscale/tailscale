@@ -303,6 +303,8 @@ void wg_socket_set_peer_endpoint_from_skb(struct wg_peer *peer,
 {
 	struct endpoint endpoint;
 
+	if (!tswg_peer_may_roam(peer)) /* TSWG */
+		return;
 	if (!wg_socket_endpoint_from_skb(&endpoint, skb))
 		wg_socket_set_peer_endpoint(peer, &endpoint);
 }

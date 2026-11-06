@@ -64,7 +64,23 @@ struct wg_peer {
 	struct list_head allowedips_list;
 	struct napi_struct napi;
 	u64 internal_id;
+
+	/*
+	 * TSWG: if set, don't learn the endpoint from incoming packets once
+	 * one is set; userspace (disco) picks the path. Read locklessly.
+	 */
+	bool tswg_no_roam;
 };
+
+/*
+ * TSWG: tswg_peer_may_roam reports whether an authenticated packet from a
+ * new address may update peer's endpoint.
+ */
+static inline bool tswg_peer_may_roam(const struct wg_peer *peer)
+{
+	return !READ_ONCE(peer->tswg_no_roam) ||
+	       !READ_ONCE(peer->endpoint.addr.sa_family);
+}
 
 struct wg_peer *wg_peer_create(struct wg_device *wg,
 			       const u8 public_key[NOISE_PUBLIC_KEY_LEN],

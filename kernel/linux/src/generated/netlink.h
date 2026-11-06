@@ -16,10 +16,11 @@
 
 /* Common nested types */
 extern const struct nla_policy wireguard_wgallowedip_nl_policy[WGALLOWEDIP_A_FLAGS + 1];
-extern const struct nla_policy wireguard_wgpeer_nl_policy[WGPEER_A_PROTOCOL_VERSION + 1];
+extern const struct nla_policy wireguard_wgpeer_nl_policy[WGPEER_A_TSWG + 1]; /* TSWG */
 
 /* TSWG: hand-written, not generated. */
 extern const struct nla_policy tswg_device_nl_policy[TSWGDEVICE_A_MAX + 1];
+extern const struct nla_policy tswg_peer_nl_policy[TSWGPEER_A_MAX + 1];
 
 /* Ops table for wireguard */
 extern const struct genl_split_ops wireguard_nl_ops[2];
