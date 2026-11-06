@@ -2151,6 +2151,87 @@ func TestWatchNotificationsClosesSlowConsumer(t *testing.T) {
 	}
 }
 
+func TestWatchNotificationsSuspendsSlowConsumer(t *testing.T) {
+	b := newTestLocalBackend(t)
+	ctx := t.Context()
+
+	watchAdded := make(chan struct{})
+	releaseFirstNotify := make(chan struct{})
+	got := make(chan *ipn.Notify, 256)
+
+	go func() {
+		first := true
+		b.WatchNotificationsAs(ctx, nil, ipn.NotifyInitialState|ipn.NotifySuspendWhenBehind, func() { close(watchAdded) }, func(n *ipn.Notify) bool {
+			if first {
+				first = false
+				<-releaseFirstNotify
+			}
+			got <- n
+			return true
+		})
+	}()
+	<-watchAdded
+
+	next := func() *ipn.Notify {
+		t.Helper()
+		select {
+		case n := <-got:
+			return n
+		case <-time.After(10 * time.Second):
+			t.Fatal("timeout waiting for notification")
+			return nil
+		}
+	}
+	numWatchers := func() int {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return len(b.notifyWatchers)
+	}
+
+	// The watcher's callback is blocked on the initial notification. Fill
+	// the 128-slot queue, then send one more notification to force overflow.
+	running := ipn.Running
+	for range 129 {
+		b.send(ipn.Notify{State: &running})
+	}
+	close(releaseFirstNotify)
+
+	ini := next()
+	if ini.SessionID == "" || ini.State == nil {
+		t.Fatalf("initial notification = %v; want SessionID and State", ini)
+	}
+	var n *ipn.Notify
+	for n = next(); !n.Suspended; n = next() {
+		if n.State == nil || *n.State != ipn.Running {
+			t.Fatalf("got %v before suspension; want Running state", n)
+		}
+	}
+	if got := numWatchers(); got != 1 {
+		t.Fatalf("watchers after suspension = %d; want 1", got)
+	}
+
+	// Nothing is delivered while suspended. Resuming re-delivers the
+	// initial notification and then new notifications.
+	stopped := ipn.Stopped
+	b.send(ipn.Notify{State: &stopped})
+	if err := b.ResumeWatchNotifications(ctx, "bogus"); err == nil {
+		t.Fatal("ResumeWatchNotifications(bogus) succeeded; want error")
+	}
+	if err := b.ResumeWatchNotifications(ctx, ini.SessionID); err != nil {
+		t.Fatalf("ResumeWatchNotifications: %v", err)
+	}
+	if n := next(); n.Suspended || n.SessionID != ini.SessionID || n.State == nil || *n.State != *ini.State {
+		t.Fatalf("after resume got %v; want initial notification", n)
+	}
+	b.send(ipn.Notify{State: &stopped})
+	if n := next(); n.State == nil || *n.State != ipn.Stopped {
+		t.Fatalf("after resume got %v; want Stopped state", n)
+	}
+	if got := numWatchers(); got != 1 {
+		t.Fatalf("watchers after resume = %d; want 1", got)
+	}
+}
+
 func TestWatchNotificationsInProcessNoDisconnectBlocksSender(t *testing.T) {
 	b := newTestLocalBackend(t)
 	ctx, cancel := context.WithCancel(context.Background())
