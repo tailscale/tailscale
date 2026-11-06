@@ -198,37 +198,74 @@ family version or a feature attribute).
 
 Integration tests run as natlab vmtests in tailscale.com
 (`tstest/natlab/vmtest`), which boot QEMU VMs connected by vnet, a
-simulated network with NATs, DERP and a test control server.
+simulated network with NATs, DERP and a test control server. The tests
+live in the tailscale.com worktree, in `tstest/natlab/vmtest/tswg_test.go`.
+Run them with `scripts/vmtest.sh [TEST_REGEXP]`; it sets `TSWG_DIR` to this
+tree, and the tests skip if the tree is missing.
 
-* Guest: the natlab Ubuntu 24.04 cloud image, stock kernel
-  `6.8.0-106-generic`. The host is also Ubuntu 24.04 with the same gcc
-  (13.3), so the host builds tswg.ko against that kernel's headers,
-  fetched with `apt-get download` and unpacked into a cache directory
-  (never installed).
-* The tests live in the tailscale.com worktree, in
-  `tstest/natlab/vmtest/tswg_test.go`. Run them with `scripts/vmtest.sh`
-  (it sets `TSWG_DIR` to this tree; the tests skip if the tree is
-  missing).
-* After boot, a test asks the guest for `uname -r`, runs
-  `scripts/build-for-ubuntu.sh` to build tswg.ko for it in a private copy
-  of `src/`, builds `tswgctl`, registers both with the vnet file server,
-  and has the guest curl them from `http://52.52.0.6/tswg/<kver>/`, then
-  `depmod` and `modprobe tswg`. Commands run as root over the debug SSH
-  NIC.
-* `TestTSWGManualTunnel`: two VMs on one LAN, tunnel configured by hand
-  with `tswgctl` (no tailscaled), ping across it, and check handshake and
-  byte counters.
-* Later: also boot a custom debug kernel (KASAN, lockdep) built from a
-  Linux tree, and more distro images (Debian, Fedora) for compat coverage.
+### Primary guest: gokrazy
+
+Decided 2026-11-06: the natlab gokrazy image is the primary test guest.
+
+* It boots a recent upstream kernel (7.2.8 today), from the
+  `github.com/gokrazy/kernel.amd64` package pinned in tailscale.com's
+  go.mod, which gets bumped regularly. That keeps the fork honest against
+  new kernel APIs, which is where the fork's base is anyway.
+* gokrazy has no userspace tools (no modprobe, iproute2 or shell), just
+  like the end state, where tailscaled drives the kernel entirely. So
+  everything is done from Go: `tswg.LoadModule` calls init_module(2) on
+  the tswg.ko image, and links and addresses are set up over rtnetlink.
+* gokrazy kernels are kernel.org releases plus the patches in
+  `_build/series`, with an embedded config (`CONFIG_IKCONFIG`) and without
+  MODVERSIONS or module signing. `scripts/gokrazy-kdir.sh` recreates a
+  matching module build tree (download, patch, embedded config,
+  `modules_prepare`; about 20 seconds, cached). We build with the host's
+  gcc 13 while gokrazy uses Debian 12's gcc 12; the only resulting config
+  differences are toolchain capability bits. If that ever matters, build
+  in a Debian 12 container instead.
+* Such a tree has no `Module.symvers`, so modpost can't check the kernel's
+  exports (we set `KBUILD_MODPOST_WARN=1`); a missing symbol shows up as a
+  load failure instead.
+* The test agent (`cmd/tta`) has `/tswg/load` (POST tswg.ko),
+  `/tswg/up` (create, configure and bring up a one-peer device),
+  `/tswg/show` (device JSON) and `/tswg/dmesg` (kernel log lines
+  mentioning tswg, read from /dev/kmsg).
+* `TestTSWGGokrazyManualTunnel`: two gokrazy VMs on one LAN, tunnel set up
+  through tta, ping across it, and check handshake and byte counters.
+
+### Secondary guest: Ubuntu 24.04
+
+Kept for distro and DKMS-style coverage, since that's how real users will
+install the module.
+
+* The natlab Ubuntu 24.04 cloud image, stock kernel `6.8.0-106-generic`.
+  The host is also Ubuntu 24.04 with the same gcc (13.3), so
+  `scripts/build-for-ubuntu.sh` builds tswg.ko against that kernel's
+  headers, fetched with `apt-get download` and unpacked into a cache
+  directory (never installed).
+* The test asks the guest for `uname -r`, builds tswg.ko and `tswgctl`,
+  registers both with the vnet file server, and has the guest curl them
+  from `http://52.52.0.6/tswg/<kver>/`, then `depmod` and `modprobe tswg`.
+  Commands run as root over the debug SSH NIC.
+* `TestTSWGManualTunnel`: the same tunnel check, configured with
+  `ip link` and `tswgctl`.
+
+### Later
+
+* A custom debug kernel (KASAN, lockdep) built from a Linux tree, which
+  would also cover the 7.4 compat path.
+* More distro images (Debian, Fedora) for compat coverage.
 
 ## Repo layout
 
 * `DESIGN.md`: this file.
 * `upstream/`: pristine upstream sources (see "Fork, not patches").
 * `src/`: the tswg module sources, Kbuild and compat headers.
-* `scripts/`: `probe.sh` (compat probes), `ubuntu-headers.sh` (fetch and
-  unpack Ubuntu kernel headers), `build-for-ubuntu.sh` (build tswg.ko for
-  an Ubuntu kernel), `vmtest.sh` (run the natlab vmtests).
+* `scripts/`: `probe.sh` (compat probes), `build.sh` (build tswg.ko
+  against a KDIR in a private copy of `src/`), `ubuntu-headers.sh` and
+  `build-for-ubuntu.sh` (Ubuntu kernels), `gokrazy-kdir.sh` and
+  `build-for-gokrazy.sh` (gokrazy kernels), `extract-ikconfig` (vendored
+  from Linux), `vmtest.sh` (run the natlab vmtests).
 
 ## TODO
 
@@ -244,7 +281,14 @@ simulated network with NATs, DERP and a test control server.
 - [x] Go netlink client (`tailscale.com/wgengine/tswg`) and `tswgctl`.
 - [x] vmtest: two Ubuntu VMs, load tswg.ko, configure a tswg tunnel by
       hand, ping through it (`TestTSWGManualTunnel`, passes in about 80s).
+- [x] Same on gokrazy, with no userspace tools
+      (`TestTSWGGokrazyManualTunnel`, passes in about 23s).
+- [ ] Generate a Module.symvers for gokrazy build trees (for example from
+      the kernel's exported-symbol list) so missing exports fail at build
+      time rather than load time.
 - [ ] Verify the 7.4 path (all probes succeed) against a built 7.4 tree.
+      (Partly covered: gokrazy's 7.2.8 has every probed API except
+      udp_get_len_short.)
 - [ ] Forked YNL spec plus regen script once we add attributes.
 - [ ] Look at the allowedips.c frame-size warning (1048 > 1024 bytes),
       present in upstream code too.
