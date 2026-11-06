@@ -138,10 +138,7 @@ func TestOpenresolvDNSOtherSnippet(t *testing.T) {
 	// Register a second snippet, the way a DHCP client would. It points at
 	// vnet's default DNS server, the only thing that answers
 	// orUpstreamOnlyName.
-	cmd := fmt.Sprintf("printf 'nameserver %s\\n' | resolvconf -a eth0.inet", vnet.FakeDNSIPv4())
-	if out, err := env.SSHExec(node, cmd); err != nil {
-		t.Fatalf("%s: %v (%s)", cmd, err, strings.TrimSpace(out))
-	}
+	addOpenresolvSnippet(t, env, node, "eth0.inet", vnet.FakeDNSIPv4().String())
 
 	// tailscaled has no reason to re-read the OS config on its own, so force a
 	// full reapply. This is also how the reporter of #20825 reproduced the bug.
@@ -185,6 +182,53 @@ func TestOpenresolvDNSOtherSnippet(t *testing.T) {
 	// An answer here can only come from quad-100 forwarding to that base config,
 	// since nothing else on the guest answers this name.
 	assertResolves(t, env, node, orUpstreamOnlyName, orUpstreamOnlyIP)
+}
+
+// orDeadNameserver is a nameserver nothing answers. It is in TEST-NET-2, and
+// vnet's router drops packets for it silently.
+const orDeadNameserver = "198.51.100.53"
+
+// TestOpenresolvDNSSnippetChange checks that tailscaled picks up a change to
+// another snippet's nameservers when nothing else about the network changes.
+// A DHCP lease renewal that carries new DNS servers produces the same
+// sequence. The client's resolvconf hook re-registers its snippet, and no
+// netlink event follows. See tailscale/tailscale#21607.
+func TestOpenresolvDNSSnippetChange(t *testing.T) {
+	t.Skip("tailscaled does not notice a resolvconf snippet changing without a link change; see https://github.com/tailscale/tailscale/issues/21607")
+	env, node := newOpenresolvEnv(t)
+
+	// The DHCP snippet starts out pointing at a nameserver nothing answers.
+	addOpenresolvSnippet(t, env, node, "eth0.dhcp", orDeadNameserver)
+
+	// Make tailscaled read the snippet and take over resolv.conf.
+	env.SetAcceptDNS(node, false)
+	env.SetAcceptDNS(node, true)
+	assertOpenresolvResolvConf(t, env, node,
+		[]string{orSignature, orQuad100},
+		[]string{orDeadNameserver})
+
+	// The lease renews with a working nameserver.
+	addOpenresolvSnippet(t, env, node, "eth0.dhcp", vnet.FakeDNSIPv4().String())
+
+	// tailscaled can read the new nameserver back.
+	if base := openresolvBaseConfig(t, env, node); base != nil {
+		if want := vnet.FakeDNSIPv4().String(); !slices.Equal(base.Nameservers, []string{want}) {
+			t.Fatalf("OS base config nameservers after renewal = %q, want just %s", base.Nameservers, want)
+		}
+	}
+
+	// Public names must resolve through quad-100.
+	assertResolves(t, env, node, orUpstreamOnlyName, orUpstreamOnlyIP)
+}
+
+// addOpenresolvSnippet registers a resolvconf snippet with the given name and
+// single nameserver on the node, the way a DHCP client's hook would.
+func addOpenresolvSnippet(t *testing.T, env *vmtest.Env, n *vmtest.Node, name, nameserver string) {
+	t.Helper()
+	cmd := fmt.Sprintf("printf 'nameserver %s\\n' | resolvconf -a %s", nameserver, name)
+	if out, err := env.SSHExec(n, cmd); err != nil {
+		t.Fatalf("%s: %v (%s)", cmd, err, strings.TrimSpace(out))
+	}
 }
 
 // assertOpenresolvResolvConf waits for the guest's /etc/resolv.conf to contain
