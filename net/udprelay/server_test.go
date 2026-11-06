@@ -238,8 +238,11 @@ func TestServer(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			// We expect the same endpoint details pre-handshake.
-			if diff := cmp.Diff(dupEndpoint, endpoint, cmpopts.EquateComparable(netip.AddrPort{}, key.DiscoPublic{})); diff != "" {
+			// Retrying allocation preserves identity but reduces the bind window.
+			if got := dupEndpoint.BindLifetime.Duration; got <= 0 || got > endpoint.BindLifetime.Duration {
+				t.Fatalf("duplicate allocation bind lifetime = %v, want in (0, %v]", got, endpoint.BindLifetime.Duration)
+			}
+			if diff := cmp.Diff(dupEndpoint, endpoint, cmpopts.IgnoreFields(endpoint, "BindLifetime"), cmpopts.EquateComparable(netip.AddrPort{}, key.DiscoPublic{})); diff != "" {
 				t.Fatalf("wrong dupEndpoint (-got +want)\n%s", diff)
 			}
 

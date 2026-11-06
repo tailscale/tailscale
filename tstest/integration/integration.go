@@ -528,12 +528,11 @@ func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // TestEnv contains the test environment (set of servers) used by one
 // or more nodes.
 type TestEnv struct {
-	t                      testing.TB
-	cli                    string
-	daemon                 string
-	loopbackPort           *int
-	neverDirectUDP         bool
-	relayServerUseLoopback bool
+	t              testing.TB
+	cli            string
+	daemon         string
+	loopbackPort   *int
+	neverDirectUDP bool
 
 	LogCatcher       *LogCatcher
 	LogCatcherServer *httptest.Server
@@ -962,9 +961,6 @@ func (n *TestNode) daemonEnv(ipnGOOS string) []string {
 	}
 	if n.env.neverDirectUDP {
 		env = append(env, "TS_DEBUG_NEVER_DIRECT_UDP=1")
-	}
-	if n.env.relayServerUseLoopback {
-		env = append(env, "TS_DEBUG_RELAY_SERVER_ADDRS=::1,127.0.0.1")
 	}
 	if version.IsRace() {
 		env = append(env, "GORACE=halt_on_error=1")

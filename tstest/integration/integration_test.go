@@ -2255,11 +2255,11 @@ func TestPeerRelayPing(t *testing.T) {
 		server.PeerRelayGrants = true
 	}))
 	env.neverDirectUDP = true
-	env.relayServerUseLoopback = true
 
-	n1 := NewTestNode(t, env)
-	n2 := NewTestNode(t, env)
-	peerRelay := NewTestNode(t, env)
+	// Keep all nodes independent of the host TUN interface and DNS settings.
+	n1 := NewTestNode(t, env, TUNMode(false))
+	n2 := NewTestNode(t, env, TUNMode(false))
+	peerRelay := NewTestNode(t, env, TUNMode(false))
 
 	allNodes := []*TestNode{n1, n2, peerRelay}
 	wantPeerRelayServers := make(set.Set[string])
@@ -2274,8 +2274,28 @@ func TestPeerRelayPing(t *testing.T) {
 	if err := peerRelay.Tailscale("set", "--relay-server-port=0").Run(); err != nil {
 		t.Fatal(err)
 	}
+	var relayPort uint16
+	if err := tstest.WaitFor(10*time.Second, func() error {
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		st, err := peerRelay.LocalClient().DebugPeerRelaySessions(ctx)
+		if err != nil {
+			return err
+		}
+		if st.UDPPort == nil || *st.UDPPort == 0 {
+			return errors.New("relay server not listening")
+		}
+		relayPort = *st.UDPPort
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Provide a loopback candidate without waiting for address discovery.
+	if err := peerRelay.Tailscale("set", fmt.Sprintf("--relay-server-static-endpoints=127.0.0.1:%d", relayPort)).Run(); err != nil {
+		t.Fatal(err)
+	}
 
-	errCh := make(chan error)
+	errCh := make(chan error, len(allNodes))
 	for _, a := range allNodes {
 		go func() {
 			err := tstest.WaitFor(time.Second*5, func() error {
@@ -2301,10 +2321,12 @@ func TestPeerRelayPing(t *testing.T) {
 		}()
 	}
 	for range allNodes {
-		err := <-errCh
-		if err != nil {
-			t.Fatal(err)
+		if err := <-errCh; err != nil {
+			t.Error(err)
 		}
+	}
+	if t.Failed() {
+		t.FailNow()
 	}
 
 	pingPairs := make([][2]*TestNode, 0)
@@ -2316,33 +2338,43 @@ func TestPeerRelayPing(t *testing.T) {
 			pingPairs = append(pingPairs, [2]*TestNode{a, z})
 		}
 	}
+	errCh = make(chan error, len(pingPairs))
 	for _, pair := range pingPairs {
+		a, z := pair[0], pair[1]
+		aID := a.MustStatus().Self.ID
+		zSelf := z.MustStatus().Self
+		zIP := z.AwaitIP4().String()
 		go func() {
-			a := pair[0]
-			z := pair[1]
-			err := tstest.WaitFor(time.Second*10, func() error {
-				remoteKey := z.MustStatus().Self.PublicKey
-				if err := a.Tailscale("ping", "--until-direct=false", "--c=1", "--timeout=1s", z.AwaitIP4().String()).Run(); err != nil {
-					return err
+			// Allow another discovery round after the 30-second rate limit.
+			err := tstest.WaitFor(60*time.Second, func() error {
+				out, err := a.Tailscale("ping", "--until-direct=false", "--c=1", "--timeout=1s", zIP).CombinedOutput()
+				if err != nil {
+					return fmt.Errorf("%v->%v ping: %w\n%s", aID, zSelf.ID, err, out)
 				}
-				remotePeer, ok := a.MustStatus().Peer[remoteKey]
+				st, err := a.Status()
+				if err != nil {
+					return fmt.Errorf("%v->%v status: %w", aID, zSelf.ID, err)
+				}
+				remotePeer, ok := st.Peer[zSelf.PublicKey]
 				if !ok {
-					return fmt.Errorf("%v->%v remote peer not found", a.MustStatus().Self.ID, z.MustStatus().Self.ID)
+					return fmt.Errorf("%v->%v remote peer not found", aID, zSelf.ID)
 				}
 				if len(remotePeer.PeerRelay) == 0 {
-					return fmt.Errorf("%v->%v not using peer relay, curAddr=%v relay=%v", a.MustStatus().Self.ID, z.MustStatus().Self.ID, remotePeer.CurAddr, remotePeer.Relay)
+					return fmt.Errorf("%v->%v not using peer relay, curAddr=%v relay=%v", aID, zSelf.ID, remotePeer.CurAddr, remotePeer.Relay)
 				}
-				t.Logf("%v->%v using peer relay addr: %v", a.MustStatus().Self.ID, z.MustStatus().Self.ID, remotePeer.PeerRelay)
+				t.Logf("%v->%v using peer relay addr: %v", aID, zSelf.ID, remotePeer.PeerRelay)
 				return nil
 			})
 			errCh <- err
 		}()
 	}
 	for range pingPairs {
-		err := <-errCh
-		if err != nil {
-			t.Fatal(err)
+		if err := <-errCh; err != nil {
+			t.Error(err)
 		}
+	}
+	if t.Failed() {
+		t.FailNow()
 	}
 
 	allControlNodes := env.Control.AllNodes()
