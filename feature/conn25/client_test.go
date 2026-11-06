@@ -347,15 +347,101 @@ func TestResetDrainsQueuedAssignments(t *testing.T) {
 	}
 }
 
+// TestResetDropsInFlightAssignment covers the assignment that sendLoop has
+// already taken off the queue when reset runs: the drain can't reach it, and
+// because reset rebuilds the pools from scratch the same transit IP can be
+// handed back out, so a presence check on byTransitIP would wrongly let the
+// stale assignment register its connector.
+func TestResetDropsInFlightAssignment(t *testing.T) {
+	const appName = "a"
+	conn25 := newConn25(t.Logf)
+	conn25.reconfig(&config{
+		isConfigured: true,
+		appsByName:   map[string]appctype.AppConnectorAttr{appName: {}},
+		ipSets: ipSets{
+			v4Magic:   mustIPSetFromPrefix("100.64.0.0/24"),
+			v6Magic:   mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0100::/80"),
+			v4Transit: mustIPSetFromPrefix("169.254.0.0/24"),
+			v6Transit: mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0200::/80"),
+		},
+	})
+	c := conn25.client
+
+	oldConnector := (&tailcfg.Node{
+		ID:       tailcfg.NodeID(7),
+		Hostinfo: (&tailcfg.Hostinfo{AppConnector: opt.NewBool(true)}).View(),
+		Key:      key.NodePublicFromRaw32(mem.B([]byte{0: 0xff, 31: 0x07})),
+	}).View()
+
+	dst := netip.MustParseAddr("0.0.0.1")
+	as, err := c.reserveAddresses(appName, "example.com.", dst, 10, oldConnector, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stand in for sendLoop dequeuing the assignment and blocking in the
+	// PeerAPI request: it's out of the queue, and no lock is held.
+	inFlight := <-c.addrsCh
+
+	c.reset()
+
+	// The new profile reserves and gets the same transit IP back, so the
+	// stale assignment's IP is present in byTransitIP again.
+	fresh, err := c.reserveAddresses(appName, "example.com.", dst, 10, testConnectorPeer, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.connectorAddr.transit != as.connectorAddr.transit {
+		t.Fatalf("test needs the transit IP to be reused after reset: got %v, want %v",
+			fresh.connectorAddr.transit, as.connectorAddr.transit)
+	}
+
+	// The in-flight request now completes against the new state.
+	err = c.addTransitIPForConnector(inFlight)
+	if !errors.Is(err, errStaleGeneration) {
+		t.Errorf("applying an assignment from before the reset: got error %v, want %v", err, errStaleGeneration)
+	}
+	if tips, ok := c.lookupTransitIPsByConnKey(oldConnector.Key()); ok {
+		t.Errorf("connector from before the reset got transit IPs registered: %v", tips)
+	}
+}
+
+func (c *client) currentGeneration() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.generation
+}
+
+// enqueueAddressAssignmentForTest is [client.enqueueAddressAssignment] with the
+// lock it expects callers to hold, plus the generation stamp that
+// [client.reserveAddresses] would have applied. The production callers all
+// enqueue from inside a c.mu critical section; tests reach for it on its own,
+// and build the [addrs] by hand rather than reserving one. Without the stamp
+// such an assignment looks like it predates the last [client.reset] and is
+// silently dropped.
+func (c *client) enqueueAddressAssignmentForTest(as *addrs) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	as.generation = c.generation
+	return c.enqueueAddressAssignment(as)
+}
+
 func TestTransitIPConnMapping(t *testing.T) {
 	conn25 := newConn25(t.Logf)
 
 	as := &addrs{
 		dst:           netip.MustParseAddr("1.2.3.1"),
 		magic:         netip.MustParseAddr("100.64.0.1"),
+		generation:    conn25.client.currentGeneration(),
 		connectorAddr: connectorAddr{transit: netip.MustParseAddr("169.254.0.1")},
 		domain:        "woo.example.com.",
 		app:           "app1",
+	}
+	// forConnector is the assignment as it would reach
+	// [client.addTransitIPForConnector] had it been reserved against n.
+	forConnector := func(n tailcfg.NodeView) addrs {
+		a := *as
+		a.connectorAddr.node = n
+		return a
 	}
 
 	connectorPeers := []tailcfg.NodeView{
@@ -374,7 +460,7 @@ func TestTransitIPConnMapping(t *testing.T) {
 	}
 
 	// Adding a transit IP that isn't known should fail
-	if err := conn25.client.addTransitIPForConnector(as.connectorAddr.transit, connectorPeers[1]); err == nil {
+	if err := conn25.client.addTransitIPForConnector(forConnector(connectorPeers[1])); err == nil {
 		t.Error("adding an unknown transit IP should fail")
 	}
 
@@ -382,16 +468,16 @@ func TestTransitIPConnMapping(t *testing.T) {
 	conn25.client.assignments.insert(as)
 
 	// Adding a transit IP for a node with an unset key should fail
-	if err := conn25.client.addTransitIPForConnector(as.connectorAddr.transit, connectorPeers[0]); err == nil {
+	if err := conn25.client.addTransitIPForConnector(forConnector(connectorPeers[0])); err == nil {
 		t.Error("adding an transit IP mapping for a connector with a zero key should fail")
 	}
 	// Adding a transit IP that is known should succeed
-	if err := conn25.client.addTransitIPForConnector(as.connectorAddr.transit, connectorPeers[1]); err != nil {
+	if err := conn25.client.addTransitIPForConnector(forConnector(connectorPeers[1])); err != nil {
 		t.Errorf("unexpected error for first time add: %v", err)
 	}
 	// And doing it again shouldn't fail (this is done when resending mappings
 	// to a restarted connector)
-	if err := conn25.client.addTransitIPForConnector(as.connectorAddr.transit, connectorPeers[1]); err != nil {
+	if err := conn25.client.addTransitIPForConnector(forConnector(connectorPeers[1])); err != nil {
 		t.Errorf("error adding duplicate transitIP for a connector: %v", err)
 	}
 }

@@ -545,6 +545,7 @@ func newConn25(logf logger.Logf) *Conn25 {
 		addrsCh:     make(chan addrs, 64),
 		assignments: addrAssignments{clock: tstime.StdClock{}},
 		getIPSets:   getIPSets,
+		generation:  1, // initialize with non-zero value to detect missing stamps
 	}
 	c.connector = &connector{
 		logf:        logf,
@@ -906,12 +907,20 @@ func (e *extension) sendLoop(ctx context.Context) {
 }
 
 func (e *extension) handleAddressAssignment(ctx context.Context, as addrs) error {
+	if !e.conn25.client.assignmentIsCurrent(as) {
+		e.conn25.logf("stale address assignment, skipping it")
+		return nil
+	}
 	err := e.sendAddressAssignment(ctx, as)
 	if err != nil {
 		return err
 	}
-	err = e.conn25.client.addTransitIPForConnector(as.connectorAddr.transit, as.connectorAddr.node)
+	err = e.conn25.client.addTransitIPForConnector(as)
 	if err != nil {
+		if errors.Is(err, errStaleGeneration) {
+			e.conn25.logf("stale address assignment, dropping it")
+			return nil
+		}
 		return err
 	}
 
