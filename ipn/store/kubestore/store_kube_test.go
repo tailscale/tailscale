@@ -8,9 +8,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/envknob"
@@ -19,6 +21,7 @@ import (
 	"tailscale.com/kube/kubeapi"
 	"tailscale.com/kube/kubeclient"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/tstest"
 )
 
 func TestKubernetesPodMigrationWithTPMAttestationKey(t *testing.T) {
@@ -632,6 +635,172 @@ func TestReadTLSCertAndKey(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestReadTLSCertAndKeyWriteReplicaCache(t *testing.T) {
+	const testDomain = "my-app.tailnetxyz.ts.net"
+
+	var (
+		secretData   map[string][]byte
+		secretGetErr error
+		gets         int
+		lastTimeout  time.Duration
+	)
+	client := &kubeclient.FakeClient{
+		GetSecretImpl: func(ctx context.Context, name string) (*kubeapi.Secret, error) {
+			gets++
+			if deadline, ok := ctx.Deadline(); ok {
+				lastTimeout = time.Until(deadline)
+			}
+			if secretGetErr != nil {
+				return nil, secretGetErr
+			}
+			return &kubeapi.Secret{Data: secretData}, nil
+		},
+		JSONPatchResourceImpl: func(context.Context, string, string, []kubeclient.JSONPatch) error {
+			return nil
+		},
+	}
+	clock := tstest.NewClock(tstest.ClockOpts{})
+	s := &Store{
+		client:        client,
+		secretName:    "ts-state",
+		certShareMode: "rw",
+		clock:         clock,
+		logf:          t.Logf,
+	}
+	tlsData := func(cert, key string) map[string][]byte {
+		return map[string][]byte{"tls.crt": []byte(cert), "tls.key": []byte(key)}
+	}
+
+	steps := []struct {
+		name         string
+		advance      time.Duration
+		secretData   map[string][]byte
+		secretGetErr error
+		// write, if set, writes cert and key with WriteTLSCertAndKey
+		// before the read.
+		write       map[string][]byte
+		wantCert    string
+		wantKey     string
+		wantErr     error
+		wantGet     bool
+		wantTimeout time.Duration // max GetSecret timeout, if wantGet
+	}{
+		{
+			name:         "no_cache_api_error",
+			secretGetErr: errors.New("api error"),
+			wantErr:      errors.New("api error"),
+			wantGet:      true,
+			wantTimeout:  timeout,
+		},
+		{
+			name:        "first_read_from_secret",
+			secretData:  tlsData("cert-a", "key-a"),
+			wantCert:    "cert-a",
+			wantKey:     "key-a",
+			wantGet:     true,
+			wantTimeout: timeout,
+		},
+		{
+			name:       "within_ttl_served_from_cache",
+			advance:    rwCertTTL / 2,
+			secretData: tlsData("cert-b", "key-b"),
+			wantCert:   "cert-a",
+			wantKey:    "key-a",
+		},
+		{
+			name:        "after_ttl_read_from_secret",
+			advance:     rwCertTTL,
+			secretData:  tlsData("cert-b", "key-b"),
+			wantCert:    "cert-b",
+			wantKey:     "key-b",
+			wantGet:     true,
+			wantTimeout: rwCertFallbackTimeout,
+		},
+		{
+			name:         "after_ttl_api_error_serves_last_known_good",
+			advance:      rwCertTTL,
+			secretGetErr: errors.New("api error"),
+			wantCert:     "cert-b",
+			wantKey:      "key-b",
+			wantGet:      true,
+			wantTimeout:  rwCertFallbackTimeout,
+		},
+		{
+			name:         "after_fallback_served_from_cache",
+			advance:      rwCertTTL / 2,
+			secretGetErr: errors.New("api error"),
+			wantCert:     "cert-b",
+			wantKey:      "key-b",
+		},
+		{
+			name:       "after_ttl_secret_emptied",
+			advance:    rwCertTTL,
+			secretData: map[string][]byte{},
+			wantErr:    ipn.ErrStateNotExist,
+			wantGet:    true,
+		},
+		{
+			name:         "emptied_secret_clears_cache",
+			secretGetErr: errors.New("api error"),
+			wantErr:      errors.New("api error"),
+			wantGet:      true,
+			wantTimeout:  timeout,
+		},
+		{
+			name:       "written_cert_served_from_cache",
+			write:      tlsData("cert-c", "key-c"),
+			secretData: tlsData("cert-c", "key-c"),
+			wantCert:   "cert-c",
+			wantKey:    "key-c",
+		},
+		{
+			name:         "after_ttl_secret_not_found",
+			advance:      rwCertTTL,
+			secretGetErr: &kubeapi.Status{Code: 404},
+			wantErr:      ipn.ErrStateNotExist,
+			wantGet:      true,
+		},
+		{
+			name:         "not_found_clears_cache",
+			secretGetErr: errors.New("api error"),
+			wantErr:      errors.New("api error"),
+			wantGet:      true,
+			wantTimeout:  timeout,
+		},
+	}
+	for _, st := range steps {
+		clock.Advance(st.advance)
+		secretData = st.secretData
+		secretGetErr = st.secretGetErr
+		if st.write != nil {
+			if err := s.WriteTLSCertAndKey(testDomain, st.write["tls.crt"], st.write["tls.key"]); err != nil {
+				t.Fatalf("%s: WriteTLSCertAndKey: %v", st.name, err)
+			}
+		}
+		gets = 0
+
+		cert, key, err := s.ReadTLSCertAndKey(testDomain)
+		switch {
+		case st.wantErr != nil:
+			if err == nil || !strings.Contains(err.Error(), st.wantErr.Error()) {
+				t.Errorf("%s: got error %v, want error containing %v", st.name, err, st.wantErr)
+			}
+		case err != nil:
+			t.Errorf("%s: unexpected error: %v", st.name, err)
+		default:
+			if string(cert) != st.wantCert || string(key) != st.wantKey {
+				t.Errorf("%s: got cert %q key %q, want cert %q key %q", st.name, cert, key, st.wantCert, st.wantKey)
+			}
+		}
+		if gotGet := gets > 0; gotGet != st.wantGet {
+			t.Errorf("%s: read Secret = %v, want %v", st.name, gotGet, st.wantGet)
+		}
+		if st.wantGet && st.wantTimeout != 0 && (lastTimeout > st.wantTimeout || lastTimeout < st.wantTimeout-time.Second) {
+			t.Errorf("%s: GetSecret timeout = %v, want %v", st.name, lastTimeout, st.wantTimeout)
+		}
 	}
 }
 
