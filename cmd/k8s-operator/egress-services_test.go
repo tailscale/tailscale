@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/AlekSi/pointer"
@@ -22,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
@@ -621,5 +623,116 @@ func TestMissingEndpointSliceFamilies(t *testing.T) {
 	}
 	if missing {
 		t.Error("expected missing=false once the current ClusterIP Service's IPv4 slice exists")
+	}
+}
+
+// TestEgressServicePortAllocation verifies that the reconciler allocates match
+// ports until the ProxyGroup uses maxPorts of them, and that the health check
+// port does not count towards the limit.
+func TestEgressServicePortAllocation(t *testing.T) {
+	tests := []struct {
+		name      string
+		usedPorts int
+		wantErr   bool
+	}{
+		{name: "above_old_limit", usedPorts: 1000},
+		{name: "one_below_limit", usedPorts: maxPorts - 1},
+		{name: "at_limit", usedPorts: maxPorts, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pg := &tsapi.ProxyGroup{
+				ObjectMeta: metav1.ObjectMeta{Name: "foo"},
+				Spec:       tsapi.ProxyGroupSpec{Type: tsapi.ProxyGroupTypeEgress},
+			}
+			cm := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      pgEgressCMName("foo"),
+					Namespace: "operator-ns",
+				},
+			}
+			// A ClusterIP Service for another egress service on the same
+			// ProxyGroup that already uses tt.usedPorts match ports.
+			existing := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "existing",
+					Namespace: "operator-ns",
+					Labels:    map[string]string{labelProxyGroup: "foo"},
+				},
+				Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP},
+			}
+			for i := range tt.usedPorts {
+				existing.Spec.Ports = append(existing.Spec.Ports, corev1.ServicePort{
+					Name:       fmt.Sprintf("port-%d", i),
+					Protocol:   "TCP",
+					Port:       int32(i + 1),
+					TargetPort: intstr.FromInt32(minMatchPort + int32(i)),
+				})
+			}
+			existing.Spec.Ports = append(existing.Spec.Ports, corev1.ServicePort{
+				Name:       tsHealthCheckPortName,
+				Protocol:   "TCP",
+				Port:       defaultLocalAddrPort,
+				TargetPort: intstr.FromInt(defaultLocalAddrPort),
+			})
+			fc := fake.NewClientBuilder().
+				WithScheme(tsapi.GlobalScheme).
+				WithObjects(pg, cm, existing).
+				WithStatusSubresource(pg).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Create: clusterIPInterceptor("10.96.0.1"),
+				}).
+				Build()
+			zl, err := zap.NewDevelopment()
+			if err != nil {
+				t.Fatal(err)
+			}
+			esr := &egressSvcsReconciler{
+				Client:      fc,
+				logger:      zl.Sugar(),
+				clock:       tstest.NewClock(tstest.ClockOpts{}),
+				tsNamespace: "operator-ns",
+			}
+			svc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test",
+					Namespace: "default",
+					UID:       types.UID("1234-UID"),
+					Annotations: map[string]string{
+						AnnotationTailnetTargetFQDN: "foo.bar.ts.net.",
+						AnnotationProxyGroup:        "foo",
+					},
+				},
+				Spec: corev1.ServiceSpec{
+					ExternalName: "placeholder",
+					Type:         corev1.ServiceTypeExternalName,
+					Ports:        []corev1.ServicePort{{Protocol: "TCP", Port: 80}},
+				},
+			}
+			mustCreate(t, fc, svc)
+
+			_, err = esr.Reconcile(t.Context(), reconcile.Request{
+				NamespacedName: types.NamespacedName{Namespace: "default", Name: "test"},
+			})
+			if tt.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "unable to allocate additional ports") {
+					t.Fatalf("Reconcile: got error %v, want a port allocation error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Reconcile: unexpected error: %v", err)
+			}
+			name := findGenNameForEgressSvcResources(t, fc, svc)
+			clusterSvc := mustGetClusterIPSvc(t, fc, name)
+			for _, p := range clusterSvc.Spec.Ports {
+				if p.Name == tsHealthCheckPortName {
+					continue
+				}
+				if got := p.TargetPort.IntVal; got < minMatchPort+int32(tt.usedPorts) || got >= minMatchPort+maxPorts {
+					t.Errorf("got match port %d, want a free port in range [%d, %d)", got, minMatchPort+tt.usedPorts, minMatchPort+maxPorts)
+				}
+			}
+		})
 	}
 }
