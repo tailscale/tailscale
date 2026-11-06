@@ -248,6 +248,32 @@ func TestCollectPanic(t *testing.T) {
 	}
 }
 
+// TestLogLineHooks checks that a node's log line hooks see its output, even as the Windows service.
+func TestLogLineHooks(t *testing.T) {
+	tstest.Parallel(t)
+	env := NewTestEnv(t)
+	n1 := NewTestNode(t, env)
+	started := make(chan bool, 1)
+	n1.addLogLineHook(func(line []byte) {
+		if mem.Contains(mem.B(line), mem.S("Program starting: ")) {
+			select {
+			case started <- true:
+			default:
+			}
+		}
+	})
+
+	d1 := n1.StartDaemon()
+	n1.AwaitResponding()
+	select {
+	case <-started:
+	case <-time.After(20 * time.Second):
+		t.Fatal("log line hooks never saw tailscaled's startup line")
+	}
+
+	d1.MustCleanShutdown(t)
+}
+
 func TestControlTimeLogLine(t *testing.T) {
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
@@ -912,11 +938,11 @@ func TestTwoNodes(t *testing.T) {
 		os.WriteFile("n2.log", cleanLog(n2), 0666)
 	})
 
-	if runtime.GOOS != "windows" {
-		// TODO(yaruk): the service node has no stderr to scrape the address from; see #20443.
+	// The Windows service runs tailscaled without --socks5-server.
+	if d1.svc == nil {
 		t.Logf("node1 SOCKS5 addr: %v", n1.AwaitSocksAddr(n1SocksAddrCh))
-		t.Logf("node2 SOCKS5 addr: %v", n1.AwaitSocksAddr(n2SocksAddrCh))
 	}
+	t.Logf("node2 SOCKS5 addr: %v", n1.AwaitSocksAddr(n2SocksAddrCh))
 
 	n1.AwaitListening()
 	t.Logf("n1 is listening")
