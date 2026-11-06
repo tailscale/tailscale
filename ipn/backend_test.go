@@ -101,6 +101,20 @@ func TestValidateNotifyWatchOpt(t *testing.T) {
 			mask: NotifyInProcessNoDisconnect | NotifyPeerChanges,
 		},
 		{
+			name: "suspend-when-behind",
+			mask: NotifySuspendWhenBehind | NotifyInitialState | NotifyPeerChanges,
+		},
+		{
+			name:    "suspend-when-behind-without-initial-state",
+			mask:    NotifySuspendWhenBehind | NotifyPeerChanges,
+			wantErr: true,
+		},
+		{
+			name:    "suspend-when-behind-with-in-process-no-disconnect",
+			mask:    NotifySuspendWhenBehind | NotifyInitialState | NotifyInProcessNoDisconnect,
+			wantErr: true,
+		},
+		{
 			name:    "obsolete-rate-limit-only",
 			mask:    ObsoleteNotifyRateLimit,
 			wantErr: true,
