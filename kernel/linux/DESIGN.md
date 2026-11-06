@@ -74,19 +74,50 @@ possible so upstream security fixes merge cleanly.
 * The uapi stays attribute-compatible with upstream WireGuard. New
   attributes are only ever appended. That way wgctrl-go and a lightly
   patched `wg(8)` keep working by changing only the family name.
+* The uapi header is `src/include/uapi/linux/tswg.h`. Upstream generates
+  it, and `src/generated/netlink.[ch]`, from
+  `Documentation/netlink/specs/wireguard.yaml` with YNL. For now we
+  hand-edit the generated files; once we add attributes, keep a forked
+  spec and regenerate with a kernel tree's `tools/net/ynl/ynl-regen.sh`
+  (TODO).
 
 ### Kernel compatibility
 
 The fork's base is the newest upstream (currently 7.4-rc1). Older kernels
 are supported through compat shims in `src/compat/`.
 
-* Prefer feature probes (configure-style compile tests, as in OpenZFS or
-  NVIDIA's conftest) over `LINUX_VERSION_CODE` checks. RHEL kernels carry
-  years of backports, so version numbers lie.
+* Feature probes, not `LINUX_VERSION_CODE` checks (decided 2026-11-06;
+  RHEL kernels carry years of backports, so version numbers lie).
+  `scripts/probe.sh` compiles each `src/compat/probes/HAVE_*.c` against
+  the target kernel's build directory, in parallel (about one second in
+  total), and writes `src/compat/generated/autoconf.h`. The top-level
+  Makefile runs it before every build.
+* `src/compat/compat.h` is force-included into every file and shims
+  whatever is missing, mostly as macros or static inlines named like the
+  new API, so upstream code stays untouched. The few spots that can't be
+  shimmed from a header get small `#ifdef HAVE_...` blocks marked
+  `TSWG_COMPAT` in the `.c` files (currently only `device.c`).
+* To add a shim: add a probe file, use its `HAVE_` macro in compat.h, and
+  build against both an old and a new kernel.
 * Use the kernel's lib/crypto (chacha20poly1305, blake2s, curve25519). Every
   distro kernel that ships WireGuard builds those libraries. Do not vendor
   crypto.
-* Minimum kernel: TBD. The first target is Ubuntu 24.04 (6.8).
+* Builds today: Ubuntu 6.8.0-106-generic (the natlab guest) and
+  7.0.0-1009-aws (the dev host). The 7.4 path itself (all probes
+  succeeding) isn't verified yet, since that needs a configured and built
+  7.4 tree.
+* Minimum kernel: TBD.
+
+### Userspace (Go) side
+
+Decided 2026-11-06: the Go code lives in tailscale.com, because tailscaled
+is what will program the module.
+
+* `tailscale.com/wgengine/tswg`: netlink client for the `tswg` genetlink
+  family (configure and dump devices).
+* `tailscale.com/cmd/tswgctl`: a wg(8)-like debugging tool built on it.
+* This work lives on the `bradfitz/tswg` branch, in a worktree at
+  `~/src/tailscale.com-tswg`.
 
 ### Shared UDP socket
 
@@ -174,8 +205,19 @@ simulated network with NATs, DERP and a test control server.
   (13.3), so the host builds tswg.ko against that kernel's headers,
   fetched with `apt-get download` and unpacked into a cache directory
   (never installed).
-* The test copies tswg.ko into the guest (over the debug SSH NIC or the
-  vnet file server) and loads it.
+* The tests live in the tailscale.com worktree, in
+  `tstest/natlab/vmtest/tswg_test.go`. Run them with `scripts/vmtest.sh`
+  (it sets `TSWG_DIR` to this tree; the tests skip if the tree is
+  missing).
+* After boot, a test asks the guest for `uname -r`, runs
+  `scripts/build-for-ubuntu.sh` to build tswg.ko for it in a private copy
+  of `src/`, builds `tswgctl`, registers both with the vnet file server,
+  and has the guest curl them from `http://52.52.0.6/tswg/<kver>/`, then
+  `depmod` and `modprobe tswg`. Commands run as root over the debug SSH
+  NIC.
+* `TestTSWGManualTunnel`: two VMs on one LAN, tunnel configured by hand
+  with `tswgctl` (no tailscaled), ping across it, and check handshake and
+  byte counters.
 * Later: also boot a custom debug kernel (KASAN, lockdep) built from a
   Linux tree, and more distro images (Debian, Fedora) for compat coverage.
 
@@ -184,23 +226,30 @@ simulated network with NATs, DERP and a test control server.
 * `DESIGN.md`: this file.
 * `upstream/`: pristine upstream sources (see "Fork, not patches").
 * `src/`: the tswg module sources, Kbuild and compat headers.
-* `scripts/`: helpers (building against a distro kernel's headers,
-  importing upstream).
+* `scripts/`: `probe.sh` (compat probes), `ubuntu-headers.sh` (fetch and
+  unpack Ubuntu kernel headers), `build-for-ubuntu.sh` (build tswg.ko for
+  an Ubuntu kernel), `vmtest.sh` (run the natlab vmtests).
 
 ## TODO
 
 - [x] Create repo; import pristine upstream WireGuard (Linux 7.4-rc1).
 - [x] Write DESIGN.md.
-- [ ] Fork into `src/`: rename module, link kind and genetlink family to
+- [x] Fork into `src/`: rename module, link kind and genetlink family to
       `tswg`; out-of-tree Kbuild/Makefile.
-- [ ] Build against the host's 7.0 headers.
-- [ ] Script: fetch and unpack Ubuntu kernel headers for a given version;
+- [x] Feature-probe compat framework.
+- [x] Build against the host's 7.0 headers.
+- [x] Script: fetch and unpack Ubuntu kernel headers for a given version;
       build tswg.ko against them.
-- [ ] Compat shims so it builds and loads on Ubuntu 24.04 (6.8).
-- [ ] vmtest: two Ubuntu VMs, load tswg.ko, configure a tswg tunnel by
-      hand, ping through it.
-- [ ] Userspace config tool or Go package (fork of wgctrl's netlink code
-      with family `tswg`).
+- [x] Compat shims so it builds on Ubuntu 24.04 (6.8).
+- [x] Go netlink client (`tailscale.com/wgengine/tswg`) and `tswgctl`.
+- [x] vmtest: two Ubuntu VMs, load tswg.ko, configure a tswg tunnel by
+      hand, ping through it (`TestTSWGManualTunnel`, passes in about 80s).
+- [ ] Verify the 7.4 path (all probes succeed) against a built 7.4 tree.
+- [ ] Forked YNL spec plus regen script once we add attributes.
+- [ ] Look at the allowedips.c frame-size warning (1048 > 1024 bytes),
+      present in upstream code too.
+- [ ] Split large peer lists across several netlink messages in the Go
+      client.
 - [ ] Socket fd passing plus `encap_rcv` classifier (WG vs. disco/STUN).
 - [ ] vmtest: disco/STUN still reach userspace on the shared socket.
 - [ ] Per-peer no-auto-roam flag.
@@ -209,7 +258,7 @@ simulated network with NATs, DERP and a test control server.
       tailscale.com branch.
 - [ ] Fallback to wireguard-go when tswg is unavailable.
 - [ ] Decide socket lifetime across tailscaled restarts.
-- [ ] Decide minimum supported kernel; feature-probe compat framework.
+- [ ] Decide minimum supported kernel.
 - [ ] dkms.conf and packaging.
 - [ ] Benchmarks versus wireguard-go (CPU/byte, pps, latency, forwarding).
 - [ ] Custom debug kernel (KASAN, lockdep) in the testbed.
