@@ -104,6 +104,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.StringVar(&upArgs.clientID, "client-id", "", "Client ID used to generate authkeys via workload identity federation")
 	upf.StringVar(&upArgs.clientSecretOrFile, "client-secret", "", `Client Secret used to generate authkeys via OAuth; if it begins with "file:", then it's a path to a file containing the secret`)
 	upf.StringVar(&upArgs.idTokenOrFile, "id-token", "", `ID token from the identity provider to exchange with the control server for workload identity federation; if it begins with "file:", then it's a path to a file containing the token`)
+	upf.IntVar(&upArgs.authErrorRetries, "auth-error-retries", 1, "max number of attempts to acquire an OAuth or workload identity federation token on transient errors, using exponential backoff; values <= 1 make a single attempt")
 
 	upf.StringVar(&upArgs.server, "login-server", ipn.DefaultControlURL, "base URL of control server")
 	upf.BoolVar(&upArgs.acceptRoutes, "accept-routes", acceptRouteDefault(goos), "accept routes advertised by other Tailscale nodes")
@@ -208,6 +209,7 @@ type upArgsT struct {
 	acceptedRisks          string
 	profileName            string
 	postureChecking        bool
+	authErrorRetries       int
 }
 
 // resolveValueFromFile returns the value as-is, or if it starts with "file:",
@@ -672,8 +674,9 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 			}
 
 			authKey, err = f(ctx, tailscale.ResolveAuthKeyArgs{
-				AuthKey: clientSecret,
-				Tags:    prefs.AdvertiseTags,
+				AuthKey:          clientSecret,
+				Tags:             prefs.AdvertiseTags,
+				AuthErrorRetries: upArgs.authErrorRetries,
 			})
 			if err != nil {
 				return err
@@ -688,11 +691,12 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 			}
 
 			authKey, err = f(ctx, tailscale.ResolveAuthKeyWIFArgs{
-				BaseURL:  prefs.ControlURL,
-				ClientID: upArgs.clientID,
-				IDToken:  idToken,
-				Audience: upArgs.audience,
-				Tags:     prefs.AdvertiseTags,
+				BaseURL:          prefs.ControlURL,
+				ClientID:         upArgs.clientID,
+				IDToken:          idToken,
+				Audience:         upArgs.audience,
+				Tags:             prefs.AdvertiseTags,
+				AuthErrorRetries: upArgs.authErrorRetries,
 			})
 			if err != nil {
 				return err
@@ -992,7 +996,7 @@ func addPrefFlagMapping(flagName string, prefNames ...string) {
 // correspond to an ipn.Pref.
 func preflessFlag(flagName string) bool {
 	switch flagName {
-	case "auth-key", "force-reauth", "reset", "qr", "qr-format", "json", "timeout", "accept-risk", "host-routes", "client-id", "audience", "client-secret", "id-token":
+	case "auth-key", "force-reauth", "reset", "qr", "qr-format", "json", "timeout", "accept-risk", "host-routes", "client-id", "audience", "client-secret", "id-token", "auth-error-retries":
 		return true
 	}
 	return false
