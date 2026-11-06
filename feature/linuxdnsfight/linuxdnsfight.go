@@ -37,19 +37,35 @@ func watchFile(ctx context.Context, dir, filename string, cb func()) error {
 		gonotify.IN_MODIFY |
 		gonotify.IN_MOVE
 
-	watcher, err := gonotify.NewDirWatcher(ctx, events, dir)
+	// Watch only dir itself (not recursively) and only for the events
+	// above. gonotify.NewDirWatcher registers IN_ALL_EVENTS on every
+	// subdirectory and filters afterwards, so every open or read under
+	// /etc (including /etc/ld.so.cache on each exec) woke this goroutine.
+	in, err := gonotify.NewInotify(ctx)
 	if err != nil {
-		return fmt.Errorf("NewDirWatcher: %w", err)
+		return fmt.Errorf("NewInotify: %w", err)
+	}
+	if _, err := in.AddWatch(dir, events|gonotify.IN_ONLYDIR); err != nil {
+		return fmt.Errorf("AddWatch: %w", err)
 	}
 
+	// NewDirWatcher used to emit a synthetic event for existing files,
+	// which ran cb once at startup. Keep that behavior.
+	cb()
+
 	for {
-		select {
-		case event := <-watcher.C:
-			if event.Name == filename {
-				cb()
+		evs, err := in.Read()
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
-		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("Read: %w", err)
+		}
+		for _, ev := range evs {
+			if ev.Name == filename {
+				cb()
+				break
+			}
 		}
 	}
 }
