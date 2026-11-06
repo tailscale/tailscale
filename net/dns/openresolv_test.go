@@ -21,7 +21,9 @@ import (
 // config snippets, and "-l" to dump their contents.
 type fakeResolvconf struct {
 	listOut  string // stdout of "resolvconf -i"
+	listErr  string // stderr of "resolvconf -i"
 	listCode int    // exit status of "resolvconf -i"
+	listKill bool   // if set, "resolvconf -i" is killed by SIGKILL instead of exiting
 	dumpOut  string // stdout of "resolvconf -l ..."
 	dumpCode int    // exit status of "resolvconf -l ..."
 }
@@ -43,21 +45,25 @@ func (f fakeResolvconf) install(t *testing.T) (argvLog string) {
 	}
 	argvLog = filepath.Join(dir, "argv")
 	listOut := writeFile("list-out", f.listOut)
+	listErr := writeFile("list-err", f.listErr)
 	dumpOut := writeFile("dump-out", f.dumpOut)
 
+	listEnd := fmt.Sprintf("exit %d", f.listCode)
+	if f.listKill {
+		listEnd = "kill -KILL $$"
+	}
 	script := fmt.Sprintf(`#!/bin/sh
 printf '%%s\n' "$*" >>%s
 case "$1" in
 -i)	cat %s
-	# Diagnostics on stderr must never be parsed as snippet names.
-	echo 'No resolv.conf for key bogus' >&2
-	exit %d ;;
+	cat %s >&2
+	%s ;;
 -l)	cat %s
 	exit %d ;;
 esac
 echo "fake resolvconf: unexpected args: $*" >&2
 exit 99
-`, argvLog, listOut, f.listCode, dumpOut, f.dumpCode)
+`, argvLog, listOut, listErr, listEnd, dumpOut, f.dumpCode)
 	must.Do(os.WriteFile(filepath.Join(dir, "resolvconf"), []byte(script), 0755))
 
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -88,11 +94,34 @@ func TestOpenresolvGetBaseConfig(t *testing.T) {
 			wantArgv:   []string{"-i"},
 		},
 		{
+			// Exit status 2 means "no snippets" even with a diagnostic
+			// on stderr, which must not be parsed as a snippet name.
+			name:       "no_snippets_with_diagnostic",
+			resolvconf: fakeResolvconf{listCode: 2, listErr: "No resolv.conf for key bogus\n"},
+			wantArgv:   []string{"-i"},
+		},
+		{
 			// The other half of #20825: we're the only registered
 			// snippet, so "resolvconf -l" must not be run at all, lest
 			// openresolv hand our own config back as our upstream.
 			name:       "only_tailscale_registered",
 			resolvconf: fakeResolvconf{listOut: "tailscale\n"},
+			wantArgv:   []string{"-i"},
+		},
+		{
+			// openresolv before 3.13 exits 1 with no output when the
+			// interface directory is empty. FreeBSD ships such a
+			// version. See tailscale/tailscale#11907.
+			name:       "no_snippets_old_openresolv",
+			resolvconf: fakeResolvconf{listCode: 1},
+			wantArgv:   []string{"-i"},
+		},
+		{
+			// A failure that explains itself on stderr is a failure,
+			// whatever its exit status.
+			name:       "exit_one_with_stderr_fails",
+			resolvconf: fakeResolvconf{listCode: 1, listErr: "Cannot write to /run/resolvconf\n"},
+			wantErr:    true,
 			wantArgv:   []string{"-i"},
 		},
 		{
@@ -105,6 +134,8 @@ func TestOpenresolvGetBaseConfig(t *testing.T) {
 			name: "tailscale_among_others",
 			resolvconf: fakeResolvconf{
 				listOut: "eth0 tailscale wlan0\n",
+				// Diagnostics on stderr must never be parsed as snippet names.
+				listErr: "No resolv.conf for key bogus\n",
 				dumpOut: eth0Dump,
 			},
 			wantNameservers: []string{"192.168.1.1"},
@@ -123,10 +154,26 @@ func TestOpenresolvGetBaseConfig(t *testing.T) {
 			wantArgv:        []string{"-i", "-l eth0"},
 		},
 		{
-			// Any status other than 2 is a real failure and must be
-			// reported, so the caller can flag DNS as unhealthy.
+			// Any other status with output is a real failure and must
+			// be reported, so the caller can flag DNS as unhealthy.
 			name:       "listing_fails",
-			resolvconf: fakeResolvconf{listCode: 1},
+			resolvconf: fakeResolvconf{listCode: 3, listErr: "resolvconf: unexpected failure\n"},
+			wantErr:    true,
+			wantArgv:   []string{"-i"},
+		},
+		{
+			// A non-zero status with snippet names on stdout is a
+			// failure too. Only a silent listing means "no snippets".
+			name:       "exit_one_with_output_fails",
+			resolvconf: fakeResolvconf{listOut: "eth0\n", listCode: 1},
+			wantErr:    true,
+			wantArgv:   []string{"-i"},
+		},
+		{
+			// A resolvconf killed by a signal prints nothing either, but
+			// its exit code is -1, not a status openresolv chose.
+			name:       "killed_by_signal_fails",
+			resolvconf: fakeResolvconf{listKill: true},
 			wantErr:    true,
 			wantArgv:   []string{"-i"},
 		},
