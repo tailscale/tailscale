@@ -2439,6 +2439,22 @@ func findModRoot() (string, error) {
 	return filepath.Dir(gomod), nil
 }
 
+// GokrazyKernelPackageDir returns the module cache directory of the gokrazy
+// kernel package (github.com/gokrazy/kernel.amd64) that gokrazy VM images
+// boot, which holds the vmlinuz and its build metadata. It's for tests that
+// build out-of-tree kernel modules for gokrazy VMs.
+func GokrazyKernelPackageDir() (string, error) {
+	modRoot, err := findModRoot()
+	if err != nil {
+		return "", err
+	}
+	vmlinuz, err := findKernelPath(filepath.Join(modRoot, "go.mod"))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(vmlinuz), nil
+}
+
 // findKernelPath finds the gokrazy kernel vmlinuz path from go.mod.
 func findKernelPath(goMod string) (string, error) {
 	// Import the same logic as nat_test.go.

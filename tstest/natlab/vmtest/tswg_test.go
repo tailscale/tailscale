@@ -4,8 +4,14 @@
 package vmtest_test
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -157,23 +163,127 @@ func TestTSWGManualTunnel(t *testing.T) {
 		if err := json.Unmarshal([]byte(ssh(t, env, n, "tswgctl show tsw0")), &d); err != nil {
 			t.Fatalf("[%s] parsing tswgctl show: %v", n.Name(), err)
 		}
-		if d.PublicKey != keys[i].Public() {
-			t.Errorf("[%s] public key = %v, want %v", n.Name(), d.PublicKey, keys[i].Public())
+		checkTSWGDevice(t, n, &d, keys[i].Public(), port)
+	}
+}
+
+// checkTSWGDevice checks that d, the state of node n's tsw0 device, has the
+// given public key and listen port and a single peer that has completed a
+// handshake and exchanged traffic.
+func checkTSWGDevice(t *testing.T, n *vmtest.Node, d *tswg.Device, pub key.NodePublic, port uint16) {
+	t.Helper()
+	if d.PublicKey != pub {
+		t.Errorf("[%s] public key = %v, want %v", n.Name(), d.PublicKey, pub)
+	}
+	if d.ListenPort != port {
+		t.Errorf("[%s] listen port = %d, want %d", n.Name(), d.ListenPort, port)
+	}
+	if len(d.Peers) != 1 {
+		t.Fatalf("[%s] got %d peers, want 1", n.Name(), len(d.Peers))
+	}
+	p := d.Peers[0]
+	if p.LastHandshake.IsZero() || time.Since(p.LastHandshake) > 5*time.Minute {
+		t.Errorf("[%s] peer last handshake = %v; want recent", n.Name(), p.LastHandshake)
+	}
+	if p.RxBytes == 0 || p.TxBytes == 0 {
+		t.Errorf("[%s] peer rx=%d tx=%d; want both nonzero", n.Name(), p.RxBytes, p.TxBytes)
+	}
+	t.Logf("[%s] peer %v endpoint=%v rx=%d tx=%d handshake=%v",
+		n.Name(), p.PublicKey.ShortString(), p.Endpoint, p.RxBytes, p.TxBytes, p.LastHandshake)
+}
+
+// buildTSWGForGokrazy builds tswg.ko for the kernel that natlab's gokrazy
+// images boot and returns its contents.
+func buildTSWGForGokrazy(t *testing.T, dir string) []byte {
+	t.Helper()
+	pkg, err := vmtest.GokrazyKernelPackageDir()
+	if err != nil {
+		t.Fatalf("finding gokrazy kernel: %v", err)
+	}
+	build := exec.Command(filepath.Join(dir, "scripts", "build-for-gokrazy.sh"), pkg, t.TempDir())
+	var stderr strings.Builder
+	build.Stderr = &stderr
+	koPath, err := build.Output()
+	if err != nil {
+		t.Fatalf("building tswg.ko for gokrazy: %v\n%s", err, stderr.String())
+	}
+	ko, err := os.ReadFile(strings.TrimSpace(string(koPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ko
+}
+
+// tta makes an HTTP request to node n's test agent and returns the response
+// body, failing the test on error or a non-200 status.
+func tta(t *testing.T, n *vmtest.Node, method, path string, body []byte) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, method, "http://unused"+path, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := n.Agent().HTTPClient.Do(req)
+	if err != nil {
+		t.Fatalf("[%s] %s %s: %v", n.Name(), method, path, err)
+	}
+	defer res.Body.Close()
+	resBody, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("[%s] %s %s: reading body: %v", n.Name(), method, path, err)
+	}
+	if res.StatusCode != 200 {
+		t.Fatalf("[%s] %s %s: %s: %s", n.Name(), method, path, res.Status, resBody)
+	}
+	return string(resBody)
+}
+
+// TestTSWGGokrazyManualTunnel is like TestTSWGManualTunnel, but on the
+// natlab gokrazy image, which boots a recent upstream kernel and has no
+// userspace tools. The test agent loads tswg.ko with init_module(2) and
+// configures the device over netlink itself, as tailscaled eventually will.
+func TestTSWGGokrazyManualTunnel(t *testing.T) {
+	dir := tswgDir(t)
+	ko := buildTSWGForGokrazy(t, dir)
+
+	env := vmtest.New(t)
+	lan := env.AddNetwork("2.1.1.1", "192.168.1.1/24", vnet.EasyNAT)
+	n1 := env.AddNode("tswg1", lan, vmtest.OS(vmtest.Gokrazy), vmtest.DontJoinTailnet())
+	n2 := env.AddNode("tswg2", lan, vmtest.OS(vmtest.Gokrazy), vmtest.DontJoinTailnet())
+	env.Start()
+
+	nodes := []*vmtest.Node{n1, n2}
+	for _, n := range nodes {
+		tta(t, n, "POST", "/tswg/load", ko)
+		t.Logf("[%s] tswg loaded: %s", n.Name(), strings.TrimSpace(tta(t, n, "GET", "/tswg/dmesg", nil)))
+	}
+
+	const port = 51820
+	keys := []key.NodePrivate{key.NewNode(), key.NewNode()}
+	tunIP := func(i int) string { return fmt.Sprintf("10.99.0.%d", i+1) }
+	for i, n := range nodes {
+		j := 1 - i
+		priv, _ := keys[i].MarshalText()
+		q := url.Values{
+			"dev":         {"tsw0"},
+			"addr":        {tunIP(i) + "/24"},
+			"private-key": {string(priv)},
+			"listen-port": {fmt.Sprint(port)},
+			"peer":        {keys[j].Public().String()},
+			"endpoint":    {fmt.Sprintf("%s:%d", nodes[j].LanIP(lan), port)},
+			"allowed-ips": {tunIP(j) + "/32"},
 		}
-		if d.ListenPort != port {
-			t.Errorf("[%s] listen port = %d, want %d", n.Name(), d.ListenPort, port)
+		tta(t, n, "POST", "/tswg/up?"+q.Encode(), nil)
+	}
+
+	env.LANPing(n1, netip.MustParseAddr(tunIP(1)))
+
+	for i, n := range nodes {
+		var d tswg.Device
+		if err := json.Unmarshal([]byte(tta(t, n, "GET", "/tswg/show?dev=tsw0", nil)), &d); err != nil {
+			t.Fatalf("[%s] parsing /tswg/show: %v", n.Name(), err)
 		}
-		if len(d.Peers) != 1 {
-			t.Fatalf("[%s] got %d peers, want 1", n.Name(), len(d.Peers))
-		}
-		p := d.Peers[0]
-		if p.LastHandshake.IsZero() || time.Since(p.LastHandshake) > 5*time.Minute {
-			t.Errorf("[%s] peer last handshake = %v; want recent", n.Name(), p.LastHandshake)
-		}
-		if p.RxBytes == 0 || p.TxBytes == 0 {
-			t.Errorf("[%s] peer rx=%d tx=%d; want both nonzero", n.Name(), p.RxBytes, p.TxBytes)
-		}
-		t.Logf("[%s] peer %v endpoint=%v rx=%d tx=%d handshake=%v",
-			n.Name(), p.PublicKey.ShortString(), p.Endpoint, p.RxBytes, p.TxBytes, p.LastHandshake)
+		checkTSWGDevice(t, n, &d, keys[i].Public(), port)
 	}
 }

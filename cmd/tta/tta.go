@@ -418,6 +418,13 @@ func main() {
 		}
 		wgServerUp(w, r)
 	})
+	ttaMux.HandleFunc("/tswg/", func(w http.ResponseWriter, r *http.Request) {
+		if tswgHandler == nil {
+			http.Error(w, "tswg not supported on this platform", http.StatusNotImplemented)
+			return
+		}
+		tswgHandler.ServeHTTP(w, r)
+	})
 	ttaMux.HandleFunc("/restart-tailscaled", func(w http.ResponseWriter, r *http.Request) {
 		if restartTailscaled == nil {
 			http.Error(w, "restart-tailscaled not supported on this platform", http.StatusNotImplemented)
@@ -649,6 +656,10 @@ var wgServerUp func(w http.ResponseWriter, r *http.Request)
 // gokrazy supervisor restarts it. It is set by restart_tailscaled_linux.go
 // and is nil on non-Linux.
 var restartTailscaled func() (pid int, err error)
+
+// tswgHandler serves the /tswg/ endpoints that load and configure the
+// tswg kernel module. It is set by tswg_linux.go and is nil on non-Linux.
+var tswgHandler http.Handler
 
 // logBuffer is a bytes.Buffer that is safe for concurrent use
 // intended to capture early logs from the process, even if
