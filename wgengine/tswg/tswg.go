@@ -22,6 +22,16 @@ type Config struct {
 	ListenPort   *uint16          // nil means unchanged; 0 means random
 	ReplacePeers bool             // remove all peers not in Peers
 	Peers        []PeerConfig
+
+	// SocketFD4 and SocketFD6, if non-nil, are file descriptors, in this
+	// process, of bound UDP sockets (IPv4, and IPV6_V6ONLY IPv6) for the
+	// device to share with the caller instead of creating its own. The
+	// device consumes the WireGuard messages arriving on them and leaves
+	// all other datagrams for the caller to read; the caller can send its
+	// own datagrams on them too. The device drops a socket when the caller
+	// closes it. A value of -1 detaches the current socket, and the device
+	// goes back to creating its own.
+	SocketFD4, SocketFD6 *int
 }
 
 // PeerConfig is a change to one peer of a tswg device.
@@ -52,6 +62,10 @@ type Device struct {
 	ListenPort   uint16
 	FirewallMark uint32
 	Peers        []Peer
+
+	// UserSocket4 and UserSocket6 report whether the device is using a
+	// caller-supplied socket (see Config.SocketFD4) for that family.
+	UserSocket4, UserSocket6 bool
 }
 
 // Peer is the current state of one peer of a tswg device.

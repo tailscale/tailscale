@@ -4,14 +4,17 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/tailscale/netlink"
 	"golang.org/x/sys/unix"
@@ -25,6 +28,9 @@ func init() {
 	mux.HandleFunc("POST /tswg/up", tswgUp)
 	mux.HandleFunc("GET /tswg/show", tswgShow)
 	mux.HandleFunc("GET /tswg/dmesg", tswgDmesg)
+	mux.HandleFunc("POST /tswg/sock-send", tswgSockSend)
+	mux.HandleFunc("GET /tswg/sock-recv", tswgSockRecv)
+	mux.HandleFunc("POST /tswg/sock-close", tswgSockClose)
 	tswgHandler = mux
 }
 
@@ -54,6 +60,9 @@ func tswgLoad(w http.ResponseWriter, r *http.Request) {
 //   - peer: peer public key (nodekey:...)
 //   - endpoint: peer endpoint IP:port
 //   - allowed-ips: comma-separated peer allowed IP prefixes
+//   - user-socket: if "1", open a UDP socket on listen-port and share it
+//     with the device (see /tswg/sock-send, /tswg/sock-recv and
+//     /tswg/sock-close), rather than having the device open its own
 func tswgUp(w http.ResponseWriter, r *http.Request) {
 	if err := tswgUpErr(r); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -115,15 +124,169 @@ func tswgUpErr(r *http.Request) error {
 		return err
 	}
 	defer c.Close()
-	port16 := uint16(port)
-	if err := c.ConfigureDevice(dev, tswg.Config{
+	cfg := tswg.Config{
 		PrivateKey: &priv,
-		ListenPort: &port16,
 		Peers:      []tswg.PeerConfig{pc},
-	}); err != nil {
-		return err
+	}
+	if q.Get("user-socket") == "1" {
+		// Share a UDP socket of our own with the device, as tailscaled will.
+		us, err := newTSWGUserSock(dev, uint16(port))
+		if err != nil {
+			return err
+		}
+		if err := us.withFD(func(fd int) error {
+			cfg.SocketFD4 = &fd
+			return c.ConfigureDevice(dev, cfg)
+		}); err != nil {
+			us.close()
+			return err
+		}
+	} else {
+		port16 := uint16(port)
+		cfg.ListenPort = &port16
+		if err := c.ConfigureDevice(dev, cfg); err != nil {
+			return err
+		}
 	}
 	return netlink.LinkSetUp(link)
+}
+
+// tswgUserSock is a UDP socket that tta shares with a tswg device, standing
+// in for tailscaled's magicsock socket. It records every datagram that the
+// device leaves for userspace.
+type tswgUserSock struct {
+	conn *net.UDPConn
+
+	mu   sync.Mutex
+	recv []tswgDatagram
+}
+
+// tswgDatagram is a datagram received on a tswgUserSock.
+type tswgDatagram struct {
+	From netip.AddrPort
+	Data []byte
+}
+
+var (
+	tswgUserSocksMu sync.Mutex
+	tswgUserSocks   = map[string]*tswgUserSock{} // by device name
+)
+
+// newTSWGUserSock opens a UDP socket on port for device dev, replacing (and
+// closing) any previous one.
+func newTSWGUserSock(dev string, port uint16) (*tswgUserSock, error) {
+	tswgUserSocksMu.Lock()
+	defer tswgUserSocksMu.Unlock()
+	if old := tswgUserSocks[dev]; old != nil {
+		old.conn.Close()
+		delete(tswgUserSocks, dev)
+	}
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{Port: int(port)})
+	if err != nil {
+		return nil, err
+	}
+	us := &tswgUserSock{conn: conn}
+	tswgUserSocks[dev] = us
+	go us.readLoop()
+	return us, nil
+}
+
+func (us *tswgUserSock) readLoop() {
+	buf := make([]byte, 65535)
+	for {
+		n, from, err := us.conn.ReadFromUDPAddrPort(buf)
+		if err != nil {
+			return
+		}
+		us.mu.Lock()
+		us.recv = append(us.recv, tswgDatagram{From: from, Data: bytes.Clone(buf[:n])})
+		us.mu.Unlock()
+	}
+}
+
+// withFD calls f with the socket's file descriptor.
+func (us *tswgUserSock) withFD(f func(fd int) error) error {
+	rc, err := us.conn.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var ferr error
+	if err := rc.Control(func(fd uintptr) { ferr = f(int(fd)) }); err != nil {
+		return err
+	}
+	return ferr
+}
+
+func (us *tswgUserSock) close() error {
+	return us.conn.Close()
+}
+
+// tswgUserSockFor returns the user socket for the device named by r's dev
+// query parameter, writing an HTTP error and returning nil if there isn't
+// one.
+func tswgUserSockFor(w http.ResponseWriter, r *http.Request) *tswgUserSock {
+	dev := r.URL.Query().Get("dev")
+	tswgUserSocksMu.Lock()
+	us := tswgUserSocks[dev]
+	tswgUserSocksMu.Unlock()
+	if us == nil {
+		http.Error(w, "no user socket for "+dev, http.StatusNotFound)
+	}
+	return us
+}
+
+// tswgSockSend sends the request body as a datagram from the user socket of
+// device dev to the to query parameter (IP:port).
+func tswgSockSend(w http.ResponseWriter, r *http.Request) {
+	us := tswgUserSockFor(w, r)
+	if us == nil {
+		return
+	}
+	to, err := netip.ParseAddrPort(r.URL.Query().Get("to"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, err := us.conn.WriteToUDPAddrPort(data, to); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	io.WriteString(w, "OK\n")
+}
+
+// tswgSockRecv writes, as JSON, the datagrams received so far on the user
+// socket of device dev, and forgets them.
+func tswgSockRecv(w http.ResponseWriter, r *http.Request) {
+	us := tswgUserSockFor(w, r)
+	if us == nil {
+		return
+	}
+	us.mu.Lock()
+	recv := us.recv
+	us.recv = nil
+	us.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(recv)
+}
+
+// tswgSockClose closes the user socket of device dev.
+func tswgSockClose(w http.ResponseWriter, r *http.Request) {
+	dev := r.URL.Query().Get("dev")
+	tswgUserSocksMu.Lock()
+	us := tswgUserSocks[dev]
+	delete(tswgUserSocks, dev)
+	tswgUserSocksMu.Unlock()
+	if us == nil {
+		http.Error(w, "no user socket for "+dev, http.StatusNotFound)
+		return
+	}
+	us.close()
+	io.WriteString(w, "OK\n")
 }
 
 // tswgShow writes the JSON state of the tswg device named by the dev query

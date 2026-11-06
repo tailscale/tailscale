@@ -57,6 +57,16 @@ const (
 	allowedIPAFamily   = 1
 	allowedIPAIPAddr   = 2
 	allowedIPACidrMask = 3
+
+	// tswg additions, nested in deviceATSWG.
+	deviceATSWG = 64
+
+	tswgDeviceASockFD4 = 1
+	tswgDeviceASockFD6 = 2
+	tswgDeviceAFlags   = 3
+
+	tswgDeviceFlagUserSock4 = 1
+	tswgDeviceFlagUserSock6 = 2
 )
 
 // Client is a connection to the tswg generic netlink family.
@@ -100,6 +110,17 @@ func (c *Client) ConfigureDevice(ifname string, cfg Config) error {
 	}
 	if cfg.ReplacePeers {
 		ae.Uint32(deviceAFlags, deviceFlagReplacePeers)
+	}
+	if cfg.SocketFD4 != nil || cfg.SocketFD6 != nil {
+		ae.Nested(deviceATSWG, func(nae *netlink.AttributeEncoder) error {
+			if cfg.SocketFD4 != nil {
+				nae.Int32(tswgDeviceASockFD4, int32(*cfg.SocketFD4))
+			}
+			if cfg.SocketFD6 != nil {
+				nae.Int32(tswgDeviceASockFD6, int32(*cfg.SocketFD6))
+			}
+			return nil
+		})
 	}
 	if len(cfg.Peers) > 0 {
 		ae.Nested(deviceAPeers, func(nae *netlink.AttributeEncoder) error {
@@ -256,6 +277,17 @@ func (d *Device) decode(b []byte) error {
 			d.ListenPort = ad.Uint16()
 		case deviceAFwmark:
 			d.FirewallMark = ad.Uint32()
+		case deviceATSWG:
+			ad.Nested(func(nad *netlink.AttributeDecoder) error {
+				for nad.Next() {
+					if nad.Type() == tswgDeviceAFlags {
+						flags := nad.Uint32()
+						d.UserSocket4 = flags&tswgDeviceFlagUserSock4 != 0
+						d.UserSocket6 = flags&tswgDeviceFlagUserSock6 != 0
+					}
+				}
+				return nil
+			})
 		case deviceAPeers:
 			ad.Nested(func(nad *netlink.AttributeDecoder) error {
 				for nad.Next() {
