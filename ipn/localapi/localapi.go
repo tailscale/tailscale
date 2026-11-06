@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
@@ -914,17 +915,37 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	ctx := r.Context()
 	enc := json.NewEncoder(w)
-	h.b.WatchNotificationsAs(ctx, h.Actor, mask, f.Flush, func(roNotify *ipn.Notify) (keepGoing bool) {
-		err := enc.Encode(roNotify)
-		if err != nil {
-			if !neterror.IsClosedPipeError(err) {
-				h.logf("json.Encode: %v", err)
+
+	notifications := make(chan *ipn.Notify)
+	done := make(chan struct{})
+	var stop atomic.Bool
+	flush := time.NewTimer(time.Millisecond)
+	flush.Stop()
+
+	go func() {
+		h.b.WatchNotificationsAs(ctx, h.Actor, mask, f.Flush, func(roNotify *ipn.Notify) (keepGoing bool) {
+			notifications <- roNotify
+			return stop.Load()
+		})
+		close(done)
+	}()
+
+	for {
+		select {
+		case n := <-notifications:
+			if err := enc.Encode(n); err != nil {
+				if !neterror.IsClosedPipeError(err) {
+					h.logf("json.Encode: %v", err)
+				}
+				stop.Store(true)
 			}
-			return false
+			flush.Reset(time.Millisecond)
+		case <-flush.C:
+			f.Flush()
+		case <-done:
+			return
 		}
-		f.Flush()
-		return true
-	})
+	}
 }
 
 func (h *Handler) serveLoginInteractive(w http.ResponseWriter, r *http.Request) {
