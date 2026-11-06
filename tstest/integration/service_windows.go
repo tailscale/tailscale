@@ -71,6 +71,10 @@ func (n *TestNode) startWindowsServiceDaemon() *Daemon {
 	})
 
 	proc = n.startService()
+	if !*windowsUnattended {
+		// Before waitServiceReady, so its status polls don't each connect and disconnect the user.
+		n.watchIPNBusLikeGUI()
+	}
 	n.waitServiceReady(90 * time.Second)
 	return &Daemon{node: n, svc: n, Process: proc}
 }

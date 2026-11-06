@@ -1,4 +1,4 @@
-# Runs the whole tstest/integration suite against the Windows service three times a night.
+# Runs tstest/integration on the Windows service three times a night, unattended mode on and off.
 name: windows-nightly
 
 on:
@@ -29,16 +29,21 @@ jobs:
       contents: read # for actions/checkout
     runs-on: ci-windows-github-1
     name: Windows nightly (${{ matrix.suite }})
-    timeout-minutes: 30
+    timeout-minutes: 45 # room for a 20m test run plus 10m of retries
     strategy:
       fail-fast: false
       matrix:
         include:
-          # One row per suite, so smoke and regression suites can be added as rows later.
+          # One row per suite or mode, and each needs a line in notify's suites input.
           - suite: integration
             packages: ./tstest/integration
             results_pkg: tailscale.com/tstest/integration
             flags: --run-windows-service-tests
+          # -timeout=20m, so tests that fail slowly can't time out the package and drop the rest.
+          - suite: integration-unattended-off
+            packages: ./tstest/integration
+            results_pkg: tailscale.com/tstest/integration
+            flags: --run-windows-service-tests --windows-unattended=false -timeout=20m
     steps:
     - name: checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -116,8 +121,15 @@ jobs:
         title: Windows Nightly Tests
         header: "*${{ github.ref_name }}*"
         tests-label: smoke and integration tests
-        # One result file per suite row.
+        suites: |
+          windows-nightly-integration-results=(unattended on)
+          windows-nightly-integration-unattended-off-results=(unattended off)
+        # One result file per matrix row.
         expected-files: "1"
+    - name: Print Slack payload
+      if: always()
+      # PR runs don't post, so this shows what a nightly run would send.
+      run: jq . payload.json
     - name: Send Slack notification
       env:
         WEBHOOK: ${{ secrets.WINDOWS_SLACK_WEBHOOK_URL }}

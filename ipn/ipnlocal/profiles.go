@@ -889,6 +889,22 @@ func ReadStartupPrefsForTest(logf logger.Logf, store ipn.StateStore) (ipn.PrefsV
 	return pm.CurrentPrefs(), nil
 }
 
+// ReadUserPrefsForTest reads uid's default profile prefs from disk. It is only used for testing.
+func ReadUserPrefsForTest(logf logger.Logf, store ipn.StateStore, uid ipn.WindowsUserID) (ipn.PrefsView, error) {
+	testenv.AssertInTest()
+	bus := eventbus.New()
+	defer bus.Close()
+	ht := health.NewTracker(bus) // in tests, don't care about the health status
+	pm, err := newProfileManager(store, logf, ht)
+	if err != nil {
+		return ipn.PrefsView{}, err
+	}
+	if _, _, err := pm.SwitchToDefaultProfileForUser(uid); err != nil {
+		return ipn.PrefsView{}, err
+	}
+	return pm.CurrentPrefs(), nil
+}
+
 // newProfileManager creates a new [profileManager] using the provided [ipn.StateStore].
 // It also loads the list of known profiles from the store.
 func newProfileManager(store ipn.StateStore, logf logger.Logf, health *health.Tracker) (*profileManager, error) {
