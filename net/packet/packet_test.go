@@ -5,6 +5,7 @@ package packet
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"net/netip"
 	"reflect"
@@ -885,6 +886,117 @@ func TestMarshalResponse(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPacketBoundsAndValidation(t *testing.T) {
+	t.Run("v4-short-ihl", func(t *testing.T) {
+		buf := make([]byte, 40)
+		buf[0] = 0x44 // IPv4, IHL = 4 (< min 5)
+		buf[9] = byte(ipproto.TCP)
+		binary.BigEndian.PutUint16(buf[2:4], 40)
+		var p Parsed
+		p.Decode(buf)
+		if p.IPProto != Unknown {
+			t.Errorf("got IPProto %v, want Unknown", p.IPProto)
+		}
+		if p.subofs != 0 {
+			t.Errorf("got subofs %d, want 0", p.subofs)
+		}
+	})
+
+	t.Run("v4-trailing-bytes-not-parsed", func(t *testing.T) {
+		buf := make([]byte, 60)
+		buf[0] = 0x45 // IPv4, IHL = 5 (20 bytes)
+		binary.BigEndian.PutUint16(buf[2:4], 20)
+		buf[9] = byte(ipproto.TCP)
+		binary.BigEndian.PutUint16(buf[20:22], 1234)
+		binary.BigEndian.PutUint16(buf[22:24], 80)
+		buf[32] = 0x50
+
+		var p Parsed
+		p.Decode(buf)
+		if p.IPProto != Unknown {
+			t.Errorf("got IPProto %v, want Unknown", p.IPProto)
+		}
+	})
+
+	t.Run("v4-tcp-invalid-data-offset", func(t *testing.T) {
+		buf := make([]byte, 40)
+		buf[0] = 0x45
+		binary.BigEndian.PutUint16(buf[2:4], 40)
+		buf[9] = byte(ipproto.TCP)
+		buf[32] = 0x00 // Data offset = 0 (< 5)
+
+		var p Parsed
+		p.Decode(buf)
+		if p.IPProto != TCP {
+			t.Errorf("got IPProto %v, want TCP", p.IPProto)
+		}
+		if p.dataofs != p.subofs+20 {
+			t.Errorf("got dataofs %d, want %d", p.dataofs, p.subofs+20)
+		}
+	})
+
+	t.Run("v4-tcp-truncated-options", func(t *testing.T) {
+		buf := make([]byte, 40)
+		buf[0] = 0x45
+		binary.BigEndian.PutUint16(buf[2:4], 40)
+		buf[9] = byte(ipproto.TCP)
+		buf[32] = 0x80 // Data offset = 8 (32 bytes), but only 20 bytes of TCP header
+
+		var p Parsed
+		p.Decode(buf)
+		if p.IPProto != Unknown {
+			t.Errorf("got IPProto %v, want Unknown", p.IPProto)
+		}
+	})
+
+	t.Run("v6-trailing-bytes-not-parsed", func(t *testing.T) {
+		buf := make([]byte, 60)
+		buf[0] = 0x60
+		binary.BigEndian.PutUint16(buf[4:6], 0) // payload length = 0
+		buf[6] = byte(ipproto.TCP)
+		buf[52] = 0x50
+
+		var p Parsed
+		p.Decode(buf)
+		if p.IPProto != Unknown {
+			t.Errorf("got IPProto %v, want Unknown", p.IPProto)
+		}
+	})
+
+	t.Run("v6-truncated-fragment-header", func(t *testing.T) {
+		buf := make([]byte, 60)
+		buf[0] = 0x60
+		binary.BigEndian.PutUint16(buf[4:6], 4) // payload length = 4 (< 8)
+		buf[6] = byte(ip6FragHeader)
+
+		var p Parsed
+		p.Decode(buf)
+		if p.IPProto != Unknown {
+			t.Errorf("got IPProto %v, want Unknown", p.IPProto)
+		}
+	})
+
+	t.Run("transport-bounded", func(t *testing.T) {
+		buf := make([]byte, 60)
+		buf[0] = 0x45
+		binary.BigEndian.PutUint16(buf[2:4], 28)
+		buf[9] = byte(ipproto.UDP)
+		binary.BigEndian.PutUint16(buf[20:22], 1234)
+		binary.BigEndian.PutUint16(buf[22:24], 80)
+		binary.BigEndian.PutUint16(buf[24:26], 8)
+
+		var p Parsed
+		p.Decode(buf)
+		if p.IPProto != UDP {
+			t.Fatalf("got IPProto %v, want UDP", p.IPProto)
+		}
+		tr := p.Transport()
+		if len(tr) != 8 {
+			t.Errorf("len(Transport()) = %d; want 8", len(tr))
+		}
+	})
 }
 
 var sinkString string
