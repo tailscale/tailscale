@@ -15,15 +15,70 @@ keeps doing everything else: control plane, disco, NAT traversal (STUN,
 hole punching), port mapping (UPnP, NAT-PMP, PCP), DERP, and programming
 the kernel module.
 
-What we expect to win, and should measure, compared to wireguard-go with
-TUN GSO/GRO:
+Performance is the primary motivation for this work (stated
+2026-11-06). Everything else is in service of getting the data plane out
+of userspace, so every change should be judged by its effect on
+performance, and performance must be measured, not assumed.
+
+What we expect to win, compared to wireguard-go with TUN GSO/GRO and UDP
+GSO/GRO:
 
 * CPU cost per byte and per packet.
 * Latency and small-packet rate.
 * Forwarding performance for subnet routers and exit nodes.
+* Throughput, especially on small or many-core machines, once outer UDP
+  GSO/GRO is in place (see "Performance" below).
 
-Raw single-flow throughput is not the main argument; wireguard-go is
-already fast there.
+## Performance
+
+### What we inherit from upstream WireGuard
+
+* Inner GSO on send: the device advertises GSO (`WG_NETDEV_FEATURES` in
+  `device.c`), so the stack hands it large TCP super-packets, which
+  `wg_xmit` segments (`skb_gso_segment`) before encrypting each segment.
+* Inner GRO on receive: decrypted packets go up through each peer's NAPI
+  context with `napi_gro_receive` (`receive.c`), so the stack sees
+  coalesced inner packets.
+* Parallel encryption and decryption across CPUs (per-device crypt
+  workqueue), with per-peer ordering.
+
+### What's missing: outer UDP GSO/GRO
+
+* Send: each encrypted packet is sent as its own UDP datagram through
+  `udp_tunnel_xmit_skb`, so every MTU-sized packet pays the full IP/UDP
+  output and qdisc/driver cost. Building UDP GSO super-datagrams
+  (`SKB_GSO_UDP_L4`) out of a peer's consecutive encrypted packets would
+  amortize that, and let NICs with UDP segmentation offload do the
+  splitting.
+* Receive: the encap socket has no `gro_receive`, so encrypted datagrams
+  aren't coalesced; each one goes through the IP/UDP input path
+  separately. A `gro_receive`/`gro_complete` pair (as VXLAN, Geneve and
+  FOU have) could batch them per flow before decryption.
+* These are the kernel analogues of what makes wireguard-go fast. In the
+  kernel there are no syscalls to amortize, so the expected win is
+  smaller, but it is likely the biggest remaining throughput lever.
+  Measure before and after.
+
+### Shared socket and GRO
+
+The UDP stack segments GRO'd UDP packets before handing them to a socket
+with `encap_rcv` set (`udp_unexpected_gso`, checked in both 6.8 and 7.4),
+so `UDP_GRO` on the shared socket is safe but wasteful: datagrams get
+coalesced and then immediately split again. In kernel mode, tailscaled
+should not enable `UDP_GRO` (or rely on `UDP_SEGMENT`) on the shared
+socket; only low-volume disco and STUN traffic reaches userspace there,
+and the module's sends don't go through the socket send path at all.
+
+### Measuring
+
+* A benchmark harness in the natlab testbed (iperf3-style TCP and UDP
+  throughput, pps with small packets, latency under load, CPU use via
+  `/proc/stat` or perf), comparing tswg against wireguard-go
+  (tailscaled in its usual TUN mode) on the same VMs.
+* natlab's vnet is a userspace network simulator, so it caps absolute
+  numbers. Use it for relative comparisons and regressions; for real
+  numbers, also benchmark on bare metal or between cloud VMs with real
+  NICs.
 
 ## Non-goals
 
@@ -316,6 +371,26 @@ install the module.
 
 ## TODO
 
+Performance (the primary motivation; see "Performance"):
+
+- [ ] Benchmark harness: tswg vs. wireguard-go (tailscaled TUN mode) on the
+      same VMs: TCP/UDP throughput, small-packet pps, latency under load,
+      CPU per byte and per packet, subnet router and exit node forwarding.
+- [ ] Benchmarks on real NICs (bare metal or cloud VMs), not just natlab.
+- [ ] Outer UDP GSO on send: coalesce a peer's consecutive encrypted
+      packets into `SKB_GSO_UDP_L4` super-datagrams.
+- [ ] Outer UDP GRO on receive: `gro_receive`/`gro_complete` on the encap
+      socket to batch encrypted datagrams before decryption.
+- [ ] vmtest: shared socket with `UDP_GRO` enabled still works (exercises
+      the segment-before-encap_rcv path at runtime).
+- [ ] tailscaled: don't enable `UDP_GRO`/`UDP_SEGMENT` on the shared
+      socket in kernel mode.
+- [ ] Profile the encrypt/decrypt path (workqueue fan-out, per-peer
+      ordering) under many-flow and many-peer loads.
+- [ ] Measure scaling with many peers; unknown-peer upcall only if needed.
+
+Everything else:
+
 - [x] Create repo; import pristine upstream WireGuard (Linux 7.4-rc1).
 - [x] Write DESIGN.md.
 - [x] Fork into `src/`: rename module, link kind and genetlink family to
@@ -355,7 +430,4 @@ install the module.
 - [ ] Fallback to wireguard-go when tswg is unavailable.
 - [ ] Decide minimum supported kernel.
 - [ ] dkms.conf and packaging.
-- [ ] Benchmarks versus wireguard-go (CPU/byte, pps, latency, forwarding).
 - [ ] Custom debug kernel (KASAN, lockdep) in the testbed.
-- [ ] UDP GSO/GRO on the encap socket (later perf work).
-- [ ] Measure scaling with many peers; unknown-peer upcall only if needed.
