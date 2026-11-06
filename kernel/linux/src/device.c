@@ -10,6 +10,7 @@
 #include "ratelimiter.h"
 #include "peer.h"
 #include "messages.h"
+#include "tswg.h"
 
 #include <linux/module.h>
 #include <linux/rtnetlink.h>
@@ -251,6 +252,7 @@ static void wg_destruct(struct net_device *dev)
 	mutex_lock(&wg->device_update_lock);
 	rcu_assign_pointer(wg->creating_net, NULL);
 	wg->incoming_port = 0;
+	tswg_socket_detach_all_user(wg); /* TSWG */
 	wg_socket_reinit(wg, NULL, NULL);
 	/* The final references are cleared in the below calls to destroy_workqueue. */
 	wg_peer_remove_all(wg);

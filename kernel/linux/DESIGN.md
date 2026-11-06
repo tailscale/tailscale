@@ -122,24 +122,65 @@ is what will program the module.
 ### Shared UDP socket
 
 Tailscale needs disco, STUN and WireGuard to share one UDP 4-tuple so NAT
-mappings discovered by disco are the ones WireGuard uses. Plan, modeled on
-ESP-in-UDP (`UDP_ENCAP_ESPINUDP`) and L2TP:
+mappings discovered by disco are the ones WireGuard uses. Implemented
+2026-11-06 (`src/socket.c`, "TSWG: user-supplied sockets"), modeled on
+L2TP's user-supplied tunnel sockets and ESP-in-UDP:
 
 1. tailscaled creates and binds the UDP socket(s) and sets its socket
    options (SO_MARK, buffer sizes, and so on).
-2. tailscaled passes the fd to tswg over genetlink (new attributes
-   `WGDEVICE_A_TSWG_SOCK_FD4` and `..._FD6`, names TBD).
-3. tswg calls `setup_udp_tunnel_sock()` on it with its `encap_rcv`.
-4. `encap_rcv` consumes WireGuard messages (types 1-4 with three zero
-   reserved bytes) and returns >0 for everything else (disco, STUN), which
-   then lands in the socket's normal receive queue for tailscaled's
-   `recvmsg`.
+2. tailscaled passes the fds to tswg in `WG_CMD_SET_DEVICE`, as
+   `TSWGDEVICE_A_SOCK_FD4` / `TSWGDEVICE_A_SOCK_FD6` (NLA_S32) nested in
+   `WGDEVICE_A_TSWG`. The netlink request is processed in the caller's
+   context, so `sockfd_lookup` sees the caller's fd table.
+3. tswg validates the socket (UDP, the right family, bound, IPv6 sockets
+   must be `IPV6_V6ONLY`, not already used by a tunnel), calls
+   `setup_udp_tunnel_sock()` with its `encap_rcv` and `encap_destroy`, and
+   keeps a reference to the `struct sock` (not the file).
+4. `encap_rcv` consumes WireGuard messages (a first byte of 1-4 followed by
+   three zero bytes) and returns 1 for everything else, which lands in the
+   socket's normal receive queue for tailscaled. Nothing else Tailscale
+   sends matches: disco starts with "TS", STUN with 0x00, or 0x01 followed
+   by a nonzero byte, and Geneve (peer relay) with 0x00.
 5. tailscaled sends disco and STUN with plain `sendmsg` on the same socket.
 
-Socket lifetime: tswg holds a reference to the socket, so the data plane
-survives a tailscaled restart. The new tailscaled can't bind the same port
-while the kernel holds it, so either put the fd in systemd's fd store
-(`FileDescriptorStoreMax=`) or add an explicit "detach socket" op. TBD.
+Details and decisions:
+
+* uapi numbering: all tswg device attributes live in one nested attribute,
+  `WGDEVICE_A_TSWG` = 64, far above upstream's (8 today), so upstream can
+  keep appending its own without colliding. Peer attributes will get the
+  same treatment (`WGPEER_A_TSWG` = 64). Dumps report
+  `TSWGDEVICE_A_FLAGS` (`TSWGDEVICE_F_USER_SOCK4/6`).
+* Socket lifetime is the lifetime of tailscaled's fd (decided
+  2026-11-06). When the process closes the socket (or exits), UDP calls
+  our `encap_destroy` and the device drops it, leaving the device with no
+  socket for that family until tailscaled passes a new one. No explicit
+  detach op is needed for restarts. A restart that keeps the data plane up
+  needs the fd to survive it, via systemd's fd store
+  (`FileDescriptorStoreMax=`); that's a tailscaled-side TODO.
+* Passing -1 detaches the socket, and the device goes back to creating its
+  own on its listen port (which fails with EADDRINUSE if tailscaled still
+  holds that port).
+* The user sockets are kept per device (`tswg_user_sock4/6`) across
+  ifdown/ifup; while the device is up they're also its active
+  `sock4/sock6`. WireGuard messages arriving while the device is down are
+  dropped; everything else still reaches userspace.
+* Setting `WGDEVICE_A_LISTEN_PORT` to a different port while a user
+  socket is attached fails with EBUSY.
+* Detaching restores the socket to plain UDP (`encap_rcv`, `encap_type`,
+  `sk_user_data`, checksum conversion). It leaves multicast loopback
+  disabled, since we don't know its previous value, and leaves the encap
+  static key reference for UDP to drop when the socket is destroyed.
+* A global mutex, `tswg_user_sock_lock`, serializes attach and detach,
+  including detach from `encap_destroy`, which runs from the user's
+  `close()` without any of our locks held. Lock order:
+  `device_update_lock`, then `tswg_user_sock_lock`, then
+  `socket_update_lock`.
+* `UDP_GRO` on the shared socket is safe: the UDP stack segments GRO'd
+  packets before handing them to a socket with `encap_rcv` set (checked
+  in both 6.8 and 7.4). Making WireGuard itself use GRO is separate perf
+  work.
+* We set `sk_allocation = GFP_ATOMIC` on the user socket, as WireGuard and
+  L2TP do for their sockets, since we send from atomic context.
 
 ### Endpoints and roaming
 
@@ -295,19 +336,23 @@ install the module.
 - [ ] Verify the 7.4 path (all probes succeed) against a built 7.4 tree.
       (Partly covered: gokrazy's 7.2.8 has every probed API except
       udp_get_len_short.)
-- [ ] Forked YNL spec plus regen script once we add attributes.
+- [ ] Forked YNL spec plus regen script. (We now have hand-written
+      additions in `src/generated/netlink.[ch]`, marked TSWG.)
 - [ ] Look at the allowedips.c frame-size warning (1048 > 1024 bytes),
       present in upstream code too.
 - [ ] Split large peer lists across several netlink messages in the Go
       client.
-- [ ] Socket fd passing plus `encap_rcv` classifier (WG vs. disco/STUN).
-- [ ] vmtest: disco/STUN still reach userspace on the shared socket.
+- [x] Socket fd passing plus `encap_rcv` classifier (WG vs. disco/STUN).
+- [x] vmtest: disco/STUN still reach userspace on the shared socket, from
+      the same 4-tuple; no WireGuard leaks to userspace; closing the fd
+      detaches; a new fd reattaches (`TestTSWG{Gokrazy,Ubuntu}SharedSocket`).
+- [ ] tailscaled: keep the shared sockets in systemd's fd store across
+      restarts.
 - [ ] Per-peer no-auto-roam flag.
 - [ ] Loopback DERP endpoints; vmtest with DERP-only path.
 - [ ] tailscaled integration (wgengine backend that programs tswg) on a
       tailscale.com branch.
 - [ ] Fallback to wireguard-go when tswg is unavailable.
-- [ ] Decide socket lifetime across tailscaled restarts.
 - [ ] Decide minimum supported kernel.
 - [ ] dkms.conf and packaging.
 - [ ] Benchmarks versus wireguard-go (CPU/byte, pps, latency, forwarding).

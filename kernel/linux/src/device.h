@@ -54,6 +54,9 @@ struct wg_device {
 	unsigned int num_peers, device_update_gen;
 	u32 fwmark;
 	u16 incoming_port;
+
+	/* TSWG: user-supplied sockets, protected by tswg_user_sock_lock. */
+	struct sock *tswg_user_sock4, *tswg_user_sock6;
 };
 
 int wg_device_init(void);

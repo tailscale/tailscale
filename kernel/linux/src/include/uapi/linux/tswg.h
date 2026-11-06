@@ -41,6 +41,37 @@ enum wgdevice_attribute {
 };
 #define WGDEVICE_A_MAX (__WGDEVICE_A_LAST - 1)
 
+/*
+ * tswg additions. They live in a single nested attribute whose number is
+ * far above upstream WireGuard's, so that upstream can keep appending its
+ * own attributes without colliding with ours.
+ */
+#define WGDEVICE_A_TSWG 64 /* NLA_NESTED, of enum tswgdevice_attribute */
+
+enum tswgdevice_flag {
+	TSWGDEVICE_F_USER_SOCK4 = 1, /* a user-supplied IPv4 socket is attached */
+	TSWGDEVICE_F_USER_SOCK6 = 2, /* a user-supplied IPv6 socket is attached */
+};
+
+enum tswgdevice_attribute {
+	TSWGDEVICE_A_UNSPEC,
+	/*
+	 * NLA_S32, set only: the file descriptor, in the calling process, of a
+	 * bound UDP socket for the device to use instead of creating its own.
+	 * WireGuard messages arriving on it are consumed by the device; all
+	 * other datagrams (disco, STUN, ...) stay on the socket for the
+	 * process to read, and the process may send its own datagrams on it.
+	 * The device drops the socket when the process closes it. -1 detaches
+	 * the current socket, so the device creates its own again.
+	 */
+	TSWGDEVICE_A_SOCK_FD4,
+	TSWGDEVICE_A_SOCK_FD6, /* NLA_S32, like SOCK_FD4; must be IPV6_V6ONLY */
+	TSWGDEVICE_A_FLAGS, /* NLA_U32 of enum tswgdevice_flag, get only */
+
+	__TSWGDEVICE_A_LAST
+};
+#define TSWGDEVICE_A_MAX (__TSWGDEVICE_A_LAST - 1)
+
 enum wgpeer_attribute {
 	WGPEER_A_UNSPEC,
 	WGPEER_A_PUBLIC_KEY,

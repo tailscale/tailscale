@@ -10,6 +10,7 @@
 #include "queueing.h"
 #include "messages.h"
 #include "generated/netlink.h"
+#include "tswg.h"
 
 #include <uapi/linux/tswg.h>
 
@@ -204,7 +205,8 @@ int wg_get_device_dumpit(struct sk_buff *skb, struct netlink_callback *cb)
 				wg->incoming_port) ||
 		    nla_put_u32(skb, WGDEVICE_A_FWMARK, wg->fwmark) ||
 		    nla_put_u32(skb, WGDEVICE_A_IFINDEX, wg->dev->ifindex) ||
-		    nla_put_string(skb, WGDEVICE_A_IFNAME, wg->dev->name))
+		    nla_put_string(skb, WGDEVICE_A_IFNAME, wg->dev->name) ||
+		    tswg_get_device(skb, wg))
 			goto out;
 
 		down_read(&wg->static_identity.lock);
@@ -288,6 +290,9 @@ static int set_port(struct wg_device *wg, u16 port)
 
 	if (wg->incoming_port == port)
 		return 0;
+	/* TSWG: the port of a user socket is userspace's business. */
+	if (tswg_socket_has_user(wg))
+		return -EBUSY;
 	list_for_each_entry(peer, &wg->peer_list, peer_list)
 		wg_socket_clear_peer_endpoint_src(peer);
 	if (!netif_running(wg->dev)) {
@@ -487,7 +492,8 @@ int wg_set_device_doit(struct sk_buff *skb, struct genl_info *info)
 	if (info->attrs[WGDEVICE_A_FLAGS])
 		flags = nla_get_u32(info->attrs[WGDEVICE_A_FLAGS]);
 
-	if (info->attrs[WGDEVICE_A_LISTEN_PORT] || info->attrs[WGDEVICE_A_FWMARK]) {
+	if (info->attrs[WGDEVICE_A_LISTEN_PORT] || info->attrs[WGDEVICE_A_FWMARK] ||
+	    info->attrs[WGDEVICE_A_TSWG]) {
 		struct net *net;
 		rcu_read_lock();
 		net = rcu_dereference(wg->creating_net);
@@ -510,6 +516,12 @@ int wg_set_device_doit(struct sk_buff *skb, struct genl_info *info)
 	if (info->attrs[WGDEVICE_A_LISTEN_PORT]) {
 		ret = set_port(wg,
 			nla_get_u16(info->attrs[WGDEVICE_A_LISTEN_PORT]));
+		if (ret)
+			goto out;
+	}
+
+	if (info->attrs[WGDEVICE_A_TSWG]) {
+		ret = tswg_set_device(wg, info->attrs[WGDEVICE_A_TSWG], info->extack);
 		if (ret)
 			goto out;
 	}
@@ -582,6 +594,58 @@ out_nodev:
 		memzero_explicit(nla_data(info->attrs[WGDEVICE_A_PRIVATE_KEY]),
 				 nla_len(info->attrs[WGDEVICE_A_PRIVATE_KEY]));
 	return ret;
+}
+
+/*
+ * TSWG: tswg_set_device applies the nested WGDEVICE_A_TSWG attribute attr
+ * to wg. It must be called with rtnl and wg->device_update_lock held.
+ */
+int tswg_set_device(struct wg_device *wg, struct nlattr *attr,
+		    struct netlink_ext_ack *extack)
+{
+	struct nlattr *tb[TSWGDEVICE_A_MAX + 1];
+	int ret;
+
+	ret = nla_parse_nested(tb, TSWGDEVICE_A_MAX, attr,
+			       tswg_device_nl_policy, extack);
+	if (ret < 0)
+		return ret;
+
+	if (tb[TSWGDEVICE_A_SOCK_FD4]) {
+		ret = tswg_socket_set_user(wg, AF_INET,
+					   nla_get_s32(tb[TSWGDEVICE_A_SOCK_FD4]),
+					   extack);
+		if (ret)
+			return ret;
+	}
+	if (tb[TSWGDEVICE_A_SOCK_FD6]) {
+		if (!IS_ENABLED(CONFIG_IPV6)) {
+			NL_SET_ERR_MSG(extack, "IPv6 is not supported");
+			return -EAFNOSUPPORT;
+		}
+		ret = tswg_socket_set_user(wg, AF_INET6,
+					   nla_get_s32(tb[TSWGDEVICE_A_SOCK_FD6]),
+					   extack);
+		if (ret)
+			return ret;
+	}
+	return 0;
+}
+
+/* TSWG: tswg_get_device adds wg's WGDEVICE_A_TSWG attribute to skb. */
+int tswg_get_device(struct sk_buff *skb, struct wg_device *wg)
+{
+	struct nlattr *nest;
+
+	nest = nla_nest_start(skb, WGDEVICE_A_TSWG);
+	if (!nest)
+		return -EMSGSIZE;
+	if (nla_put_u32(skb, TSWGDEVICE_A_FLAGS, tswg_socket_flags(wg))) {
+		nla_nest_cancel(skb, nest);
+		return -EMSGSIZE;
+	}
+	nla_nest_end(skb, nest);
+	return 0;
 }
 
 static struct genl_family genl_family __ro_after_init = {

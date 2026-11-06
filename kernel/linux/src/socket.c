@@ -8,6 +8,9 @@
 #include "socket.h"
 #include "queueing.h"
 #include "messages.h"
+#include "tswg.h"
+
+#include <uapi/linux/tswg.h>
 
 #include <linux/ctype.h>
 #include <linux/net.h>
@@ -312,14 +315,40 @@ void wg_socket_clear_peer_endpoint_src(struct wg_peer *peer)
 	write_unlock_bh(&peer->endpoint_lock);
 }
 
+/*
+ * TSWG: tswg_is_wg_message reports whether the UDP payload of skb looks like
+ * a WireGuard message: a little-endian 32-bit type of 1 through 4. Nothing
+ * else Tailscale sends on the socket matches: disco starts with "TS", STUN
+ * with 0x00 or 0x01 followed by a nonzero byte, and Geneve-encapsulated peer
+ * relay traffic with 0x00.
+ */
+static bool tswg_is_wg_message(struct sk_buff *skb)
+{
+	u8 buf[4];
+	const u8 *h;
+
+	h = skb_header_pointer(skb, skb_transport_offset(skb) + sizeof(struct udphdr),
+			       sizeof(buf), buf);
+	if (!h)
+		return false;
+	return h[0] >= MESSAGE_HANDSHAKE_INITIATION && h[0] <= MESSAGE_DATA &&
+	       !h[1] && !h[2] && !h[3];
+}
+
 static int wg_receive(struct sock *sk, struct sk_buff *skb)
 {
 	struct wg_device *wg;
 
 	if (unlikely(!sk))
 		goto err;
+	/* TSWG: leave everything but WireGuard messages on user sockets. */
+	if (!sk->sk_kern_sock && !tswg_is_wg_message(skb))
+		return 1;
 	wg = sk->sk_user_data;
 	if (unlikely(!wg))
+		goto err;
+	/* TSWG: user sockets outlive the device being up. */
+	if (!sk->sk_kern_sock && unlikely(!netif_running(wg->dev)))
 		goto err;
 	skb_mark_not_on_list(skb);
 	wg_packet_receive(wg, skb);
@@ -334,9 +363,16 @@ static void sock_free(struct sock *sock)
 {
 	if (unlikely(!sock))
 		return;
+	/* TSWG: user sockets belong to userspace; just drop our reference. */
+	if (!sock->sk_kern_sock) {
+		sock_put(sock);
+		return;
+	}
 	sk_clear_memalloc(sock);
 	udp_tunnel_sock_release(sock);
 }
+
+static int tswg_socket_activate_user(struct wg_device *wg);
 
 static void set_sock_opts(struct socket *sock)
 {
@@ -371,6 +407,11 @@ int wg_socket_init(struct wg_device *wg, u16 port)
 		.ipv6_v6only = true
 	};
 #endif
+
+	/* TSWG: use the user's sockets, if any, instead of creating our own. */
+	ret = tswg_socket_activate_user(wg);
+	if (ret != -ENOENT)
+		return ret;
 
 	rcu_read_lock();
 	net = rcu_dereference(wg->creating_net);
@@ -433,4 +474,240 @@ void wg_socket_reinit(struct wg_device *wg, struct sock *new4,
 	synchronize_net();
 	sock_free(old4);
 	sock_free(old6);
+}
+
+/*
+ * TSWG: user-supplied sockets.
+ *
+ * tailscaled shares one UDP socket (per address family) between the kernel,
+ * which handles WireGuard messages, and itself, for disco, STUN and so on,
+ * so that NAT mappings discovered by disco are the ones WireGuard uses. It
+ * passes the socket's fd over netlink; we hook the socket's UDP encap_rcv
+ * (as L2TP does for user-supplied sockets) and leave non-WireGuard
+ * datagrams on its receive queue.
+ *
+ * The device keeps a reference to each user socket in tswg_user_sock4/6,
+ * independent of whether the device is up. While it's up, the same sockets
+ * are also the device's active sock4/sock6, each holding its own reference.
+ * When the process closes a socket, UDP calls tswg_user_sock_destroy and we
+ * drop it, so the socket's lifetime is that of the user's file descriptor.
+ *
+ * tswg_user_sock_lock serializes attaching and detaching user sockets
+ * across all devices, including detaching from the socket's destroy hook,
+ * which runs without any of our locks held. Lock order: device_update_lock,
+ * then tswg_user_sock_lock, then socket_update_lock.
+ */
+
+static DEFINE_MUTEX(tswg_user_sock_lock);
+
+/*
+ * tswg_detach_user_sock_locked removes the user socket sk from wg, restores
+ * it to a plain UDP socket, and drops wg's references to it.
+ */
+static void tswg_detach_user_sock_locked(struct wg_device *wg, struct sock *sk)
+{
+	struct udp_sock *up = udp_sk(sk);
+	bool active = false;
+
+	lockdep_assert_held(&tswg_user_sock_lock);
+
+	if (wg->tswg_user_sock4 == sk)
+		wg->tswg_user_sock4 = NULL;
+	if (wg->tswg_user_sock6 == sk)
+		wg->tswg_user_sock6 = NULL;
+
+	mutex_lock(&wg->socket_update_lock);
+	if (rcu_access_pointer(wg->sock4) == sk) {
+		RCU_INIT_POINTER(wg->sock4, NULL);
+		active = true;
+	}
+	if (rcu_access_pointer(wg->sock6) == sk) {
+		RCU_INIT_POINTER(wg->sock6, NULL);
+		active = true;
+	}
+	mutex_unlock(&wg->socket_update_lock);
+
+	/*
+	 * Undo setup_udp_tunnel_sock. We leave the socket's encap static key
+	 * reference (ENCAP_ENABLED) alone, since UDP drops it when the socket
+	 * is destroyed, and multicast loopback disabled, since we don't know
+	 * its old value.
+	 */
+	lock_sock(sk);
+	WRITE_ONCE(up->encap_rcv, NULL);
+	WRITE_ONCE(up->encap_destroy, NULL);
+	WRITE_ONCE(up->encap_type, 0);
+	rcu_assign_sk_user_data(sk, NULL);
+	inet_dec_convert_csum(sk);
+	release_sock(sk);
+
+	/* Wait for in-flight receives and sends before dropping references. */
+	synchronize_net();
+	if (active)
+		sock_put(sk);
+	sock_put(sk);
+}
+
+/* tswg_user_sock_destroy is the UDP encap_destroy hook for user sockets. */
+static void tswg_user_sock_destroy(struct sock *sk)
+{
+	struct wg_device *wg;
+
+	mutex_lock(&tswg_user_sock_lock);
+	rcu_read_lock();
+	wg = rcu_dereference_sk_user_data(sk);
+	rcu_read_unlock();
+	if (wg) {
+		pr_debug("%s: User socket closed\n", wg->dev->name);
+		tswg_detach_user_sock_locked(wg, sk);
+	}
+	mutex_unlock(&tswg_user_sock_lock);
+}
+
+/*
+ * tswg_socket_activate_user makes wg's user sockets its active sockets. It
+ * returns -ENOENT if wg has no user sockets.
+ */
+static int tswg_socket_activate_user(struct wg_device *wg)
+{
+	struct sock *s4, *s6;
+
+	mutex_lock(&tswg_user_sock_lock);
+	s4 = wg->tswg_user_sock4;
+	s6 = wg->tswg_user_sock6;
+	if (!s4 && !s6) {
+		mutex_unlock(&tswg_user_sock_lock);
+		return -ENOENT;
+	}
+	if (s4)
+		sock_hold(s4);
+	if (s6)
+		sock_hold(s6);
+	wg_socket_reinit(wg, s4, s6);
+	if (!s4)
+		wg->incoming_port = ntohs(inet_sk(s6)->inet_sport);
+	mutex_unlock(&tswg_user_sock_lock);
+	return 0;
+}
+
+/*
+ * tswg_socket_set_user attaches the UDP socket with file descriptor fd in
+ * the calling process as wg's socket for family (AF_INET or AF_INET6),
+ * replacing any previous one. If fd is negative, it detaches the current
+ * one instead. If the device is up, it then switches to the new socket(s),
+ * or back to its own sockets if no user sockets are left.
+ *
+ * It must be called with rtnl and wg->device_update_lock held, from the
+ * netlink request's process context.
+ */
+int tswg_socket_set_user(struct wg_device *wg, int family, int fd,
+			 struct netlink_ext_ack *extack)
+{
+	struct udp_tunnel_sock_cfg cfg = {
+		.sk_user_data = wg,
+		.encap_type = 1,
+		.encap_rcv = wg_receive,
+		.encap_destroy = tswg_user_sock_destroy,
+	};
+	struct sock **slot, *old, *sk = NULL;
+	struct socket *sock;
+	int ret;
+
+	if (fd >= 0) {
+		sock = sockfd_lookup(fd, &ret);
+		if (!sock) {
+			NL_SET_ERR_MSG(extack, "invalid socket file descriptor");
+			return ret;
+		}
+		sk = sock->sk;
+		ret = -EINVAL;
+		if (sk->sk_type != SOCK_DGRAM || sk->sk_protocol != IPPROTO_UDP ||
+		    sk->sk_family != family) {
+			NL_SET_ERR_MSG(extack, "not a UDP socket of the expected address family");
+			goto err_put;
+		}
+		if (family == AF_INET6 && !sk->sk_ipv6only) {
+			NL_SET_ERR_MSG(extack, "IPv6 socket must be IPV6_V6ONLY");
+			goto err_put;
+		}
+		if (!inet_sk(sk)->inet_sport) {
+			NL_SET_ERR_MSG(extack, "socket is not bound");
+			goto err_put;
+		}
+
+		lock_sock(sk);
+		if (rcu_access_pointer(sk->sk_user_data) == wg) {
+			/* Already ours; nothing to do. */
+			release_sock(sk);
+			sockfd_put(sock);
+			return 0;
+		}
+		if (rcu_access_pointer(sk->sk_user_data) || udp_sk(sk)->encap_type) {
+			release_sock(sk);
+			ret = -EBUSY;
+			NL_SET_ERR_MSG(extack, "socket is already in use by a tunnel");
+			goto err_put;
+		}
+		/* Like WireGuard's own sockets, since we send from atomic context. */
+		sk->sk_allocation = GFP_ATOMIC;
+		setup_udp_tunnel_sock(sock_net(sk), sk, &cfg);
+		release_sock(sk);
+		sock_hold(sk);
+		sockfd_put(sock);
+	}
+
+	mutex_lock(&tswg_user_sock_lock);
+	slot = family == AF_INET ? &wg->tswg_user_sock4 : &wg->tswg_user_sock6;
+	old = *slot;
+	*slot = sk;
+	if (old)
+		tswg_detach_user_sock_locked(wg, old);
+	if (sk && (family == AF_INET || !wg->tswg_user_sock4))
+		wg->incoming_port = ntohs(inet_sk(sk)->inet_sport);
+	mutex_unlock(&tswg_user_sock_lock);
+
+	if (!netif_running(wg->dev))
+		return 0;
+	/* This activates the user sockets, or creates our own if none are left. */
+	return wg_socket_init(wg, wg->incoming_port);
+
+err_put:
+	sockfd_put(sock);
+	return ret;
+}
+
+/* tswg_socket_has_user reports whether wg has any user sockets. */
+bool tswg_socket_has_user(struct wg_device *wg)
+{
+	bool ret;
+
+	mutex_lock(&tswg_user_sock_lock);
+	ret = wg->tswg_user_sock4 || wg->tswg_user_sock6;
+	mutex_unlock(&tswg_user_sock_lock);
+	return ret;
+}
+
+/* tswg_socket_flags returns wg's TSWGDEVICE_F_USER_SOCK* flags. */
+u32 tswg_socket_flags(struct wg_device *wg)
+{
+	u32 flags = 0;
+
+	mutex_lock(&tswg_user_sock_lock);
+	if (wg->tswg_user_sock4)
+		flags |= TSWGDEVICE_F_USER_SOCK4;
+	if (wg->tswg_user_sock6)
+		flags |= TSWGDEVICE_F_USER_SOCK6;
+	mutex_unlock(&tswg_user_sock_lock);
+	return flags;
+}
+
+/* tswg_socket_detach_all_user detaches all of wg's user sockets. */
+void tswg_socket_detach_all_user(struct wg_device *wg)
+{
+	mutex_lock(&tswg_user_sock_lock);
+	if (wg->tswg_user_sock4)
+		tswg_detach_user_sock_locked(wg, wg->tswg_user_sock4);
+	if (wg->tswg_user_sock6)
+		tswg_detach_user_sock_locked(wg, wg->tswg_user_sock6);
+	mutex_unlock(&tswg_user_sock_lock);
 }
