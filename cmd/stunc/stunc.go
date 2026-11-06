@@ -17,11 +17,13 @@ import (
 
 func main() {
 	log.SetFlags(0)
+	log.SetOutput(os.Stdout) // CLI tool, write to stdout.
 	var host string
 	port := "3478"
 
 	var readTimeout time.Duration
 	flag.DurationVar(&readTimeout, "timeout", 3*time.Second, "response wait timeout")
+	quiet := flag.Bool("quiet", false, "only print errors")
 
 	flag.Parse()
 
@@ -44,8 +46,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("invalid port: %v", err)
 	}
-
-	uaddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, port))
+	hostPort := net.JoinHostPort(host, port)
+	log.SetPrefix(hostPort + ": ")
+	uaddr, err := net.ResolveUDPAddr("udp", hostPort)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -80,7 +83,9 @@ func main() {
 		log.Fatalf("txid mismatch: got %v, want %v", tid, txID)
 	}
 
-	log.Printf("sent addr: %v", uaddr)
-	log.Printf("from addr: %v", raddr)
-	log.Printf("stun addr: %v", saddr)
+	if !*quiet {
+		log.Printf("sent addr: %v", uaddr)
+		log.Printf("from addr: %v", raddr)
+		log.Printf("stun addr: %v", saddr)
+	}
 }
