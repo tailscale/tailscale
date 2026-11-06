@@ -275,6 +275,17 @@ func (id StableTailnetID) IsZero() bool {
 	return id == ""
 }
 
+// StableVIPServiceID is the stable and opaque identifier of a [VIPService].
+// Unlike its [ServiceName], it is never reused: a service that is deleted and
+// recreated with the same name gets a new ID. These IDs are guaranteed to be
+// unique across all services for a single control server instance, but may or
+// may not be unique across different servers.
+type StableVIPServiceID string
+
+func (id StableVIPServiceID) IsZero() bool {
+	return id == ""
+}
+
 // User is a Tailscale user.
 //
 // A user can have multiple logins associated with it (e.g. gmail and github oauth).
