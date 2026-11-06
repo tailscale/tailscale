@@ -60,6 +60,11 @@ const (
 	// has ever been received (even if partially).
 	// Any non-empty value indicates that at least one file has been received.
 	TaildropReceivedKey = StateKey("_taildrop-received")
+
+	// TaildropConsentSecretKey stores a 32-byte random key used to HMAC
+	// Taildrop consent tokens. It is generated on first use and never rotated
+	// unless the state store is wiped. The secret never leaves this node.
+	TaildropConsentSecretKey = StateKey("_taildrop-consent-secret")
 )
 
 // StateStoreHealth is a Warnable set when store.New fails at startup. If
