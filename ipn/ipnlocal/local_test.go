@@ -2621,6 +2621,247 @@ func TestSetControlClientStatusSendsFullNetmapAsPeerChanges(t *testing.T) {
 	nw.check()
 }
 
+// TestExitNodeIPResolvedOnDeltaUpsert checks that an exit node selected by
+// IP before it was in the netmap is resolved to a node ID when the node
+// arrives as a delta upsert, not only on the next full netmap.
+//
+// See https://github.com/tailscale/tailscale/issues/22012.
+func TestExitNodeIPResolvedOnDeltaUpsert(t *testing.T) {
+	self := makePeer(1, withName("self"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.1/32")))
+	exitNode := makeExitNode(2, withName("exit"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.2/32")))
+	other := makePeer(10, withName("other"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.10/32")))
+
+	b := newTestLocalBackend(t)
+	b.ForTest().SetPrefs(&ipn.Prefs{
+		ControlURL: "https://localhost:1/",
+		ExitNodeIP: exitNode.Addresses().At(0).Addr(),
+	})
+
+	// A full netmap that does not contain the exit node leaves the IP unresolved.
+	b.SetControlClientStatus(b.cc, controlclient.Status{NetMap: buildNetmapWithPeers(self, other), LoggedIn: true})
+	if p := b.Prefs(); p.ExitNodeID() != "" || !p.ExitNodeIP().IsValid() {
+		t.Fatalf("after netmap without exit node: ExitNodeID=%q ExitNodeIP=%v; want unresolved", p.ExitNodeID(), p.ExitNodeIP())
+	}
+
+	// A peer that is not the exit node does not resolve it.
+	if !b.UpdateNetmapDelta([]netmap.NodeMutation{netmap.NodeMutationUpsert{Node: makePeer(11, withAddresses(netip.MustParsePrefix("100.64.1.11/32")))}}) {
+		t.Fatal("UpdateNetmapDelta returned false")
+	}
+	if p := b.Prefs(); p.ExitNodeID() != "" || !p.ExitNodeIP().IsValid() {
+		t.Fatalf("after unrelated upsert: ExitNodeID=%q ExitNodeIP=%v; want unresolved", p.ExitNodeID(), p.ExitNodeIP())
+	}
+
+	// The exit node arrives by delta and is resolved. Watchers must learn
+	// about the peer and the prefs that select it in the same notification.
+	nw := newNotificationWatcher(t, b, ipnauth.Self)
+	nw.watch(ipn.NotifyPeerChanges|ipn.NotifyNoNetMap, []wantedNotification{{
+		name: "exit node peer change with prefs selecting it",
+		cond: func(_ testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+			hasPeer := slices.ContainsFunc(n.PeersChanged, func(p *tailcfg.Node) bool { return p.ID == exitNode.ID() })
+			hasPrefs := n.Prefs != nil && n.Prefs.Valid() && n.Prefs.ExitNodeID() == exitNode.StableID()
+			return hasPeer && hasPrefs
+		},
+	}})
+	if !b.UpdateNetmapDelta([]netmap.NodeMutation{netmap.NodeMutationUpsert{Node: exitNode}}) {
+		t.Fatal("UpdateNetmapDelta returned false")
+	}
+	nw.check()
+	p := b.Prefs()
+	if p.ExitNodeID() != exitNode.StableID() {
+		t.Errorf("after delta upsert: ExitNodeID = %q, want %q", p.ExitNodeID(), exitNode.StableID())
+	}
+	if p.ExitNodeIP().IsValid() {
+		t.Errorf("after delta upsert: ExitNodeIP = %v, want cleared", p.ExitNodeIP())
+	}
+	if got := b.hostinfo.ExitNodeID; got != exitNode.StableID() {
+		t.Errorf("after delta upsert: hostinfo.ExitNodeID = %q, want %q", got, exitNode.StableID())
+	}
+}
+
+// TestAutoExitNodeResolvedOnDeltaUpsert checks that an auto exit node that
+// could not be resolved, because no exit node was in the netmap, is selected
+// when the first exit node arrives as a delta upsert.
+func TestAutoExitNodeResolvedOnDeltaUpsert(t *testing.T) {
+	self := makePeer(1, withName("self"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.1/32")))
+	exitNode := makeExitNode(2, withName("exit"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.2/32")))
+	other := makePeer(10, withName("other"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.10/32")))
+
+	b := newTestLocalBackend(t)
+	b.ForTest().SetPrefs(&ipn.Prefs{
+		ControlURL:   "https://localhost:1/",
+		AutoExitNode: ipn.AnyExitNode,
+	})
+
+	nm := buildNetmapWithPeers(self, other)
+	b.MagicConn().AddNetcheckReportForTest(nm.DERPMap, &netcheck.Report{
+		RegionLatency: map[tailcfg.DERPRegionID]time.Duration{1: 5 * time.Millisecond},
+		PreferredDERP: 1,
+	}, time.Now())
+	b.SetControlClientStatus(b.cc, controlclient.Status{NetMap: nm, LoggedIn: true})
+	if p := b.Prefs(); p.ExitNodeID() != ipn.UnresolvedExitNodeID {
+		t.Fatalf("after netmap without exit nodes: ExitNodeID=%q; want %q", p.ExitNodeID(), ipn.UnresolvedExitNodeID)
+	}
+
+	// A peer that is not an exit node leaves the blackhole in place.
+	if !b.UpdateNetmapDelta([]netmap.NodeMutation{netmap.NodeMutationUpsert{Node: makePeer(11, withAddresses(netip.MustParsePrefix("100.64.1.11/32")))}}) {
+		t.Fatal("UpdateNetmapDelta returned false")
+	}
+	if p := b.Prefs(); p.ExitNodeID() != ipn.UnresolvedExitNodeID {
+		t.Fatalf("after unrelated upsert: ExitNodeID=%q; want %q", p.ExitNodeID(), ipn.UnresolvedExitNodeID)
+	}
+
+	if !b.UpdateNetmapDelta([]netmap.NodeMutation{netmap.NodeMutationUpsert{Node: exitNode}}) {
+		t.Fatal("UpdateNetmapDelta returned false")
+	}
+	if p := b.Prefs(); p.ExitNodeID() != exitNode.StableID() {
+		t.Errorf("after delta upsert: ExitNodeID = %q, want %q", p.ExitNodeID(), exitNode.StableID())
+	}
+	if got := b.hostinfo.ExitNodeID; got != exitNode.StableID() {
+		t.Errorf("after delta upsert: hostinfo.ExitNodeID = %q, want %q", got, exitNode.StableID())
+	}
+}
+
+// TestAutoExitNodeResolvedOnDeltaOnline checks that an auto exit node that
+// could not be resolved, because every exit node in the netmap was offline,
+// is selected when an exit node comes online by delta patch.
+func TestAutoExitNodeResolvedOnDeltaOnline(t *testing.T) {
+	self := makePeer(1, withName("self"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.1/32")))
+	exitNode := makeExitNode(2, withName("exit"), withDERP(1), withOnline(false), withAddresses(netip.MustParsePrefix("100.64.1.2/32")))
+
+	b := newTestLocalBackend(t)
+	b.ForTest().SetPrefs(&ipn.Prefs{
+		ControlURL:   "https://localhost:1/",
+		AutoExitNode: ipn.AnyExitNode,
+	})
+
+	nm := buildNetmapWithPeers(self, exitNode)
+	b.MagicConn().AddNetcheckReportForTest(nm.DERPMap, &netcheck.Report{
+		RegionLatency: map[tailcfg.DERPRegionID]time.Duration{1: 5 * time.Millisecond},
+		PreferredDERP: 1,
+	}, time.Now())
+	b.SetControlClientStatus(b.cc, controlclient.Status{NetMap: nm, LoggedIn: true})
+	if p := b.Prefs(); p.ExitNodeID() != ipn.UnresolvedExitNodeID {
+		t.Fatalf("after netmap with only an offline exit node: ExitNodeID=%q; want %q", p.ExitNodeID(), ipn.UnresolvedExitNodeID)
+	}
+
+	muts, ok := netmap.MutationsFromMapResponse(&tailcfg.MapResponse{
+		PeersChangedPatch: []*tailcfg.PeerChange{{NodeID: exitNode.ID(), Online: new(true)}},
+	}, time.Now())
+	if !ok {
+		t.Fatal("MutationsFromMapResponse failed")
+	}
+	if !b.UpdateNetmapDelta(muts) {
+		t.Fatal("UpdateNetmapDelta returned false")
+	}
+	if p := b.Prefs(); p.ExitNodeID() != exitNode.StableID() {
+		t.Errorf("after online patch: ExitNodeID = %q, want %q", p.ExitNodeID(), exitNode.StableID())
+	}
+	if got := b.hostinfo.ExitNodeID; got != exitNode.StableID() {
+		t.Errorf("after online patch: hostinfo.ExitNodeID = %q, want %q", got, exitNode.StableID())
+	}
+}
+
+// TestAutoExitNodeReselectedOnDeltaRemove checks that an auto exit node is
+// reselected when the selected exit node is removed by delta.
+func TestAutoExitNodeReselectedOnDeltaRemove(t *testing.T) {
+	self := makePeer(1, withName("self"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.1/32")))
+	// Both exit nodes are in the preferred region, so the previous suggestion
+	// is kept while it exists.
+	exitNode2 := makeExitNode(2, withName("exit2"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.2/32")))
+	exitNode3 := makeExitNode(3, withName("exit3"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.3/32")))
+
+	b := newTestLocalBackend(t)
+	b.ForTest().SetPrefs(&ipn.Prefs{
+		ControlURL:   "https://localhost:1/",
+		AutoExitNode: ipn.AnyExitNode,
+	})
+
+	nm := buildNetmapWithPeers(self, exitNode2, exitNode3)
+	b.MagicConn().AddNetcheckReportForTest(nm.DERPMap, &netcheck.Report{
+		RegionLatency: map[tailcfg.DERPRegionID]time.Duration{1: 5 * time.Millisecond},
+		PreferredDERP: 1,
+	}, time.Now())
+	b.SetControlClientStatus(b.cc, controlclient.Status{NetMap: nm, LoggedIn: true})
+	selected := b.Prefs().ExitNodeID()
+	if selected != exitNode2.StableID() && selected != exitNode3.StableID() {
+		t.Fatalf("after netmap: ExitNodeID=%q; want one of the exit nodes", selected)
+	}
+	removed, remaining := exitNode2, exitNode3
+	if selected == exitNode3.StableID() {
+		removed, remaining = exitNode3, exitNode2
+	}
+
+	// Removing the other exit node leaves the selection alone.
+	if !b.UpdateNetmapDelta([]netmap.NodeMutation{netmap.MakeNodeMutationRemove(remaining.ID())}) {
+		t.Fatal("UpdateNetmapDelta returned false")
+	}
+	if got := b.Prefs().ExitNodeID(); got != selected {
+		t.Fatalf("after removing the other exit node: ExitNodeID=%q; want %q", got, selected)
+	}
+	if !b.UpdateNetmapDelta([]netmap.NodeMutation{netmap.NodeMutationUpsert{Node: remaining}}) {
+		t.Fatal("UpdateNetmapDelta returned false")
+	}
+
+	// Removing the selected exit node switches to the remaining one.
+	if !b.UpdateNetmapDelta([]netmap.NodeMutation{netmap.MakeNodeMutationRemove(removed.ID())}) {
+		t.Fatal("UpdateNetmapDelta returned false")
+	}
+	if got := b.Prefs().ExitNodeID(); got != remaining.StableID() {
+		t.Errorf("after removing the selected exit node: ExitNodeID=%q; want %q", got, remaining.StableID())
+	}
+	if got := b.hostinfo.ExitNodeID; got != remaining.StableID() {
+		t.Errorf("after removing the selected exit node: hostinfo.ExitNodeID = %q, want %q", got, remaining.StableID())
+	}
+}
+
+// TestAutoExitNodeReselectedOnDeltaUpsertOffline checks that an auto exit
+// node is reselected when an upsert of the selected exit node marks it
+// offline.
+func TestAutoExitNodeReselectedOnDeltaUpsertOffline(t *testing.T) {
+	self := makePeer(1, withName("self"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.1/32")))
+	exitNode2 := makeExitNode(2, withName("exit2"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.2/32")))
+	exitNode3 := makeExitNode(3, withName("exit3"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.3/32")))
+
+	b := newTestLocalBackend(t)
+	b.ForTest().SetPrefs(&ipn.Prefs{
+		ControlURL:   "https://localhost:1/",
+		AutoExitNode: ipn.AnyExitNode,
+	})
+
+	nm := buildNetmapWithPeers(self, exitNode2, exitNode3)
+	b.MagicConn().AddNetcheckReportForTest(nm.DERPMap, &netcheck.Report{
+		RegionLatency: map[tailcfg.DERPRegionID]time.Duration{1: 5 * time.Millisecond},
+		PreferredDERP: 1,
+	}, time.Now())
+	b.SetControlClientStatus(b.cc, controlclient.Status{NetMap: nm, LoggedIn: true})
+	selected := b.Prefs().ExitNodeID()
+	if selected != exitNode2.StableID() && selected != exitNode3.StableID() {
+		t.Fatalf("after netmap: ExitNodeID=%q; want one of the exit nodes", selected)
+	}
+	selectedNode, other := exitNode2, exitNode3
+	if selected == exitNode3.StableID() {
+		selectedNode, other = exitNode3, exitNode2
+	}
+
+	// An upsert of the other exit node leaves the selection alone.
+	if !b.UpdateNetmapDelta([]netmap.NodeMutation{netmap.NodeMutationUpsert{Node: other}}) {
+		t.Fatal("UpdateNetmapDelta returned false")
+	}
+	if got := b.Prefs().ExitNodeID(); got != selected {
+		t.Fatalf("after upsert of the other exit node: ExitNodeID=%q; want %q", got, selected)
+	}
+
+	// An upsert that marks the selected exit node offline switches away from it.
+	offline := selectedNode.AsStruct()
+	offline.Online = new(false)
+	if !b.UpdateNetmapDelta([]netmap.NodeMutation{netmap.NodeMutationUpsert{Node: offline.View()}}) {
+		t.Fatal("UpdateNetmapDelta returned false")
+	}
+	if got := b.Prefs().ExitNodeID(); got != other.StableID() {
+		t.Errorf("after upsert marking the selected exit node offline: ExitNodeID=%q; want %q", got, other.StableID())
+	}
+}
+
 // sendFullNetmap delivers a full netmap from control, as after a
 // MapResponse that can't be applied as a delta or on a new map session.
 func sendFullNetmap(b *LocalBackend, peers ...tailcfg.NodeView) {
