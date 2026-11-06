@@ -1,0 +1,80 @@
+/* SPDX-License-Identifier: ((GPL-2.0 WITH Linux-syscall-note) OR BSD-3-Clause) */
+/* Do not edit directly, auto-generated from: */
+/*	Documentation/netlink/specs/wireguard.yaml */
+/* YNL-GEN uapi header */
+/* To regenerate run: tools/net/ynl/ynl-regen.sh */
+
+#ifndef _UAPI_LINUX_TSWG_H
+#define _UAPI_LINUX_TSWG_H
+
+#define WG_GENL_NAME	"tswg"
+#define WG_GENL_VERSION	1
+
+#define WG_KEY_LEN	32
+
+enum wgdevice_flag {
+	WGDEVICE_F_REPLACE_PEERS = 1,
+};
+
+enum wgpeer_flag {
+	WGPEER_F_REMOVE_ME = 1,
+	WGPEER_F_REPLACE_ALLOWEDIPS = 2,
+	WGPEER_F_UPDATE_ONLY = 4,
+};
+
+enum wgallowedip_flag {
+	WGALLOWEDIP_F_REMOVE_ME = 1,
+};
+
+enum wgdevice_attribute {
+	WGDEVICE_A_UNSPEC,
+	WGDEVICE_A_IFINDEX,
+	WGDEVICE_A_IFNAME,
+	WGDEVICE_A_PRIVATE_KEY,
+	WGDEVICE_A_PUBLIC_KEY,
+	WGDEVICE_A_FLAGS,
+	WGDEVICE_A_LISTEN_PORT,
+	WGDEVICE_A_FWMARK,
+	WGDEVICE_A_PEERS,
+
+	__WGDEVICE_A_LAST
+};
+#define WGDEVICE_A_MAX (__WGDEVICE_A_LAST - 1)
+
+enum wgpeer_attribute {
+	WGPEER_A_UNSPEC,
+	WGPEER_A_PUBLIC_KEY,
+	WGPEER_A_PRESHARED_KEY,
+	WGPEER_A_FLAGS,
+	WGPEER_A_ENDPOINT,
+	WGPEER_A_PERSISTENT_KEEPALIVE_INTERVAL,
+	WGPEER_A_LAST_HANDSHAKE_TIME,
+	WGPEER_A_RX_BYTES,
+	WGPEER_A_TX_BYTES,
+	WGPEER_A_ALLOWEDIPS,
+	WGPEER_A_PROTOCOL_VERSION,
+
+	__WGPEER_A_LAST
+};
+#define WGPEER_A_MAX (__WGPEER_A_LAST - 1)
+
+enum wgallowedip_attribute {
+	WGALLOWEDIP_A_UNSPEC,
+	WGALLOWEDIP_A_FAMILY,
+	WGALLOWEDIP_A_IPADDR,
+	WGALLOWEDIP_A_CIDR_MASK,
+	WGALLOWEDIP_A_FLAGS,
+
+	__WGALLOWEDIP_A_LAST
+};
+#define WGALLOWEDIP_A_MAX (__WGALLOWEDIP_A_LAST - 1)
+
+enum wg_cmd {
+	WG_CMD_GET_DEVICE,
+	WG_CMD_SET_DEVICE,
+
+	__WG_CMD_MAX
+};
+#define WG_CMD_MAX (__WG_CMD_MAX - 1)
+
+#endif /* _UAPI_LINUX_TSWG_H */

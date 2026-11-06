@@ -3,6 +3,7 @@
 *.mod
 *.mod.c
 *.cmd
+*.o.d
 modules.order
 Module.symvers
 /out/
