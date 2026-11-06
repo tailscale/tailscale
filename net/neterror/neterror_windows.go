@@ -18,6 +18,11 @@ func IsUDPReadFeedback(err error) bool {
 	return errors.Is(err, windows.WSAEHOSTUNREACH) || errors.Is(err, windows.WSAENETUNREACH)
 }
 
+// IsUDPReadUnknown reports false on windows.
+func IsUDPReadUnknown(err error) bool {
+	return false
+}
+
 // IsClosedPipeError reports whether err resulted from reading or writing to a closed or broken pipe.
 func IsClosedPipeError(err error) bool {
 	return errors.Is(err, windows.ERROR_NO_DATA) ||
