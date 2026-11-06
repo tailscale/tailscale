@@ -237,6 +237,8 @@ static const struct net_device_ops netdev_ops = {
 	.ndo_open		= wg_open,
 	.ndo_stop		= wg_stop,
 	.ndo_start_xmit		= wg_xmit,
+	/* TSWG_COMPAT: older kernels don't fold tstats in dev_get_stats(). */
+	.ndo_get_stats64	= dev_get_tstats64,
 };
 
 static void wg_destruct(struct net_device *dev)
@@ -289,7 +291,11 @@ static void wg_setup(struct net_device *dev)
 	dev->type = ARPHRD_NONE;
 	dev->flags = IFF_POINTOPOINT | IFF_NOARP;
 	dev->priv_flags |= IFF_NO_QUEUE;
+#ifdef HAVE_NETDEV_LLTX /* TSWG_COMPAT */
 	dev->lltx = true;
+#else
+	dev->features |= NETIF_F_LLTX;
+#endif
 	dev->features |= WG_NETDEV_FEATURES;
 	dev->hw_features |= WG_NETDEV_FEATURES;
 	dev->hw_enc_features |= WG_NETDEV_FEATURES;
@@ -404,6 +410,18 @@ err_free_peer_hashtable:
 	return ret;
 }
 
+#ifndef HAVE_RTNL_NEWLINK_PARAMS /* TSWG_COMPAT */
+static int wg_newlink_compat(struct net *src_net, struct net_device *dev,
+			     struct nlattr *tb[], struct nlattr *data[],
+			     struct netlink_ext_ack *extack)
+{
+	struct rtnl_newlink_params params = { .src_net = src_net };
+
+	return wg_newlink(dev, &params, extack);
+}
+#define wg_newlink wg_newlink_compat
+#endif
+
 static struct rtnl_link_ops link_ops __read_mostly = {
 	.kind			= KBUILD_MODNAME,
 	.priv_size		= sizeof(struct wg_device),
@@ -430,9 +448,22 @@ static void __net_exit wg_netns_exit_rtnl(struct net *net, struct list_head *dev
 	}
 }
 
+#ifdef HAVE_PERNET_EXIT_RTNL /* TSWG_COMPAT */
 static struct pernet_operations pernet_ops __read_mostly = {
 	.exit_rtnl = wg_netns_exit_rtnl
 };
+#else
+static void wg_netns_pre_exit(struct net *net)
+{
+	rtnl_lock();
+	wg_netns_exit_rtnl(net, NULL);
+	rtnl_unlock();
+}
+
+static struct pernet_operations pernet_ops __read_mostly = {
+	.pre_exit = wg_netns_pre_exit
+};
+#endif
 
 int __init wg_device_init(void)
 {
