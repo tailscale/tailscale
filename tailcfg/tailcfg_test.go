@@ -15,6 +15,7 @@ import (
 
 	"tailscale.com/ipn/ipnstate"
 	. "tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tstest/deptest"
 	"tailscale.com/types/key"
@@ -788,6 +789,21 @@ var nodeIsRouterCases = []struct {
 		},
 		want: true,
 	},
+	{
+		name: "conn25-connector",
+		node: Node{
+			Addresses: []netip.Prefix{
+				netip.MustParsePrefix("100.64.0.1/32"),
+			},
+			AllowedIPs: []netip.Prefix{
+				netip.MustParsePrefix("100.64.0.1/32"),
+			},
+			CapMap: NodeCapMap{
+				nodecap.Conn25Connector: nil,
+			},
+		},
+		want: true,
+	},
 }
 
 func TestNodeIsRouter(t *testing.T) {
@@ -824,6 +840,12 @@ func peerStatusFromNode(n NodeView) *ipnstate.PeerStatus {
 		}
 	}
 	ps.AllowedIPs = new(n.AllowedIPs())
+	if cm := n.CapMap(); cm.Len() > 0 {
+		ps.CapMap = make(NodeCapMap, cm.Len())
+		for k, v := range cm.All() {
+			ps.CapMap[k] = v.AsSlice()
+		}
+	}
 	return ps
 }
 
