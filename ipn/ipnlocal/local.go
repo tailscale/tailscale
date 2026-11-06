@@ -215,6 +215,10 @@ type watchSession struct {
 	// hiddenNetworkDevices is the parsed GUI visibility policy from the
 	// most recent effective policy snapshot for this session.
 	hiddenNetworkDevices hiddenNetworkDevices
+
+	// suspended is whether this session fell behind and is waiting for
+	// [LocalBackend.ResumeWatchNotifications]. See [ipn.NotifySuspendWhenBehind].
+	suspended bool
 }
 
 var (
@@ -2496,6 +2500,9 @@ func (b *LocalBackend) sysPolicyChangedForSession(sess *watchSession) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	if sess.suspended {
+		return
+	}
 	snapshot, err := b.polc.GetPolicySnapshot(sess.policyUID)
 	if err != nil || snapshot == nil {
 		return
@@ -3901,9 +3908,9 @@ func applyConfigToHostinfo(hi *tailcfg.Hostinfo, c *conffile.Config) {
 //
 // Failure to consume many notifications in a row will result in one final
 // notification with ErrMessage set, followed by the watch closing, unless mask
-// includes [ipn.NotifyInProcessNoDisconnect]. Watchers using
-// NotifyInProcessNoDisconnect must not call back into LocalBackend from fn or
-// wait on work that might call back into LocalBackend.
+// includes [ipn.NotifyInProcessNoDisconnect] or [ipn.NotifySuspendWhenBehind].
+// Watchers using NotifyInProcessNoDisconnect must not call back into
+// LocalBackend from fn or wait on work that might call back into LocalBackend.
 func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWatchOpt, onWatchAdded func(), fn func(roNotify *ipn.Notify) (keepGoing bool)) {
 	b.WatchNotificationsAs(ctx, nil, mask, onWatchAdded, fn)
 }
@@ -3928,25 +3935,7 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 		fn = appendHealthActions(fn)
 	}
 
-	var ini *ipn.Notify
-
-	// Build the engine half of the InitialStatus before taking b.mu, since
-	// b.e.UpdateStatus has its own locking and shouldn't be called under
-	// b.mu (lock-ordering: outer-to-inner is b.mu -> engine, not the other
-	// way). The backend half is then populated under b.mu below, atomically
-	// with watcher registration so no events arrive on the watcher's
-	// channel before InitialStatus is delivered.
-	var statusSB *ipnstate.StatusBuilder
-	if mask&ipn.NotifyInitialStatus != 0 {
-		// The initial status is sized to the subscription: building the
-		// per-peer status entries is O(peers), so only do it for watchers
-		// that subscribed to peer deltas and thus need a peer baseline to
-		// apply them to. Self-only watchers get Status.Self and the
-		// scalar fields.
-		wantPeers := mask&(ipn.NotifyPeerChanges|ipn.NotifyPeerPatches) != 0
-		statusSB = &ipnstate.StatusBuilder{WantPeers: wantPeers}
-		b.e.UpdateStatus(statusSB)
-	}
+	sb := b.initialStatusBuilder(mask)
 	if mask&ipn.NotifyPeerWireGuardState != 0 {
 		_ = b.peerWGStateQueue.Wait(ctx)
 	}
@@ -3957,86 +3946,34 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	deadlockDone := b.CheckDeadlocks()
 	b.mu.Lock()
 
-	var policyUID string
-	var hiddenNetworkDevices hiddenNetworkDevices
-	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs |
-		ipn.NotifyInitialStatus |
-		ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode |
-		ipn.NotifyInitialClientVersion | ipn.NotifySysPolicyChanges | ipn.NotifyPeerWireGuardState
-	if mask&initialBits != 0 {
-		ini = &ipn.Notify{Version: version.Long()}
-		if mask&ipn.NotifyInitialState != 0 {
-			ini.SessionID = sessionID
-			ini.State = new(b.state)
-			if b.state == ipn.NeedsLogin && b.authURL != "" {
-				ini.BrowseToURL = new(b.authURL)
-			}
-		}
-		if mask&ipn.NotifyInitialPrefs != 0 {
-			ini.Prefs = new(b.sanitizedPrefsLocked())
-		}
-		if statusSB != nil {
-			b.updateStatusLocked(statusSB)
-			ini.InitialStatus = statusSB.Status()
-		}
-		if mask&ipn.NotifyInitialDriveShares != 0 && b.DriveSharingEnabled() {
-			ini.DriveShares = b.pm.prefs.DriveShares()
-		}
-		if mask&ipn.NotifyInitialHealthState != 0 {
-			ini.Health = b.HealthTracker().CurrentState()
-		}
-		if mask&ipn.NotifyInitialSuggestedExitNode != 0 {
-			if en, err := b.suggestExitNodeLocked(); err == nil {
-				ini.SuggestedExitNode = &en.ID
-			}
-		}
-		if mask&ipn.NotifyInitialClientVersion != 0 {
-			if prefs := b.pm.CurrentPrefs(); prefs.Valid() && prefs.AutoUpdate().Check {
-				ini.ClientVersion = b.lastClientVersion
-			}
-		}
-		if mask&ipn.NotifySysPolicyChanges != 0 {
-			if actor != nil {
-				policyUID = string(actor.UserID())
-			}
-			var err error
-			ini.Policy, err = b.polc.GetPolicySnapshot(policyUID)
-			if err != nil {
-				b.logf("syspolicy: GetPolicySnapshot(%q): %v", policyUID, err)
-			} else if ini.Policy != nil {
-				hiddenNetworkDevices = hiddenNetworkDevicesFromPolicy(ini.Policy)
-				ini.NodeGUIVisibility = b.nodeGUIVisibilityLocked(hiddenNetworkDevices)
-			}
-		}
-	}
-
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	session := &watchSession{
-		ch:                   ch,
-		ctx:                  ctx,
-		owner:                actor,
-		sessionID:            sessionID,
-		cancel:               cancel,
-		mask:                 mask,
-		policyUID:            policyUID,
-		hiddenNetworkDevices: hiddenNetworkDevices,
+		ch:        ch,
+		ctx:       ctx,
+		owner:     actor,
+		sessionID: sessionID,
+		cancel:    cancel,
+		mask:      mask,
 	}
+	if mask&ipn.NotifySysPolicyChanges != 0 && actor != nil {
+		session.policyUID = string(actor.UserID())
+	}
+	// Build the initial notification under the same lock as the
+	// registration so nothing can slip onto the channel ahead of it.
+	ini := b.buildInitialNotifyLocked(sb, session)
 	mak.Set(&b.notifyWatchers, sessionID, session)
-	if mask&ipn.NotifyPeerWireGuardState != 0 {
-		ini.PeerState = maps.Clone(b.peerWGState)
-	}
 	b.mu.Unlock()
 	deadlockDone()
 
 	if mask&ipn.NotifySysPolicyChanges != 0 {
-		if unreg, err := b.polc.RegisterChangeCallback(policyUID, func(_ policyclient.PolicyChange) {
+		if unreg, err := b.polc.RegisterChangeCallback(session.policyUID, func(_ policyclient.PolicyChange) {
 			b.sysPolicyChangedForSession(session)
 		}); err == nil {
 			defer unreg()
 		} else {
-			b.logf("syspolicy: RegisterChangeCallback(%q): %v", policyUID, err)
+			b.logf("syspolicy: RegisterChangeCallback(%q): %v", session.policyUID, err)
 		}
 	}
 
@@ -4087,6 +4024,127 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 			}
 		}
 	}
+}
+
+// initialStatusBuilder returns the engine half of the initial status for a
+// watcher with the given mask, or nil if the mask doesn't ask for one.
+//
+// It must be called without b.mu held: b.e.UpdateStatus takes the engine's
+// locks, and the lock order is b.mu before the engine.
+// [LocalBackend.buildInitialNotifyLocked] fills in the backend half.
+func (b *LocalBackend) initialStatusBuilder(mask ipn.NotifyWatchOpt) *ipnstate.StatusBuilder {
+	if mask&ipn.NotifyInitialStatus == 0 {
+		return nil
+	}
+	// The initial status is sized to the subscription: building the
+	// per-peer status entries is O(peers), so only do it for watchers
+	// that subscribed to peer deltas and thus need a peer baseline to
+	// apply them to. Self-only watchers get Status.Self and the
+	// scalar fields.
+	wantPeers := mask&(ipn.NotifyPeerChanges|ipn.NotifyPeerPatches) != 0
+	sb := &ipnstate.StatusBuilder{WantPeers: wantPeers}
+	b.e.UpdateStatus(sb)
+	return sb
+}
+
+// buildInitialNotifyLocked returns the first [ipn.Notify] for sess, with
+// whatever current state its mask asks for, or nil if it asks for none.
+// sb comes from [LocalBackend.initialStatusBuilder] and may be nil; if it is
+// not, it is updated with the backend half of the status, and the result
+// goes into [ipn.Notify.InitialStatus].
+//
+// b.mu must be held.
+func (b *LocalBackend) buildInitialNotifyLocked(sb *ipnstate.StatusBuilder, sess *watchSession) *ipn.Notify {
+	mask := sess.mask
+	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs |
+		ipn.NotifyInitialStatus |
+		ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode |
+		ipn.NotifyInitialClientVersion | ipn.NotifySysPolicyChanges | ipn.NotifyPeerWireGuardState
+	if mask&initialBits == 0 {
+		return nil
+	}
+	ini := &ipn.Notify{Version: version.Long()}
+	if mask&ipn.NotifyInitialState != 0 {
+		ini.SessionID = sess.sessionID
+		ini.State = new(b.state)
+		if b.state == ipn.NeedsLogin && b.authURL != "" {
+			ini.BrowseToURL = new(b.authURL)
+		}
+	}
+	if mask&ipn.NotifyInitialPrefs != 0 {
+		ini.Prefs = new(b.sanitizedPrefsLocked())
+	}
+	if sb != nil {
+		b.updateStatusLocked(sb)
+		ini.InitialStatus = sb.Status()
+	}
+	if mask&ipn.NotifyInitialDriveShares != 0 && b.DriveSharingEnabled() {
+		ini.DriveShares = b.pm.prefs.DriveShares()
+	}
+	if mask&ipn.NotifyInitialHealthState != 0 {
+		ini.Health = b.HealthTracker().CurrentState()
+	}
+	if mask&ipn.NotifyInitialSuggestedExitNode != 0 {
+		if en, err := b.suggestExitNodeLocked(); err == nil {
+			ini.SuggestedExitNode = &en.ID
+		}
+	}
+	if mask&ipn.NotifyInitialClientVersion != 0 {
+		if prefs := b.pm.CurrentPrefs(); prefs.Valid() && prefs.AutoUpdate().Check {
+			ini.ClientVersion = b.lastClientVersion
+		}
+	}
+	if mask&ipn.NotifySysPolicyChanges != 0 {
+		var err error
+		ini.Policy, err = b.polc.GetPolicySnapshot(sess.policyUID)
+		if err != nil {
+			b.logf("syspolicy: GetPolicySnapshot(%q): %v", sess.policyUID, err)
+		} else if ini.Policy != nil {
+			sess.hiddenNetworkDevices = hiddenNetworkDevicesFromPolicy(ini.Policy)
+			ini.NodeGUIVisibility = b.nodeGUIVisibilityLocked(sess.hiddenNetworkDevices)
+		}
+	}
+	if mask&ipn.NotifyPeerWireGuardState != 0 {
+		ini.PeerState = maps.Clone(b.peerWGState)
+	}
+	return ini
+}
+
+// ResumeWatchNotifications resumes the watch session with the given
+// [ipn.Notify.SessionID] after it was suspended for falling behind (see
+// [ipn.NotifySuspendWhenBehind]). Whatever is still queued for the session
+// is dropped and replaced with the initial [ipn.Notify], as if the watcher
+// had just connected; new notifications follow from there.
+//
+// It returns an error if the session doesn't exist, e.g. because the watch
+// has since closed.
+func (b *LocalBackend) ResumeWatchNotifications(ctx context.Context, sessionID string) error {
+	b.mu.Lock()
+	sess, ok := b.notifyWatchers[sessionID]
+	b.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("no IPN bus watch session %q", sessionID)
+	}
+	sb := b.initialStatusBuilder(sess.mask)
+	if sess.mask&ipn.NotifyPeerWireGuardState != 0 {
+		_ = b.peerWGStateQueue.Wait(ctx)
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.notifyWatchers[sessionID] != sess {
+		return fmt.Errorf("IPN bus watch session %q closed", sessionID)
+	}
+	// The client starts over from the initial notification, so the
+	// per-session dedup state starts over too.
+	sess.lastSentUserProfile = nil
+	sess.lastSentSelf = tailcfg.NodeView{}
+	sess.suspended = false
+	drainWatchSessionLocked(sess)
+	if ini := b.buildInitialNotifyLocked(sb, sess); ini != nil {
+		sess.ch <- ini
+	}
+	return nil
 }
 
 // appendHealthActions returns an IPN listener func that wraps the supplied IPN
@@ -4274,21 +4332,44 @@ func (b *LocalBackend) sendToLocked(n ipn.Notify, recipient notificationTarget) 
 	}
 
 	for _, sess := range b.notifyWatchers {
-		if !recipient.match(sess.owner) {
+		if sess.suspended || !recipient.match(sess.owner) {
 			continue
 		}
 		nForSess := b.notifyForSessionLocked(sess, &n)
 		select {
 		case sess.ch <- nForSess:
 		default:
-			if sess.mask&ipn.NotifyInProcessNoDisconnect != 0 {
+			switch {
+			case sess.mask&ipn.NotifyInProcessNoDisconnect != 0:
+				metricWatchIPNBusBehindBlocked.Add(1)
 				select {
 				case sess.ch <- nForSess:
 				case <-sess.ctx.Done():
 				}
-				continue
+			case sess.mask&ipn.NotifySuspendWhenBehind != 0:
+				metricWatchIPNBusBehindSuspended.Add(1)
+				b.logf("IPN bus watcher %s fell behind; suspending it", sess.sessionID)
+				b.suspendLaggingWatchSessionLocked(sess)
+			default:
+				metricWatchIPNBusBehindClosed.Add(1)
+				b.logf("IPN bus watcher %s fell behind; closing the watch", sess.sessionID)
+				b.closeLaggingWatchSessionLocked(sess)
 			}
-			b.closeLaggingWatchSessionLocked(sess)
+		}
+	}
+}
+
+// drainWatchSessionLocked drops everything queued for sess. Nothing else
+// can enqueue while b.mu is held, so the caller can then enqueue one
+// notification without blocking.
+//
+// b.mu must be held.
+func drainWatchSessionLocked(sess *watchSession) {
+	for {
+		select {
+		case <-sess.ch:
+		default:
+			return
 		}
 	}
 }
@@ -4299,22 +4380,27 @@ func (b *LocalBackend) sendToLocked(n ipn.Notify, recipient notificationTarget) 
 // b.mu must be held.
 func (b *LocalBackend) closeLaggingWatchSessionLocked(sess *watchSession) {
 	delete(b.notifyWatchers, sess.sessionID)
+	drainWatchSessionLocked(sess)
+	msg := watchIPNBusFellBehindMessage
+	sess.ch <- &ipn.Notify{
+		Version:    version.Long(),
+		ErrMessage: &msg,
+	}
+	close(sess.ch)
+}
 
-	// The session already fell behind, so the queued delta stream is not
-	// trustworthy. Drop queued messages and replace them with a terminal
-	// notification.
-	for {
-		select {
-		case <-sess.ch:
-		default:
-			msg := watchIPNBusFellBehindMessage
-			sess.ch <- &ipn.Notify{
-				Version:    version.Long(),
-				ErrMessage: &msg,
-			}
-			close(sess.ch)
-			return
-		}
+// suspendLaggingWatchSessionLocked stops sending to sess, which fell behind
+// and asked for [ipn.NotifySuspendWhenBehind], and tells it so with a single
+// [ipn.Notify] with Suspended set. The session stays registered and the
+// watch stays open until [LocalBackend.ResumeWatchNotifications].
+//
+// b.mu must be held.
+func (b *LocalBackend) suspendLaggingWatchSessionLocked(sess *watchSession) {
+	sess.suspended = true
+	drainWatchSessionLocked(sess)
+	sess.ch <- &ipn.Notify{
+		Version:   version.Long(),
+		Suspended: true,
 	}
 }
 
@@ -9464,6 +9550,13 @@ var (
 	metricPeerWGStateHandshake   = clientmetric.NewGauge("localbackend_peer_wireguard_state_handshake")
 	metricPeerWGStateEstablished = clientmetric.NewGauge("localbackend_peer_wireguard_state_established")
 	metricPeerWGStateExpired     = clientmetric.NewGauge("localbackend_peer_wireguard_state_expired")
+
+	// Counters for IPN bus watchers that fell behind, by what happened to
+	// them: the producer blocked until they caught up, they were suspended,
+	// or the watch was closed.
+	metricWatchIPNBusBehindBlocked   = clientmetric.NewCounter("localbackend_watch_ipn_bus_behind_blocked")
+	metricWatchIPNBusBehindSuspended = clientmetric.NewCounter("localbackend_watch_ipn_bus_behind_suspended")
+	metricWatchIPNBusBehindClosed    = clientmetric.NewCounter("localbackend_watch_ipn_bus_behind_closed")
 
 	// Counters for the controlclient's delta-update fast path: each
 	// counts a destination-side call into [LocalBackend] from
