@@ -14,14 +14,6 @@ if [ $# -ne 2 ]; then
 	echo "usage: $0 KERNEL_RELEASE OUTDIR" >&2
 	exit 2
 fi
-kver=$1
-out=$2
-top=$(cd "$(dirname "$0")/.." && pwd)
-
-kdir=$("$top/scripts/ubuntu-headers.sh" "$kver")
-
-mkdir -p "$out"
-rm -rf "$out/src"
-cp -r "$top/src" "$out/src"
-make -C "$top" KDIR="$kdir" SRC="$out/src" >&2
-echo "$out/src/tswg.ko"
+scripts=$(dirname "$0")
+kdir=$("$scripts/ubuntu-headers.sh" "$1")
+exec "$scripts/build.sh" "$kdir" "$2"
