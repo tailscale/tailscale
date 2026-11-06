@@ -1540,6 +1540,17 @@ func (lc *Client) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (*IP
 	}, nil
 }
 
+// ResumeIPNBus resumes a watch session that tailscaled suspended because the
+// client fell behind. sessionID is the [ipn.Notify.SessionID] of that watch.
+// See [ipn.NotifySuspendWhenBehind].
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
+func (lc *Client) ResumeIPNBus(ctx context.Context, sessionID string) error {
+	_, err := lc.send(ctx, "POST", "/localapi/v0/resume-ipn-bus?session="+url.QueryEscape(sessionID), 204, nil)
+	return err
+}
+
 // CheckUpdate returns a [*tailcfg.ClientVersion] indicating whether or not an update is available
 // to be installed via the LocalAPI. In case the LocalAPI can't install updates, it returns a
 // ClientVersion that says that we are up to date.

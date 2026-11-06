@@ -256,9 +256,9 @@ type NotifyWatcher interface {
 	//
 	// Failure to consume many notifications in a row will result in one final
 	// notification with ErrMessage set, followed by the watch closing, unless mask
-	// includes ipn.NotifyInProcessNoDisconnect. Watchers using
-	// NotifyInProcessNoDisconnect must not call back into LocalBackend from fn or
-	// wait on work that might call back into LocalBackend.
+	// includes ipn.NotifyInProcessNoDisconnect or ipn.NotifySuspendWhenBehind.
+	// Watchers using NotifyInProcessNoDisconnect must not call back into
+	// LocalBackend from fn or wait on work that might call back into LocalBackend.
 	WatchNotifications(ctx context.Context, mask ipn.NotifyWatchOpt, onWatchAdded func(), fn func(roNotify *ipn.Notify) (keepGoing bool))
 }
 
