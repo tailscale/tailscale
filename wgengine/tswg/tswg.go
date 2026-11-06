@@ -51,6 +51,13 @@ type PeerConfig struct {
 	// AllowedIPs rather than adding to them.
 	ReplaceAllowedIPs bool
 	AllowedIPs        []netip.Prefix
+
+	// NoRoam, if non-nil, sets whether the kernel is prevented from
+	// updating the peer's endpoint from incoming packets once it has one.
+	// tailscaled sets it, since disco picks the path: otherwise a packet
+	// arriving via DERP would steal the endpoint from a good direct path.
+	// The flag is applied before Endpoint, so setting both is one step.
+	NoRoam *bool
 }
 
 // Device is the current state of a tswg device.
@@ -78,4 +85,5 @@ type Peer struct {
 	TxBytes             uint64
 	AllowedIPs          []netip.Prefix
 	ProtocolVersion     int
+	NoRoam              bool // see PeerConfig.NoRoam
 }

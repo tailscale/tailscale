@@ -26,6 +26,7 @@ func init() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /tswg/load", tswgLoad)
 	mux.HandleFunc("POST /tswg/up", tswgUp)
+	mux.HandleFunc("POST /tswg/peer", tswgPeer)
 	mux.HandleFunc("GET /tswg/show", tswgShow)
 	mux.HandleFunc("GET /tswg/dmesg", tswgDmesg)
 	mux.HandleFunc("POST /tswg/sock-send", tswgSockSend)
@@ -149,6 +150,46 @@ func tswgUpErr(r *http.Request) error {
 		}
 	}
 	return netlink.LinkSetUp(link)
+}
+
+// tswgPeer updates an existing peer of a tswg device, as tailscaled's disco
+// path selection will.
+//
+// Query parameters:
+//   - dev: device name
+//   - peer: peer public key (nodekey:...)
+//   - endpoint: if set, the new endpoint IP:port
+//   - no-roam: if set, "1" or "0" to set or clear the no-roam flag
+func tswgPeer(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	pc := tswg.PeerConfig{UpdateOnly: true}
+	if err := pc.PublicKey.UnmarshalText([]byte(q.Get("peer"))); err != nil {
+		http.Error(w, "peer: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if s := q.Get("endpoint"); s != "" {
+		ep, err := netip.ParseAddrPort(s)
+		if err != nil {
+			http.Error(w, "endpoint: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		pc.Endpoint = ep
+	}
+	if s := q.Get("no-roam"); s != "" {
+		v := s == "1"
+		pc.NoRoam = &v
+	}
+	c, err := tswg.Open()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer c.Close()
+	if err := c.ConfigureDevice(q.Get("dev"), tswg.Config{Peers: []tswg.PeerConfig{pc}}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	io.WriteString(w, "OK\n")
 }
 
 // tswgUserSock is a UDP socket that tta shares with a tswg device, standing

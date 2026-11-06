@@ -67,6 +67,13 @@ const (
 
 	tswgDeviceFlagUserSock4 = 1
 	tswgDeviceFlagUserSock6 = 2
+
+	// tswg additions, nested in peerATSWG.
+	peerATSWG = 64
+
+	tswgPeerAFlags = 1
+
+	tswgPeerFlagNoRoam = 1
 )
 
 // Client is a connection to the tswg generic netlink family.
@@ -161,6 +168,16 @@ func encodePeer(ae *netlink.AttributeEncoder, p PeerConfig) error {
 	}
 	if flags != 0 {
 		ae.Uint32(peerAFlags, flags)
+	}
+	if p.NoRoam != nil {
+		ae.Nested(peerATSWG, func(nae *netlink.AttributeEncoder) error {
+			var flags uint32
+			if *p.NoRoam {
+				flags |= tswgPeerFlagNoRoam
+			}
+			nae.Uint32(tswgPeerAFlags, flags)
+			return nil
+		})
 	}
 	if p.Endpoint.IsValid() {
 		ae.Bytes(peerAEndpoint, encodeSockaddr(p.Endpoint))
@@ -343,6 +360,15 @@ func (p *Peer) decode(ad *netlink.AttributeDecoder) error {
 			p.TxBytes = ad.Uint64()
 		case peerAProtocolVersion:
 			p.ProtocolVersion = int(ad.Uint32())
+		case peerATSWG:
+			ad.Nested(func(nad *netlink.AttributeDecoder) error {
+				for nad.Next() {
+					if nad.Type() == tswgPeerAFlags {
+						p.NoRoam = nad.Uint32()&tswgPeerFlagNoRoam != 0
+					}
+				}
+				return nil
+			})
 		case peerAAllowedIPs:
 			ad.Nested(func(nad *netlink.AttributeDecoder) error {
 				for nad.Next() {
