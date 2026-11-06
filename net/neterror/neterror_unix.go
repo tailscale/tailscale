@@ -18,6 +18,12 @@ func IsUDPReadFeedback(err error) bool {
 	return errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH)
 }
 
+// IsTransientReadError reports whether err is a UDP read error that may
+// clear up if the socket is read again later.
+func IsTransientReadError(err error) bool {
+	return errors.Is(err, syscall.EADDRNOTAVAIL)
+}
+
 // Reports whether err resulted from reading or writing to a closed or broken pipe.
 func IsClosedPipeError(err error) bool {
 	// EPIPE/ENOTCONN are common errors when a send fails due to a closed
