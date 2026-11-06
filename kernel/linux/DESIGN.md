@@ -209,8 +209,14 @@ Decided 2026-11-06: the natlab gokrazy image is the primary test guest.
 
 * It boots a recent upstream kernel (7.2.8 today), from the
   `github.com/gokrazy/kernel.amd64` package pinned in tailscale.com's
-  go.mod, which gets bumped regularly. That keeps the fork honest against
-  new kernel APIs, which is where the fork's base is anyway.
+  go.mod. A gokrazy bot bumps that package to new kernel releases, and a
+  tailscale.com cron bot bumps the go.mod dependency, so the test guest
+  follows upstream kernels without anyone doing anything. That keeps the
+  fork honest against new kernel APIs, which is where the fork's base is
+  anyway.
+* Consequence: a gokrazy vmtest failure after a dependency bump most
+  likely means kernel API churn that needs a new compat probe and shim
+  (or an upstream WireGuard change worth importing), not a test flake.
 * gokrazy has no userspace tools (no modprobe, iproute2 or shell), just
   like the end state, where tailscaled drives the kernel entirely. So
   everything is done from Go: `tswg.LoadModule` calls init_module(2) on
