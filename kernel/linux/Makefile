@@ -7,7 +7,9 @@
 #   make TSWG_DEBUG=y         # enable DEBUG and the built-in selftests
 
 KDIR ?= /lib/modules/$(shell uname -r)/build
-SRC := $(CURDIR)/src
+# SRC may point at a copy of src/ so that builds for different kernels
+# don't share object files.
+SRC ?= $(CURDIR)/src
 AUTOCONF := $(SRC)/compat/generated/autoconf.h
 
 all: module
