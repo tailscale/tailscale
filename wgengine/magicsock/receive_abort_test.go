@@ -42,7 +42,7 @@ func (*scriptedPacketConn) LocalAddr() net.Addr              { return &net.UDPAd
 
 var _ nettype.PacketConn = (*scriptedPacketConn)(nil)
 
-func TestReceiveFuncReadFeedback(t *testing.T) {
+func TestReceiveFuncRetriesRecoverableErrors(t *testing.T) {
 	for _, tt := range []struct {
 		err      error
 		feedback bool
@@ -51,6 +51,8 @@ func TestReceiveFuncReadFeedback(t *testing.T) {
 		{syscall.ENETUNREACH, runtime.GOOS != "windows"},
 		{syscall.Errno(10065), runtime.GOOS == "windows"},
 		{syscall.Errno(10051), runtime.GOOS == "windows"},
+		{syscall.EADDRNOTAVAIL, runtime.GOOS != "windows"},
+		{syscall.Errno(10049), false}, // WSAEADDRNOTAVAIL
 		{syscall.EBADF, false},
 		{syscall.ENOTSOCK, false},
 		{syscall.ECONNRESET, false},

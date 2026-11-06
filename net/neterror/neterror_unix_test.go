@@ -44,3 +44,25 @@ func TestIsUDPReadFeedback(t *testing.T) {
 		}
 	}
 }
+
+func TestIsUDPReadErrorUnknown(t *testing.T) {
+	for _, tt := range []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{errors.New("unknown error"), false},
+		{syscall.EADDRNOTAVAIL, true},
+		{syscall.EHOSTUNREACH, false},
+		{syscall.ECONNRESET, false},
+		{syscall.EBADF, false},
+		{net.ErrClosed, false},
+	} {
+		wrapped := &net.OpError{Op: "read", Net: "udp4", Err: &os.SyscallError{
+			Syscall: "recvfrom", Err: tt.err,
+		}}
+		if got := IsUDPReadUnknown(wrapped); got != tt.want {
+			t.Errorf("IsUDPReadUnknown(wrapped %v) = %v, want %v", tt.err, got, tt.want)
+		}
+	}
+}

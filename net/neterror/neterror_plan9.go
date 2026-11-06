@@ -17,6 +17,11 @@ func IsUDPReadFeedback(err error) bool {
 	return false
 }
 
+// IsUDPReadUnknown always returns false on Plan 9.
+func IsUDPReadUnknown(err error) bool {
+	return false
+}
+
 // Reports whether err resulted from reading or writing to a closed or broken pipe.
 func IsClosedPipeError(err error) bool {
 	// Libraries may also return root errors like fs.ErrClosed/io.ErrClosedPipe
