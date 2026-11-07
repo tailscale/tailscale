@@ -45,7 +45,11 @@ RUN set -e && \
     TAILSCALED_PATH=$(pwd)/tailscaled ./tailssh.test -test.v -test.run TestLocalUnixForwarding && \
     TAILSCALED_PATH=$(pwd)/tailscaled ./tailssh.test -test.v -test.run TestReverseUnixForwarding && \
     TAILSCALED_PATH=$(pwd)/tailscaled ./tailssh.test -test.v -test.run TestUnixForwardingDenied && \
-    TAILSCALED_PATH=$(pwd)/tailscaled ./tailssh.test -test.v -test.run TestUnixForwardingPathRestriction
+    TAILSCALED_PATH=$(pwd)/tailscaled ./tailssh.test -test.v -test.run TestUnixForwardingPathRestriction && \
+    echo "Run every other integration test, skipping the ones already run above." && \
+    TAILSCALED_PATH=$(pwd)/tailscaled ./tailssh.test -test.v \
+        -test.run 'TestIntegration|TestOpenSSHExitCodes|TestLocalUnixForwardingHalfClose' \
+        -test.skip '^(TestIntegrationSFTP|TestIntegrationSCP|TestIntegrationSSH|TestIntegrationSSHNoLeakedPTY|TestIntegrationParamiko)$'
 
 # Run tests as non-root user testuser and make sure tests still pass.
 RUN set -e && \
@@ -53,7 +57,7 @@ RUN set -e && \
     chown testuser:groupone /tmp/tailscalessh.log && \
     export TAILSCALED_PATH=$(pwd)/tailscaled && \
     eval $(su -m testuser -c "ssh-agent -s") && \
-    su -m testuser -c "./tailssh.test -test.v -test.run 'TestSSHAgentForwarding|TestIntegration|TestDoDropPrivileges'" && \
+    su -m testuser -c "./tailssh.test -test.v -test.run 'TestSSHAgentForwarding|TestIntegration|TestOpenSSHExitCodes|TestLocalUnixForwardingHalfClose|TestDoDropPrivileges'" && \
     echo "Also, deny everyone access to the user's home directory and make sure non file-related tests still pass." && \
     mkdir -p /home/testuser && chown testuser:groupone /home/testuser && chmod 0000 /home/testuser && \
     SKIP_FILE_OPS=1 su -m testuser -c "./tailssh.test -test.v -test.run TestIntegrationSSH" && \
@@ -70,7 +74,7 @@ RUN if echo "$BASE" | grep -q "ubuntu:"; then \
     printf "#!/bin/bash\necho 'Enforcing'" > /usr/bin/getenforce && \
     chmod 755 /usr/bin/getenforce && \
     eval $(ssh-agent -s) && \
-    TAILSCALED_PATH=$(pwd)/tailscaled ./tailssh.test -test.v -test.run 'TestSSHAgentForwarding|TestIntegration' && \
+    TAILSCALED_PATH=$(pwd)/tailscaled ./tailssh.test -test.v -test.run 'TestSSHAgentForwarding|TestIntegration|TestOpenSSHExitCodes|TestLocalUnixForwardingHalfClose' && \
     mv /tmp/login_orig /usr/bin/login && \
     rm /usr/bin/getenforce \
     ; fi
@@ -92,4 +96,4 @@ RUN set -e && \
     chown root:root /tmp/tailscalessh.log && \
     rm $(which su) && \
     eval $(ssh-agent -s) && \
-    TAILSCALED_PATH=$(pwd)/tailscaled ./tailssh.test -test.v -test.run 'TestSSHAgentForwarding|TestIntegration|TestDoDropPrivileges'
+    TAILSCALED_PATH=$(pwd)/tailscaled ./tailssh.test -test.v -test.run 'TestSSHAgentForwarding|TestIntegration|TestOpenSSHExitCodes|TestLocalUnixForwardingHalfClose|TestDoDropPrivileges'

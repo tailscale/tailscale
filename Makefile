@@ -135,14 +135,19 @@ publishdevproxy: check-image-repo ## Build and publish k8s-proxy image to locati
 
 .PHONY: sshintegrationtest
 sshintegrationtest: ## Run the SSH integration tests in various Docker containers
-	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 ./tool/go test -tags integrationtest -c ./ssh/tailssh -o ssh/tailssh/testcontainers/tailssh.test && \
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 ./tool/go build -o ssh/tailssh/testcontainers/tailscaled ./cmd/tailscaled && \
-	echo "Testing on ubuntu:focal, ubuntu:jammy, ubuntu:noble, alpine:latest (in parallel)" && \
-	docker build --build-arg="BASE=ubuntu:focal" -t ssh-ubuntu-focal ssh/tailssh/testcontainers & \
-	docker build --build-arg="BASE=ubuntu:jammy" -t ssh-ubuntu-jammy ssh/tailssh/testcontainers & \
-	docker build --build-arg="BASE=ubuntu:noble" -t ssh-ubuntu-noble ssh/tailssh/testcontainers & \
-	docker build --build-arg="BASE=alpine:latest" -t ssh-alpine-latest ssh/tailssh/testcontainers & \
-	wait
+	@set -e; \
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 ./tool/go test -tags integrationtest -c ./ssh/tailssh -o ssh/tailssh/testcontainers/tailssh.test; \
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 ./tool/go build -o ssh/tailssh/testcontainers/tailscaled ./cmd/tailscaled; \
+	bases="ubuntu:focal ubuntu:jammy ubuntu:noble alpine:latest"; \
+	echo "Testing on $$bases (in parallel)"; \
+	failed=$$(mktemp); \
+	for base in $$bases; do \
+		{ docker build --progress=plain --build-arg="BASE=$$base" -t "ssh-$$(echo $$base | tr : -)" ssh/tailssh/testcontainers || echo $$base >>$$failed; } & \
+	done; \
+	wait; \
+	if [ -s $$failed ]; then echo "FAILED on:" $$(cat $$failed); rm -f $$failed; exit 1; fi; \
+	rm -f $$failed; \
+	echo "PASS on $$bases"
 
 .PHONY: generate
 generate: ## Generate code
