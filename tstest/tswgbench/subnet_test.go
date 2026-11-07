@@ -40,6 +40,8 @@ import (
 //	TSWG_SUBNET_PROFILE      modes whose router to profile during the last run
 //	                         (comma-separated), with TSWG_PROFILE_FOCUS as in
 //	                         TestLeanProfile
+//	TSWG_SUBNET_ROUTER_CMD   a shell command to run on the router after
+//	                         each setup, for experiments ($MODE is the mode)
 //	TSWG_COMPARE_RUNS        runs of each mode, interleaved (default 3)
 //	TSWG_BENCH_DUR           length of each run (default 10s)
 func TestLeanSubnetRouter(t *testing.T) {
@@ -112,7 +114,7 @@ func TestLeanSubnetRouter(t *testing.T) {
 					time.Sleep(dur / 4)
 					profErr = router.do("GET", "/profile?"+url.Values{
 						"dur":   {(dur / 2).String()},
-						"top":   {"30"},
+						"top":   {"80"},
 						"focus": {os.Getenv("TSWG_PROFILE_FOCUS")},
 					}.Encode(), &prof)
 				}()
@@ -250,6 +252,13 @@ func (s *subnetLab) setup(mode string) {
 	}
 	if err := s.router.do("POST", "/setup?"+rq.Encode(), nil); err != nil {
 		t.Fatalf("setting up router (%s): %v", mode, err)
+	}
+	if cmd := os.Getenv("TSWG_SUBNET_ROUTER_CMD"); cmd != "" {
+		if out, err := s.router.host.ssh("MODE="+mode+"; "+cmd, nil); err != nil {
+			t.Fatalf("TSWG_SUBNET_ROUTER_CMD: %v", err)
+		} else if out != "" {
+			t.Logf("router command: %s", strings.TrimSpace(out))
+		}
 	}
 	for i, c := range s.clients {
 		priv, _ := clientKeys[i].MarshalText()
