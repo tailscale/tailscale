@@ -466,7 +466,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 	closePool.add(e.magicConn)
 	if e.kdp != nil {
-		if err := e.kdp.start(e.magicConn); err != nil {
+		if err := e.kdp.start(e.magicConn, e.tundev); err != nil {
 			return nil, fmt.Errorf("wgengine: starting kernel data plane: %w", err)
 		}
 		closePool.add(e.kdp)
@@ -711,6 +711,13 @@ func (e *userspaceEngine) SetPeerConfigFunc(fn func(key.NodePublic) (config wgcf
 		panic("SetPeerConfigFunc: nil fn")
 	}
 	e.peerConfigFn.Store(&fn)
+	if e.kdp != nil {
+		// The kernel data plane reads fn itself. wireguard-go must never
+		// create peers in this mode, or it would handshake over magicsock
+		// with our keys and fight the kernel's sessions.
+		e.kdp.kickReconcile()
+		return
+	}
 	e.wgdev.SetPeerLookupFunc(wgcfg.NewPeerLookupFunc(e.wgdev.Bind(), e.logf, func(pubk device.NoisePublicKey) (wgcfg.PeerConfig, bool) {
 		return fn(key.NodePublicFromRaw32(mem.B(pubk[:])))
 	}))
@@ -745,6 +752,9 @@ func (e *userspaceEngine) SyncDevicePeer(k key.NodePublic) {
 
 // MarkDevicePeerForHandshake implements [Engine.MarkDevicePeerForHandshake].
 func (e *userspaceEngine) MarkDevicePeerForHandshake(k key.NodePublic) {
+	if e.kdp != nil {
+		e.kdp.clearSession(k)
+	}
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 	e.wgLogger.Invalidate()
@@ -764,6 +774,11 @@ func (e *userspaceEngine) MarkDevicePeerForHandshake(k key.NodePublic) {
 // in the device. Callers without a LocalBackend that need outbound packets
 // to lazily create peers must install their own callback.
 func (e *userspaceEngine) SetPeerByIPPacketFunc(fn func(netip.Addr) (_ key.NodePublic, ok bool)) {
+	if e.kdp != nil {
+		// The kernel routes by its own allowed IPs, and wireguard-go
+		// must not create peers; see SetPeerConfigFunc.
+		return
+	}
 	if fn == nil {
 		e.wgdev.SetPeerByIPPacketFunc(nil)
 		return
@@ -794,6 +809,12 @@ func (e *userspaceEngine) SetPeerSessionStateFunc(fn func(key.NodePublic, PeerWi
 // [github.com/tailscale/wireguard-go/device.Device]. The returned message must
 // not exceed [github.com/tailscale/wireguard-go/device.MaxPriorityMessageContentSize].
 func (e *userspaceEngine) SetPeerPriorityMessageOnEstablishmentFunc(fn func(key.NodePublic) (msg []byte)) {
+	if e.kdp != nil {
+		// The kernel data plane sends these itself when the kernel
+		// establishes a session.
+		e.kdp.setPriorityMessageFunc(fn)
+		return
+	}
 	if fn != nil {
 		e.wgdev.SetPriorityMessageOnEstablishmentFunc(func(pk device.NoisePublicKey) (msg []byte) {
 			return fn(key.NodePublicFromRaw32(mem.B(pk[:])))

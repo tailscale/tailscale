@@ -63,6 +63,13 @@ type PeerConfig struct {
 	// arriving via DERP would steal the endpoint from a good direct path.
 	// The flag is applied before Endpoint, so setting both is one step.
 	NoRoam *bool
+
+	// ClearSession, if true, makes the kernel forget the peer's session
+	// keys and any handshake in progress, so that the next packet to the
+	// peer starts a new handshake right away. tailscaled sets it when a
+	// peer's disco key changes in a way that means it restarted (and so
+	// lost its keys).
+	ClearSession bool
 }
 
 // Device is the current state of a tswg device.

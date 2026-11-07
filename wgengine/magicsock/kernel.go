@@ -102,18 +102,34 @@ func (c *Conn) KernelPeerPaths() []KernelPeerPath {
 	defer c.mu.Unlock()
 	paths := make([]KernelPeerPath, 0, c.peerMap.nodeCount())
 	c.peerMap.forEachEndpoint(func(de *endpoint) {
-		p := KernelPeerPath{Key: de.publicKey}
-		de.mu.Lock()
-		udpAddr, derpAddr, _ := de.addrForSendLocked(now)
-		de.mu.Unlock()
-		// A DERP address alongside the UDP one means the UDP path isn't
-		// trusted (yet), so magicsock sends to both.
-		if udpAddr.isDirect() && !derpAddr.IsValid() {
-			p.Direct = udpAddr.ap
-		}
-		paths = append(paths, p)
+		paths = append(paths, de.kernelPath(now))
 	})
 	return paths
+}
+
+// KernelPeerPath is like KernelPeerPaths, for the single peer with key k.
+func (c *Conn) KernelPeerPath(k key.NodePublic) (_ KernelPeerPath, ok bool) {
+	c.mu.Lock()
+	de, ok := c.peerMap.endpointForNodeKey(k)
+	c.mu.Unlock()
+	if !ok {
+		return KernelPeerPath{}, false
+	}
+	return de.kernelPath(mono.Now()), true
+}
+
+// kernelPath returns the path the tswg kernel module should use for de.
+func (de *endpoint) kernelPath(now mono.Time) KernelPeerPath {
+	p := KernelPeerPath{Key: de.publicKey}
+	de.mu.Lock()
+	udpAddr, derpAddr, _ := de.addrForSendLocked(now)
+	de.mu.Unlock()
+	// A DERP address alongside the UDP one means the UDP path isn't
+	// trusted (yet), so magicsock sends to both.
+	if udpAddr.isDirect() && !derpAddr.IsValid() {
+		p.Direct = udpAddr.ap
+	}
+	return p
 }
 
 // NoteKernelActivity tells magicsock that the tswg kernel module sent (tx)

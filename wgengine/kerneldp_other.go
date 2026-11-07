@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/tstun"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/magicsock"
@@ -24,12 +25,14 @@ func newKernelDataplane(logger.Logf, string, *atomic.Pointer[func(key.NodePublic
 	return &kernelDataplane{}
 }
 
-func (*kernelDataplane) start(*magicsock.Conn) error {
+func (*kernelDataplane) start(*magicsock.Conn, *tstun.Wrapper) error {
 	return errors.New("tswg kernel data plane not supported on this platform or build")
 }
 
-func (*kernelDataplane) Close() error                               { return nil }
-func (*kernelDataplane) setPrivateKey(key.NodePrivate)              {}
-func (*kernelDataplane) kickReconcile()                             {}
-func (*kernelDataplane) injectFromMagicsock(key.NodePublic, []byte) {}
-func (*kernelDataplane) peerStatuses() []ipnstate.PeerStatusLite    { return nil }
+func (*kernelDataplane) Close() error                                       { return nil }
+func (*kernelDataplane) setPrivateKey(key.NodePrivate)                      {}
+func (*kernelDataplane) kickReconcile()                                     {}
+func (*kernelDataplane) clearSession(key.NodePublic)                        {}
+func (*kernelDataplane) injectFromMagicsock(key.NodePublic, []byte)         {}
+func (*kernelDataplane) peerStatuses() []ipnstate.PeerStatusLite            { return nil }
+func (*kernelDataplane) setPriorityMessageFunc(func(key.NodePublic) []byte) {}

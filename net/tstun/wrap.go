@@ -208,6 +208,11 @@ type Wrapper struct {
 
 	captureHook syncs.AtomicValue[packet.CaptureCallback]
 
+	// outboundInjectHook, if set, receives packets injected outbound
+	// (InjectOutbound and friends) instead of the queue that
+	// wireguard-go reads; see SetOutboundInjectHook.
+	outboundInjectHook syncs.AtomicValue[func([]byte)]
+
 	metrics *metrics
 
 	eventClient              *eventbus.Client
@@ -505,6 +510,10 @@ func (t *Wrapper) injectOutbound(ctx context.Context, r tunInjectedRead) (err er
 	if t.isClosed() {
 		return ErrClosed
 	}
+	if hook := t.outboundInjectHook.Load(); hook != nil {
+		t.sendToOutboundInjectHook(hook, r)
+		return nil
+	}
 	// Avoid a cancellation select when the queue has space.
 	select {
 	case t.injectionQueue.ch <- r:
@@ -537,6 +546,10 @@ func (t *Wrapper) tryInjectOutbound(data []byte) error {
 	if t.isClosed() {
 		return ErrClosed
 	}
+	if hook := t.outboundInjectHook.Load(); hook != nil {
+		hook(data)
+		return nil
+	}
 	select {
 	case t.injectionQueue.ch <- tunInjectedRead{data: data}:
 		t.drainIfClosed()
@@ -545,6 +558,31 @@ func (t *Wrapper) tryInjectOutbound(data []byte) error {
 	}
 	t.metrics.outboundDroppedPacketsTotal.Add(usermetric.DropLabels{Reason: usermetric.ReasonQueueFull}, 1)
 	return ErrInjectionQueueFull
+}
+
+// SetOutboundInjectHook makes packets injected outbound (InjectOutbound,
+// TryInjectOutbound, InjectOutboundPacketBuffer and so on) go to fn, which
+// takes ownership of them, instead of being queued for wireguard-go to read
+// and send to peers. It's for the tswg kernel data plane, which sends them
+// into the kernel's WireGuard device. fn must not block for long.
+func (t *Wrapper) SetOutboundInjectHook(fn func(pkt []byte)) {
+	t.outboundInjectHook.Store(fn)
+}
+
+// sendToOutboundInjectHook passes the injected packet r to hook.
+func (t *Wrapper) sendToOutboundInjectHook(hook func([]byte), r tunInjectedRead) {
+	if r.packet == nil {
+		hook(r.data)
+		return
+	}
+	if !buildfeatures.HasNetstack {
+		panic("unreachable")
+	}
+	b := r.packet.ToBuffer()
+	data := b.Flatten()
+	b.Release()
+	r.packet.DecRef()
+	hook(data)
 }
 
 // snat does SNAT on p if the destination address requires a different source address.

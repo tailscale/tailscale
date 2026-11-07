@@ -20,6 +20,7 @@ import (
 	"github.com/tailscale/netlink"
 	"golang.org/x/sys/unix"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/tstun"
 	"tailscale.com/tsconst"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -52,11 +53,17 @@ type kernelDataplane struct {
 	peerConfigFn *atomic.Pointer[func(key.NodePublic) (wgcfg.PeerConfig, bool)]
 	kick         chan struct{} // buffered(1); wakes the reconcile loop
 
-	ms     *magicsock.Conn // set by start
-	bridge *net.UDPConn    // set by start
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{} // closed when the reconcile loop exits
+	ms      *magicsock.Conn // set by start
+	bridge  *net.UDPConn    // set by start
+	ipSocks *ipSockets      // set by start; see kerneldp_tsmp_linux.go
+
+	// priorityMsgFn, if set, returns the message (a TSMP disco key
+	// advertisement) to send to a peer when the kernel establishes a new
+	// session with it, as wireguard-go does with its priority messages.
+	priorityMsgFn atomic.Pointer[func(key.NodePublic) []byte]
+	ctx           context.Context
+	cancel        context.CancelFunc
+	done          chan struct{} // closed when the reconcile loop exits
 
 	// kernelPort is the kernel device's UDP listen port, which the bridge
 	// sends injected packets to.
@@ -73,6 +80,7 @@ type kernelDataplane struct {
 	loopPeer     map[netip.Addr]key.NodePublic      // inverse of loopAddr
 	nextLoop     uint32                             // next index for loopAddr
 	counters     map[key.NodePublic][2]uint64       // last seen rx, tx bytes
+	handshakes   map[key.NodePublic]time.Time       // last seen handshake times
 	status       []ipnstate.PeerStatusLite          // from the last dump
 	warnedHybrid map[key.NodePublic]bool
 }
@@ -108,13 +116,15 @@ func newKernelDataplane(logf logger.Logf, ifname string, peerConfigFn *atomic.Po
 		loopAddr:     map[key.NodePublic]netip.Addr{},
 		loopPeer:     map[netip.Addr]key.NodePublic{},
 		counters:     map[key.NodePublic][2]uint64{},
+		handshakes:   map[key.NodePublic]time.Time{},
 		warnedHybrid: map[key.NodePublic]bool{},
 	}
 }
 
-// start opens the bridge, shares magicsock's sockets with the kernel, and
-// starts the bridge and reconcile loops.
-func (k *kernelDataplane) start(ms *magicsock.Conn) error {
+// start opens the bridge, shares magicsock's sockets with the kernel,
+// connects tun's injected and TSMP packets to the kernel device, and
+// starts the bridge, TSMP and reconcile loops.
+func (k *kernelDataplane) start(ms *magicsock.Conn, tun *tstun.Wrapper) error {
 	k.ms = ms
 	nl, err := tswg.Open()
 	if err != nil {
@@ -164,8 +174,20 @@ func (k *kernelDataplane) start(ms *magicsock.Conn) error {
 		return fmt.Errorf("bringing up %s: %w", k.ifname, err)
 	}
 
+	k.ipSocks, err = k.openIPSockets()
+	if err != nil {
+		k.bridge.Close()
+		nl.Close()
+		return err
+	}
+	tun.SetOutboundInjectHook(k.sendIPPacket)
+
 	k.ctx, k.cancel = context.WithCancel(context.Background())
 	go k.readBridge()
+	go k.readTSMP4(tun)
+	if k.ipSocks.recv6 != nil {
+		go k.readTSMP6(tun)
+	}
 	go k.reconcileLoop()
 	k.logf("kernel data plane on %s; loopback bridge on %v", k.ifname, k.bridge.LocalAddr())
 	return nil
@@ -178,6 +200,7 @@ func (k *kernelDataplane) Close() error {
 	}
 	k.cancel()
 	k.bridge.Close()
+	k.ipSocks.close()
 	<-k.done
 	k.nlMu.Lock()
 	defer k.nlMu.Unlock()
@@ -214,6 +237,16 @@ func (k *kernelDataplane) setSocket(network string, fd uintptr) error {
 	return nil
 }
 
+// setPriorityMessageFunc sets the function that returns the message to send
+// to a peer when the kernel establishes a new session with it.
+func (k *kernelDataplane) setPriorityMessageFunc(fn func(key.NodePublic) []byte) {
+	if fn == nil {
+		k.priorityMsgFn.Store(nil)
+		return
+	}
+	k.priorityMsgFn.Store(&fn)
+}
+
 // setPrivateKey sets the device's private key.
 func (k *kernelDataplane) setPrivateKey(pk key.NodePrivate) {
 	k.mu.Lock()
@@ -222,12 +255,55 @@ func (k *kernelDataplane) setPrivateKey(pk key.NodePrivate) {
 	k.kickReconcile()
 }
 
+// clearSession makes the kernel forget its session with the peer with key
+// pk, so that the next packet to the peer starts a new handshake. It's the
+// kernel equivalent of wireguard-go's ScheduleHandshakeOnUserSend, for when
+// the peer restarted and lost its keys.
+//
+// It also updates the peer's kernel endpoint in the same step: the peer's
+// path has likely just changed too (a restarted peer usually has a new
+// port), and the new handshake should go out on the new path rather than
+// waiting for the next reconcile.
+func (k *kernelDataplane) clearSession(pk key.NodePublic) {
+	path, _ := k.ms.KernelPeerPath(pk)
+	k.mu.Lock()
+	st, ok := k.pushed[pk]
+	if !ok {
+		k.mu.Unlock()
+		return // not in the kernel; nothing to clear
+	}
+	st.endpoint = k.endpointLocked(pk, path.Direct)
+	k.pushed[pk] = st
+	k.mu.Unlock()
+	err := k.configure(tswg.Config{Peers: []tswg.PeerConfig{{
+		PublicKey:    pk,
+		UpdateOnly:   true,
+		ClearSession: true,
+		Endpoint:     st.endpoint,
+	}}})
+	if err != nil {
+		k.logf("clearing session with %v: %v", pk.ShortString(), err)
+		return
+	}
+	k.logf("cleared session with %v", pk.ShortString())
+}
+
 // kickReconcile makes the reconcile loop run soon.
 func (k *kernelDataplane) kickReconcile() {
 	select {
 	case k.kick <- struct{}{}:
 	default:
 	}
+}
+
+// endpointLocked returns the kernel endpoint for the peer with key pk:
+// direct, if valid, else the peer's address on the loopback bridge. k.mu
+// must be held.
+func (k *kernelDataplane) endpointLocked(pk key.NodePublic, direct netip.AddrPort) netip.AddrPort {
+	if direct.IsValid() {
+		return direct
+	}
+	return netip.AddrPortFrom(k.loopAddrLocked(pk), uint16(k.bridge.LocalAddr().(*net.UDPAddr).Port))
 }
 
 // loopAddrLocked returns the bridge address of the peer with key pk,
@@ -377,9 +453,7 @@ func (k *kernelDataplane) reconcile() error {
 	var peers []tswg.PeerConfig
 	noRoam := true
 	for _, w := range wants {
-		if !w.st.endpoint.IsValid() {
-			w.st.endpoint = netip.AddrPortFrom(k.loopAddrLocked(w.pk), uint16(k.bridge.LocalAddr().(*net.UDPAddr).Port))
-		}
+		w.st.endpoint = k.endpointLocked(w.pk, w.st.endpoint)
 		if w.conf.Hybrid && !k.warnedHybrid[w.pk] {
 			k.warnedHybrid[w.pk] = true
 			k.logf("[unexpected] peer %v wants a hybrid handshake, which tswg doesn't support; using a classic handshake", w.pk.ShortString())
@@ -449,9 +523,14 @@ func (k *kernelDataplane) readCounters() error {
 		tx, rx bool
 	}
 	var acts []activity
+	var newSessions []key.NodePublic
 	status := make([]ipnstate.PeerStatusLite, 0, len(d.Peers))
 	k.mu.Lock()
 	for _, p := range d.Peers {
+		if p.LastHandshake.After(k.handshakes[p.PublicKey]) {
+			k.handshakes[p.PublicKey] = p.LastHandshake
+			newSessions = append(newSessions, p.PublicKey)
+		}
 		status = append(status, ipnstate.PeerStatusLite{
 			NodeKey:       p.PublicKey,
 			RxBytes:       int64(p.RxBytes),
@@ -471,6 +550,13 @@ func (k *kernelDataplane) readCounters() error {
 	k.mu.Unlock()
 	for _, a := range acts {
 		k.ms.NoteKernelActivity(a.pk, a.tx, a.rx)
+	}
+	if fn := k.priorityMsgFn.Load(); fn != nil {
+		for _, pk := range newSessions {
+			if msg := (*fn)(pk); len(msg) > 0 {
+				k.sendIPPacket(msg)
+			}
+		}
 	}
 	return nil
 }

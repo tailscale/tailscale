@@ -71,7 +71,8 @@ const (
 	// tswg additions, nested in peerATSWG.
 	peerATSWG = 64
 
-	tswgPeerAFlags = 1
+	tswgPeerAFlags        = 1
+	tswgPeerAClearSession = 2
 
 	tswgPeerFlagNoRoam = 1
 )
@@ -175,13 +176,18 @@ func encodePeer(ae *netlink.AttributeEncoder, p PeerConfig) error {
 	if p.PresharedKey != nil {
 		ae.Bytes(peerAPresharedKey, p.PresharedKey[:])
 	}
-	if p.NoRoam != nil {
+	if p.NoRoam != nil || p.ClearSession {
 		ae.Nested(peerATSWG, func(nae *netlink.AttributeEncoder) error {
-			var flags uint32
-			if *p.NoRoam {
-				flags |= tswgPeerFlagNoRoam
+			if p.NoRoam != nil {
+				var flags uint32
+				if *p.NoRoam {
+					flags |= tswgPeerFlagNoRoam
+				}
+				nae.Uint32(tswgPeerAFlags, flags)
 			}
-			nae.Uint32(tswgPeerAFlags, flags)
+			if p.ClearSession {
+				nae.Flag(tswgPeerAClearSession, true)
+			}
 			return nil
 		})
 	}
