@@ -31,6 +31,48 @@ GSO/GRO:
 
 ## Performance
 
+### Results at a glance
+
+The current numbers, kept up to date as results come in (details, setups
+and history in the sections below). "CPU-s/GB" is CPU seconds per GB
+delivered or forwarded on the measured machine (lower is better); ratios
+are tswg over wireguard-go. MTU 1280 (Tailscale's) unless noted.
+
+Subnet router on EC2 (`TestLeanSubnetRouter`): clients, each a peer of
+the router, with many TCP flows each to a backend on the router's LAN,
+which the router forwards to, masquerading. Updated 2026-11-07.
+
+| router | clients x flows | tswg | wireguard-go | kernel WG | tswg/wggo throughput | CPU-s/GB tswg / wggo / kernel WG | tswg/wggo CPU per GB |
+|---|---|---|---|---|---|---|---|
+| c7i.16xlarge, 4 CPUs online | 20 x 8 | 13.9 Gbps | 6.3 | 10.2 | 2.2x | 2.38 / 3.87 / 3.35 | 0.61x |
+| c7i.16xlarge, 8 CPUs online | 20 x 8 | 23.0 Gbps | 6.4 | 16.9 | 3.6x | 2.62 / 4.56 / 3.98 | 0.57x |
+| c7i.48xlarge, 192 CPUs | 8 x 16 | 31.5 Gbps | 7.2 | 12.3 | 4.3x | 3.90 / 3.87 / 94.7 | 1.01x |
+| c7i.48xlarge, 192 CPUs | 24 x 8 | 40.0 Gbps | 7.1 | 13.5 | 5.6x | 4.49 / 4.60 / 95.4 | 0.98x |
+| c7i.48xlarge, MTU 8920 (data point only) | 8 x 16 | 49.6 Gbps (line rate) | 17.5 | 49.2 | 2.8x | 2.18 / 1.86 / 15.0 | 1.17x |
+
+* Limits: wireguard-go about 7 Gbps however many peers or CPUs (a
+  serial stage); tswg on small routers its CPUs, and on the 192-CPU one
+  EC2's packet rate allowance (about 12M packets per second through the
+  router at 40 Gbps). On the 192-CPU router, neither is CPU-bound, so
+  their CPU per byte is about even; where CPU is the limit, tswg uses
+  about 0.6x wireguard-go's. Kernel WireGuard's per-packet round-robin
+  worker kicks keep most of a big machine's CPUs busy.
+
+Point to point (`TestLeanBenchmark`, `scripts/leanbench.sh`): one tunnel
+between two machines, 4 vCPUs each. Updated 2026-11-07.
+
+| testbed | metric | tswg | wireguard-go | kernel WG | tswg/wggo |
+|---|---|---|---|---|---|
+| QEMU lab (nested) | TCP 1 stream | 10.2 Gbps | 10.2 | 3.6 | 1.0x |
+| QEMU lab (nested) | TCP 4 streams | 11.7 Gbps | 11.1 | 4.2 | 1.05x |
+| QEMU lab (nested) | sender / receiver CPU-s/GB, 1 stream | 1.81 / 2.12 | 1.93 / 2.37 | 2.95 / 5.20 | 0.94x / 0.90x |
+| QEMU lab (nested) | UDP 64B received (loss) | 263k pps (0%) | 242k (79%) | 166k (16%) | 1.08x |
+| QEMU lab (nested) | RTT idle / under load p50 | 0.92 / 1.49 ms | 0.61 / 1.57 | 1.07 / 1.07 | 1.5x / 0.95x |
+| EC2 c7i.xlarge | TCP 1 or 4 streams | 7.25 Gbps | 7.25 | 5.3 | 1.0x (EC2's per-flow limit) |
+| EC2 c7i.xlarge | sender / receiver CPU-s/GB, 1 stream | 2.48 / 2.47 | 2.59 / 2.97 | 2.68 / 3.80 | 0.96x / 0.83x |
+| EC2 c7i.xlarge | UDP 64B received (loss) | 536k pps (0.06%) | 328k (58%) | 430k (1.7%) | 1.6x |
+| EC2 c7i.xlarge | RTT idle / under load p50 | 0.92 / 0.82 ms | 0.47 / 3.57 | 0.85 / 1.28 | 1.96x / 0.23x |
+
 ### What we inherit from upstream WireGuard
 
 * Inner GSO on send: the device advertises GSO (`WG_NETDEV_FEATURES` in
@@ -994,6 +1036,8 @@ Performance (the primary motivation; see "Performance"):
       (udp_tunnel, ip6_udp_tunnel, libcurve25519 are modules on Ubuntu);
       the harness agent does (`loadModuleDeps`).
 - [x] Benchmarks on cloud VMs (EC2, harness remote mode, `scripts/ec2.sh`).
+- [ ] Subnet router beyond 40 Gbps at MTU 1280: c6in instances (allowed
+      as of 2026-11-07, offered in us-west-2a-c), pending bigger vCPU quota.
 - [ ] EC2: c7i.large (2 vCPUs, CPU-bound), and the QEMU lab on a
       c7i.metal-24xl (to see what nesting cost the lab's numbers).
 - [ ] vmtest: shared socket with `UDP_GRO` enabled still works.
