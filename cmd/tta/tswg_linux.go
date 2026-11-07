@@ -32,6 +32,7 @@ func init() {
 	mux.HandleFunc("POST /tswg/sock-send", tswgSockSend)
 	mux.HandleFunc("GET /tswg/sock-recv", tswgSockRecv)
 	mux.HandleFunc("POST /tswg/sock-close", tswgSockClose)
+	mux.HandleFunc("POST /tswg/drop-udp-from", tswgDropUDPFrom)
 	tswgHandler = mux
 }
 

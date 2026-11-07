@@ -6,6 +6,7 @@ package magicsock
 import (
 	"errors"
 	"net/netip"
+	"time"
 
 	"tailscale.com/net/packet"
 	"tailscale.com/net/sockopts"
@@ -120,16 +121,68 @@ func (c *Conn) KernelPeerPath(k key.NodePublic) (_ KernelPeerPath, ok bool) {
 
 // kernelPath returns the path the tswg kernel module should use for de.
 func (de *endpoint) kernelPath(now mono.Time) KernelPeerPath {
-	p := KernelPeerPath{Key: de.publicKey}
 	de.mu.Lock()
-	udpAddr, derpAddr, _ := de.addrForSendLocked(now)
-	de.mu.Unlock()
-	// A DERP address alongside the UDP one means the UDP path isn't
-	// trusted (yet), so magicsock sends to both.
-	if udpAddr.isDirect() && !derpAddr.IsValid() {
-		p.Direct = udpAddr.ap
+	defer de.mu.Unlock()
+	return KernelPeerPath{Key: de.publicKey, Direct: de.kernelDirectLocked(now)}
+}
+
+// kernelDirectLocked returns de's direct UDP address for the kernel to
+// send to, if it has a trusted direct (not DERP or peer relay) best path,
+// or else the zero value. de.mu must be held.
+func (de *endpoint) kernelDirectLocked(now mono.Time) netip.AddrPort {
+	if de.isWireguardOnly {
+		// WireGuard-only peers (no disco) have no trust window; use
+		// whichever of their addresses magicsock would send to.
+		if udpAddr, _, _ := de.addrForSendLocked(now); udpAddr.isDirect() {
+			return udpAddr.ap
+		}
+		return netip.AddrPort{}
 	}
-	return p
+	if de.bestAddr.isDirect() && now.Before(de.trustBestAddrUntil) {
+		return de.bestAddr.ap
+	}
+	return netip.AddrPort{}
+}
+
+// SetKernelPathHook registers fn to be called, from its own goroutine, with
+// a peer's key whenever the result of KernelPeerPath for that peer may have
+// changed: its best path changed, or became trusted, or stopped being
+// trusted. It lets the kernel data plane switch the kernel's endpoint for
+// the peer right away, without polling.
+func (c *Conn) SetKernelPathHook(fn func(key.NodePublic)) {
+	c.kernelPathHook.Store(&fn)
+}
+
+// noteKernelPathLocked calls the kernel path hook, if any, if de's kernel
+// path changed since it last did. While de's kernel path is direct, it
+// keeps a timer armed for when that path's trust expires, since nothing
+// else happens then. de.mu must be held.
+func (de *endpoint) noteKernelPathLocked() {
+	if de.c == nil {
+		return // in tests
+	}
+	fn := de.c.kernelPathHook.Load()
+	if fn == nil {
+		return
+	}
+	now := mono.Now()
+	direct := de.kernelDirectLocked(now)
+	if direct != de.kernelDirect {
+		de.kernelDirect = direct
+		go (*fn)(de.publicKey)
+	}
+	if direct.IsValid() && !de.isWireguardOnly && de.kernelTrustTimer == nil {
+		de.kernelTrustTimer = time.AfterFunc(de.trustBestAddrUntil.Sub(now), de.kernelTrustTimerFired)
+	}
+}
+
+// kernelTrustTimerFired re-checks de's kernel path when its trust may have
+// expired, re-arming the timer if trust was extended meanwhile.
+func (de *endpoint) kernelTrustTimerFired() {
+	de.mu.Lock()
+	defer de.mu.Unlock()
+	de.kernelTrustTimer = nil
+	de.noteKernelPathLocked()
 }
 
 // NoteKernelActivity tells magicsock that the tswg kernel module sent (tx)

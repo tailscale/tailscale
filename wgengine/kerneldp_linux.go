@@ -15,7 +15,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
-	"time"
 
 	"github.com/tailscale/netlink"
 	"golang.org/x/sys/unix"
@@ -24,6 +23,7 @@ import (
 	"tailscale.com/tsconst"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/set"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/tswg"
 	"tailscale.com/wgengine/wgcfg"
@@ -43,15 +43,21 @@ import (
 // injects the WireGuard packets magicsock receives over DERP or a peer
 // relay into the kernel from the peer's loopback address.
 //
-// A reconcile loop keeps the kernel's peers in sync with magicsock's peers
-// and the live per-peer config, points each peer at its direct path or the
-// bridge, and feeds the kernel's per-peer traffic back to magicsock so
+// Nothing polls. A single reconcile goroutine applies all changes to the
+// kernel's peers, when kicked: a full sync of the peer set against
+// magicsock's peers and the live per-peer config (on config and key
+// changes), a peer's endpoint (when magicsock reports that its kernel path
+// changed: direct and trusted, or not), and session clears (when a peer
+// restarted). Peer events from the kernel (new sessions, and rate-limited
+// traffic notices) drive the disco key advertisements that wireguard-go
+// sends on new sessions, and feed direct-path traffic back to magicsock so
 // that it keeps heartbeating active sessions.
 type kernelDataplane struct {
 	logf         logger.Logf
 	ifname       string
 	peerConfigFn *atomic.Pointer[func(key.NodePublic) (wgcfg.PeerConfig, bool)]
 	kick         chan struct{} // buffered(1); wakes the reconcile loop
+	ifindex      int           // the device's interface index; set by start
 
 	ms      *magicsock.Conn // set by start
 	bridge  *net.UDPConn    // set by start
@@ -72,6 +78,8 @@ type kernelDataplane struct {
 	nlMu sync.Mutex // serializes use of nl
 	nl   *tswg.Client
 
+	events *tswg.EventConn // set by start
+
 	mu           sync.Mutex
 	privKey      key.NodePrivate                    // desired private key
 	pushedPriv   key.NodePrivate                    // private key last pushed to the kernel
@@ -79,10 +87,12 @@ type kernelDataplane struct {
 	loopAddr     map[key.NodePublic]netip.Addr      // peer's bridge address
 	loopPeer     map[netip.Addr]key.NodePublic      // inverse of loopAddr
 	nextLoop     uint32                             // next index for loopAddr
-	counters     map[key.NodePublic][2]uint64       // last seen rx, tx bytes
-	handshakes   map[key.NodePublic]time.Time       // last seen handshake times
-	status       []ipnstate.PeerStatusLite          // from the last dump
 	warnedHybrid map[key.NodePublic]bool
+
+	// Work for the reconcile loop, which clears these as it takes them.
+	wantFullSync  bool
+	dirtyPaths    set.Set[key.NodePublic] // peers whose kernel path may have changed
+	pendingClears set.Set[key.NodePublic] // peers whose sessions to clear
 }
 
 // kernelPeerState is the state of one kernel peer that the reconcile loop
@@ -97,11 +107,6 @@ func (s kernelPeerState) equal(o kernelPeerState) bool {
 	return s.endpoint == o.endpoint && s.psk == o.psk && slices.Equal(s.allowedIPs, o.allowedIPs)
 }
 
-// kernelReconcileInterval is how often the reconcile loop runs when not
-// kicked. It bounds how long the kernel keeps sending on a direct path
-// after magicsock stops trusting it.
-const kernelReconcileInterval = time.Second
-
 // kernelMaxPeersPerMessage bounds the size of each netlink message.
 const kernelMaxPeersPerMessage = 32
 
@@ -115,9 +120,8 @@ func newKernelDataplane(logf logger.Logf, ifname string, peerConfigFn *atomic.Po
 		pushed:       map[key.NodePublic]kernelPeerState{},
 		loopAddr:     map[key.NodePublic]netip.Addr{},
 		loopPeer:     map[netip.Addr]key.NodePublic{},
-		counters:     map[key.NodePublic][2]uint64{},
-		handshakes:   map[key.NodePublic]time.Time{},
 		warnedHybrid: map[key.NodePublic]bool{},
+		wantFullSync: true,
 	}
 }
 
@@ -173,9 +177,19 @@ func (k *kernelDataplane) start(ms *magicsock.Conn, tun *tstun.Wrapper) error {
 		nl.Close()
 		return fmt.Errorf("bringing up %s: %w", k.ifname, err)
 	}
+	k.ifindex = link.Attrs().Index
+
+	k.events, err = tswg.OpenEvents()
+	if err != nil {
+		k.bridge.Close()
+		nl.Close()
+		return err
+	}
+	ms.SetKernelPathHook(k.notePathChange)
 
 	k.ipSocks, err = k.openIPSockets()
 	if err != nil {
+		k.events.Close()
 		k.bridge.Close()
 		nl.Close()
 		return err
@@ -188,7 +202,9 @@ func (k *kernelDataplane) start(ms *magicsock.Conn, tun *tstun.Wrapper) error {
 	if k.ipSocks.recv6 != nil {
 		go k.readTSMP6(tun)
 	}
+	go k.readEvents()
 	go k.reconcileLoop()
+	k.kickReconcile()
 	k.logf("kernel data plane on %s; loopback bridge on %v", k.ifname, k.bridge.LocalAddr())
 	return nil
 }
@@ -201,6 +217,7 @@ func (k *kernelDataplane) Close() error {
 	k.cancel()
 	k.bridge.Close()
 	k.ipSocks.close()
+	k.events.Close()
 	<-k.done
 	k.nlMu.Lock()
 	defer k.nlMu.Unlock()
@@ -251,6 +268,26 @@ func (k *kernelDataplane) setPriorityMessageFunc(fn func(key.NodePublic) []byte)
 func (k *kernelDataplane) setPrivateKey(pk key.NodePrivate) {
 	k.mu.Lock()
 	k.privKey = pk
+	k.wantFullSync = true
+	k.mu.Unlock()
+	k.kickReconcile()
+}
+
+// syncPeers makes the reconcile loop sync the kernel's peers with
+// magicsock's peers and the live per-peer config.
+func (k *kernelDataplane) syncPeers() {
+	k.mu.Lock()
+	k.wantFullSync = true
+	k.mu.Unlock()
+	k.kickReconcile()
+}
+
+// notePathChange is magicsock's kernel path hook: the kernel path of the
+// peer with key pk may have changed.
+func (k *kernelDataplane) notePathChange(pk key.NodePublic) {
+	k.mu.Lock()
+	k.dirtyPaths.Make()
+	k.dirtyPaths.Add(pk)
 	k.mu.Unlock()
 	k.kickReconcile()
 }
@@ -258,34 +295,15 @@ func (k *kernelDataplane) setPrivateKey(pk key.NodePrivate) {
 // clearSession makes the kernel forget its session with the peer with key
 // pk, so that the next packet to the peer starts a new handshake. It's the
 // kernel equivalent of wireguard-go's ScheduleHandshakeOnUserSend, for when
-// the peer restarted and lost its keys.
-//
-// It also updates the peer's kernel endpoint in the same step: the peer's
-// path has likely just changed too (a restarted peer usually has a new
-// port), and the new handshake should go out on the new path rather than
-// waiting for the next reconcile.
+// the peer restarted and lost its keys. It's applied asynchronously by the
+// reconcile loop, since callers hold LocalBackend locks that a full sync
+// needs.
 func (k *kernelDataplane) clearSession(pk key.NodePublic) {
-	path, _ := k.ms.KernelPeerPath(pk)
 	k.mu.Lock()
-	st, ok := k.pushed[pk]
-	if !ok {
-		k.mu.Unlock()
-		return // not in the kernel; nothing to clear
-	}
-	st.endpoint = k.endpointLocked(pk, path.Direct)
-	k.pushed[pk] = st
+	k.pendingClears.Make()
+	k.pendingClears.Add(pk)
 	k.mu.Unlock()
-	err := k.configure(tswg.Config{Peers: []tswg.PeerConfig{{
-		PublicKey:    pk,
-		UpdateOnly:   true,
-		ClearSession: true,
-		Endpoint:     st.endpoint,
-	}}})
-	if err != nil {
-		k.logf("clearing session with %v: %v", pk.ShortString(), err)
-		return
-	}
-	k.logf("cleared session with %v", pk.ShortString())
+	k.kickReconcile()
 }
 
 // kickReconcile makes the reconcile loop run soon.
@@ -392,24 +410,34 @@ func pktinfoDst(oob []byte) (netip.Addr, bool) {
 
 func (k *kernelDataplane) reconcileLoop() {
 	defer close(k.done)
-	t := time.NewTicker(kernelReconcileInterval)
-	defer t.Stop()
 	for {
-		if err := k.reconcile(); err != nil {
-			k.logf("reconcile: %v", err)
-		}
 		select {
 		case <-k.ctx.Done():
 			return
-		case <-t.C:
 		case <-k.kick:
+		}
+		k.mu.Lock()
+		full := k.wantFullSync
+		dirty, clears := k.dirtyPaths, k.pendingClears
+		k.wantFullSync, k.dirtyPaths, k.pendingClears = false, nil, nil
+		k.mu.Unlock()
+
+		if full {
+			if err := k.fullSync(); err != nil {
+				k.logf("syncing peers: %v", err)
+			}
+			dirty = nil // a full sync also updates every peer's path
+		}
+		if len(dirty) > 0 || len(clears) > 0 {
+			if err := k.updatePeers(dirty, clears); err != nil {
+				k.logf("updating peers: %v", err)
+			}
 		}
 	}
 }
 
-// reconcile pushes the desired private key and peers to the kernel, then
-// reads back the kernel's per-peer traffic counters.
-func (k *kernelDataplane) reconcile() error {
+// fullSync pushes the desired private key and peers to the kernel.
+func (k *kernelDataplane) fullSync() error {
 	fn := k.peerConfigFn.Load()
 	if fn == nil {
 		return nil // no config source yet
@@ -480,24 +508,74 @@ func (k *kernelDataplane) reconcile() error {
 	}
 	k.mu.Unlock()
 
-	// Push the changes, in chunks.
-	if cfg.PrivateKey != nil || len(peers) > 0 {
-		for first := true; first || len(peers) > 0; first = false {
-			n := min(len(peers), kernelMaxPeersPerMessage)
-			cfg.Peers = peers[:n]
-			peers = peers[n:]
-			if err := k.configure(cfg); err != nil {
-				return err
-			}
-			cfg.PrivateKey = nil
-		}
-		k.mu.Lock()
-		k.pushedPriv = k.privKey
-		k.pushed = desired
-		k.mu.Unlock()
+	if cfg.PrivateKey == nil && len(peers) == 0 {
+		return nil
 	}
+	// Push the changes, in chunks.
+	for first := true; first || len(peers) > 0; first = false {
+		n := min(len(peers), kernelMaxPeersPerMessage)
+		cfg.Peers = peers[:n]
+		peers = peers[n:]
+		if err := k.configure(cfg); err != nil {
+			return err
+		}
+		cfg.PrivateKey = nil
+	}
+	k.mu.Lock()
+	k.pushedPriv = k.privKey
+	k.pushed = desired
+	k.mu.Unlock()
+	return k.refreshListenPort()
+}
 
-	return k.readCounters()
+// updatePeers updates the kernel endpoints of the peers in dirty and clears
+// the sessions of the peers in clears (also updating their endpoints, since
+// a restarted peer usually has a new port too, and its new handshake
+// should go out on its new path).
+func (k *kernelDataplane) updatePeers(dirty, clears set.Set[key.NodePublic]) error {
+	var peers []tswg.PeerConfig
+	for pk := range set.Of(slices.Concat(dirty.Slice(), clears.Slice())...) {
+		path, _ := k.ms.KernelPeerPath(pk)
+		k.mu.Lock()
+		st, ok := k.pushed[pk]
+		if !ok {
+			k.mu.Unlock()
+			continue // not in the kernel (yet); a full sync will add it
+		}
+		ep := k.endpointLocked(pk, path.Direct)
+		changed := ep != st.endpoint
+		st.endpoint = ep
+		k.pushed[pk] = st
+		k.mu.Unlock()
+		clear := clears.Contains(pk)
+		if !changed && !clear {
+			continue
+		}
+		if changed {
+			if path.Direct.IsValid() {
+				k.logf("peer %v: kernel now sends directly to %v", pk.ShortString(), ep)
+			} else {
+				k.logf("peer %v: kernel now sends via the loopback bridge", pk.ShortString())
+			}
+		}
+		if clear {
+			k.logf("clearing session with %v", pk.ShortString())
+		}
+		peers = append(peers, tswg.PeerConfig{
+			PublicKey:    pk,
+			UpdateOnly:   true,
+			Endpoint:     ep,
+			ClearSession: clear,
+		})
+	}
+	for len(peers) > 0 {
+		n := min(len(peers), kernelMaxPeersPerMessage)
+		if err := k.configure(tswg.Config{Peers: peers[:n]}); err != nil {
+			return err
+		}
+		peers = peers[n:]
+	}
+	return nil
 }
 
 func (k *kernelDataplane) configure(cfg tswg.Config) error {
@@ -506,9 +584,11 @@ func (k *kernelDataplane) configure(cfg tswg.Config) error {
 	return k.nl.ConfigureDevice(k.ifname, cfg)
 }
 
-// readCounters dumps the kernel device, records each peer's status, and
-// tells magicsock about peers whose traffic counters moved.
-func (k *kernelDataplane) readCounters() error {
+// refreshListenPort records the kernel device's listen port, which is
+// where the bridge injects packets. It's normally the port of magicsock's
+// shared socket (which setSocket records), but if magicsock has no UDP
+// socket, the kernel opens its own on a random port.
+func (k *kernelDataplane) refreshListenPort() error {
 	k.nlMu.Lock()
 	d, err := k.nl.Device(k.ifname)
 	k.nlMu.Unlock()
@@ -518,53 +598,73 @@ func (k *kernelDataplane) readCounters() error {
 	if d.ListenPort != 0 {
 		k.kernelPort.Store(uint32(d.ListenPort))
 	}
-	type activity struct {
-		pk     key.NodePublic
-		tx, rx bool
-	}
-	var acts []activity
-	var newSessions []key.NodePublic
-	status := make([]ipnstate.PeerStatusLite, 0, len(d.Peers))
-	k.mu.Lock()
-	for _, p := range d.Peers {
-		if p.LastHandshake.After(k.handshakes[p.PublicKey]) {
-			k.handshakes[p.PublicKey] = p.LastHandshake
-			newSessions = append(newSessions, p.PublicKey)
+	return nil
+}
+
+// readEvents handles the kernel's peer events.
+func (k *kernelDataplane) readEvents() {
+	for {
+		evs, err := k.events.Receive()
+		if err != nil {
+			if k.ctx.Err() != nil {
+				return
+			}
+			if errors.Is(err, unix.ENOBUFS) {
+				// Events were lost. The ones that matter are
+				// rate-limited traffic notices, which recur, and
+				// new sessions, whose disco key advertisements are
+				// an optimization.
+				k.logf("kernel peer events overrun; some were lost")
+				continue
+			}
+			k.logf("reading kernel peer events: %v", err)
+			return
 		}
+		for _, ev := range evs {
+			if ev.IfIndex == k.ifindex {
+				k.handleEvent(ev)
+			}
+		}
+	}
+}
+
+func (k *kernelDataplane) handleEvent(ev tswg.Event) {
+	if ev.Session {
+		if fn := k.priorityMsgFn.Load(); fn != nil {
+			if msg := (*fn)(ev.PublicKey); len(msg) > 0 {
+				k.sendIPPacket(msg)
+			}
+		}
+	}
+	if ev.TX || ev.RX {
+		// Only direct-path traffic bypasses magicsock; bridged traffic
+		// already went through it.
+		k.mu.Lock()
+		st, ok := k.pushed[ev.PublicKey]
+		k.mu.Unlock()
+		if ok && !st.endpoint.Addr().IsLoopback() {
+			k.ms.NoteKernelActivity(ev.PublicKey, ev.TX, ev.RX)
+		}
+	}
+}
+
+// peerStatuses returns the kernel's per-peer status.
+func (k *kernelDataplane) peerStatuses() []ipnstate.PeerStatusLite {
+	k.nlMu.Lock()
+	d, err := k.nl.Device(k.ifname)
+	k.nlMu.Unlock()
+	if err != nil {
+		k.logf("getting peer status: %v", err)
+		return nil
+	}
+	status := make([]ipnstate.PeerStatusLite, 0, len(d.Peers))
+	for _, p := range d.Peers {
 		status = append(status, ipnstate.PeerStatusLite{
 			NodeKey:       p.PublicKey,
 			RxBytes:       int64(p.RxBytes),
 			TxBytes:       int64(p.TxBytes),
 			LastHandshake: p.LastHandshake,
 		})
-		last := k.counters[p.PublicKey]
-		rx, tx := p.RxBytes != last[0], p.TxBytes != last[1]
-		k.counters[p.PublicKey] = [2]uint64{p.RxBytes, p.TxBytes}
-		// Only direct-path traffic bypasses magicsock; bridged traffic
-		// already went through it.
-		if (rx || tx) && !p.Endpoint.Addr().IsLoopback() {
-			acts = append(acts, activity{p.PublicKey, tx, rx})
-		}
 	}
-	k.status = status
-	k.mu.Unlock()
-	for _, a := range acts {
-		k.ms.NoteKernelActivity(a.pk, a.tx, a.rx)
-	}
-	if fn := k.priorityMsgFn.Load(); fn != nil {
-		for _, pk := range newSessions {
-			if msg := (*fn)(pk); len(msg) > 0 {
-				k.sendIPPacket(msg)
-			}
-		}
-	}
-	return nil
-}
-
-// peerStatuses returns the kernel's per-peer status as of the last
-// reconcile.
-func (k *kernelDataplane) peerStatuses() []ipnstate.PeerStatusLite {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	return slices.Clone(k.status)
+	return status
 }

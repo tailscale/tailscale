@@ -31,7 +31,7 @@ func (*kernelDataplane) start(*magicsock.Conn, *tstun.Wrapper) error {
 
 func (*kernelDataplane) Close() error                                       { return nil }
 func (*kernelDataplane) setPrivateKey(key.NodePrivate)                      {}
-func (*kernelDataplane) kickReconcile()                                     {}
+func (*kernelDataplane) syncPeers()                                         {}
 func (*kernelDataplane) clearSession(key.NodePublic)                        {}
 func (*kernelDataplane) injectFromMagicsock(key.NodePublic, []byte)         {}
 func (*kernelDataplane) peerStatuses() []ipnstate.PeerStatusLite            { return nil }

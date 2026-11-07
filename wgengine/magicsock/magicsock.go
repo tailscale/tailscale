@@ -169,6 +169,7 @@ type Conn struct {
 	onDERPRecv             func(tailcfg.DERPRegionID, key.NodePublic, []byte) bool // or nil, see Options.OnDERPRecv
 	kernelWGRecv           func(key.NodePublic, []byte)                            // or nil, see Options.KernelWGRecv
 	kernelSocketHook       atomic.Pointer[kernelSocketHookFunc]                    // see SetKernelSocketHook
+	kernelPathHook         atomic.Pointer[func(key.NodePublic)]                    // see SetKernelPathHook
 	netMon                 *netmon.Monitor                                         // must be non-nil
 	health                 *health.Tracker                                         // or nil
 	extraRootCAs           *x509.CertPool                                          // additional trusted root CAs; or nil

@@ -72,6 +72,16 @@ type PeerConfig struct {
 	ClearSession bool
 }
 
+// Event is a peer event from the kernel; see EventConn.
+type Event struct {
+	IfIndex   int // the device's interface index
+	PublicKey key.NodePublic
+
+	Session bool // a new session (keypair) was established with the peer
+	TX      bool // the kernel sent to the peer (rate limited to every 2s or so)
+	RX      bool // the kernel received from the peer (likewise)
+}
+
 // Device is the current state of a tswg device.
 type Device struct {
 	Name         string

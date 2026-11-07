@@ -715,7 +715,7 @@ func (e *userspaceEngine) SetPeerConfigFunc(fn func(key.NodePublic) (config wgcf
 		// The kernel data plane reads fn itself. wireguard-go must never
 		// create peers in this mode, or it would handshake over magicsock
 		// with our keys and fight the kernel's sessions.
-		e.kdp.kickReconcile()
+		e.kdp.syncPeers()
 		return
 	}
 	e.wgdev.SetPeerLookupFunc(wgcfg.NewPeerLookupFunc(e.wgdev.Bind(), e.logf, func(pubk device.NoisePublicKey) (wgcfg.PeerConfig, bool) {
@@ -727,7 +727,7 @@ func (e *userspaceEngine) SetPeerConfigFunc(fn func(key.NodePublic) (config wgcf
 func (e *userspaceEngine) SyncDevicePeer(k key.NodePublic) {
 	if e.kdp != nil {
 		// The kernel data plane reconciles all peers from the live config.
-		e.kdp.kickReconcile()
+		e.kdp.syncPeers()
 	}
 	fn := e.peerConfigFn.Load()
 	if fn == nil {

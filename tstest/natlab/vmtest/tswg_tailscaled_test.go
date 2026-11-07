@@ -93,6 +93,34 @@ func (f *tswgTailscaled) waitKernelReady(n *vmtest.Node) {
 	}
 }
 
+// waitKernelPath pings from n to peerIP until n's kernel endpoint for its
+// only peer is direct (if wantDirect) or the loopback bridge (if not), and
+// returns the kernel's view of the peer then. It fails the test if that
+// doesn't happen within timeout.
+func (f *tswgTailscaled) waitKernelPath(n *vmtest.Node, peerIP netip.Addr, wantDirect bool, timeout time.Duration) tswg.Peer {
+	f.t.Helper()
+	var p tswg.Peer
+	err := tstest.WaitFor(timeout, func() error {
+		pingOnce(f.t, n, peerIP) // keep the session active
+		d, err := f.show(n)
+		if err != nil {
+			return err
+		}
+		if len(d.Peers) != 1 {
+			return fmt.Errorf("%d peers", len(d.Peers))
+		}
+		p = d.Peers[0]
+		if isDirect := !p.Endpoint.Addr().IsLoopback(); isDirect != wantDirect {
+			return fmt.Errorf("kernel endpoint for peer is %v; want direct=%v", p.Endpoint, wantDirect)
+		}
+		return nil
+	})
+	if err != nil {
+		f.t.Fatalf("[%s] %v", n.Name(), err)
+	}
+	return p
+}
+
 // ip returns n's Tailscale IPv4 address.
 func (f *tswgTailscaled) ip(n *vmtest.Node) netip.Addr {
 	return f.env.Status(n).Self.TailscaleIPs[0]
@@ -126,27 +154,7 @@ func testTSWGTailscaledPath(t *testing.T, nat vnet.NAT, wantDirect bool) {
 
 	// Wait for the kernel's endpoint for the peer to settle: direct, or
 	// tailscaled's loopback bridge.
-	var d *tswg.Device
-	err := tstest.WaitFor(60*time.Second, func() error {
-		pingOnce(t, n1, ip2) // keep the session active
-		var err error
-		d, err = f.show(n1)
-		if err != nil {
-			return err
-		}
-		if len(d.Peers) != 1 {
-			return fmt.Errorf("%d peers", len(d.Peers))
-		}
-		ep := d.Peers[0].Endpoint
-		if isDirect := !ep.Addr().IsLoopback(); isDirect != wantDirect {
-			return fmt.Errorf("kernel endpoint for peer is %v; want direct=%v", ep, wantDirect)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := d.Peers[0]
+	p := f.waitKernelPath(n1, ip2, wantDirect, 60*time.Second)
 	t.Logf("[%s] kernel peer %v: endpoint=%v rx=%d tx=%d handshake=%v no-roam=%v",
 		n1.Name(), p.PublicKey.ShortString(), p.Endpoint, p.RxBytes, p.TxBytes, p.LastHandshake, p.NoRoam)
 	if !p.NoRoam {
@@ -159,6 +167,70 @@ func testTSWGTailscaledPath(t *testing.T, nat vnet.NAT, wantDirect bool) {
 	// And the tunnel still works, both ways, on the settled path.
 	f.env.LANPing(n1, ip2)
 	f.env.LANPing(n2, f.ip(n1))
+}
+
+// TestTSWGTailscaledPathFallback checks that when a direct path dies, the
+// kernel falls back to sending via tailscaled's loopback bridge (and so
+// DERP) once magicsock stops trusting the path, with nothing polling: no
+// packet arrives to say the path is gone, so it relies on magicsock's
+// trust expiry timer.
+func TestTSWGTailscaledPathFallback(t *testing.T) {
+	f := newTSWGTailscaled(t, vnet.EasyNAT)
+	n1, n2 := f.nodes[0], f.nodes[1]
+	ip2 := f.ip(n2)
+	f.env.LANPing(n1, ip2)
+	f.waitKernelPath(n1, ip2, true, 60*time.Second)
+
+	// Break the direct path: n1 drops all UDP from n2's public address
+	// (DERP, over TCP, still works).
+	tta(t, n1, "POST", "/tswg/drop-udp-from?ip=2.2.2.2", nil)
+
+	// magicsock trusts a path for 6.5 seconds after its last pong.
+	start := time.Now()
+	f.waitKernelPath(n1, ip2, false, 30*time.Second)
+	t.Logf("kernel fell back to the bridge %v after the direct path broke", time.Since(start).Round(time.Second))
+
+	// And the tunnel works over DERP.
+	f.env.LANPing(n1, ip2)
+	f.env.LANPing(n2, f.ip(n1))
+}
+
+// TestTSWGTailscaledIdleTrustExpiry checks that when a session goes idle,
+// so that magicsock stops heartbeating and its trust in the direct path
+// lapses (with no packet or ping timeout to mark the moment), the kernel
+// stops sending to the peer directly, as wireguard-go would, so that the
+// next packets go through magicsock (DERP, plus the candidate path) until
+// the path is trusted again. That relies on magicsock's trust expiry timer.
+func TestTSWGTailscaledIdleTrustExpiry(t *testing.T) {
+	f := newTSWGTailscaled(t, vnet.EasyNAT)
+	n1, n2 := f.nodes[0], f.nodes[1]
+	ip2 := f.ip(n2)
+	f.env.LANPing(n1, ip2)
+	f.waitKernelPath(n1, ip2, true, 60*time.Second)
+
+	// Send nothing. magicsock considers a session idle after 45 seconds
+	// and then trusts its path for at most 6.5 more.
+	start := time.Now()
+	if err := tstest.WaitFor(90*time.Second, func() error {
+		d, err := f.show(n1)
+		if err != nil {
+			return err
+		}
+		if len(d.Peers) != 1 {
+			return fmt.Errorf("%d peers", len(d.Peers))
+		}
+		if ep := d.Peers[0].Endpoint; !ep.Addr().IsLoopback() {
+			return fmt.Errorf("kernel endpoint still direct: %v", ep)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("kernel kept sending directly after the session went idle: %v", err)
+	}
+	t.Logf("kernel moved to the bridge %v into the idle period", time.Since(start).Round(time.Second))
+
+	// Traffic makes the path trusted, and direct, again.
+	f.env.LANPing(n1, ip2)
+	f.waitKernelPath(n1, ip2, true, 30*time.Second)
 }
 
 // TestTSWGTailscaledTSMP checks TSMP in kernel mode: TSMP pings (and their
@@ -230,7 +302,7 @@ func TestTSWGTailscaledPeerRestart(t *testing.T) {
 	if !pingOnce(t, n1, ip2) {
 		t.Errorf("first ping after %s restarted failed; the stale session wasn't cleared", n2.Name())
 	}
-	if logs := f.env.NodeLogs(n1); !strings.Contains(logs, "tswg: cleared session with") {
+	if logs := f.env.NodeLogs(n1); !strings.Contains(logs, "tswg: clearing session with") {
 		t.Errorf("%s's logs don't mention clearing the session", n1.Name())
 	}
 }
