@@ -8,6 +8,7 @@
 #include "peer.h"
 #include "queueing.h"
 #include "socket.h"
+#include "tswg.h"
 
 /*
  * - Timer for retransmitting the handshake if we don't hear back after
@@ -207,6 +208,7 @@ void wg_timers_session_derived(struct wg_peer *peer)
 {
 	mod_peer_timer(peer, &peer->timer_zero_key_material,
 		       jiffies + REJECT_AFTER_TIME * 3 * HZ);
+	tswg_notify_peer(peer, TSWGEVENT_F_SESSION); /* TSWG */
 }
 
 /* Should be called before a packet with authentication, whether

@@ -184,6 +184,8 @@ int wg_socket_send_skb_to_peer(struct wg_peer *peer, struct sk_buff *skb, u8 ds)
 	if (likely(!ret))
 		peer->tx_bytes += skb_len;
 	read_unlock_bh(&peer->endpoint_lock);
+	if (likely(!ret)) /* TSWG */
+		tswg_note_activity(peer, &peer->tswg_tx_event, TSWGEVENT_F_TX);
 
 	return ret;
 }

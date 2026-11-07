@@ -10,6 +10,7 @@
 #include "messages.h"
 #include "cookie.h"
 #include "socket.h"
+#include "tswg.h"
 
 #include <linux/ip.h>
 #include <linux/ipv6.h>
@@ -21,6 +22,7 @@ static void update_rx_stats(struct wg_peer *peer, size_t len)
 {
 	dev_sw_netstats_rx_add(peer->device->dev, len);
 	peer->rx_bytes += len;
+	tswg_note_activity(peer, &peer->tswg_rx_event, TSWGEVENT_F_RX); /* TSWG */
 }
 
 #define SKB_TYPE_LE32(skb) (((struct message_header *)(skb)->data)->type)

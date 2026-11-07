@@ -21,6 +21,9 @@
 
 static struct genl_family genl_family;
 
+/* TSWG: indexes of genl_family's multicast groups (tswg_mcgrps). */
+enum { TSWG_MCGRP_EVENTS_IDX };
+
 static struct wg_device *lookup_interface(struct nlattr **attrs,
 					  struct sk_buff *skb)
 {
@@ -685,6 +688,38 @@ int tswg_get_peer(struct sk_buff *skb, struct wg_peer *peer)
 	return 0;
 }
 
+/*
+ * TSWG: tswg_notify_peer multicasts a TSWG_CMD_PEER_EVENT with flags (of
+ * enum tswgevent_flag) for peer, if anyone is listening. It may be called
+ * from any context, including the packet path.
+ */
+void tswg_notify_peer(struct wg_peer *peer, u32 flags)
+{
+	struct net_device *dev = peer->device->dev;
+	struct net *net = dev_net(dev);
+	struct sk_buff *skb;
+	void *hdr;
+
+	if (!genl_has_listeners(&genl_family, net, TSWG_MCGRP_EVENTS_IDX))
+		return;
+	skb = genlmsg_new(nla_total_size(sizeof(u32)) * 2 +
+			  nla_total_size(NOISE_PUBLIC_KEY_LEN), GFP_ATOMIC);
+	if (!skb)
+		return;
+	hdr = genlmsg_put(skb, 0, 0, &genl_family, 0, TSWG_CMD_PEER_EVENT);
+	if (!hdr ||
+	    nla_put_u32(skb, TSWGEVENT_A_IFINDEX, dev->ifindex) ||
+	    nla_put(skb, TSWGEVENT_A_PUBLIC_KEY, NOISE_PUBLIC_KEY_LEN,
+		    peer->handshake.remote_static) ||
+	    nla_put_u32(skb, TSWGEVENT_A_FLAGS, flags)) {
+		nlmsg_free(skb);
+		return;
+	}
+	genlmsg_end(skb, hdr);
+	genlmsg_multicast_netns(&genl_family, net, skb, 0,
+				TSWG_MCGRP_EVENTS_IDX, GFP_ATOMIC);
+}
+
 /* TSWG: tswg_get_device adds wg's WGDEVICE_A_TSWG attribute to skb. */
 int tswg_get_device(struct sk_buff *skb, struct wg_device *wg)
 {
@@ -701,9 +736,15 @@ int tswg_get_device(struct sk_buff *skb, struct wg_device *wg)
 	return 0;
 }
 
+static const struct genl_multicast_group tswg_mcgrps[] = {
+	[TSWG_MCGRP_EVENTS_IDX] = { .name = TSWG_MCGRP_EVENTS },
+};
+
 static struct genl_family genl_family __ro_after_init = {
 	.split_ops = wireguard_nl_ops,
 	.n_split_ops = ARRAY_SIZE(wireguard_nl_ops),
+	.mcgrps = tswg_mcgrps, /* TSWG */
+	.n_mcgrps = ARRAY_SIZE(tswg_mcgrps),
 	.name = WG_GENL_NAME,
 	.version = WG_GENL_VERSION,
 	.module = THIS_MODULE,

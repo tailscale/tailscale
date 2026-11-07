@@ -139,4 +139,30 @@ enum wg_cmd {
 };
 #define WG_CMD_MAX (__WG_CMD_MAX - 1)
 
+/*
+ * tswg peer events, so that userspace doesn't have to poll. The device
+ * multicasts TSWG_CMD_PEER_EVENT messages, with enum tswgevent_attribute
+ * attributes, to the TSWG_MCGRP_EVENTS group of the genetlink family, in
+ * the device's network namespace. Messages are only built when someone
+ * listens.
+ */
+#define TSWG_CMD_PEER_EVENT 64
+#define TSWG_MCGRP_EVENTS "events"
+
+enum tswgevent_flag {
+	TSWGEVENT_F_SESSION = 1, /* a new session (keypair) was established */
+	TSWGEVENT_F_TX = 2,	 /* sent to the peer; at most every couple of seconds */
+	TSWGEVENT_F_RX = 4,	 /* received from the peer; likewise rate limited */
+};
+
+enum tswgevent_attribute {
+	TSWGEVENT_A_UNSPEC,
+	TSWGEVENT_A_IFINDEX,	/* NLA_U32 */
+	TSWGEVENT_A_PUBLIC_KEY,	/* NLA_EXACT_LEN, WG_KEY_LEN: the peer's */
+	TSWGEVENT_A_FLAGS,	/* NLA_U32 of enum tswgevent_flag */
+
+	__TSWGEVENT_A_LAST
+};
+#define TSWGEVENT_A_MAX (__TSWGEVENT_A_LAST - 1)
+
 #endif /* _UAPI_LINUX_TSWG_H */
