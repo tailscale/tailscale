@@ -351,6 +351,12 @@ type AutoUpdatePrefs struct {
 	// enabled, tailscaled will apply available updates in the background.
 	// Check must also be set when Apply is set.
 	Apply opt.Bool
+	// ForceAfter specifies how long tailscaled will wait for a quiet link
+	// (no appreciable peer traffic) before applying an available update
+	// regardless of traffic. Zero means it will wait indefinitely for a
+	// quiet link and never force an update. Only meaningful when Apply is
+	// true.
+	ForceAfter time.Duration
 }
 
 func (au1 AutoUpdatePrefs) Equals(au2 AutoUpdatePrefs) bool {
@@ -360,7 +366,8 @@ func (au1 AutoUpdatePrefs) Equals(au2 AutoUpdatePrefs) bool {
 	apply2, ok2 := au2.Apply.Get()
 	return au1.Check == au2.Check &&
 		apply1 == apply2 &&
-		ok1 == ok2
+		ok1 == ok2 &&
+		au1.ForceAfter == au2.ForceAfter
 }
 
 // AppConnectorPrefs are the app connector settings for the node agent.
@@ -422,8 +429,9 @@ func (mp *MaskedPrefs) SetsInternal() bool {
 }
 
 type AutoUpdatePrefsMask struct {
-	CheckSet bool `json:",omitempty"`
-	ApplySet bool `json:",omitempty"`
+	CheckSet      bool `json:",omitempty"`
+	ApplySet      bool `json:",omitempty"`
+	ForceAfterSet bool `json:",omitempty"`
 }
 
 func (m AutoUpdatePrefsMask) Pretty(au AutoUpdatePrefs) string {
@@ -433,6 +441,9 @@ func (m AutoUpdatePrefsMask) Pretty(au AutoUpdatePrefs) string {
 	}
 	if m.ApplySet {
 		fields = append(fields, fmt.Sprintf("Apply=%v", au.Apply))
+	}
+	if m.ForceAfterSet {
+		fields = append(fields, fmt.Sprintf("ForceAfter=%v", au.ForceAfter))
 	}
 	return strings.Join(fields, " ")
 }
@@ -732,6 +743,9 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 
 func (au AutoUpdatePrefs) Pretty() string {
 	if au.Apply.EqualBool(true) {
+		if au.ForceAfter > 0 {
+			return fmt.Sprintf("update=on force-after=%v ", au.ForceAfter)
+		}
 		return "update=on "
 	}
 	if au.Check {

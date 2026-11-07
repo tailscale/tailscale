@@ -68,18 +68,14 @@ type extension struct {
 	// c2nUpdateStatus is the status of c2n-triggered client update.
 	c2nUpdateStatus updateStatus
 	prefs           ipn.PrefsView
-	state           ipn.State
 
 	lastSelfUpdateState ipnstate.SelfUpdateStatus
 	selfUpdateProgress  []ipnstate.UpdateProgress
 
-	// offlineAutoUpdateCancel stops offline auto-updates when called. It
-	// should be used via stopOfflineAutoUpdate and
-	// maybeStartOfflineAutoUpdate. It is nil when offline auto-updates are
-	// not running.
-	//
-	//lint:ignore U1000 only used in Linux and Windows builds in autoupdate.go
-	offlineAutoUpdateCancel func()
+	// autoUpdateCancel stops the periodic auto-update checker when called.
+	// It should be used via stopAutoUpdate and maybeStartAutoUpdateLocked.
+	// It is nil when the periodic checker is not running.
+	autoUpdateCancel func()
 }
 
 func (e *extension) Name() string { return "clientupdate" }
@@ -87,7 +83,6 @@ func (e *extension) Name() string { return "clientupdate" }
 func (e *extension) Init(h ipnext.Host) error {
 
 	h.Hooks().ProfileStateChange.Add(e.onChangeProfile)
-	h.Hooks().BackendStateChange.Add(e.onBackendStateChange)
 
 	// TODO(nickkhyl): remove this after the profileManager refactoring.
 	// See tailscale/tailscale#15974.
@@ -99,34 +94,26 @@ func (e *extension) Init(h ipnext.Host) error {
 }
 
 func (e *extension) Shutdown() error {
-	e.stopOfflineAutoUpdate()
+	e.stopAutoUpdate()
 	return nil
-}
-
-func (e *extension) onBackendStateChange(newState ipn.State) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.state = newState
-	e.updateOfflineAutoUpdateLocked()
 }
 
 func (e *extension) onChangeProfile(profile ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.prefs = prefs
-	e.updateOfflineAutoUpdateLocked()
+	e.updateAutoUpdateLocked()
 }
 
-func (e *extension) updateOfflineAutoUpdateLocked() {
-	want := e.prefs.Valid() && e.prefs.AutoUpdate().Apply.EqualBool(true) &&
-		e.state != ipn.Running && e.state != ipn.Starting
+func (e *extension) updateAutoUpdateLocked() {
+	want := e.prefs.Valid() && e.prefs.AutoUpdate().Apply.EqualBool(true)
 
-	cur := e.offlineAutoUpdateCancel != nil
+	cur := e.autoUpdateCancel != nil
 
 	if want && !cur {
-		e.maybeStartOfflineAutoUpdateLocked(e.prefs)
+		e.maybeStartAutoUpdateLocked(e.prefs)
 	} else if !want && cur {
-		e.stopOfflineAutoUpdateLocked()
+		e.stopAutoUpdateLocked()
 	}
 }
 
@@ -479,23 +466,23 @@ func (e *extension) startAutoUpdate(logPrefix string) (retErr error) {
 	return nil
 }
 
-func (e *extension) stopOfflineAutoUpdate() {
+func (e *extension) stopAutoUpdate() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.stopOfflineAutoUpdateLocked()
+	e.stopAutoUpdateLocked()
 }
 
-func (e *extension) stopOfflineAutoUpdateLocked() {
-	if e.offlineAutoUpdateCancel == nil {
+func (e *extension) stopAutoUpdateLocked() {
+	if e.autoUpdateCancel == nil {
 		return
 	}
-	e.logf("offline auto-update: stopping update checks")
-	e.offlineAutoUpdateCancel()
-	e.offlineAutoUpdateCancel = nil
+	e.logf("auto-update: stopping update checks")
+	e.autoUpdateCancel()
+	e.autoUpdateCancel = nil
 }
 
 // e.mu must be held
-func (e *extension) maybeStartOfflineAutoUpdateLocked(prefs ipn.PrefsView) {
+func (e *extension) maybeStartAutoUpdateLocked(prefs ipn.PrefsView) {
 	if !prefs.Valid() || !prefs.AutoUpdate().Apply.EqualBool(true) {
 		return
 	}
@@ -509,30 +496,114 @@ func (e *extension) maybeStartOfflineAutoUpdateLocked(prefs ipn.PrefsView) {
 		return
 	}
 
-	if e.offlineAutoUpdateCancel != nil {
+	if e.autoUpdateCancel != nil {
 		// Already running.
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	e.offlineAutoUpdateCancel = cancel
+	e.autoUpdateCancel = cancel
 
-	e.logf("offline auto-update: starting update checks")
-	go e.offlineAutoUpdate(ctx)
+	e.logf("auto-update: starting update checks")
+	go e.autoUpdateLoop(ctx)
 }
 
-const offlineAutoUpdateCheckPeriod = time.Hour
+// autoUpdateCheckPeriod is how often we check whether it's a good time to
+// apply an available update, regardless of whether we're connected to the
+// tailnet or not. Each check that finds the link idle applies the update
+// immediately; otherwise we just wait for the next check.
+const autoUpdateCheckPeriod = time.Hour
 
-func (e *extension) offlineAutoUpdate(ctx context.Context) {
-	t := time.NewTicker(offlineAutoUpdateCheckPeriod)
+func (e *extension) autoUpdateLoop(ctx context.Context) {
+	t := time.NewTicker(autoUpdateCheckPeriod)
 	defer t.Stop()
+
+	// deferredSince is when the link was first found non-idle while an
+	// AutoUpdate.ForceAfter duration is configured. It's zero whenever
+	// nothing is currently being deferred.
+	var deferredSince time.Time
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
-		if err := e.startAutoUpdate("offline auto-update"); err != nil {
-			e.logf("offline auto-update: failed: %v", err)
+
+		idle, ok := e.peersIdle()
+		var apply bool
+		apply, deferredSince = e.decideAutoUpdateApply(ok && idle, deferredSince)
+
+		if !apply {
+			e.logf("auto-update: link not idle, deferring update")
+			continue
+		}
+		if err := e.startAutoUpdate("auto-update"); err != nil {
+			e.logf("auto-update: failed: %v", err)
 		}
 	}
+}
+
+// decideAutoUpdateApply decides whether to apply an available update on this
+// tick, given whether the link is currently idle and the deferredSince value
+// carried from the previous tick (zero if nothing is currently being
+// deferred). It returns whether to apply now, and the deferredSince value to
+// carry into the next tick.
+func (e *extension) decideAutoUpdateApply(idle bool, deferredSince time.Time) (apply bool, newDeferredSince time.Time) {
+	if idle {
+		return true, time.Time{}
+	}
+	forceAfter := e.autoUpdateForceAfter()
+	if forceAfter <= 0 {
+		// Forcing disabled: wait indefinitely for an idle link. Drop any
+		// prior deferral so re-enabling forcing starts a fresh countdown.
+		return false, time.Time{}
+	}
+	now := e.sb.Clock().Now()
+	switch {
+	case deferredSince.IsZero():
+		return false, now
+	case now.Sub(deferredSince) >= forceAfter:
+		e.logf("auto-update: forcing update after %v without an idle link", forceAfter)
+		return true, time.Time{}
+	default:
+		return false, deferredSince
+	}
+}
+
+// autoUpdateForceAfter returns the current AutoUpdate.ForceAfter pref, or
+// zero if auto-updates should never be forced through a non-idle link.
+func (e *extension) autoUpdateForceAfter() time.Duration {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.prefs.Valid() {
+		return 0
+	}
+	return e.prefs.AutoUpdate().ForceAfter
+}
+
+// peersIdle reports whether no current peer is active, i.e. whether none of
+// them have had a packet sent to them in roughly the last 45 seconds (see
+// ipnstate.PeerStatus.Active and magicsock's sessionActiveTimeout). It's a fresh, point-in-time check with no
+// memory of past calls. ok is false if peer status couldn't be determined
+// (e.g. the engine isn't up yet), in which case idle is meaningless. It does
+// not take the LocalBackend's mutex and is safe to call from a background
+// goroutine at any time.
+func (e *extension) peersIdle() (idle bool, ok bool) {
+	eng, ok := e.sb.Sys().Engine.GetOK()
+	if !ok {
+		return false, false
+	}
+	sb := &ipnstate.StatusBuilder{WantPeers: true}
+	eng.UpdateStatus(sb)
+	return allPeersIdle(sb.Status()), true
+}
+
+// allPeersIdle reports whether none of st's peers are currently Active.
+func allPeersIdle(st *ipnstate.Status) bool {
+	for _, ps := range st.Peer {
+		if ps.Active {
+			return false
+		}
+	}
+	return true
 }

@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/cmd/tailscale/cli/ffcomplete"
@@ -61,6 +62,7 @@ type setArgsT struct {
 	forceDaemon                bool
 	updateCheck                bool
 	updateApply                bool
+	updateForceAfter           time.Duration
 	reportPosture              bool
 	remoteConfig               bool
 	snat                       bool
@@ -87,6 +89,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.advertiseConnector, "advertise-connector", false, "offer to be an app connector for domain specific internet traffic for the tailnet")
 	setf.BoolVar(&setArgs.updateCheck, "update-check", true, "notify about available Tailscale updates")
 	setf.BoolVar(&setArgs.updateApply, "auto-update", false, "automatically update to the latest available version")
+	setf.DurationVar(&setArgs.updateForceAfter, "auto-update-force-after", 0, "force an auto-update to apply after waiting this long for a quiet link (no peer traffic), even if the link never goes quiet; zero (the default) waits indefinitely for a quiet link and never forces")
 	setf.BoolVar(&setArgs.reportPosture, "report-posture", false, "allow management plane to gather device posture information")
 	setf.BoolVar(&setArgs.runWebClient, "webclient", false, "expose the web interface for managing this node over Tailscale at port 5252")
 	setf.BoolVar(&setArgs.remoteConfig, "remote-config", false, hidden+"delegate FULL remote control of this node's prefs and LocalAPI to the tailnet admin, bypassing Tailscale's per-feature double opt-in; only use when the tailnet admin owns or is fully trusted with this machine")
@@ -160,8 +163,9 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			ForceDaemon:            setArgs.forceDaemon,
 			Sync:                   opt.NewBool(setArgs.sync),
 			AutoUpdate: ipn.AutoUpdatePrefs{
-				Check: setArgs.updateCheck,
-				Apply: opt.NewBool(setArgs.updateApply),
+				Check:      setArgs.updateCheck,
+				Apply:      opt.NewBool(setArgs.updateApply),
+				ForceAfter: setArgs.updateForceAfter,
 			},
 			AppConnector: ipn.AppConnectorPrefs{
 				Advertise: setArgs.advertiseConnector,
