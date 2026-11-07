@@ -37,6 +37,8 @@ import (
 //	TSWG_SUBNET_CLIENTS      clients to use (default all)
 //	TSWG_SUBNET_STREAMS      TCP flows per client (default 16)
 //	TSWG_SUBNET_ROUTER_CPUS  CPUs to leave online on the router (default all)
+//	TSWG_SUBNET_MTU          tunnel MTU (default 1280, Tailscale's; within an
+//	                         EC2 VPC, up to 8920 fits the 9001-byte underlay)
 //	TSWG_SUBNET_PROFILE      modes whose router to profile during the last run
 //	                         (comma-separated), with TSWG_PROFILE_FOCUS as in
 //	                         TestLeanProfile
@@ -170,6 +172,14 @@ type subnetLab struct {
 	clientMode string
 }
 
+// mtu returns the tunnel MTU to use.
+func (s *subnetLab) mtu() string {
+	if m := os.Getenv("TSWG_SUBNET_MTU"); m != "" {
+		return m
+	}
+	return "1280"
+}
+
 // setupRouter makes the router forward and masquerade traffic to the
 // backend's network, with only cpus CPUs online (if nonzero), and arranges
 // to undo it all.
@@ -241,6 +251,7 @@ func (s *subnetLab) setup(mode string) {
 		"mode":  {mode},
 		"port":  {fmt.Sprint(wgPort)},
 		"addrs": {tunnel4(s.router.i).String() + "/24"},
+		"mtu":   {s.mtu()},
 	}
 	rpriv, _ := routerKey.MarshalText()
 	rq.Set("private-key", string(rpriv))
@@ -271,6 +282,7 @@ func (s *subnetLab) setup(mode string) {
 			"port":        {fmt.Sprint(wgPort)},
 			"addrs":       {tunnel4(c.i).String() + "/24"},
 			"route":       {backendRoute},
+			"mtu":         {s.mtu()},
 		}
 		if err := c.do("POST", "/setup?"+q.Encode(), nil); err != nil {
 			t.Fatalf("setting up client %d: %v", i, err)
