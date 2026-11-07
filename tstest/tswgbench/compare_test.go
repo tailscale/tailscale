@@ -23,7 +23,9 @@ import (
 // TSWG_COMPARE_RUNS (default 5) runs of TSWG_BENCH_DUR (default 5s) each,
 // interleaving the modes so that drift in the host's load affects them
 // alike, and reports each mode's median, minimum and maximum.
-// TSWG_COMPARE_STREAMS sets the number of TCP streams (default 1).
+// TSWG_COMPARE_STREAMS sets the number of TCP streams (default 1). With
+// TSWG_COMPARE_LOAD=rtt, it compares UDP round trip times instead, idle
+// and under a 1-stream TCP load.
 func TestLeanCompare(t *testing.T) {
 	modes := os.Getenv("TSWG_LEAN_COMPARE")
 	if modes == "" {
@@ -50,8 +52,20 @@ func TestLeanCompare(t *testing.T) {
 		}
 	}
 
+	rtt := os.Getenv("TSWG_COMPARE_LOAD") == "rtt"
+
 	l := newLab(t, cpus)
-	results := map[string][]float64{}
+	// results maps a mode and metric ("Mbps", "idle p50 ms", ...) to the
+	// runs' values.
+	type key struct{ mode, metric string }
+	results := map[key][]float64{}
+	var metrics []string
+	record := func(mode, metric string, v float64) {
+		if !slices.Contains(metrics, metric) {
+			metrics = append(metrics, metric)
+		}
+		results[key{mode, metric}] = append(results[key{mode, metric}], v)
+	}
 	for run := range runs {
 		for _, mode := range strings.Split(modes, ",") {
 			addr := netip.AddrPortFrom(l.setup(mode, false), benchPort)
@@ -59,17 +73,47 @@ func TestLeanCompare(t *testing.T) {
 			if err := receiver.Do("POST", fmt.Sprintf("serve?port=%d", benchPort), nil); err != nil {
 				t.Fatal(err)
 			}
-			r, err := netbench.RunTCP(sender, receiver, addr, streams, dur)
+			if !rtt {
+				r, err := netbench.RunTCP(sender, receiver, addr, streams, dur)
+				if err != nil {
+					t.Fatalf("%s run %d: %v", mode, run, err)
+				}
+				t.Logf("run %d: %s: %.0f Mbps", run, mode, r.Mbps)
+				record(mode, "Mbps", r.Mbps)
+				continue
+			}
+			idle, err := netbench.RunRTT(sender, addr, 400)
 			if err != nil {
 				t.Fatalf("%s run %d: %v", mode, run, err)
 			}
-			t.Logf("run %d: %s: %.0f Mbps", run, mode, r.Mbps)
-			results[mode] = append(results[mode], r.Mbps)
+			var loaded netbench.RTT
+			var tcp netbench.TCPResult
+			var loadErr error
+			done := make(chan bool)
+			go func() {
+				tcp, loadErr = netbench.RunTCP(sender, receiver, addr, 1, 4*time.Second)
+				close(done)
+			}()
+			time.Sleep(500 * time.Millisecond) // let the load ramp up
+			loaded, err = netbench.RunRTT(sender, addr, 400)
+			<-done
+			if err != nil || loadErr != nil {
+				t.Fatalf("%s run %d: %v, %v", mode, run, err, loadErr)
+			}
+			t.Logf("run %d: %s: idle p50 %.2f p99 %.2f ms; loaded p50 %.2f p99 %.2f ms (%.0f Mbps)",
+				run, mode, idle.P50, idle.P99, loaded.P50, loaded.P99, tcp.Mbps)
+			record(mode, "idle p50 ms", idle.P50)
+			record(mode, "idle p99 ms", idle.P99)
+			record(mode, "loaded p50 ms", loaded.P50)
+			record(mode, "loaded p99 ms", loaded.P99)
+			record(mode, "loaded Mbps", tcp.Mbps)
 		}
 	}
-	for _, mode := range strings.Split(modes, ",") {
-		rs := slices.Sorted(slices.Values(results[mode]))
-		t.Logf("%-8s median %6.0f Mbps (min %6.0f, max %6.0f, %d runs)",
-			mode, rs[len(rs)/2], rs[0], rs[len(rs)-1], len(rs))
+	for _, metric := range metrics {
+		for _, mode := range strings.Split(modes, ",") {
+			rs := slices.Sorted(slices.Values(results[key{mode, metric}]))
+			t.Logf("%-8s %-14s median %8.2f (min %8.2f, max %8.2f, %d runs)",
+				mode, metric, rs[len(rs)/2], rs[0], rs[len(rs)-1], len(rs))
+		}
 	}
 }
