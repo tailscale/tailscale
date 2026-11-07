@@ -258,8 +258,9 @@ static void tswg_finish_out(struct sk_buff *out, unsigned int mss,
 
 /*
  * tswg_encrypt_list encrypts the list of packets at first into
- * PACKET_CB(first)->tswg_out, a list of packets to send, and frees them,
- * but for first itself (which stays on the peer's queue).
+ * PACKET_CB(first)->tswg_out, a list of packets to send. The tx worker
+ * frees the originals once it has sent those (see
+ * wg_packet_create_data_done).
  */
 static bool tswg_encrypt_list(struct sk_buff *first, struct page_frag *pfrag)
 {
@@ -310,23 +311,6 @@ static bool tswg_encrypt_list(struct sk_buff *first, struct page_frag *pfrag)
 	}
 	if (out)
 		tswg_finish_out(out, mss, segs);
-
-	/*
-	 * The packets may belong to the inner socket (for TCP, for its small
-	 * queues accounting), which we'd rather release now than once first
-	 * is sent; wireguard-go has the same effect, since the TUN device
-	 * frees a packet once read.
-	 */
-	skb = first->next;
-	first->next = NULL;
-	skb_orphan(first);
-	while (skb) {
-		struct sk_buff *next = skb->next;
-
-		skb_mark_not_on_list(skb);
-		consume_skb(skb);
-		skb = next;
-	}
 	return ok;
 }
 
@@ -361,7 +345,6 @@ static void wg_packet_create_data_done(struct wg_peer *peer, struct sk_buff *fir
 	/* TSWG: send the encrypted packets; see tswg_encrypt_list. */
 	skb = PACKET_CB(first)->tswg_out;
 	PACKET_CB(first)->tswg_out = NULL;
-	consume_skb(first);
 	for (; skb; skb = next) {
 		next = skb->next;
 		skb_mark_not_on_list(skb);
@@ -373,6 +356,19 @@ static void wg_packet_create_data_done(struct wg_peer *peer, struct sk_buff *fir
 
 	if (likely(data_sent))
 		wg_timers_data_sent(peer);
+
+	/*
+	 * TSWG: free the originals here, on the peer's one tx worker CPU,
+	 * rather than in the encrypt workers. For TCP, freeing releases the
+	 * socket's small queues accounting (tcp_wfree), and from several
+	 * CPUs at once, the resulting TSQ handlers fight over the socket
+	 * lock.
+	 */
+	for (skb = first; skb; skb = next) {
+		next = skb->next;
+		skb_mark_not_on_list(skb);
+		consume_skb(skb);
+	}
 
 	keep_key_fresh(peer);
 }
