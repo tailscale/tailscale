@@ -28,6 +28,18 @@ func TestResumeIPNBus(t *testing.T) {
 		t.Fatal("initial notification has no SessionID")
 	}
 
+	if err := s.Backend().SuspendWatchNotifications(ini.SessionID); err != nil {
+		t.Fatalf("SuspendWatchNotifications: %v", err)
+	}
+
+	// What was already on the wire still arrives, then the suspension.
+	n, err := w.Next()
+	for ; err == nil && !n.Suspended; n, err = w.Next() {
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	// Resuming replays the initial notification.
 	if err := c.ResumeIPNBus(ctx, ini.SessionID); err != nil {
 		t.Fatalf("ResumeIPNBus: %v", err)
