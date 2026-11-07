@@ -4110,6 +4110,26 @@ func (b *LocalBackend) buildInitialNotifyLocked(sb *ipnstate.StatusBuilder, sess
 	return ini
 }
 
+// SuspendWatchNotifications suspends the watch session with the given
+// [ipn.Notify.SessionID] as if it had fallen behind; see
+// [ipn.NotifySuspendWhenBehind]. It returns an error if the session
+// doesn't exist or didn't ask for that mode.
+func (b *LocalBackend) SuspendWatchNotifications(sessionID string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	sess, ok := b.notifyWatchers[sessionID]
+	if !ok {
+		return fmt.Errorf("no IPN bus watch session %q", sessionID)
+	}
+	if sess.mask&ipn.NotifySuspendWhenBehind == 0 {
+		return fmt.Errorf("IPN bus watch session %q did not ask for NotifySuspendWhenBehind", sessionID)
+	}
+	if !sess.suspended {
+		b.suspendLaggingWatchSessionLocked(sess)
+	}
+	return nil
+}
+
 // ResumeWatchNotifications resumes the watch session with the given
 // [ipn.Notify.SessionID] after it was suspended for falling behind (see
 // [ipn.NotifySuspendWhenBehind]). Whatever is still queued for the session
