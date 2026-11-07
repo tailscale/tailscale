@@ -319,7 +319,6 @@ func (p *Probe) loop() {
 			// TODO(percy):implement exponential backoff, possibly using util/backoff.
 			select {
 			case <-time.After(-1 * p.interval):
-				p.run()
 			case <-p.ctx.Done():
 				return
 			}
@@ -344,13 +343,17 @@ func (p *Probe) loop() {
 // run invokes the probe function and records the result. It returns the probe
 // result and an error if the probe failed.
 //
-// The probe function is invoked with a timeout slightly less than interval, so
-// that the probe either succeeds or fails before the next cycle is scheduled to
-// start.
+// For periodic probes, the execution timeout defaults to slightly less than
+// the interval so that the next cycle can start on schedule.
 func (p *Probe) run() (pi ProbeInfo, err error) {
-	// Probes are scheduled each p.interval, so we don't wait longer than that.
-	semaCtx, cancel := context.WithTimeout(p.ctx, p.interval)
-	defer cancel()
+	// Periodic probes don't wait for a slot longer than their interval.
+	// Continuous probes use their lifetime context.
+	semaCtx := p.ctx
+	if !p.IsContinuous() {
+		var cancel func()
+		semaCtx, cancel = context.WithTimeout(semaCtx, p.interval)
+		defer cancel()
+	}
 	if !p.runSema.AcquireContext(semaCtx) {
 		return pi, fmt.Errorf("probe %s: context cancelled", p.name)
 	}
