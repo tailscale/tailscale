@@ -42,6 +42,14 @@ int wg_packet_queue_init(struct crypt_queue *queue, work_func_t function,
 
 void wg_packet_queue_free(struct crypt_queue *queue, bool purge)
 {
+	int cpu;
+
+	for_each_possible_cpu(cpu) { /* TSWG */
+		struct page_frag *pfrag = &per_cpu_ptr(queue->worker, cpu)->tswg_frag;
+
+		if (pfrag->page)
+			put_page(pfrag->page);
+	}
 	free_percpu(queue->worker);
 	WARN_ON(!purge && !__ptr_ring_empty(&queue->ring));
 	ptr_ring_cleanup(&queue->ring, purge ? __skb_array_destroy_skb : NULL);
@@ -69,9 +77,19 @@ static void __wg_prev_queue_enqueue(struct prev_queue *queue, struct sk_buff *sk
 	WRITE_ONCE(NEXT(xchg_release(&queue->head, skb)), skb);
 }
 
+/*
+ * TSWG: TSWG_MAX_QUEUED_PEER is how many entries a peer's in-order queue
+ * holds. Upstream's MAX_QUEUED_PACKETS (1024) is only about 1.5ms of
+ * packets at 7 Gbps, so a decrypt worker briefly held up (by its vCPU being
+ * descheduled, say) made the queue overflow and drop packets, which TCP
+ * then took as congestion. wireguard-go's queues hold batches of up to
+ * 128 packets, so 1024 entries there go much further.
+ */
+#define TSWG_MAX_QUEUED_PEER (4 * MAX_QUEUED_PACKETS)
+
 bool wg_prev_queue_enqueue(struct prev_queue *queue, struct sk_buff *skb)
 {
-	if (!atomic_add_unless(&queue->count, 1, MAX_QUEUED_PACKETS))
+	if (!atomic_add_unless(&queue->count, 1, TSWG_MAX_QUEUED_PEER))
 		return false;
 	__wg_prev_queue_enqueue(queue, skb);
 	return true;

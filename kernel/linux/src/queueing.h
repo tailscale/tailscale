@@ -62,6 +62,11 @@ struct packet_cb {
 	atomic_t state;
 	u32 mtu;
 	u8 ds;
+	/*
+	 * TSWG: on the first packet of a list being encrypted, the encrypted
+	 * packets to send (see tswg_encrypt_list); NULL until then.
+	 */
+	struct sk_buff *tswg_out;
 };
 
 #define PACKET_CB(skb) ((struct packet_cb *)((skb)->cb))
@@ -129,30 +134,93 @@ static inline int wg_cpumask_next_online(int *last_cpu)
 }
 
 /*
- * TSWG: TSWG_CRYPT_BATCH is how many packets in a row go to the same crypt
- * worker before moving on to the next CPU. Upstream moves on with every
- * packet, so every packet queues (and usually wakes, with an IPI) another
- * CPU's worker, which profiling showed to be the main cost on the receive
- * path's single softirq CPU. All workers drain the same ring, so batching
- * doesn't strand packets; it just means fewer, longer worker runs.
+ * TSWG: demand-driven crypt worker kicks. Upstream queues the next CPU's
+ * crypt worker for every packet, round robin, which usually means waking
+ * it with an IPI (a VM exit, in a VM); profiling showed that to be the main
+ * cost on the receive path's single softirq CPU. All of a queue's workers
+ * drain the same ring, so a packet needs no kick at all while some worker
+ * is already draining it, unless the backlog shows that the busy workers
+ * aren't keeping up, in which case we recruit another CPU's worker.
+ *
+ * tswg_busy pairs with the ring: the producer adds to the ring and then
+ * reads tswg_busy, and a worker clears tswg_busy and then checks the ring,
+ * each with a full barrier in between, so either the producer sees the
+ * worker busy (and the worker sees the packet), or the producer kicks.
  */
-#define TSWG_CRYPT_BATCH 16
 
-/* tswg_crypt_queue_cpu returns the CPU whose crypt worker to kick. */
-static inline int tswg_crypt_queue_cpu(struct crypt_queue *queue)
+/*
+ * TSWG_DECRYPT_BACKLOG and TSWG_ENCRYPT_BACKLOG are how many ring entries
+ * may wait before another worker is recruited. A decrypt entry is one
+ * packet; an encrypt entry is a whole GSO packet's worth.
+ */
+#define TSWG_DECRYPT_BACKLOG 16
+#define TSWG_ENCRYPT_BACKLOG 1
+
+/*
+ * tswg_crypt_backlog returns about how many entries are in the ring. It
+ * reads indices that other CPUs write, so it's only an estimate.
+ */
+static inline unsigned int tswg_crypt_backlog(struct ptr_ring *r)
 {
-	unsigned int n = READ_ONCE(queue->tswg_batch);
+	int n = READ_ONCE(r->producer) - READ_ONCE(r->consumer_head);
 
-	if (n < TSWG_CRYPT_BATCH) {
-		int cpu = READ_ONCE(queue->last_cpu);
+	return n < 0 ? n + r->size : n;
+}
 
-		if (likely(cpu < nr_cpu_ids && cpu_online(cpu))) {
-			WRITE_ONCE(queue->tswg_batch, n + 1);
-			return cpu;
+/* tswg_worker_active reports whether w is draining or about to drain. */
+static inline bool tswg_worker_active(struct multicore_worker *w)
+{
+	return READ_ONCE(w->tswg_busy) || work_pending(&w->work);
+}
+
+/*
+ * tswg_crypt_kick makes sure some worker will consume what was just added
+ * to queue's ring, recruiting another one if more than backlog entries
+ * are waiting. It prefers workers on other CPUs than the caller's: for
+ * decryption, the caller is the CPU taking packets from the NIC, and a
+ * worker there is starved by that softirq work, holding up every packet
+ * behind it in the peer's in-order queue.
+ */
+static inline void tswg_crypt_kick(struct crypt_queue *queue,
+				   struct workqueue_struct *wq,
+				   unsigned int backlog)
+{
+	struct multicore_worker *w;
+	int cpu = READ_ONCE(queue->last_cpu);
+
+	smp_mb(); /* ring produce before reading tswg_busy; see above */
+	if (likely(cpu >= 0 && cpu < nr_cpu_ids && cpu_online(cpu) &&
+		   cpu != raw_smp_processor_id())) {
+		w = per_cpu_ptr(queue->worker, cpu);
+		if (!tswg_worker_active(w)) {
+			queue_work_on(cpu, wq, &w->work);
+			return;
 		}
+		if (tswg_crypt_backlog(&queue->ring) <= backlog)
+			return;
 	}
-	WRITE_ONCE(queue->tswg_batch, 1);
-	return wg_cpumask_next_online(&queue->last_cpu);
+	cpu = wg_cpumask_next_online(&queue->last_cpu);
+	if (cpu == raw_smp_processor_id() && num_online_cpus() > 1)
+		cpu = wg_cpumask_next_online(&queue->last_cpu);
+	w = per_cpu_ptr(queue->worker, cpu);
+	if (!tswg_worker_active(w))
+		queue_work_on(cpu, wq, &w->work);
+}
+
+/*
+ * tswg_crypt_worker_idle is called by a crypt worker that found its ring
+ * empty. It returns whether the worker may return, or must keep draining
+ * because something was added since.
+ */
+static inline bool tswg_crypt_worker_idle(struct multicore_worker *w,
+					  struct crypt_queue *queue)
+{
+	WRITE_ONCE(w->tswg_busy, false);
+	smp_mb(); /* clear tswg_busy before checking the ring; see above */
+	if (likely(__ptr_ring_empty(&queue->ring)))
+		return true;
+	WRITE_ONCE(w->tswg_busy, true);
+	return false;
 }
 
 /*
@@ -194,10 +262,9 @@ static inline void wg_prev_queue_drop_peeked(struct prev_queue *queue)
 
 static inline int wg_queue_enqueue_per_device_and_peer(
 	struct crypt_queue *device_queue, struct prev_queue *peer_queue,
-	struct sk_buff *skb, struct workqueue_struct *wq)
+	struct sk_buff *skb, struct workqueue_struct *wq,
+	unsigned int backlog)
 {
-	int cpu;
-
 	atomic_set_release(&PACKET_CB(skb)->state, PACKET_STATE_UNCRYPTED);
 	/* We first queue this up for the peer ingestion, but the consumer
 	 * will wait for the state to change to CRYPTED or DEAD before.
@@ -208,10 +275,9 @@ static inline int wg_queue_enqueue_per_device_and_peer(
 	/* Then we queue it up in the device queue, which consumes the
 	 * packet as soon as it can.
 	 */
-	cpu = tswg_crypt_queue_cpu(device_queue);
 	if (unlikely(ptr_ring_produce_bh(&device_queue->ring, skb)))
 		return -EPIPE;
-	tswg_queue_work_on(cpu, wq, &per_cpu_ptr(device_queue->worker, cpu)->work);
+	tswg_crypt_kick(device_queue, wq, backlog); /* TSWG */
 	return 0;
 }
 

@@ -159,63 +159,175 @@ static unsigned int calculate_skb_padding(struct sk_buff *skb)
 	return padded_size - last_unit;
 }
 
-static bool encrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
+/*
+ * TSWG: encryption into new pages, sent as UDP GSO.
+ *
+ * Upstream encrypts each packet in place, which first means making it
+ * linear and writable (skb_cow_data), usually a copy, and then sends each
+ * through the UDP/IP stack and the device on its own. Instead, we copy each
+ * packet (computing its checksum on the way, if it's still to be done) into
+ * pages of our own, encrypt it there, and gather the encrypted packets of
+ * a list, which mostly came from one GSO packet on the WireGuard device and
+ * so are all the same size but perhaps the last (WireGuard pads to 16
+ * bytes), into UDP GSO (SKB_GSO_UDP_L4) packets whose payload is those
+ * pages. Segmenting such a packet needs no copying (just page references),
+ * and a device that does UDP segmentation offload (USO) takes it whole.
+ *
+ * TSWG_GSO_MAX_SEGS and TSWG_GSO_MAX_BYTES bound a GSO packet; the IP and
+ * UDP length fields are 16 bits.
+ */
+#define TSWG_GSO_MAX_SEGS 64
+#define TSWG_GSO_MAX_BYTES (65535 - sizeof(struct ipv6hdr) - sizeof(struct udphdr))
+
+/*
+ * tswg_copy_plaintext copies skb to the linear buffer to, finishing its
+ * checksum if that's still to be done, as skb_checksum_help would.
+ */
+static bool tswg_copy_plaintext(struct sk_buff *skb, u8 *to)
 {
-	unsigned int padding_len, plaintext_len, trailer_len;
-	struct scatterlist sg[MAX_SKB_FRAGS + 8];
+	int start;
+	__wsum csum;
+
+	if (skb->ip_summed != CHECKSUM_PARTIAL)
+		return !skb_copy_bits(skb, 0, to, skb->len);
+	if (unlikely(skb_csum_is_sctp(skb)))
+		return !skb_csum_hwoffload_help(skb, 0) &&
+		       !skb_copy_bits(skb, 0, to, skb->len);
+	start = skb_checksum_start_offset(skb);
+	if (unlikely(start < 0 ||
+		     start + skb->csum_offset + sizeof(__sum16) > skb->len))
+		return false;
+	if (unlikely(skb_copy_bits(skb, 0, to, start)))
+		return false;
+	csum = skb_copy_and_csum_bits(skb, start, to + start, skb->len - start);
+	*(__sum16 *)(to + start + skb->csum_offset) =
+		csum_fold(csum) ?: CSUM_MANGLED_0;
+	return true;
+}
+
+/*
+ * tswg_encrypt_into encrypts skb as a data message of msg_len bytes,
+ * appended to out's page frags. out must have a free frag slot.
+ */
+static bool tswg_encrypt_into(struct sk_buff *out, struct sk_buff *skb,
+			      unsigned int msg_len,
+			      struct noise_keypair *keypair,
+			      struct page_frag *pfrag)
+{
+	unsigned int plaintext_len = msg_len - message_data_len(0);
+	int i = skb_shinfo(out)->nr_frags;
 	struct message_data *header;
-	struct sk_buff *trailer;
-	int num_frags;
+	u8 *plaintext;
 
-	/* Force hash calculation before encryption so that flow analysis is
-	 * consistent over the inner packet.
-	 */
-	skb_get_hash(skb);
-
-	/* Calculate lengths. */
-	padding_len = calculate_skb_padding(skb);
-	trailer_len = padding_len + noise_encrypted_len(0);
-	plaintext_len = skb->len + padding_len;
-
-	/* Expand head section to have room for our header and the network
-	 * stack's headers.
-	 */
-	if (unlikely(skb_cow_head(skb, DATA_PACKET_HEAD_ROOM) < 0))
+	if (unlikely(!skb_page_frag_refill(msg_len, pfrag, GFP_ATOMIC)))
 		return false;
-
-	/* Finalize checksum calculation for the inner packet, if required. */
-	if (unlikely(skb->ip_summed == CHECKSUM_PARTIAL &&
-		     skb_checksum_help(skb)))
+	header = page_address(pfrag->page) + pfrag->offset;
+	plaintext = (u8 *)(header + 1);
+	if (unlikely(!tswg_copy_plaintext(skb, plaintext)))
 		return false;
-
-	/* Expand data section to have room for padding and auth tag. */
-	num_frags = skb_cow_data(skb, trailer_len, &trailer);
-	if (unlikely(num_frags < 0 || num_frags > ARRAY_SIZE(sg)))
-		return false;
-
-	/* Set the padding to zeros, and make sure it and the auth tag are part
-	 * of the skb.
-	 */
-	memset(skb_tail_pointer(trailer), 0, padding_len);
-
-	/* Only after checksumming can we safely add on the padding at the end
-	 * and the header.
-	 */
-	skb_set_inner_network_header(skb, 0);
-	header = (struct message_data *)skb_push(skb, sizeof(*header));
+	memset(plaintext + skb->len, 0, plaintext_len - skb->len);
 	header->header.type = cpu_to_le32(MESSAGE_DATA);
 	header->key_idx = keypair->remote_index;
 	header->counter = cpu_to_le64(PACKET_CB(skb)->nonce);
-	pskb_put(skb, trailer, trailer_len);
+	chacha20poly1305_encrypt(plaintext, plaintext, plaintext_len, NULL, 0,
+				 PACKET_CB(skb)->nonce, keypair->sending.key);
 
-	/* Now we can encrypt the scattergather segments */
-	sg_init_table(sg, num_frags);
-	if (skb_to_sgvec(skb, sg, sizeof(struct message_data),
-			 noise_encrypted_len(plaintext_len)) <= 0)
-		return false;
-	return chacha20poly1305_encrypt_sg_inplace(sg, plaintext_len, NULL, 0,
-						   PACKET_CB(skb)->nonce,
-						   keypair->sending.key);
+	if (skb_can_coalesce(out, i, pfrag->page, pfrag->offset)) {
+		skb_frag_size_add(&skb_shinfo(out)->frags[i - 1], msg_len);
+	} else {
+		get_page(pfrag->page);
+		skb_fill_page_desc(out, i, pfrag->page, pfrag->offset, msg_len);
+	}
+	pfrag->offset += msg_len;
+	out->len += msg_len;
+	out->data_len += msg_len;
+	out->truesize += msg_len;
+	return true;
+}
+
+/* tswg_finish_out makes out a GSO packet, if it has more than one segment. */
+static void tswg_finish_out(struct sk_buff *out, unsigned int mss,
+			    unsigned int segs)
+{
+	if (segs < 2)
+		return;
+	skb_shinfo(out)->gso_size = mss;
+	skb_shinfo(out)->gso_type = SKB_GSO_UDP_L4;
+	skb_shinfo(out)->gso_segs = segs;
+}
+
+/*
+ * tswg_encrypt_list encrypts the list of packets at first into
+ * PACKET_CB(first)->tswg_out, a list of packets to send, and frees them,
+ * but for first itself (which stays on the peer's queue).
+ */
+static bool tswg_encrypt_list(struct sk_buff *first, struct page_frag *pfrag)
+{
+	struct noise_keypair *keypair = PACKET_CB(first)->keypair;
+	struct sk_buff **tail = &PACKET_CB(first)->tswg_out;
+	unsigned int mss = 0, segs = 0;
+	struct sk_buff *skb, *out = NULL;
+	bool ok = true;
+
+	for (skb = first; skb; skb = skb->next) {
+		unsigned int msg_len = message_data_len(skb->len +
+						       calculate_skb_padding(skb));
+
+		/* Only the last segment of a GSO packet may be shorter. */
+		if (out && (msg_len > mss || out->len != mss * segs ||
+			    msg_len == message_data_len(0) ||
+			    mss == message_data_len(0) ||
+			    segs >= TSWG_GSO_MAX_SEGS ||
+			    out->len + msg_len > TSWG_GSO_MAX_BYTES ||
+			    skb_shinfo(out)->nr_frags >= MAX_SKB_FRAGS ||
+			    PACKET_CB(skb)->ds != PACKET_CB(out)->ds)) {
+			tswg_finish_out(out, mss, segs);
+			out = NULL;
+		}
+		if (!out) {
+			out = alloc_skb(SKB_HEADER_LEN, GFP_ATOMIC);
+			if (unlikely(!out)) {
+				ok = false;
+				break;
+			}
+			skb_reserve(out, SKB_HEADER_LEN);
+			/* Keep the inner flow's hash, as upstream does. */
+			out->hash = skb_get_hash(skb);
+			out->l4_hash = skb->l4_hash;
+			out->sw_hash = skb->sw_hash;
+			PACKET_CB(out)->ds = PACKET_CB(skb)->ds;
+			*tail = out;
+			tail = &out->next;
+			mss = msg_len;
+			segs = 0;
+		}
+		if (unlikely(!tswg_encrypt_into(out, skb, msg_len, keypair,
+						pfrag))) {
+			ok = false;
+			break;
+		}
+		segs++;
+	}
+	if (out)
+		tswg_finish_out(out, mss, segs);
+
+	/*
+	 * The packets may belong to the inner socket (for TCP, for its small
+	 * queues accounting), which we'd rather release now than once first
+	 * is sent; wireguard-go has the same effect, since the TUN device
+	 * frees a packet once read.
+	 */
+	skb = first->next;
+	first->next = NULL;
+	skb_orphan(first);
+	while (skb) {
+		struct sk_buff *next = skb->next;
+
+		skb_mark_not_on_list(skb);
+		consume_skb(skb);
+		skb = next;
+	}
+	return ok;
 }
 
 void wg_packet_send_keepalive(struct wg_peer *peer)
@@ -239,79 +351,6 @@ void wg_packet_send_keepalive(struct wg_peer *peer)
 	wg_packet_send_staged_packets(peer);
 }
 
-/*
- * TSWG: outer UDP GSO. Upstream sends each encrypted packet through the
- * UDP/IP stack and the device on its own, which profiling showed to be a
- * main cost on the transmit path (with virtio, a device kick, so a VM exit,
- * per packet). Packets that came from one GSO packet on the WireGuard
- * device all encrypt to the same size (WireGuard pads to 16 bytes), except
- * perhaps the last, which is what UDP GSO (SKB_GSO_UDP_L4) needs. So we
- * chain each such run, without copying, as the frag_list of its first
- * packet, and send it as one UDP GSO packet; the stack (or the device, if
- * it can) segments it, and the segments go to the device together.
- *
- * TSWG_GSO_MAX_SEGS and TSWG_GSO_MAX_BYTES bound a run; the IP and UDP
- * length fields are 16 bits.
- */
-#define TSWG_GSO_MAX_SEGS 64
-#define TSWG_GSO_MAX_BYTES (65535 - sizeof(struct ipv6hdr) - sizeof(struct udphdr))
-
-/*
- * tswg_coalesce takes the run of packets starting at skb that can be sent
- * as one UDP GSO packet, makes them one (if more than one), and returns the
- * packet after the run.
- */
-static struct sk_buff *tswg_coalesce(struct sk_buff *skb)
-{
-	unsigned int mss = skb->len, total = skb->len, segs = 1;
-	struct sk_buff *last = skb, *next = skb->next, *frag;
-
-	if (mss == message_data_len(0))
-		goto out; /* keepalive */
-	while (next && segs < TSWG_GSO_MAX_SEGS && next->len <= mss &&
-	       total + next->len <= TSWG_GSO_MAX_BYTES &&
-	       next->len != message_data_len(0) &&
-	       PACKET_CB(next)->ds == PACKET_CB(skb)->ds) {
-		bool shorter = next->len < mss;
-
-		total += next->len;
-		segs++;
-		last = next;
-		next = next->next;
-		if (shorter)
-			break; /* only the last segment may be shorter */
-	}
-	if (segs == 1)
-		goto out;
-
-	frag = skb->next;
-	skb->next = NULL;
-	last->next = NULL;
-	/*
-	 * The packets still belong to the inner socket (for TCP, with
-	 * tcp_wfree as their destructor, for TCP small queues). Release them
-	 * now: segmenting a GSO packet with a frag_list of socket-owned
-	 * packets uncharges the socket more than it charged (refcount
-	 * underflows in tcp_wfree). It's what happens with wireguard-go too,
-	 * whose TUN device frees the inner packet once it's read.
-	 */
-	skb_orphan(skb);
-	for (struct sk_buff *f = frag; f; f = f->next) {
-		skb_orphan(f);
-		skb->truesize += f->truesize;
-	}
-	skb_shinfo(skb)->frag_list = frag;
-	skb->len = total;
-	skb->data_len += total - mss;
-	skb_shinfo(skb)->gso_size = mss;
-	skb_shinfo(skb)->gso_type = SKB_GSO_UDP_L4;
-	skb_shinfo(skb)->gso_segs = segs;
-	return next;
-out:
-	skb->next = NULL;
-	return next;
-}
-
 static void wg_packet_create_data_done(struct wg_peer *peer, struct sk_buff *first)
 {
 	struct sk_buff *skb, *next;
@@ -319,9 +358,14 @@ static void wg_packet_create_data_done(struct wg_peer *peer, struct sk_buff *fir
 
 	wg_timers_any_authenticated_packet_traversal(peer);
 	wg_timers_any_authenticated_packet_sent(peer);
-	for (skb = first; skb; skb = next) {
+	/* TSWG: send the encrypted packets; see tswg_encrypt_list. */
+	skb = PACKET_CB(first)->tswg_out;
+	PACKET_CB(first)->tswg_out = NULL;
+	consume_skb(first);
+	for (; skb; skb = next) {
+		next = skb->next;
+		skb_mark_not_on_list(skb);
 		is_keepalive = skb->len == message_data_len(0);
-		next = tswg_coalesce(skb); /* TSWG */
 		if (likely(!wg_socket_send_skb_to_peer(peer, skb,
 				PACKET_CB(skb)->ds) && !is_keepalive))
 			data_sent = true;
@@ -346,10 +390,12 @@ void wg_packet_tx_worker(struct work_struct *work)
 		wg_prev_queue_drop_peeked(&peer->tx_queue);
 		keypair = PACKET_CB(first)->keypair;
 
-		if (likely(state == PACKET_STATE_CRYPTED))
+		if (likely(state == PACKET_STATE_CRYPTED)) {
 			wg_packet_create_data_done(peer, first);
-		else
+		} else {
+			kfree_skb_list(PACKET_CB(first)->tswg_out); /* TSWG */
 			kfree_skb_list(first);
+		}
 
 		wg_noise_keypair_put(keypair, false);
 		wg_peer_put(peer);
@@ -360,26 +406,25 @@ void wg_packet_tx_worker(struct work_struct *work)
 
 void wg_packet_encrypt_worker(struct work_struct *work)
 {
-	struct crypt_queue *queue = container_of(work, struct multicore_worker,
-						 work)->ptr;
-	struct sk_buff *first, *skb, *next;
+	struct multicore_worker *w = container_of(work, struct multicore_worker,
+						  work);
+	struct crypt_queue *queue = w->ptr;
+	struct sk_buff *first;
 
+	WRITE_ONCE(w->tswg_busy, true); /* TSWG */
+again:
 	while ((first = ptr_ring_consume_bh(&queue->ring)) != NULL) {
 		enum packet_state state = PACKET_STATE_CRYPTED;
 
-		skb_list_walk_safe(first, skb, next) {
-			if (likely(encrypt_packet(skb,
-					PACKET_CB(first)->keypair))) {
-				wg_reset_packet(skb, true);
-			} else {
-				state = PACKET_STATE_DEAD;
-				break;
-			}
-		}
+		/* TSWG: see tswg_encrypt_list. */
+		if (unlikely(!tswg_encrypt_list(first, &w->tswg_frag)))
+			state = PACKET_STATE_DEAD;
 		wg_queue_enqueue_per_peer_tx(first, state);
 		if (need_resched())
 			cond_resched();
 	}
+	if (!tswg_crypt_worker_idle(w, queue)) /* TSWG */
+		goto again;
 }
 
 static void wg_packet_create_data(struct wg_peer *peer, struct sk_buff *first)
@@ -392,7 +437,8 @@ static void wg_packet_create_data(struct wg_peer *peer, struct sk_buff *first)
 		goto err;
 
 	ret = wg_queue_enqueue_per_device_and_peer(&wg->encrypt_queue, &peer->tx_queue, first,
-						   wg->packet_crypt_wq);
+						   wg->packet_crypt_wq,
+						   TSWG_ENCRYPT_BACKLOG);
 	if (unlikely(ret == -EPIPE))
 		wg_queue_enqueue_per_peer_tx(first, PACKET_STATE_DEAD);
 err:
@@ -459,6 +505,7 @@ void wg_packet_send_staged_packets(struct wg_peer *peer)
 	packets.prev->next = NULL;
 	wg_peer_get(keypair->entry.peer);
 	PACKET_CB(packets.next)->keypair = keypair;
+	PACKET_CB(packets.next)->tswg_out = NULL; /* TSWG */
 	wg_packet_create_data(peer, packets.next);
 	return;
 

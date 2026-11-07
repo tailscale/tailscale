@@ -495,10 +495,13 @@ next:
 
 void wg_packet_decrypt_worker(struct work_struct *work)
 {
-	struct crypt_queue *queue = container_of(work, struct multicore_worker,
-						 work)->ptr;
+	struct multicore_worker *w = container_of(work, struct multicore_worker,
+						  work);
+	struct crypt_queue *queue = w->ptr;
 	struct sk_buff *skb;
 
+	WRITE_ONCE(w->tswg_busy, true); /* TSWG */
+again:
 	while ((skb = ptr_ring_consume_bh(&queue->ring)) != NULL) {
 		enum packet_state state =
 			likely(decrypt_packet(skb, PACKET_CB(skb)->keypair)) ?
@@ -507,6 +510,8 @@ void wg_packet_decrypt_worker(struct work_struct *work)
 		if (need_resched())
 			cond_resched();
 	}
+	if (!tswg_crypt_worker_idle(w, queue)) /* TSWG */
+		goto again;
 }
 
 static void wg_packet_consume_data(struct wg_device *wg, struct sk_buff *skb)
@@ -527,13 +532,18 @@ static void wg_packet_consume_data(struct wg_device *wg, struct sk_buff *skb)
 		goto err;
 
 	ret = wg_queue_enqueue_per_device_and_peer(&wg->decrypt_queue, &peer->rx_queue, skb,
-						   wg->packet_crypt_wq);
-	if (unlikely(ret == -EPIPE))
+						   wg->packet_crypt_wq,
+						   TSWG_DECRYPT_BACKLOG);
+	if (unlikely(ret == -EPIPE)) {
+		/* TSWG: count drops, which upstream doesn't. */
+		DEV_STATS_INC(wg->dev, rx_fifo_errors);
 		wg_queue_enqueue_per_peer_rx(skb, PACKET_STATE_DEAD);
+	}
 	if (likely(!ret || ret == -EPIPE)) {
 		rcu_read_unlock_bh();
 		return;
 	}
+	DEV_STATS_INC(wg->dev, rx_dropped); /* TSWG: peer's queue is full */
 err:
 	wg_noise_keypair_put(PACKET_CB(skb)->keypair, false);
 err_keypair:

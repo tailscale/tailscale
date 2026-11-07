@@ -23,13 +23,14 @@ struct wg_device;
 struct multicore_worker {
 	void *ptr;
 	struct work_struct work;
+	bool tswg_busy; /* TSWG: worker is draining the ring; see tswg_crypt_kick */
+	struct page_frag tswg_frag; /* TSWG: encrypt worker's output pages */
 };
 
 struct crypt_queue {
 	struct ptr_ring ring;
 	struct multicore_worker __percpu *worker;
 	int last_cpu;
-	unsigned int tswg_batch; /* TSWG: packets queued since last_cpu changed */
 };
 
 struct prev_queue {
