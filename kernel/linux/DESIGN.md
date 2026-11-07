@@ -369,8 +369,19 @@ At 50 Gbps (2026-11-07): router and backend c7i.48xlarge (192 vCPUs,
   c7i sizes), and with 8 peers, flows collide on queues (4 clients on 3
   queues: the two sharing got half each). More peers spread better; a
   larger MTU needs 7x fewer packets. The router's CPUs weren't the limit.
-* For 100 Gbps, the next step: c6in instances (up to 200 Gbps), which
-  the IAM policy doesn't allow yet.
+* With more peers at MTU 1280 (24 clients: the 8 above plus 16
+  c7i.2xlarge, 8 flows each, 192 flows), traffic spreads over all the
+  queues: tswg 39996 Mbps (4.49 CPU-s/GB, about 22 of the 192 CPUs busy),
+  wireguard-go 7107 (5.6x less), kernel WireGuard 13463 (78% of 192
+  CPUs). There the limit is EC2's packet rate allowance for the
+  instance (ENA's `pps_allowance_exceeded` rises during tswg's runs): at
+  MTU 1280 everything the router handles is small (tunnel packets in,
+  1280-byte TCP segments out to the backend, ACKs both ways), about 12M
+  packets per second at 40 Gbps. (The plain baseline isn't comparable
+  here: without a tunnel, the clients' TCP uses the VPC's 9001-byte MTU.)
+* For more: instances with higher packet rate allowances, such as c6in
+  (network optimized, up to 200 Gbps), which the IAM policy doesn't allow
+  yet.
 
 Profile of the tswg router at 4 CPUs (CPU-bound), before the
 optimizations: ChaCha20-Poly1305 about 23% (of which 5.5% was a scalar
