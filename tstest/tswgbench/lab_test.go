@@ -15,7 +15,10 @@
 // QEMU itself needs /dev/kvm and /dev/vhost-net.
 //
 // The tests only run with TSWG_LEAN=1 and need the tswg module tree (see
-// tswgDir).
+// tswgDir). With TSWG_DEBUG_KERNEL=1, the VMs boot a debug build of the
+// same kernel (KASAN, lockdep and more), which is slow but catches memory
+// and locking bugs; look for "BUG:" and "WARNING:" in the consoles, which
+// failing tests print.
 package tswgbench
 
 import (
@@ -123,6 +126,18 @@ func buildArtifacts(t testing.TB) (kernel, initrd string) {
 				return fmt.Errorf("finding gokrazy kernel: %w", err)
 			}
 			artifacts.kernel = filepath.Join(pkg, "vmlinuz")
+			var koEnv []string
+			if os.Getenv("TSWG_DEBUG_KERNEL") != "" {
+				// The same kernel with KASAN, lockdep and other
+				// checks; see tslinux's scripts/gokrazy-debug-kernel.sh.
+				out, err := exec.Command(filepath.Join(tswgDir(t), "scripts", "gokrazy-debug-kernel.sh"), pkg).Output()
+				if err != nil {
+					return fmt.Errorf("building debug kernel: %w", err)
+				}
+				kdir := strings.TrimSpace(string(out))
+				artifacts.kernel = filepath.Join(kdir, "arch", "x86", "boot", "bzImage")
+				koEnv = append(koEnv, "TSWG_KDIR="+kdir)
+			}
 
 			agent := filepath.Join(dir, "agent")
 			build := exec.Command("go", "build", "-o", agent, "tailscale.com/tstest/tswgbench/agent")
@@ -132,6 +147,7 @@ func buildArtifacts(t testing.TB) (kernel, initrd string) {
 			}
 
 			ko := exec.Command(filepath.Join(tswgDir(t), "scripts", "build-for-gokrazy.sh"), pkg, filepath.Join(dir, "ko"))
+			ko.Env = append(os.Environ(), koEnv...)
 			var stderr bytes.Buffer
 			ko.Stderr = &stderr
 			koPath, err := ko.Output()
@@ -266,6 +282,17 @@ type lab struct {
 	vms [2]*vm
 }
 
+// kernelSplats are console messages that mean a kernel found a bug.
+var kernelSplats = []string{
+	"BUG:",
+	"WARNING:",
+	"Oops:",
+	"Kernel panic",
+	"possible circular locking dependency",
+	"INFO: task", // hung task
+	"rcu: INFO:",
+}
+
 // newLab boots two VMs with cpus virtual CPUs (and as many NIC queues)
 // each.
 func newLab(t testing.TB, cpus int) *lab {
@@ -287,6 +314,15 @@ func newLab(t testing.TB, cpus int) *lab {
 		if cpus > 1 {
 			netdev += fmt.Sprintf(",queues=%d", cpus)
 			nic += fmt.Sprintf(",mq=on,vectors=%d", 2*cpus+2)
+		}
+		// Without guest USO, the host splits UDP GSO packets from the
+		// other VM before handing them to this one, as a physical
+		// network would, so receivers see individual datagrams (and
+		// coalesce them with GRO, if they do). With it, VM-to-VM UDP
+		// arrives still coalesced, which flatters UDP data planes in a
+		// way real networks don't. TSWG_LAB_GUEST_USO=1 enables it.
+		if os.Getenv("TSWG_LAB_GUEST_USO") == "" {
+			nic += ",guest_uso4=off,guest_uso6=off"
 		}
 		v.cmd = exec.Command("qemu-system-x86_64",
 			"-machine", "q35,accel=kvm",
@@ -315,6 +351,29 @@ func newLab(t testing.TB, cpus int) *lab {
 		})
 		l.vms[i] = v
 	}
+	// Fail the test if a kernel reported a bug (an oops, a KASAN or
+	// lockdep report, a warning), and on failure, show the end of each
+	// VM's console, where that would be. Cleanups run in reverse order, so
+	// this runs before the VMs are killed.
+	t.Cleanup(func() {
+		for _, v := range l.vms {
+			log, _ := os.ReadFile(v.logPath)
+			for _, bad := range kernelSplats {
+				if i := bytes.Index(log, []byte(bad)); i >= 0 {
+					t.Errorf("VM %d kernel reported %q", v.i, bad)
+					break
+				}
+			}
+		}
+		if !t.Failed() {
+			return
+		}
+		for _, v := range l.vms {
+			log, _ := os.ReadFile(v.logPath)
+			lines := strings.Split(strings.TrimRight(string(log), "\n"), "\n")
+			t.Logf("VM %d console (tail):\n%s", v.i, strings.Join(lines[max(0, len(lines)-150):], "\n"))
+		}
+	})
 	for _, v := range l.vms {
 		if err := v.waitHealthy(30 * time.Second); err != nil {
 			log, _ := os.ReadFile(v.logPath)

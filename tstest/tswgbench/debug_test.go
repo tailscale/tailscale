@@ -47,7 +47,8 @@ func snmpLines(s, proto string) string {
 
 // TestLeanDebug runs a short TCP load over the data plane in
 // TSWG_LEAN_DEBUG and dumps both VMs' UDP and TCP counters, interface
-// statistics, kernel log, and tunnel device state, for debugging.
+// statistics, kernel log, and tunnel device state, for debugging, plus the
+// /proc or /sys files in TSWG_DEBUG_FILES (space-separated).
 func TestLeanDebug(t *testing.T) {
 	mode := os.Getenv("TSWG_LEAN_DEBUG")
 	if mode == "" {
@@ -72,6 +73,9 @@ func TestLeanDebug(t *testing.T) {
 			v.getText("/file?"+url.Values{"path": {"/proc/net/dev"}}.Encode()),
 			tail(v.getText("/dmesg"), 120),
 			v.getText("/show"))
+		for f := range strings.FieldsSeq(os.Getenv("TSWG_DEBUG_FILES")) {
+			t.Logf("VM %d: %s:\n%s", i, f, v.getText("/file?"+url.Values{"path": {f}}.Encode()))
+		}
 	}
 }
 

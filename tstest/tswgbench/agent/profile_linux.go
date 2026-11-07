@@ -47,6 +47,14 @@ type ProfileCPU struct {
 	Top     []ProfileSym
 }
 
+// ProfileStack is a call stack's share of the samples, for the focus
+// symbol of /profile.
+type ProfileStack struct {
+	Stack   []string // from the focus symbol outward, to its callers
+	Samples int
+	Pct     float64 // of all non-idle samples
+}
+
 // Profile is the result of /profile.
 type Profile struct {
 	Seconds float64
@@ -54,6 +62,7 @@ type Profile struct {
 	Busy    int // non-idle
 	Top     []ProfileSym
 	CPUs    []ProfileCPU
+	Focus   []ProfileStack // if requested, the focus symbol's callers
 }
 
 // handleProfile profiles all CPUs for the dur query parameter (default
@@ -64,10 +73,11 @@ func handleProfile(w http.ResponseWriter, r *http.Request) {
 		dur = 5 * time.Second
 	}
 	top, _ := strconv.Atoi(r.URL.Query().Get("top"))
+	focus := r.URL.Query().Get("focus")
 	if top <= 0 {
 		top = 40
 	}
-	p, err := profile(dur, top)
+	p, err := profile(dur, top, focus)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -90,6 +100,9 @@ type perfCPU struct {
 	mem  []byte
 	data []byte
 }
+
+// focusDepth is how many frames of the focus symbol's stacks to report.
+const focusDepth = 8
 
 func openPerfCPU(cpu int) (*perfCPU, error) {
 	attr := unix.PerfEventAttr{
@@ -177,7 +190,7 @@ func atomicLoad64(b *byte) uint64 {
 	return *(*uint64)(unsafe.Pointer(b)) // the kernel writes it; good enough on amd64
 }
 
-func profile(dur time.Duration, top int) (*Profile, error) {
+func profile(dur time.Duration, top int, focus string) (*Profile, error) {
 	syms, err := loadSymbols()
 	if err != nil {
 		return nil, err
@@ -216,6 +229,7 @@ func profile(dur time.Duration, top int) (*Profile, error) {
 	newCounts := func() counts { return counts{map[string]int{}, map[string]int{}} }
 	all := newCounts()
 	perCPU := map[int]counts{}
+	focusStacks := map[string]int{}
 	cpuSamples := map[int]int{}
 	cpuBusy := map[int]int{}
 	pid := uint32(os.Getpid())
@@ -230,6 +244,12 @@ func profile(dur time.Duration, top int) (*Profile, error) {
 		}
 		prof.Busy++
 		cpuBusy[s.cpu]++
+		if focus != "" {
+			if i := slices.Index(names, focus); i >= 0 {
+				callers := names[i:min(len(names), i+focusDepth)]
+				focusStacks[strings.Join(callers, "\x00")]++
+			}
+		}
 		c, ok := perCPU[s.cpu]
 		if !ok {
 			c = newCounts()
@@ -269,6 +289,17 @@ func profile(dur time.Duration, top int) (*Profile, error) {
 		return out
 	}
 	prof.Top = topSyms(all, prof.Busy, top)
+	for st, n := range focusStacks {
+		prof.Focus = append(prof.Focus, ProfileStack{
+			Stack:   strings.Split(st, "\x00"),
+			Samples: n,
+			Pct:     100 * float64(n) / float64(max(prof.Busy, 1)),
+		})
+	}
+	sort.Slice(prof.Focus, func(i, j int) bool { return prof.Focus[i].Samples > prof.Focus[j].Samples })
+	if len(prof.Focus) > 10 {
+		prof.Focus = prof.Focus[:10]
+	}
 	for cpu := range runtime.NumCPU() {
 		pc := ProfileCPU{CPU: cpu, Samples: cpuSamples[cpu]}
 		if pc.Samples > 0 {

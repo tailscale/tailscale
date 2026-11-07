@@ -32,11 +32,17 @@ type (
 		Busy    float64
 		Top     []profileSym
 	}
+	profileStack struct {
+		Stack   []string
+		Samples int
+		Pct     float64
+	}
 	profileResult struct {
 		Seconds       float64
 		Samples, Busy int
 		Top           []profileSym
 		CPUs          []profileCPU
+		Focus         []profileStack
 	}
 )
 
@@ -45,7 +51,8 @@ type (
 // in TSWG_LEAN_PROFILE (comma-separated modes, such as "tswg,wggo"), and
 // prints where the CPU time goes. TSWG_PROFILE_LOAD is tcp (default),
 // tcp4 (4 streams) or udp (64-byte datagrams); TSWG_BENCH_CPUS sets the
-// vCPUs (default 4).
+// vCPUs (default 4). TSWG_PROFILE_FOCUS names a symbol whose callers to
+// report.
 func TestLeanProfile(t *testing.T) {
 	modes := os.Getenv("TSWG_LEAN_PROFILE")
 	if modes == "" {
@@ -59,6 +66,7 @@ func TestLeanProfile(t *testing.T) {
 	if load == "" {
 		load = "tcp"
 	}
+	focus := os.Getenv("TSWG_PROFILE_FOCUS")
 	l := newLab(t, cpus)
 	const profDur = 5 * time.Second
 	for _, mode := range strings.Split(modes, ",") {
@@ -95,7 +103,7 @@ func TestLeanProfile(t *testing.T) {
 		var pwg sync.WaitGroup
 		for i, v := range l.vms {
 			pwg.Go(func() {
-				if err := v.do("GET", "/profile?"+url.Values{"dur": {profDur.String()}, "top": {"30"}}.Encode(), &profs[i]); err != nil {
+				if err := v.do("GET", "/profile?"+url.Values{"dur": {profDur.String()}, "top": {"30"}, "focus": {focus}}.Encode(), &profs[i]); err != nil {
 					t.Errorf("profiling VM %d: %v", i, err)
 				}
 			})
@@ -131,6 +139,9 @@ func formatProfile(p profileResult) string {
 			fmt.Fprintf(&sb, " %s(%.0f%%)", s.Sym, s.SelfPct)
 		}
 		sb.WriteString("\n")
+	}
+	for _, st := range p.Focus {
+		fmt.Fprintf(&sb, "  %5.2f%%  %s\n", st.Pct, strings.Join(st.Stack, " < "))
 	}
 	return sb.String()
 }
