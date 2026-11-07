@@ -1120,12 +1120,34 @@ func (e *extension) mapDNSResponse(res *resolver.Response) []byte {
 		return buf
 	}
 
-	// There is guaranteed to be at least one matching app, so just take the first one for now
-	// TODO(tailscale/corp#50408): We have access to res.DoHMeta.RequestURL, so we can easily see the requested
-	// app name. So we can make sure we have that configured, bail if not, and use that instead
-	// of just taking the first one. We can also verify the connector node advertises the app in its
-	// CapMap.
-	appName := appNames[0]
+	// Attribute the response to the app the query was actually made for, named
+	// by the app query parameter of the connector's DoH URL (see
+	// [extension.installHooks]). Taking the first app configured for the domain
+	// instead can name a different app than the one whose connector answered,
+	// and the connector authorizes the later TransitIPRequest against the app
+	// named in it, so a mismatch either fails the request or records the wrong
+	// app.
+	//
+	// The check above decided whether the name is covered by a conn25 app at all
+	// (and whether we are its client); this one decides which app the answer
+	// belongs to. Require the app to be one we have configured that serves the
+	// name, using the predicate the connector applies to a name for an app
+	// ([makeNameChecker]). It is deliberately not checked against appNames:
+	// [config.getAppsForConnectorDomain] is exact-match-preferred and can omit an
+	// app that serves the name only by wildcard, which would drop legitimate
+	// queries.
+	//
+	// TODO(tailscale/corp#50408): also verify the connector node advertises the
+	// app in its CapMap.
+	appName, err := appFromRequestURL(res.DoHMeta.RequestURL)
+	if err != nil {
+		c.logf("could not determine the app a DNS response was for: %v", err)
+		return buf
+	}
+	if app, ok := cfg.appsByName[appName]; !ok || !makeNameChecker(app)(string(queriedDomain)) {
+		c.logf("DNS response for app %q does not serve %q; not rewriting", appName, queriedDomain)
+		return buf
+	}
 
 	// Write through record types we are sure are unrelated to conn25, as we try our best not to break
 	// user's application. If this causes problems in the future, it could be reasonable to not write through anything.
@@ -1412,6 +1434,23 @@ func (e *extension) extractConnectorFromRequestURL(u *url.URL) (tailcfg.NodeView
 	}
 
 	return node, nil
+}
+
+// appFromRequestURL returns the app name that a PeerAPI DoH request was made
+// for, taken from its app query parameter. See [extension.installHooks], which
+// sets that parameter when it builds the connector's DoH URL. Like the
+// connector's own check of the parameter (see
+// [extension.handleHookReplyToDNSQueries]), it must appear exactly once and be
+// non-empty.
+func appFromRequestURL(u *url.URL) (string, error) {
+	if u == nil {
+		return "", errors.New("nil URL in PeerAPI DoH request")
+	}
+	apps := u.Query()["app"]
+	if len(apps) != 1 || apps[0] == "" {
+		return "", errors.New("PeerAPI DoH request URL must have exactly one non-empty app query parameter")
+	}
+	return apps[0], nil
 }
 
 // TokenHeader is the PeerAPI DoH response header a connector uses to hand a
