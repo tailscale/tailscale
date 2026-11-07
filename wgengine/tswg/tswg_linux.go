@@ -115,6 +115,9 @@ func (c *Client) ConfigureDevice(ifname string, cfg Config) error {
 	if cfg.ListenPort != nil {
 		ae.Uint16(deviceAListenPort, *cfg.ListenPort)
 	}
+	if cfg.FirewallMark != nil {
+		ae.Uint32(deviceAFwmark, *cfg.FirewallMark)
+	}
 	if cfg.ReplacePeers {
 		ae.Uint32(deviceAFlags, deviceFlagReplacePeers)
 	}
@@ -168,6 +171,9 @@ func encodePeer(ae *netlink.AttributeEncoder, p PeerConfig) error {
 	}
 	if flags != 0 {
 		ae.Uint32(peerAFlags, flags)
+	}
+	if p.PresharedKey != nil {
+		ae.Bytes(peerAPresharedKey, p.PresharedKey[:])
 	}
 	if p.NoRoam != nil {
 		ae.Nested(peerATSWG, func(nae *netlink.AttributeEncoder) error {

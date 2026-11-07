@@ -20,6 +20,7 @@ import (
 type Config struct {
 	PrivateKey   *key.NodePrivate // nil means unchanged
 	ListenPort   *uint16          // nil means unchanged; 0 means random
+	FirewallMark *uint32          // nil means unchanged; 0 means none
 	ReplacePeers bool             // remove all peers not in Peers
 	Peers        []PeerConfig
 
@@ -42,6 +43,10 @@ type PeerConfig struct {
 
 	// Endpoint, if valid, sets the peer's endpoint.
 	Endpoint netip.AddrPort
+
+	// PresharedKey, if non-nil, sets the peer's preshared key. All zeros
+	// removes it.
+	PresharedKey *[32]byte
 
 	// PersistentKeepalive, if non-nil, sets the persistent keepalive
 	// interval. Zero disables it.

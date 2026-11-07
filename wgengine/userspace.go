@@ -85,6 +85,7 @@ type userspaceEngine struct {
 	timeNow        func() mono.Time
 	tundev         *tstun.Wrapper
 	wgdev          *device.Device
+	kdp            *kernelDataplane // non-nil in tswg kernel data plane mode (Config.KernelWG)
 	router         router.Router
 	dialer         *tsdial.Dialer
 	confListenPort uint16 // original conf.ListenPort
@@ -267,6 +268,17 @@ type Config struct {
 	// WireGuard. The pkt slice is borrowed and must be copied if
 	// the callee needs to retain it.
 	OnDERPRecv func(regionID tailcfg.DERPRegionID, src key.NodePublic, pkt []byte) (handled bool)
+
+	// KernelWG, if true, makes the engine use the tswg kernel module as
+	// its WireGuard data plane instead of wireguard-go (Linux only;
+	// experimental; see https://github.com/tailscale/tailscale/issues/426).
+	// Tun must then be a device from tswg.NewTailscaleDevice, which names
+	// the tswg network device but carries no packets.
+	//
+	// In this mode, packets don't pass through the engine, so its packet
+	// filter, netstack and the MagicDNS (100.100.100.100) interception
+	// don't apply.
+	KernelWG bool
 }
 
 // NewFakeUserspaceEngine returns a new userspace engine for testing.
@@ -443,12 +455,23 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		ForceDiscoKey:  conf.ForceDiscoKey,
 		OnDERPRecv:     conf.OnDERPRecv,
 	}
+	if conf.KernelWG {
+		e.kdp = newKernelDataplane(logf, tunName, &e.peerConfigFn)
+		magicsockOpts.KernelWGRecv = e.kdp.injectFromMagicsock
+	}
 	var err error
 	e.magicConn, err = magicsock.NewConn(magicsockOpts)
 	if err != nil {
 		return nil, fmt.Errorf("wgengine: %v", err)
 	}
 	closePool.add(e.magicConn)
+	if e.kdp != nil {
+		if err := e.kdp.start(e.magicConn); err != nil {
+			return nil, fmt.Errorf("wgengine: starting kernel data plane: %w", err)
+		}
+		closePool.add(e.kdp)
+		logf("wgengine: using the tswg kernel data plane on %s; the packet filter, netstack and MagicDNS interception are bypassed", tunName)
+	}
 	e.magicConn.SetNetworkUp(e.netMon.InterfaceState().AnyInterfaceUp())
 
 	if newNetLogger, ok := HookNewNetLogger.GetOk(); ok {
@@ -695,6 +718,10 @@ func (e *userspaceEngine) SetPeerConfigFunc(fn func(key.NodePublic) (config wgcf
 
 // SyncDevicePeer implements [Engine.SyncDevicePeer].
 func (e *userspaceEngine) SyncDevicePeer(k key.NodePublic) {
+	if e.kdp != nil {
+		// The kernel data plane reconciles all peers from the live config.
+		e.kdp.kickReconcile()
+	}
 	fn := e.peerConfigFn.Load()
 	if fn == nil {
 		return
@@ -895,6 +922,9 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		if err := e.wgdev.SetPrivateKey(key.NodePrivateAs[device.NoisePrivateKey](cfg.PrivateKey)); err != nil {
 			e.logf("wgengine: Reconfig: wgdev.SetPrivateKey: %v", err)
 		}
+		if e.kdp != nil {
+			e.kdp.setPrivateKey(cfg.PrivateKey)
+		}
 	}
 
 	e.lastCfg = *cfg.Clone()
@@ -1068,6 +1098,9 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		if status, ok := e.getPeerStatusLite(k); ok {
 			peers = append(peers, status)
 		}
+	}
+	if e.kdp != nil {
+		peers = e.kdp.peerStatuses()
 	}
 
 	return &Status{
