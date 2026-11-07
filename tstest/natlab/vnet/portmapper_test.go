@@ -72,7 +72,7 @@ func checkMapping(t *testing.T, n *network, extPort uint16, want netip.AddrPort)
 func mappingExpiry(n *network, extPort uint16) time.Time {
 	n.natMu.Lock()
 	defer n.natMu.Unlock()
-	return n.portMap[netip.AddrPortFrom(n.wanIP4, extPort)].Expiry
+	return n.portMap[netip.AddrPortFrom(n.wanIP4, extPort)].ExpiresAt
 }
 
 // checkRenewed checks that the mapping for extPort is the only one to dst

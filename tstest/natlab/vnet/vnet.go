@@ -2709,7 +2709,7 @@ func (n *network) doNATIn(src, dst netip.AddrPort) (newDst netip.AddrPort) {
 
 	// First see if there's a port mapping, before doing NAT.
 	if lanAP, ok := n.portMap[dst]; ok {
-		if now.Before(lanAP.Expiry) {
+		if now.Before(lanAP.ExpiresAt) {
 			mak.Set(&n.portMapFlow, portmapFlowKey{
 				peerWAN: src,
 				lanAP:   lanAP.dst,

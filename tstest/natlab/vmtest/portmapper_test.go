@@ -215,7 +215,7 @@ func TestPortmapRenew(t *testing.T) {
 			var wan netip.AddrPort
 			var expiry time.Time
 			for k, pm := range mappings {
-				wan, expiry = k, pm.Expiry
+				wan, expiry = k, pm.ExpiresAt
 			}
 			if time.Until(expiry) > lifetime {
 				t.Fatalf("port mapping expires at %v, want within %v", expiry, lifetime)
@@ -236,8 +236,8 @@ func TestPortmapRenew(t *testing.T) {
 				if !ok || len(mappings) != 1 || pm.Service != tt.svc {
 					t.Fatalf("got port mappings %v, want only %v made with %v", mappings, wan, tt.svc)
 				}
-				if pm.Expiry.After(expiry) {
-					if renewed := pm.Expiry.Add(-lifetime); renewed.After(expiry) {
+				if pm.ExpiresAt.After(expiry) {
+					if renewed := pm.ExpiresAt.Add(-lifetime); renewed.After(expiry) {
 						t.Fatalf("port mapping renewed at %v, after it expired at %v", renewed, expiry)
 					}
 					break // successful renewal

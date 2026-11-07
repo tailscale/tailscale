@@ -417,9 +417,9 @@ func (n *network) grantedPortMapLifetime(sec uint32) uint32 {
 }
 
 type PortMapping struct {
-	dst     netip.AddrPort // LAN IP:port
-	Expiry  time.Time
-	Service NetworkService
+	dst       netip.AddrPort // LAN IP:port
+	ExpiresAt time.Time
+	Service   NetworkService
 }
 
 func (n *network) portMappings() map[netip.AddrPort]PortMapping {
@@ -428,7 +428,7 @@ func (n *network) portMappings() map[netip.AddrPort]PortMapping {
 	now := time.Now()
 	ret := maps.Clone(n.portMap)
 	maps.DeleteFunc(ret, func(_ netip.AddrPort, pm PortMapping) bool {
-		return now.After(pm.Expiry)
+		return now.After(pm.ExpiresAt)
 	})
 	return ret
 }
@@ -460,9 +460,9 @@ func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec 
 	for k, v := range n.portMap {
 		if v.dst == dst {
 			n.portMap[k] = PortMapping{
-				dst:     dst,
-				Expiry:  time.Now().Add(time.Duration(sec) * time.Second),
-				Service: service,
+				dst:       dst,
+				ExpiresAt: time.Now().Add(time.Duration(sec) * time.Second),
+				Service:   service,
 			}
 			n.logf("vnet: renewed %v mapping from %v to %v", service, wanAP, dst)
 			return k.Port(), true
@@ -472,9 +472,9 @@ func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec 
 	for range 20_000 {
 		if wanAP.Port() > 0 && !n.natTable.IsPublicPortUsed(wanAP) {
 			mak.Set(&n.portMap, wanAP, PortMapping{
-				dst:     dst,
-				Expiry:  time.Now().Add(time.Duration(sec) * time.Second),
-				Service: service,
+				dst:       dst,
+				ExpiresAt: time.Now().Add(time.Duration(sec) * time.Second),
+				Service:   service,
 			})
 			n.logf("vnet: allocated %v mapping from %v to %v", service, wanAP, dst)
 			return wanAP.Port(), true
