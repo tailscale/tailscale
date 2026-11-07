@@ -204,8 +204,9 @@ var (
 //	addrs        comma-separated CIDRs for wg0
 //	mtu          wg0's MTU (default 1280, Tailscale's)
 //	route        a route to add, repeated: "PREFIX" (via wg0) or "PREFIX
-//	             via GATEWAY" (on the underlay, also in plain mode);
-//	             teardown removes them
+//	             via GATEWAY" (on the underlay, also in plain mode),
+//	             optionally followed by " mtu N" (which also sets the MSS
+//	             TCP advertises); teardown removes them
 func handleSetup(w http.ResponseWriter, r *http.Request) {
 	if err := setup(r.URL.Query()); err != nil {
 		log.Printf("setup: %v", err)
@@ -395,7 +396,8 @@ var routes []*netlink.Route
 // held.
 func addRoutes(specs []string) error {
 	for _, spec := range specs {
-		dst, via, hasVia := strings.Cut(spec, " via ")
+		rest, mtuStr, hasMTU := strings.Cut(spec, " mtu ")
+		dst, via, hasVia := strings.Cut(rest, " via ")
 		pfx, err := netip.ParsePrefix(dst)
 		if err != nil {
 			return fmt.Errorf("route %q: %w", spec, err)
@@ -416,6 +418,14 @@ func addRoutes(specs []string) error {
 				return err
 			}
 			r.LinkIndex = link.Attrs().Index
+		}
+		if hasMTU {
+			mtu, err := strconv.Atoi(mtuStr)
+			if err != nil {
+				return fmt.Errorf("route %q: %w", spec, err)
+			}
+			r.MTU = mtu
+			r.AdvMSS = mtu - 40 // IPv4 and TCP headers
 		}
 		if err := netlink.RouteReplace(r); err != nil {
 			return fmt.Errorf("route %q: %w", spec, err)

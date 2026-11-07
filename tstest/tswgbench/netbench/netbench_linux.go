@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -19,6 +20,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // Register registers the benchmark endpoints on mux under prefix (such as
@@ -126,6 +129,10 @@ func benchStats(w http.ResponseWriter, r *http.Request) {
 
 // benchCPU reports the node's CPU time from /proc/stat.
 func benchCPU(w http.ResponseWriter, r *http.Request) {
+	if c, ok := cpuidleCPU(); ok {
+		writeJSON(w, c)
+		return
+	}
 	f, err := os.Open("/proc/stat")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -315,4 +322,58 @@ func benchRTT(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
+}
+
+// cpuidleCPU returns the CPU's busy time as wall time less the time the
+// online CPUs spent idle, from their cpuidle state residencies, where the
+// kernel has them. /proc/stat can't be trusted for interrupt-heavy loads:
+// without CONFIG_IRQ_TIME_ACCOUNTING (as in Ubuntu's AWS kernels),
+// interrupt and softirq work done on an otherwise idle CPU is counted as
+// idle, which made a router forwarding 9M packets per second look 1%
+// busy. Busy and Total are in USER_HZ ticks, as from /proc/stat, but only
+// differences between snapshots (with the same CPUs online) mean anything.
+func cpuidleCPU() (c CPU, ok bool) {
+	b, err := os.ReadFile("/sys/devices/system/cpu/online")
+	if err != nil {
+		return c, false
+	}
+	var ts unix.Timespec
+	if err := unix.ClockGettime(unix.CLOCK_MONOTONIC, &ts); err != nil {
+		return c, false
+	}
+	nowUsec := ts.Nano() / 1000
+	var idleUsec, n int64
+	for r := range strings.SplitSeq(strings.TrimSpace(string(b)), ",") {
+		lo, hi, isRange := strings.Cut(r, "-")
+		a, err := strconv.Atoi(lo)
+		if err != nil {
+			return c, false
+		}
+		z := a
+		if isRange {
+			if z, err = strconv.Atoi(hi); err != nil {
+				return c, false
+			}
+		}
+		for cpu := a; cpu <= z; cpu++ {
+			states, _ := filepath.Glob(fmt.Sprintf("/sys/devices/system/cpu/cpu%d/cpuidle/state*/time", cpu))
+			if len(states) == 0 {
+				return c, false
+			}
+			for _, st := range states {
+				v, err := os.ReadFile(st)
+				if err != nil {
+					return c, false
+				}
+				us, _ := strconv.ParseInt(strings.TrimSpace(string(v)), 10, 64)
+				idleUsec += us
+			}
+			n++
+		}
+	}
+	const usecPerTick = 1e6 / userHZ
+	c.Total = nowUsec * n / usecPerTick
+	c.Busy = c.Total - idleUsec/usecPerTick
+	c.NumCPU = int(n)
+	return c, true
 }

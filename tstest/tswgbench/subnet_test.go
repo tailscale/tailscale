@@ -39,6 +39,9 @@ import (
 //	TSWG_SUBNET_ROUTER_CPUS  CPUs to leave online on the router (default all)
 //	TSWG_SUBNET_MTU          tunnel MTU (default 1280, Tailscale's; within an
 //	                         EC2 VPC, up to 8920 fits the 9001-byte underlay)
+//	TSWG_SUBNET_PLAIN_MTU    MTU of the plain mode's client routes (default:
+//	                         the underlay's), such as 1280 to send the same
+//	                         size packets as through a tunnel of that MTU
 //	TSWG_SUBNET_PROFILE      modes whose router to profile during the last run
 //	                         (comma-separated), with TSWG_PROFILE_FOCUS as in
 //	                         TestLeanProfile
@@ -263,7 +266,11 @@ func (s *subnetLab) setup(mode string) {
 	backendRoute := netip.PrefixFrom(s.backend.under4, 32).String()
 	if mode == modePlain {
 		for _, c := range s.clients {
-			q := url.Values{"mode": {modePlain}, "route": {backendRoute + " via " + s.router.under4.String()}}
+			route := backendRoute + " via " + s.router.under4.String()
+			if m := os.Getenv("TSWG_SUBNET_PLAIN_MTU"); m != "" {
+				route += " mtu " + m
+			}
+			q := url.Values{"mode": {modePlain}, "route": {route}}
 			if err := c.do("POST", "/setup?"+q.Encode(), nil); err != nil {
 				t.Fatalf("setting up client: %v", err)
 			}
