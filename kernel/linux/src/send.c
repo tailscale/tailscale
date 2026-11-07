@@ -10,6 +10,7 @@
 #include "socket.h"
 #include "messages.h"
 #include "cookie.h"
+#include "tswg_aead.h"
 
 #include <linux/uio.h>
 #include <linux/inetdevice.h>
@@ -229,8 +230,8 @@ static bool tswg_encrypt_into(struct sk_buff *out, struct sk_buff *skb,
 	header->header.type = cpu_to_le32(MESSAGE_DATA);
 	header->key_idx = keypair->remote_index;
 	header->counter = cpu_to_le64(PACKET_CB(skb)->nonce);
-	chacha20poly1305_encrypt(plaintext, plaintext, plaintext_len, NULL, 0,
-				 PACKET_CB(skb)->nonce, keypair->sending.key);
+	tswg_aead_encrypt(plaintext, plaintext, plaintext_len,
+			  PACKET_CB(skb)->nonce, keypair->sending.key);
 
 	if (skb_can_coalesce(out, i, pfrag->page, pfrag->offset)) {
 		skb_frag_size_add(&skb_shinfo(out)->frags[i - 1], msg_len);

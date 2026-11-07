@@ -11,6 +11,7 @@
 #include "cookie.h"
 #include "socket.h"
 #include "tswg.h"
+#include "tswg_aead.h"
 
 #include <linux/ip.h>
 #include <linux/ipv6.h>
@@ -256,6 +257,53 @@ static bool keypair_may_receive(struct noise_keypair *keypair)
 }
 
 /*
+ * TSWG: tswg_contig returns a pointer to the len bytes of skb's data at off
+ * if they're contiguous in memory: in its head, or in one page frag (of
+ * its own or of a frag_list member's), which is where a message received
+ * in one datagram ends up. Otherwise it returns NULL. *ahead says whether
+ * the CHACHA_BLOCK_SIZE bytes before them are in the same memory (the
+ * head's buffer, or the frag's page) too; see tswg_aead_decrypt_ahead.
+ */
+static const u8 *tswg_contig(const struct sk_buff *skb, unsigned int off,
+			     unsigned int len, bool *ahead)
+{
+	unsigned int headlen = skb_headlen(skb);
+	const struct sk_buff *member;
+	int i;
+
+	if (off + len <= headlen) {
+		*ahead = skb->data + off >= skb->head + CHACHA_BLOCK_SIZE;
+		return skb->data + off;
+	}
+	if (off < headlen)
+		return NULL;
+	off -= headlen;
+	for (i = 0; i < skb_shinfo(skb)->nr_frags; i++) {
+		const skb_frag_t *f = &skb_shinfo(skb)->frags[i];
+		unsigned int size = skb_frag_size(f);
+		struct page *page;
+
+		if (off >= size) {
+			off -= size;
+			continue;
+		}
+		if (off + len > size)
+			return NULL;
+		page = skb_frag_page(f);
+		if (!page || PageHighMem(page))
+			return NULL;
+		*ahead = skb_frag_off(f) + off >= CHACHA_BLOCK_SIZE;
+		return (const u8 *)page_address(page) + skb_frag_off(f) + off;
+	}
+	skb_walk_frags(skb, member) {
+		if (off < member->len)
+			return tswg_contig(member, off, len, ahead);
+		off -= member->len;
+	}
+	return NULL;
+}
+
+/*
  * TSWG: tswg_decrypt_gso decrypts each data message of skb, a packet merged
  * by tswg_gro_receive, into a new packet, listed in
  * PACKET_CB(skb)->tswg_out. Messages that fail to decrypt are dropped,
@@ -275,6 +323,8 @@ static bool tswg_decrypt_gso(struct sk_buff *skb, struct noise_keypair *keypair)
 		const struct message_data *hdr;
 		unsigned int enc_len;
 		struct sk_buff *nskb;
+		const u8 *src;
+		bool ok, ahead;
 		u64 nonce;
 
 		len = min(mss, skb->len - off);
@@ -288,15 +338,31 @@ static bool tswg_decrypt_gso(struct sk_buff *skb, struct noise_keypair *keypair)
 		nskb = netdev_alloc_skb(dev, enc_len);
 		if (unlikely(!nskb))
 			continue;
-		if (unlikely(skb_copy_bits(skb, off + sizeof(*hdr),
-					   skb_put(nskb, enc_len), enc_len) ||
-			     !chacha20poly1305_decrypt(nskb->data, nskb->data,
-						       enc_len, NULL, 0, nonce,
-						       keypair->receiving.key))) {
+		/*
+		 * Decrypt straight from skb when the message is contiguous
+		 * there, as it usually is, rather than copy it out and
+		 * decrypt the copy in place: one pass over it fewer.
+		 */
+		src = tswg_contig(skb, off + sizeof(*hdr), enc_len, &ahead);
+		if (likely(src && ahead && skb_headroom(nskb) >= CHACHA_BLOCK_SIZE)) {
+			ok = tswg_aead_decrypt_ahead(skb_put(nskb, enc_len - noise_encrypted_len(0)),
+						     src, enc_len, nonce,
+						     keypair->receiving.key);
+		} else if (src) {
+			ok = tswg_aead_decrypt(skb_put(nskb, enc_len - noise_encrypted_len(0)),
+					       src, enc_len, nonce,
+					       keypair->receiving.key);
+		} else {
+			ok = !skb_copy_bits(skb, off + sizeof(*hdr),
+					    skb_put(nskb, enc_len), enc_len) &&
+			     tswg_aead_decrypt(nskb->data, nskb->data, enc_len,
+					       nonce, keypair->receiving.key);
+			__skb_trim(nskb, enc_len - noise_encrypted_len(0));
+		}
+		if (unlikely(!ok)) {
 			kfree_skb(nskb);
 			continue;
 		}
-		__skb_trim(nskb, enc_len - noise_encrypted_len(0));
 		skb_reset_mac_header(nskb);
 		skb_reset_network_header(nskb);
 		PACKET_CB(nskb)->nonce = nonce;
