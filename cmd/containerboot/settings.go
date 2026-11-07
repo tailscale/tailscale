@@ -34,8 +34,13 @@ type settings struct {
 	Routes       *string
 	// ProxyTargetIP is the destination IP to which all incoming
 	// Tailscale traffic should be proxied. If empty, no proxying
-	// is done. This is typically a locally reachable IP.
+	// is done. This is typically a locally reachable IP. It may also be a
+	// comma-separated list of IPs (at most one per IP family) for
+	// dual-stack destinations.
 	ProxyTargetIP string
+	// ProxyTargetIPs is ProxyTargetIP parsed into individual addresses. It is
+	// filled in by configFromEnv, so a malformed TS_DEST_IP fails at startup.
+	ProxyTargetIPs []netip.Addr
 	// ProxyTargetDNSName is a DNS name to whose backing IP addresses all
 	// incoming Tailscale traffic should be proxied.
 	ProxyTargetDNSName string
@@ -189,11 +194,47 @@ func configFromEnv() (*settings, error) {
 		cfg.LocalAddrPort = strings.Replace(cfg.LocalAddrPort, cfg.PodIPv6, "["+cfg.PodIPv6+"]", 1)
 	}
 
+	if cfg.ProxyTargetIP != "" {
+		ips, err := parseProxyTargetIPs(cfg.ProxyTargetIP)
+		if err != nil {
+			return nil, fmt.Errorf("invalid TS_DEST_IP %q: %w", cfg.ProxyTargetIP, err)
+		}
+		cfg.ProxyTargetIPs = ips
+	}
+
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %v", err)
 	}
 
 	return cfg, nil
+}
+
+// parseProxyTargetIPs parses the value of TS_DEST_IP, which is either a single
+// IP address or, for dual-stack destinations, a comma-separated list of IP
+// addresses with at most one address per IP family. Empty elements (for
+// example from a trailing comma) are rejected.
+func parseProxyTargetIPs(s string) ([]netip.Addr, error) {
+	var ips []netip.Addr
+	var hasV4, hasV6 bool
+	for elem := range strings.SplitSeq(s, ",") {
+		ip, err := netip.ParseAddr(strings.TrimSpace(elem))
+		if err != nil {
+			return nil, err
+		}
+		if ip.Is4() {
+			if hasV4 {
+				return nil, errors.New("more than one IPv4 address")
+			}
+			hasV4 = true
+		} else {
+			if hasV6 {
+				return nil, errors.New("more than one IPv6 address")
+			}
+			hasV6 = true
+		}
+		ips = append(ips, ip)
+	}
+	return ips, nil
 }
 
 // parseAcceptDNS parses any values for Tailscale --accept-dns flag set via
