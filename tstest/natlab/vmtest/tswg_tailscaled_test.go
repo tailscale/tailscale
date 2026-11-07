@@ -309,7 +309,12 @@ func TestTSWGTailscaledPeerRestart(t *testing.T) {
 
 // ttaErr is like tta but returns errors instead of failing the test.
 func ttaErr(n *vmtest.Node, method, path string, body []byte) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	return ttaErrTimeout(n, method, path, body, 30*time.Second)
+}
+
+// ttaErrTimeout is like ttaErr, with a given timeout for the request.
+func ttaErrTimeout(n *vmtest.Node, method, path string, body []byte, timeout time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, method, "http://unused"+path, bytes.NewReader(body))
 	if err != nil {
