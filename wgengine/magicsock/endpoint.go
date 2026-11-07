@@ -2258,6 +2258,44 @@ func (de *endpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
 	}
 }
 
+// currentPathLocked returns the path the next packet to this peer
+// would take, using the same classification as populatePeerStatus
+// and the packet counters. ok is false if the peer is not active
+// (no packet sent within sessionActiveTimeout, mirroring
+// PeerStatus.Active) or has no usable path.
+//
+// Unlike populatePeerStatus it does not call addrForSendLocked,
+// whose WireGuard-only branch mutates bestAddr and extends its
+// trust; a metrics scrape must not change sending state. As a
+// result, a WireGuard-only peer with candidate addresses but no
+// trusted bestAddr yet reports no path here, where
+// populatePeerStatus would report a CurAddr.
+//
+// de.mu must be held.
+func (de *endpoint) currentPathLocked(now mono.Time) (path Path, ok bool) {
+	if de.lastSendExt.IsZero() || now.Sub(de.lastSendExt) >= sessionActiveTimeout {
+		return "", false
+	}
+	if ua := de.bestAddr.epAddr; ua.ap.IsValid() && !now.After(de.trustBestAddrUntil) {
+		switch {
+		case ua.ap.Addr().Is4():
+			if ua.vni.IsSet() {
+				return PathPeerRelayIPv4, true
+			}
+			return PathDirectIPv4, true
+		case ua.ap.Addr().Is6():
+			if ua.vni.IsSet() {
+				return PathPeerRelayIPv6, true
+			}
+			return PathDirectIPv6, true
+		}
+	}
+	if de.derpAddr.IsValid() {
+		return PathDERP, true
+	}
+	return "", false
+}
+
 // stopAndReset stops timers associated with de and resets its state back to zero.
 // It's called when a discovery endpoint is no longer present in the
 // NetworkMap, or when magicsock is transitioning from running to
