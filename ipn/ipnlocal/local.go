@@ -2612,6 +2612,13 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	}
 	b.setDataPlanePeerRoutes()
 
+	// Sync peers whose handshake type changed. This change takes effect
+	// on the next handshake with this peer, so sync before triggering
+	// handshakes based on disco key changes.
+	for k := range deltaRes.HandshakeTypeChanged {
+		b.e.SyncDevicePeer(k)
+	}
+
 	// Mark the WireGuard session for an opportunistic handshake for peers whose
 	// disco key changed in a way that indicates a restart, flushing their dead
 	// session keys; or control catching up to a TSMP learned key.
@@ -7678,7 +7685,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	if nm != nil {
 		login = cmp.Or(profileFromView(nm.UserProfiles[nm.User()]).LoginName, "<missing-profile>")
 	}
-	discoChanged, routeChanged := b.currentNode().SetNetMap(nm)
+	res := b.currentNode().SetNetMap(nm)
 	// A profile reset swaps in a fresh nodeBackend before clearing its map,
 	// so notify on every clear even if this node never received a map.
 	if !b.shutdownCalled && (oldNetMap == nil || nm == nil) {
@@ -7700,16 +7707,24 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 			ms.SetNetworkMap(tailcfg.NodeView{}, nil)
 		}
 	}
+
+	// Sync peers whose handshake type changed. This change takes effect
+	// on the next handshake with this peer, so sync before triggering
+	// handshakes based on disco key changes.
+	for k := range res.HandshakeTypeChanged {
+		b.e.SyncDevicePeer(k)
+	}
+
 	// Reset the WireGuard session for peers whose disco key changed in
 	// a way that indicates a restart, flushing their dead session keys;
 	// each such peer is lazily re-created on demand with current state.
-	for _, k := range discoChanged {
+	for k := range res.DiscoChanged {
 		b.e.MarkDevicePeerForHandshake(k)
 	}
 	// Converge the wireguard-go device for peers whose routes changed
 	// (or that were removed) in the full-netmap resync above; peers not
 	// in routeChanged are already up to date.
-	for k := range routeChanged {
+	for k := range res.ChangedAllowedIPs {
 		b.e.SyncDevicePeer(k)
 	}
 	if login != b.activeLogin {
