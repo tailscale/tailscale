@@ -42,32 +42,79 @@ GSO/GRO:
 * Parallel encryption and decryption across CPUs (per-device crypt
   workqueue), with per-peer ordering.
 
-### What's missing: outer UDP GSO/GRO
+What upstream lacks: outer UDP GSO and GRO. Every encrypted packet took
+its own trip through the UDP/IP stack and the NIC in both directions.
+These are the kernel analogues of what makes wireguard-go fast, and were
+the biggest levers; see the next section.
 
-* Send: each encrypted packet is sent as its own UDP datagram through
-  `udp_tunnel_xmit_skb`, so every MTU-sized packet pays the full IP/UDP
-  output and qdisc/driver cost. Building UDP GSO super-datagrams
-  (`SKB_GSO_UDP_L4`) out of a peer's consecutive encrypted packets would
-  amortize that, and let NICs with UDP segmentation offload do the
-  splitting.
-* Receive: the encap socket has no `gro_receive`, so encrypted datagrams
-  aren't coalesced; each one goes through the IP/UDP input path
-  separately. A `gro_receive`/`gro_complete` pair (as VXLAN, Geneve and
-  FOU have) could batch them per flow before decryption.
-* These are the kernel analogues of what makes wireguard-go fast. In the
-  kernel there are no syscalls to amortize, so the expected win is
-  smaller, but it is likely the biggest remaining throughput lever.
-  Measure before and after.
+### What tswg changes (2026-11-07)
 
-### Shared socket and GRO
+Profiled with the lean harness's sampling profiler (below), then fixed in
+this order. Each step's throughput is bulk TCP, 1 stream, IPv4, 4 vCPUs.
 
-The UDP stack segments GRO'd UDP packets before handing them to a socket
-with `encap_rcv` set (`udp_unexpected_gso`, checked in both 6.8 and 7.4),
-so `UDP_GRO` on the shared socket is safe but wasteful: datagrams get
-coalesced and then immediately split again. In kernel mode, tailscaled
-should not enable `UDP_GRO` (or rely on `UDP_SEGMENT`) on the shared
-socket; only low-volume disco and STUN traffic reaches userspace there,
-and the module's sends don't go through the socket send path at all.
+1. Crypt worker kicks (3.6 -> 5.0 Gbps). Upstream queues the next CPU's
+   crypt worker for every packet, round robin, which usually means an
+   IPI (a VM exit in a VM); on receive, that was half of the softirq
+   CPU. Now a packet needs no kick while some worker is draining the
+   ring (`tswg_busy`, paired with the ring under full barriers), and we
+   recruit another CPU's worker only when the backlog shows the busy
+   ones falling behind (`tswg_crypt_kick`). Workers polling the ring for
+   20us before going idle, to save more IPIs, didn't help and isn't
+   used.
+2. Outer UDP GSO on send (-> 5.8). First by chaining encrypted packets as
+   a GSO `frag_list`, which needed the packets orphaned (segmenting a
+   frag_list of TCP-owned packets underflowed `tcp_wfree`'s refcount),
+   and whose segmentation copied each packet again. Replaced by:
+3. Encryption into page frags (`tswg_encrypt_list`, same throughput,
+   sender CPU 65% -> 43%). Rather than linearize each packet
+   (`skb_cow_data`, a copy) and encrypt in place, the encrypt worker
+   copies it into pages of its own (computing the inner checksum on the
+   way, as `skb_checksum_help` would), encrypts it there, and gathers
+   each run of equal-size messages into one `SKB_GSO_UDP_L4` packet whose
+   payload is those pages. Segmenting that needs only page references,
+   and a NIC with UDP segmentation offload (virtio with USO, here) takes
+   it whole.
+4. Peer queue length. The in-order per-peer queue (`prev_queue`)
+   overflowed at upstream's 1024 packets whenever a decrypt worker was
+   held up, silently, and TCP took the drops as congestion. Its limit
+   now counts packets, not entries (a GRO entry is up to 64), at 2048,
+   and drops are counted in `rx_dropped` and `rx_fifo_errors`.
+5. Outer UDP GRO on receive (-> 9.6). Our sockets have `gro_receive`
+   and `gro_complete`, as UDP tunnels do. They merge consecutive data
+   messages of a flow that use the same key and are all the same size
+   but perhaps the last; UDP then hands the merged packet
+   (`SKB_GSO_UDP_TUNNEL`) to `encap_rcv` whole (without the tunnel type,
+   UDP would segment it first, with software checksums). It goes through
+   the decrypt ring and the peer's queue as one entry, and one worker
+   decrypts each message into a new packet (`tswg_decrypt_gso`).
+   `skb_gro_receive` isn't exported, so socket.c has a copy
+   (`tswg_gro_merge`).
+6. Freeing on the tx worker (-> 10.4). Freeing the original packets in
+   the encrypt workers ran TCP's small queues handlers on all of them at
+   once, contending for the socket lock.
+7. Backpressure (TSQ). Upstream encrypts in place, so a packet stays
+   charged to its socket until the NIC has sent it, and TCP is held to
+   the NIC's pace. Our encrypted packets are new, so without care TCP
+   could fill the NIC's qdisc as fast as we encrypt, which on a slow
+   uplink with a FIFO qdisc would be massive bufferbloat. So the
+   encrypted packet takes over the socket's ownership and charge
+   (`tswg_move_owner`, only for destructors that just uncharge
+   `truesize`: `sock_wfree` and TCP's), with the charge settled to its
+   real size (`tswg_settle_charge`; segments' `truesize` is about twice
+   their length). That cost throughput, since TCP's small queues allow
+   only about 1ms of data in flight, so we set TCP sockets'
+   `sk_pacing_shift` to 9 (about 2ms) as Wi-Fi drivers do (8) for their
+   aggregation.
+8. Where the tx worker runs. Upstream pins a peer's tx worker to one CPU
+   by peer ID. When that's the CPU taking the NIC's interrupts, softirq
+   work starved it, and encrypted packets waited up to 20ms to be sent.
+   It's now queued on the CPU that finished encrypting.
+
+The lean harness's VMs have guest USO off (decided 2026-11-07): with it,
+the host hands VM-to-VM UDP GSO packets to the receiving guest still
+coalesced, which no physical network does and which flatters UDP data
+planes (wireguard-go got 10.5 Gbps with it, 10.0 without).
+`TSWG_LAB_GUEST_USO=1` turns it back on.
 
 ### Measuring
 
@@ -178,6 +225,63 @@ Takeaways:
   from the sender than it can deliver), and at 1.4x the CPU per packet.
 * Latency: the kernel is a little worse idle, better at p50 under load,
   and worse at p99 under load.
+
+Results after the work in "What tswg changes", 2026-11-07 (same setup,
+but guest USO off; one 10-second run of each, so expect a few percent of
+noise; `scripts/leancompare.sh` gives medians of interleaved runs, which
+put TCP 1 stream at 10.1 vs. 9.7 Gbps and 4 streams at 12.3 vs. 10.8):
+
+| metric (IPv4; IPv6 in parentheses) | wireguard-go | tswg | tswg/wg |
+|---|---|---|---|
+| TCP 1 stream, Mbps | 10158 (9929) | 10220 (9474) | 1.01x (0.95x) |
+| TCP 1 stream, sender / receiver CPU-s per GB | 1.93 / 2.37 | 1.81 / 2.12 | 0.94x / 0.90x |
+| TCP 4 streams, Mbps | 11133 (11146) | 11707 (11621) | 1.05x (1.04x) |
+| TCP 4 streams, sender / receiver CPU-s per GB | 1.84 / 2.31 | 1.87 / 2.14 | 1.01x / 0.93x |
+| UDP 64B received, pps (loss) | 242k (79%) | 263k (0%) | 1.08x |
+| UDP 64B receiver CPU per packet, us | 7.3 | 5.2 | 0.72x |
+| RTT idle p50 / p99, ms | 0.61 / 1.27 | 0.92 / 1.95 | 1.50x / 1.53x |
+| RTT under TCP load p50 / p99, ms | 1.57 / 3.16 | 1.49 / 11.68 | 0.95x / 3.69x |
+
+Takeaways:
+
+* Bulk TCP: tswg went from 0.35x to parity or a little better with one
+  stream, and ahead with four, at 6-10% less CPU per byte, so it should
+  pull further ahead where CPU is the limit. From 3.6 Gbps to 10.2,
+  mostly from outer GSO and GRO.
+* Small packets: tswg delivers everything it's sent, at 0.6-0.7x
+  wireguard-go's CPU per packet. (It sends fewer because the sender's
+  socket now waits for the NIC, as it should.)
+* Idle latency is worse, and it's the VM: with the guests booted with
+  `idle=poll` (`TSWG_LAB_CMDLINE=idle=poll`), so that waking a vCPU
+  costs nothing, tswg's idle RTT p50 is 0.08ms, against 0.14 for
+  wireguard-go and 0.06 without a tunnel, and under load 0.71 / 1.70ms
+  (p50 / p99) against 1.07 / 2.36. Each of tswg's handoffs (to an
+  encrypt worker, the tx worker, a decrypt worker, the peer's NAPI
+  thread) can wake a halted vCPU, which costs a VM exit and the host
+  scheduling the vCPU's thread, while wireguard-go's goroutines mostly
+  find their Ps spinning. Cloud VMs pay this too, so it's worth fixing;
+  see the TODO list.
+* p99 under load is worse, and isn't explained yet: instrumenting the
+  queues showed that at full load the receiving VM's crypt workers and
+  tx worker sometimes didn't run for 10-40ms, with entries waiting in
+  the decrypt ring and the tx queue. The host here is itself a VM, with
+  16 CPUs for 8 vCPUs and 8 busy vhost threads; check on bare metal and
+  with fewer queues before redesigning around it.
+
+Tools in the lean harness, for this kind of work:
+
+* `TestLeanProfile` (`TSWG_LEAN_PROFILE=tswg,wggo`): a sampling
+  profiler in the agent (perf_event_open, since the VMs have no perf),
+  per CPU, kernel and Go symbols; `TSWG_PROFILE_FOCUS=sym` reports the
+  call stacks of one symbol.
+* `TestLeanCompare` (`scripts/leancompare.sh`): interleaved repeated
+  runs, reporting medians, for A/B checks; `TSWG_COMPARE_LOAD=rtt` for
+  latency.
+* `TestLeanDebug`: counters (`/proc/net/snmp`, `/proc/net/dev`), the
+  kernel log and the device after a short run.
+* `TSWG_DEBUG_KERNEL=1`: boots a KASAN, lockdep, DEBUG_VM and DEBUG_NET
+  build of the same kernel (`scripts/gokrazy-debug-kernel.sh`). Every
+  lean test fails if a VM's kernel reports a bug.
 
 ## Non-goals
 
@@ -331,10 +435,12 @@ Details and decisions:
   `close()` without any of our locks held. Lock order:
   `device_update_lock`, then `tswg_user_sock_lock`, then
   `socket_update_lock`.
-* `UDP_GRO` on the shared socket is safe: the UDP stack segments GRO'd
-  packets before handing them to a socket with `encap_rcv` set (checked
-  in both 6.8 and 7.4). Making WireGuard itself use GRO is separate perf
-  work.
+* Attaching also installs our `gro_receive`/`gro_complete` (see "Outer
+  UDP GSO and GRO"), which take precedence over the socket's own
+  `UDP_GRO` setting, so whether tailscaled enables `UDP_GRO` doesn't
+  matter. Detaching removes them, first undoing the static call that
+  `setup_udp_tunnel_sock` may have made of `gro_receive` (7.x), which
+  must not outlive the module.
 * We set `sk_allocation = GFP_ATOMIC` on the user socket, as WireGuard and
   L2TP do for their sockets, since we send from atomic context.
 
@@ -678,8 +784,11 @@ install the module.
 * `scripts/`: `probe.sh` (compat probes), `build.sh` (build tswg.ko
   against a KDIR in a private copy of `src/`), `ubuntu-headers.sh` and
   `build-for-ubuntu.sh` (Ubuntu kernels), `gokrazy-kdir.sh` and
-  `build-for-gokrazy.sh` (gokrazy kernels), `extract-ikconfig` (vendored
-  from Linux), `vmtest.sh` (run the natlab vmtests).
+  `build-for-gokrazy.sh` (gokrazy kernels), `gokrazy-debug-kernel.sh`
+  (a KASAN/lockdep build of a gokrazy kernel), `extract-ikconfig`
+  (vendored from Linux), `vmtest.sh` (run the natlab vmtests),
+  `bench.sh` (natlab benchmark), `leanbench.sh` (lean benchmark and
+  smoke test) and `leancompare.sh` (quick A/B medians).
 
 ## TODO
 
@@ -691,21 +800,41 @@ Performance (the primary motivation; see "Performance"):
       kernel, initramfs agent): plaintext, kernel WireGuard, tswg and
       wireguard-go, over IPv4 and IPv6 (`TestLeanBenchmark`,
       `scripts/leanbench.sh`).
-- [ ] Profile kernel WireGuard's bulk path in the lean harness (perf in
-      the guest, or a debug kernel) to find what serializes it: per-packet
-      UDP/IP cost, the single RX queue, per-peer NAPI, workqueue fan-out.
+- [x] Profile the bulk path in the lean harness (an in-agent sampling
+      profiler, `TestLeanProfile`).
+- [x] Crypt worker kicks on demand, not per packet.
+- [x] Outer UDP GSO on send: encrypt into page frags, as
+      `SKB_GSO_UDP_L4` packets.
+- [x] Outer UDP GRO on receive (`gro_receive`/`gro_complete`), decrypting
+      merged packets whole.
+- [x] TCP backpressure (TSQ) through the NIC, and the tx worker on a CPU
+      that isn't starved.
+- [x] Debug kernel (KASAN, lockdep) for the lean harness.
+- [x] Beat wireguard-go on bulk TCP and CPU per byte (2026-11-07; at
+      parity to 1.05x on throughput, 0.90-0.94x CPU per byte; see
+      "Performance").
+- [ ] p99 RTT under load (3.7x wireguard-go's here): find why crypt and tx
+      workers sometimes don't run for 10-40ms on a loaded receiver; try
+      bare metal, fewer NIC queues, and the scheduler's view
+      (`/proc/schedstat`, steal time).
+- [ ] Idle latency in VMs: cut cross-CPU handoffs for lone small packets
+      when nothing is busy (encrypt or decrypt inline, send from the
+      encrypt worker), without bringing back softirq starvation of
+      workers on the NIC's CPU under load.
+- [ ] Zero-copy receive: decrypt in place in the GRO packet's page frags
+      (when not shared) and hand out page-frag packets, instead of
+      copying each message out (`tswg_decrypt_gso`).
+- [ ] TSO from the inner GSO packet: encrypt straight from it, building
+      each segment's headers, instead of `skb_gso_segment` in `wg_xmit`
+      (per-segment skb allocation).
+- [ ] Device-coalesced input: UDP packets that arrive already GSO from
+      the NIC (VM-to-VM with guest USO) skip GRO, so UDP segments them,
+      with software checksums, before `encap_rcv`.
 - [ ] Benchmark subnet router and exit node forwarding.
 - [ ] Benchmarks on real NICs (bare metal or cloud VMs), not just natlab.
-- [ ] Outer UDP GSO on send: coalesce a peer's consecutive encrypted
-      packets into `SKB_GSO_UDP_L4` super-datagrams.
-- [ ] Outer UDP GRO on receive: `gro_receive`/`gro_complete` on the encap
-      socket to batch encrypted datagrams before decryption.
-- [ ] vmtest: shared socket with `UDP_GRO` enabled still works (exercises
-      the segment-before-encap_rcv path at runtime).
-- [ ] tailscaled: don't enable `UDP_GRO`/`UDP_SEGMENT` on the shared
-      socket in kernel mode.
-- [ ] Profile the encrypt/decrypt path (workqueue fan-out, per-peer
-      ordering) under many-flow and many-peer loads.
+- [ ] vmtest: shared socket with `UDP_GRO` enabled still works.
+- [ ] Profile the encrypt/decrypt path under many-flow and many-peer
+      loads.
 - [ ] Measure scaling with many peers; unknown-peer upcall only if needed.
 
 Everything else:
