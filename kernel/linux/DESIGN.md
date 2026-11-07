@@ -296,6 +296,51 @@ virtualization instead of the lab's two:
   vCPU-wakeup cost of tswg's handoffs (see above) is real on Nitro
   too, and is the main latency item.
 
+#### Subnet router (2026-11-07)
+
+Tailscale's most important server role for customers: clients on the
+tailnet reach a private LAN (10.0.0.0/24, say) through a subnet router,
+which forwards between its tunnel and the LAN, masquerading the clients
+(the default, `--snat-subnet-routes`); the LAN's machines aren't on
+Tailscale. wireguard-go is known to fall over with many clients and
+flows. `TestLeanSubnetRouter` (`scripts/subnetbench.sh [ROUTER_CPUS...]`)
+sets this up on EC2: a router (c7i.16xlarge, 25 Gbps, with CPUs taken
+offline to make CPU the limit), a backend on the same VPC subnet (also
+c7i.16xlarge), and 4 clients (c7i.4xlarge) running tswg, each a peer of
+the router, each with 16 TCP flows to the backend at once. `plain`
+routes the clients through the router without a tunnel: the ceiling.
+
+| router CPUs | tswg | wireguard-go | kernel WG | plain | tswg/wg |
+|---|---|---|---|---|---|
+| 4 | 13976 Mbps (96% CPU) | 6627 (68%) | 9756 (91%) | 24890 | 2.1x |
+| 8 | 21868 (86%) | 6808 (39%) | 10009 (70%) | 24897 | 3.2x |
+| 16 | 22654 (49%) | 8217 (19%) | 11489 (65%) | 24898 | 2.8x |
+| 8, 64 flows per client | 21088 (91%) | 6490 (41%) | 9665 (74%) | | 3.2x |
+
+Router CPU seconds per GB forwarded: tswg 2.3-2.9, wireguard-go 2.9-4.2,
+kernel WireGuard 3.2-7.3, plain 0.2-0.4. Medians of 3 interleaved runs.
+
+* tswg scales with the router's CPUs until the network is the limit (at
+  16 CPUs, 22.7 Gbps of inner traffic is about the 25 Gbps link with
+  WireGuard's overhead), at the lowest CPU cost per byte.
+* wireguard-go uses about 3 CPUs however many it has (2.7 of 4, 3.1 of 8,
+  3.0 of 16), with the rest idle: each peer is capped at about 1.6 Gbps
+  by a serial stage (its profile is mostly idle CPUs and context
+  switches; most likely each peer's receive goroutine, which writes to
+  TUN), so it only scales with more peers. Every tswg client got at
+  least 4.6 Gbps.
+* Upstream kernel WireGuard does better than wireguard-go but well below
+  tswg, and least fairly (clients from 0.8 to 2.8 Gbps).
+
+Profile of the tswg router at 4 CPUs (CPU-bound): ChaCha20-Poly1305
+about 23%, the ENA driver about 20%, packet allocation and freeing about
+15%, copying decrypted messages out 8%, zeroing new pages 5% (Ubuntu
+enables `init_on_alloc`). Zero-copy receive (decrypting in place in the
+received pages and handing out packets that reference them) was tried
+and was 7% worse: scatterlist decryption costs more than linear
+decryption of an L1-hot copy, and page-fragment packets cost more
+downstream (header pulls for NAT, more transmit descriptors).
+
 EC2 tooling: `scripts/ec2.sh` (`up`, `start`, `stop`, `down`, `ssh`,
 `status`) manages instances in the sandbox account (profile
 `tswg-sandbox`, us-west-2: the org's SCP allows only some regions, and
@@ -831,8 +876,9 @@ install the module.
   (a KASAN/lockdep build of a gokrazy kernel), `extract-ikconfig`
   (vendored from Linux), `vmtest.sh` (run the natlab vmtests),
   `bench.sh` (natlab benchmark), `leanbench.sh` (lean benchmark and
-  smoke test), `leancompare.sh` (quick A/B medians), and `ec2.sh` and
-  `ec2-idle-stop.sh` (EC2 instances for the harness's remote mode).
+  smoke test), `leancompare.sh` (quick A/B medians), `ec2.sh` and
+  `ec2-idle-stop.sh` (EC2 instances for the harness's remote mode), and
+  `subnetbench.sh` (the subnet router benchmark).
 
 ## TODO
 
@@ -865,16 +911,23 @@ Performance (the primary motivation; see "Performance"):
       when nothing is busy (encrypt or decrypt inline, send from the
       encrypt worker), without bringing back softirq starvation of
       workers on the NIC's CPU under load.
-- [ ] Zero-copy receive: decrypt in place in the GRO packet's page frags
-      (when not shared) and hand out page-frag packets, instead of
-      copying each message out (`tswg_decrypt_gso`).
+- [x] Zero-copy receive: tried, 7% worse for the subnet router (see
+      "Subnet router"); kept out of tree.
 - [ ] TSO from the inner GSO packet: encrypt straight from it, building
       each segment's headers, instead of `skb_gso_segment` in `wg_xmit`
       (per-segment skb allocation).
 - [ ] Device-coalesced input: UDP packets that arrive already GSO from
       the NIC (VM-to-VM with guest USO) skip GRO, so UDP segments them,
       with software checksums, before `encap_rcv`.
-- [ ] Benchmark subnet router and exit node forwarding.
+- [x] Benchmark a subnet router with many clients and flows
+      (`TestLeanSubnetRouter`): 2.1-3.2x wireguard-go.
+- [ ] Subnet router with many more peers than client machines (several
+      tunnels per client machine, in network namespaces), and an exit
+      node benchmark.
+- [ ] tailscaled: loading tswg.ko from an image (rather than modprobe, as
+      DKMS would) must load its dependencies first on distro kernels
+      (udp_tunnel, ip6_udp_tunnel, libcurve25519 are modules on Ubuntu);
+      the harness agent does (`loadModuleDeps`).
 - [x] Benchmarks on cloud VMs (EC2, harness remote mode, `scripts/ec2.sh`).
 - [ ] EC2: c7i.large (2 vCPUs, CPU-bound), and the QEMU lab on a
       c7i.metal-24xl (to see what nesting cost the lab's numbers).

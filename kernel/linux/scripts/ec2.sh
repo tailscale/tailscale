@@ -143,7 +143,7 @@ userdata() {
 set -e
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
-apt-get install -qy build-essential gcc-13 gcc-14 "linux-headers-$(uname -r)"
+apt-get install -qy build-essential gcc-13 gcc-14 nftables "linux-headers-$(uname -r)"
 touch /var/lib/tswg-ready
 EOF
 }
@@ -201,6 +201,9 @@ up)
 			--tag-specifications "$(tags "$name-$i" instance)" "$(tags "$name-$i" volume)" \
 			--query 'Instances[0].InstanceId' --output text)
 		echo "launched $name-$i ($type): $id" >&2
+		# Let it forward packets that aren't its own, as a subnet router does.
+		ec2 wait instance-exists --instance-ids "$id"
+		ec2 modify-instance-attribute --instance-id "$id" --no-source-dest-check
 		ids="$ids $id"
 		i=$((i + 1))
 	done
