@@ -1,4 +1,3 @@
-
 # Tailscale in Docker Compose, with the auth key supplied as a Compose secret.
 #
 # Put the key in ./ts_authkey (one line, nothing else) and lock it down:
