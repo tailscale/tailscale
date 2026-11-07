@@ -52,6 +52,22 @@ which the router forwards to, masquerading. Updated 2026-11-07.
 | c6in.32xlarge, 128 CPUs | 40 x 8 | 72.1 Gbps | | | | 6.14 / - / - | |
 | **c6in.32xlarge, 128 CPUs** | **60 x 4** | **74.3 Gbps** | 6.2 | 8.1 | **12.0x** | 6.25 / 5.57 / 130 | 1.12x |
 | c7i.48xlarge, MTU 8920 (data point only) | 8 x 16 | 49.6 Gbps (line rate) | 17.5 | 49.2 | 2.8x | 2.18 / 1.86 / 15.0 | 1.17x |
+| **c6in.32xlarge, 128 CPUs, idle-residency CPU accounting** | **37 x 4** | **70.9 Gbps** | 6.2 | 8.5 | **11.5x** | **6.50 / 8.57 / 124.6** | **0.76x** |
+
+The same 37 clients through the same router with no tunnel, the
+clients' routes clamped to MTU 1280 (so the same size packets as through
+the tunnels): 88.9 Gbps at 1.27 CPU-s/GB, so tswg gets 0.80x of plain
+routing. Unclamped (jumbo frames), plain routing reaches 165 Gbps; at
+normal MTUs, the platform's per-packet costs limit it too.
+
+CPU accounting: rows before the last measured CPU from `/proc/stat`,
+which on Ubuntu's AWS kernels (no `CONFIG_IRQ_TIME_ACCOUNTING`) counts
+interrupt and softirq work done on otherwise idle CPUs as idle: it showed
+plain routing at 9M packets per second as 1% busy, against 10.5% from
+the CPUs' idle-state residencies, which netbench uses since 2026-11-07.
+So earlier CPU-s/GB figures understate softirq-heavy work: plain routing
+and kernel WireGuard most, tswg somewhat (its crypto runs in kworkers,
+which `/proc/stat` counts), wireguard-go least (mostly user time).
 
 * Limits: wireguard-go about 6-7 Gbps however many peers or CPUs (a
   serial stage). tswg: on small routers, its CPUs; on the c7i.48xlarge,
