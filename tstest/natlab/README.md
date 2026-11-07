@@ -30,7 +30,7 @@ Alternatively, select individual tests with the usual `-run`.
 ## Matrix testing (early stages)
 
 Many tests can effectively be run across multiple variations. To wire up all
-these tests programatically and not manually, a tool exists in
+these tests programmatically and not manually, a tool exists in
 `./cmd/natlab-test-matrix` that will parse the test files in the folder
 `./tstest/natlab/vmtest` and generate a full set of tests to run.
 
