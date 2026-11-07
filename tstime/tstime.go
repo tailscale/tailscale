@@ -7,6 +7,7 @@ package tstime
 import (
 	"context"
 	"encoding"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -34,8 +35,12 @@ func ParseDuration(s string) (time.Duration, error) {
 		if end < 0 {
 			break
 		}
-		start := end - (len(s[:end]) - len(strings.TrimRight(s[:end], "0123456789")))
-		n, err := strconv.Atoi(s[start:end])
+		start := end - (len(s[:end]) - len(strings.TrimRight(s[:end], "0123456789.")))
+		num := s[start:end]
+		if strings.Contains(num, ".") {
+			return 0, fmt.Errorf("tstime: fractional %q value %q is not supported", string(s[end]), num)
+		}
+		n, err := strconv.Atoi(num)
 		if err != nil {
 			return 0, err
 		}
