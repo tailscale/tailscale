@@ -86,12 +86,9 @@ Two harnesses:
   is for full-stack comparisons and the CPU cost inside the VMs, not
   absolute numbers.
 * A lean harness without natlab (decided 2026-11-07; natlab "was never
-  meant to be fast"): two QEMU VMs on a host bridge with tap and
-  vhost-net, booting the gokrazy kernel with a tiny initramfs whose
-  `/init` is a static Go agent. It compares plaintext, stock kernel
-  WireGuard, tswg, and Tailscale's wireguard-go (TUN with offloads, and
-  UDP GSO/GRO) as bare data planes, over IPv4 and IPv6 underlays. See
-  "Lean benchmark harness" below once it exists.
+  meant to be fast"), in tailscale.com's `tstest/tswgbench`, run with
+  `scripts/leanbench.sh` (`-smoke` for the quick correctness test). See
+  "Lean benchmark harness" below.
 
 First natlab results, 2026-11-07 (2 vCPUs per VM, 10-second runs, three
 runs; the numbers below are from run 2, and runs 1 and 3 agreed within a
@@ -108,18 +105,79 @@ few percent):
 | RTT idle p50 / p99, ms | 1.29 / 2.61 | 1.30 / 2.20 | 1.01x / 0.84x |
 | RTT under TCP load p50 / p99, ms | 2.92 / 7.86 | 1.53 / 4.68 | 0.53x / 0.60x |
 
-Takeaways:
+Takeaways from natlab (but see the lean harness results below, which
+overturn the first one):
 
 * Bulk TCP: neither VM was CPU-saturated (50-80% of 2 vCPUs), so
   throughput is capped by natlab, and the CPU cost per byte is about the
-  same. wireguard-go with TUN and UDP offloads is roughly as efficient
-  per byte as kernel WireGuard without outer GSO/GRO, which matches
-  Tailscale's earlier findings. Outer UDP GSO/GRO in the kernel is the
-  lever for bulk throughput (see the TODOs).
+  same.
 * Small packets: the kernel delivers about 1.7x the packets per second
   at about 30% less CPU per packet.
 * Latency under load: the kernel roughly halves RTT p50 and p99 while a
   TCP stream runs; idle RTT is about the same.
+
+### Lean benchmark harness
+
+`tstest/tswgbench` in tailscale.com (2026-11-07):
+
+* Two QEMU VMs (q35, KVM, `-cpu host`, N vCPUs and N virtio-net queues)
+  on a host bridge (`tswgb-br`, 10.77.0.0/24 and fd77::/64) with
+  multiqueue taps and vhost-net. Creating the bridge and taps needs
+  passwordless sudo; the taps are owned by the user so QEMU isn't root.
+  Everything is removed afterwards.
+* The VMs boot the natlab gokrazy kernel with a tiny gzipped cpio
+  initramfs: `/init` is a static Go agent (`tstest/tswgbench/agent`),
+  plus `/tswg.ko`. Booting takes about a second.
+* The agent brings up eth0 from the kernel command line and serves an
+  HTTP API: set up `wg0` with one of the data planes, tear it down, show
+  the device, and the shared `netbench` endpoints (the same benchmark
+  code tta serves for natlab, now in `tstest/tswgbench/netbench`).
+* Data planes: `plain` (no tunnel, the ceiling), `kernelwg` (the
+  kernel's own WireGuard, driven by the tswg Go client with family
+  "wireguard"), `tswg`, and `wggo` (Tailscale's wireguard-go fork with a
+  TUN device and its standard bind, so TUN offloads and UDP GSO/GRO, as
+  tailscaled uses, but without magicsock). All tunnels use MTU 1280, as
+  Tailscale does.
+* `TestLeanSmoke` (about 25 seconds) checks every data plane over IPv4
+  and IPv6 underlays, which natlab can't (it's IPv4-only here).
+  `TestLeanBenchmark` runs the suite for each.
+
+First results, 2026-11-07, IPv4 underlay, 4 vCPUs per VM, 10-second runs
+(IPv6 is within a few percent; tswg and kernel WireGuard are the same
+within noise everywhere, so the fork costs nothing):
+
+| metric | wireguard-go | tswg | kernel WG | plaintext |
+|---|---|---|---|---|
+| TCP 1 stream, Mbps | 10498 | 3645 | 3647 | 16449 |
+| TCP 1 stream, sender / receiver CPU (% of VM) | 58 / 62 | 29 / 55 | 29 / 56 | 21 / 15 |
+| TCP 1 stream, sender / receiver CPU-s per GB | 1.96 / 2.06 | 3.00 / 5.20 | 2.95 / 5.22 | 0.45 / 0.31 |
+| TCP 4 streams, Mbps | 12577 | 4376 | 4380 | 47158 |
+| UDP 64B received, pps | 234k | 174k | 170k | 874k |
+| UDP 64B receiver CPU per packet, us | 6.7 | 9.2 | 9.3 | 1.3 |
+| RTT idle p50 / p99, ms | 0.57 / 1.33 | 0.63 / 2.13 | 0.70 / 1.78 | 0.24 / 0.92 |
+| RTT under TCP load p50 / p99, ms | 1.43 / 2.85 | 1.20 / 5.29 | 0.99 / 5.33 | 0.20 / 0.74 |
+
+Takeaways:
+
+* Kernel WireGuard, as upstream designed it, is far behind Tailscale's
+  wireguard-go for bulk traffic: about a third of the throughput, at 1.5x
+  (sender) to 2.5x (receiver) the CPU per byte. It isn't CPU-bound
+  either (29% and 55% of 4 vCPUs), so something serializes it. The
+  natlab results only looked like parity because natlab capped both.
+* Likely causes, to verify by profiling: every 1280-byte packet takes
+  its own trip through the UDP/IP stack and the NIC in both directions
+  (no outer UDP GSO on send, no UDP GRO on receive), while wireguard-go
+  batches with UDP GSO/GRO and TUN offloads; the single WireGuard UDP
+  flow lands on one NIC RX queue and so one CPU; and each peer's
+  decrypted packets go through one NAPI context.
+* So outer UDP GSO/GRO, and finding where the kernel serializes, are the
+  critical performance work, ahead of everything else. tswg's reason to
+  exist is to beat wireguard-go, and today it doesn't on bulk throughput.
+* Small packets are closer: the kernel receives 0.75x the packets of
+  wireguard-go, but at much lower loss (wireguard-go accepts far more
+  from the sender than it can deliver), and at 1.4x the CPU per packet.
+* Latency: the kernel is a little worse idle, better at p50 under load,
+  and worse at p99 under load.
 
 ## Non-goals
 
@@ -629,9 +687,13 @@ Performance (the primary motivation; see "Performance"):
 
 - [x] natlab benchmark harness: tailscaled kernel mode vs. TUN mode on the
       same VMs (`TestTSWGBenchmark`, `scripts/bench.sh`).
-- [ ] Lean benchmark harness without natlab (tap + vhost-net, gokrazy
+- [x] Lean benchmark harness without natlab (tap + vhost-net, gokrazy
       kernel, initramfs agent): plaintext, kernel WireGuard, tswg and
-      wireguard-go, over IPv4 and IPv6.
+      wireguard-go, over IPv4 and IPv6 (`TestLeanBenchmark`,
+      `scripts/leanbench.sh`).
+- [ ] Profile kernel WireGuard's bulk path in the lean harness (perf in
+      the guest, or a debug kernel) to find what serializes it: per-packet
+      UDP/IP cost, the single RX queue, per-peer NAPI, workqueue fan-out.
 - [ ] Benchmark subnet router and exit node forwarding.
 - [ ] Benchmarks on real NICs (bare metal or cloud VMs), not just natlab.
 - [ ] Outer UDP GSO on send: coalesce a peer's consecutive encrypted
@@ -696,8 +758,9 @@ Everything else:
       (`TestTSWGTailscaledPeerRestart`).
 - [x] Kernel mode: event-driven everything, no polling
       (`TestTSWGTailscaledPathFallback`, `TestTSWGTailscaledIdleTrustExpiry`).
-- [ ] Kernel mode: IPv6-only and dual-stack tests (in the lean harness,
-      since natlab here is IPv4-only).
+- [x] IPv6 underlay tests for tswg (`TestLeanSmoke`).
+- [ ] Kernel mode (tailscaled) over IPv6: needs control and DERP outside
+      natlab, or IPv6 in natlab.
 - [ ] Flake: in 1 of 4 natlab benchmark runs, after both nodes restarted
       tailscaled into kernel mode at nearly the same time, the tunnel
       didn't carry traffic for over 10 seconds (n1 had cleared its
