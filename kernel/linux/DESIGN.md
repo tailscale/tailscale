@@ -342,16 +342,73 @@ tag (`ts_omit_tswg` drops it, and the minimal builds don't include it).
   DERP). Both start tailscaled before the module is loaded, so they also
   cover the TUN fallback, then load the module and restart tailscaled.
 
-Known gaps in kernel mode (all TODOs):
+* wireguard-go must never get peers in kernel mode: if it did (from its
+  lazy peer lookup on an outbound packet or an incoming handshake), it
+  would handshake over magicsock with our keys and fight the kernel's
+  sessions. So in kernel mode the engine doesn't install wireguard-go's
+  `PeerLookupFunc` or `PeerByIPPacketFunc` (decided 2026-11-07).
+
+### TSMP and other packets tailscaled sends to peers
+
+Implemented 2026-11-07 (`wgengine/kerneldp_tsmp_linux.go`). With
+wireguard-go, TSMP (IP protocol 99) and the other packets tailscaled
+itself exchanges with peers pass through the tstun.Wrapper between the
+TUN device and wireguard-go. In kernel mode:
+
+* Outbound: tstun gets an outbound inject hook
+  (`tstun.Wrapper.SetOutboundInjectHook`). In kernel mode, everything
+  tailscaled injects towards peers (TSMP pings, pongs and disco key
+  advertisements, ICMP echo replies, netstack output) goes to it instead
+  of wireguard-go's queue, and the kernel data plane writes it, header
+  and all, to a raw `IPPROTO_RAW` socket bound to tailscale0 (IPv4 and
+  IPv6), so the kernel routes it into the tswg device, which encrypts it.
+* Inbound: raw `IPPROTO_TSMP` sockets bound to tailscale0 receive the
+  TSMP packets peers send, and the data plane feeds them to
+  `tstun.Wrapper.Write` as wireguard-go would, which handles them as
+  usual (answering pings, delivering pongs, learning disco keys). IPv6
+  raw sockets don't return the IP header, so it's rebuilt from the
+  source address and the `IPV6_PKTINFO` and `IPV6_HOPLIMIT` control
+  messages. With such a raw socket open, the kernel doesn't answer TSMP
+  with ICMP protocol unreachable.
+* wireguard-go sends a "priority message" (a TSMP disco key
+  advertisement) whenever it establishes a session. The kernel data plane
+  does the same when the kernel's last-handshake time for a peer moves
+  (so up to a second late).
+* Tested by `TestTSWGTailscaledTSMP`: TSMP pings both ways, and each side
+  receives the other's disco key advertisement
+  (`magicsock_tsmp_disco_key_advertisement_received`).
+
+### Peer restarts
+
+Implemented 2026-11-07. When a peer's disco key changes in a way that
+means it restarted (and so lost its WireGuard keys), ipnlocal calls
+`Engine.MarkDevicePeerForHandshake`. wireguard-go then handshakes after
+the next outbound packet. In kernel mode, the data plane instead clears
+the kernel's session with the peer (`TSWGPEER_A_CLEAR_SESSION`: forget
+the keypairs and any handshake in progress, as on suspend, and reset the
+handshake rate limit), so the next packet is staged and starts a new
+handshake right away. In the same request it updates the peer's endpoint
+from magicsock's current path, since a restarted peer usually has a new
+port, and the handshake should go there rather than wait for the next
+reconcile.
+
+Without this, the kernel keeps sending with dead keys until WireGuard's
+own timers start a new handshake about 15 seconds later.
+`TestTSWGTailscaledPeerRestart` checks that the first pings after a peer
+restart get through (and fails without the session clearing).
+
+### Known gaps in kernel mode
+
+Deliberately deferred (2026-11-07: "easy later, not a priority yet"):
 
 * No packet filter: the engine's filter runs on packets passing through
   userspace, which kernel-mode packets don't. Peers can reach anything
-  on the node. This must be fixed (nftables, or in the module) before
-  anyone uses this for real.
-* No netstack, so no MagicDNS at 100.100.100.100, Taildrop, Tailscale SSH
-  via netstack, or TSMP; peerapi and the like must use kernel sockets.
-* `MarkDevicePeerForHandshake` (peer restarted, stale keys) doesn't make
-  the kernel re-handshake.
+  on the node. Must be done (nftables, or in the module) before anyone
+  uses this for real.
+* No MagicDNS at 100.100.100.100 (or other netstack-provided services).
+
+Other TODOs:
+
 * Path switches lag by up to a second (polling); an event from magicsock
   when a peer's best path changes would make them immediate.
 * Only magicsock's first socket per family is shared; `UDPSockets` > 1
@@ -540,12 +597,15 @@ Everything else:
       (`TestTSWGTailscaledDERP`).
 - [x] tailscaled integration on the tailscale.com `bradfitz/tswg` branch
       (`TestTSWGTailscaledDirect`).
-- [ ] Kernel mode: packet filter (security; required before real use).
+- [ ] Kernel mode: packet filter (security; required before real use;
+      deferred).
 - [ ] Kernel mode: hybrid PQ handshakes (advertise no support, or
       implement them in tswg).
-- [ ] Kernel mode: MagicDNS, TSMP and the other netstack-provided
-      services.
-- [ ] Kernel mode: force a re-handshake on MarkDevicePeerForHandshake.
+- [x] Kernel mode: TSMP (`TestTSWGTailscaledTSMP`).
+- [ ] Kernel mode: MagicDNS and the other netstack-provided services
+      (deferred).
+- [x] Kernel mode: clear the session on MarkDevicePeerForHandshake
+      (`TestTSWGTailscaledPeerRestart`).
 - [ ] Kernel mode: event-driven path switches instead of 1s polling.
 - [ ] Kernel mode: IPv6-only and dual-stack vmtests.
 - [x] Fallback to wireguard-go when tswg is unavailable (module not
