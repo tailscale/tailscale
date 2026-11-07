@@ -268,6 +268,49 @@ Takeaways:
   16 CPUs for 8 vCPUs and 8 busy vhost threads; check on bare metal and
   with fewer queues before redesigning around it.
 
+On EC2 (2026-11-07), with the lean harness in remote mode (below): two
+c7i.xlarge instances (4 vCPUs, Nitro, ENA, Ubuntu 24.04's 7.0.0-1014-aws
+kernel) in a cluster placement group in us-west-2, one level of
+virtualization instead of the lab's two:
+
+| metric (IPv4; IPv6 in parentheses) | wireguard-go | tswg | kernel WG |
+|---|---|---|---|
+| TCP 1 stream, Mbps | 7244 (7027) | 7253 (7033) | 5349 (6605) |
+| TCP 1 stream, sender / receiver CPU-s per GB | 2.59 / 2.97 | 2.48 / 2.47 | 2.68 / 3.80 |
+| TCP 4 streams, Mbps | 7265 | 7266 | 5646 |
+| TCP 4 streams, sender / receiver CPU-s per GB | 2.53 / 2.95 | 2.59 / 2.94 | 2.70 / 3.80 |
+| UDP 64B received, pps (loss) | 328k (58%) | 536k (0.06%) | 430k (1.7%) |
+| UDP 64B receiver CPU per packet, us | 3.5 | 2.4 | 4.9 |
+| RTT idle p50 / p99, ms | 0.47 / 0.71 | 0.92 / 1.18 | 0.85 / 1.23 |
+| RTT under TCP load p50 / p99, ms | 3.57 / 5.12 | 0.82 / 5.01 | 1.28 / 3.13 |
+
+* Both tunnels hit the same cap of about 7.25 Gbps (inner), with 1 or 4
+  streams: EC2's limit for the one outer UDP flow (or its packet rate),
+  not either data plane. So on EC2, CPU per byte is what tells them
+  apart: tswg's receiver uses up to 17% less, and the sender up to 7%.
+  Smaller instances (c7i.large), where CPU is the limit, are next.
+* Small packets: 1.6x wireguard-go's packets delivered, at 0.7x the CPU.
+* Latency under load: p50 is a quarter of wireguard-go's (TCP
+  backpressure keeps tswg's queues short), p99 the same (IPv6: 2.3x).
+* Idle latency is about twice wireguard-go's, as in the lab, so the
+  vCPU-wakeup cost of tswg's handoffs (see above) is real on Nitro
+  too, and is the main latency item.
+
+EC2 tooling: `scripts/ec2.sh` (`up`, `start`, `stop`, `down`, `ssh`,
+`status`) manages instances in the sandbox account (profile
+`tswg-sandbox`, us-west-2: the org's SCP allows only some regions, and
+requires IMDSv2). Everything it creates is named `bradfitz-tswg...` and
+tagged `owner=claude-tswg`, the only instances the IAM user may manage.
+`scripts/ec2-idle-stop.sh install` sets up a systemd user timer on the
+(always-on) dev host that stops the instances once
+`~/.cache/tslinux/ec2/last-used` is 30 minutes old; `ec2.sh` and the
+harness's remote mode touch it while in use. Remote mode
+(`TSWG_REMOTE=~/.cache/tslinux/ec2/hosts.json`, which `ec2.sh` writes)
+copies the agent and the module sources to the instances, builds tswg.ko
+on each against its own kernel (with the compiler in `/proc/version`),
+and runs the agent there under systemd; every lean test and script
+(`leanbench.sh`, `leancompare.sh`) then runs unchanged.
+
 Tools in the lean harness, for this kind of work:
 
 * `TestLeanProfile` (`TSWG_LEAN_PROFILE=tswg,wggo`): a sampling
@@ -788,7 +831,8 @@ install the module.
   (a KASAN/lockdep build of a gokrazy kernel), `extract-ikconfig`
   (vendored from Linux), `vmtest.sh` (run the natlab vmtests),
   `bench.sh` (natlab benchmark), `leanbench.sh` (lean benchmark and
-  smoke test) and `leancompare.sh` (quick A/B medians).
+  smoke test), `leancompare.sh` (quick A/B medians), and `ec2.sh` and
+  `ec2-idle-stop.sh` (EC2 instances for the harness's remote mode).
 
 ## TODO
 
@@ -831,7 +875,9 @@ Performance (the primary motivation; see "Performance"):
       the NIC (VM-to-VM with guest USO) skip GRO, so UDP segments them,
       with software checksums, before `encap_rcv`.
 - [ ] Benchmark subnet router and exit node forwarding.
-- [ ] Benchmarks on real NICs (bare metal or cloud VMs), not just natlab.
+- [x] Benchmarks on cloud VMs (EC2, harness remote mode, `scripts/ec2.sh`).
+- [ ] EC2: c7i.large (2 vCPUs, CPU-bound), and the QEMU lab on a
+      c7i.metal-24xl (to see what nesting cost the lab's numbers).
 - [ ] vmtest: shared socket with `UDP_GRO` enabled still works.
 - [ ] Profile the encrypt/decrypt path under many-flow and many-peer
       loads.
