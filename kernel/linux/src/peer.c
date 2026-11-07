@@ -229,7 +229,9 @@ void wg_peer_put(struct wg_peer *peer)
 
 int __init wg_peer_init(void)
 {
-	peer_cache = KMEM_CACHE(wg_peer, 0);
+	/* TSWG: not KMEM_CACHE, whose names would clash with wireguard.ko. */
+	peer_cache = kmem_cache_create("tswg_peer", sizeof(struct wg_peer),
+				       __alignof__(struct wg_peer), 0, NULL);
 	return peer_cache ? 0 : -ENOMEM;
 }
 

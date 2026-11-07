@@ -161,7 +161,11 @@ int wg_ratelimiter_init(void)
 	if (++init_refcnt != 1)
 		goto out;
 
-	entry_cache = KMEM_CACHE(ratelimiter_entry, 0);
+	/* TSWG: not KMEM_CACHE, whose names would clash with wireguard.ko. */
+	entry_cache = kmem_cache_create("tswg_ratelimiter_entry",
+					sizeof(struct ratelimiter_entry),
+					__alignof__(struct ratelimiter_entry),
+					0, NULL);
 	if (!entry_cache)
 		goto err;
 

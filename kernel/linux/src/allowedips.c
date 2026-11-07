@@ -411,7 +411,11 @@ struct wg_peer *wg_allowedips_lookup_src(struct allowedips *table,
 
 int __init wg_allowedips_slab_init(void)
 {
-	node_cache = KMEM_CACHE(allowedips_node, 0);
+	/* TSWG: not KMEM_CACHE, whose names would clash with wireguard.ko. */
+	node_cache = kmem_cache_create("tswg_allowedips_node",
+				       sizeof(struct allowedips_node),
+				       __alignof__(struct allowedips_node),
+				       0, NULL);
 	return node_cache ? 0 : -ENOMEM;
 }
 
