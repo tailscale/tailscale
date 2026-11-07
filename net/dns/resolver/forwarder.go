@@ -227,13 +227,19 @@ func getEDNSBufferSize(packet []byte) (uint16, bool) {
 	return requestedSize, opt != nil
 }
 
-// checkResponseSizeAndSetTC sets the TC (truncated) flag in the DNS header when
-// the response exceeds the maximum UDP size. If no EDNS OPT record is present
-// in the request, it sets the TC flag when the response is bigger than 512 bytes
-// per RFC 1035. If an EDNS OPT record is present, it sets the TC flag when the
-// response is bigger than the EDNS buffer size. The response buffer is not
-// truncated; only the TC flag is set. Returns the response unchanged except for
-// the TC flag being set if needed.
+// checkResponseSizeAndSetTC makes sure a response to a UDP query fits into the
+// requestor's UDP payload size. If no EDNS OPT record is present in the
+// request, the limit is 512 bytes per RFC 1035, section 4.2.1. If an EDNS OPT
+// record is present, the limit is the advertised payload size, where values
+// lower than 512 are treated as 512 per RFC 6891, section 6.2.3.
+//
+// Responses that fit are returned unchanged. Responses that exceed the limit
+// are replaced by a minimal truncated response (see [truncateResponse]): the
+// header with the TC flag set, the question section and, if the request
+// carried EDNS, the response's OPT record. Setting only the TC flag while
+// still sending the full, oversized message is not enough: the message no
+// longer fits the requestor's buffer, so it may be dropped, fragmented, or cut
+// in the middle of a record by an intermediate stub resolver.
 func checkResponseSizeAndSetTC(response []byte, request []byte, family string, logf logger.Logf) []byte {
 	const defaultUDPSize = 512 // default maximum UDP DNS packet size per RFC 1035
 
@@ -242,32 +248,137 @@ func checkResponseSizeAndSetTC(response []byte, request []byte, family string, l
 		return response
 	}
 
-	// Check if TC flag is already set
 	if len(response) < headerBytes {
-		return response
-	}
-	if truncatedFlagSet(response) {
-		// TC flag already set, nothing to do
 		return response
 	}
 
 	ednsSize, hasEDNS := getEDNSBufferSize(request)
 
 	// Determine maximum allowed size
-	var maxSize int
+	maxSize := defaultUDPSize
 	if hasEDNS {
-		maxSize = int(ednsSize)
-	} else {
-		// No EDNS: enforce default UDP size limit per RFC 1035
-		maxSize = defaultUDPSize
+		// RFC 6891, section 6.2.3: "Values lower than 512 MUST be
+		// treated as equal to 512."
+		maxSize = max(int(ednsSize), defaultUDPSize)
 	}
 
-	// Check if response exceeds maximum size
-	if len(response) > maxSize {
-		setTCFlag(response)
+	if len(response) <= maxSize {
+		return response
 	}
 
-	return response
+	return truncateResponse(response, hasEDNS, maxSize)
+}
+
+// truncateResponse returns a minimal response derived from response, with the
+// TC flag set: the header, the question section and, if includeOPT is true and
+// response carries one that fits into maxSize, the OPT pseudo-RR. The answer,
+// authority and other additional records are dropped.
+//
+// This matches what other resolvers do when a message does not fit (e.g.
+// Unbound when the answer RRset does not fit) and what RFC 6891, section 7
+// requires of a truncated EDNS response ("The minimal response MUST be the DNS
+// header, question section, and an OPT record. This MUST also occur when a
+// truncated response (using the DNS header's TC bit) is returned."). Clients
+// discard the rest of a truncated response anyway and retry over TCP (RFC 2181,
+// section 9), so returning partial RRsets would only add risk.
+//
+// If response cannot be parsed, only its header is returned, with the TC flag
+// set and all section counts zeroed.
+func truncateResponse(response []byte, includeOPT bool, maxSize int) []byte {
+	headerOnly := func() []byte {
+		out := make([]byte, headerBytes)
+		copy(out, response[:headerBytes])
+		setTCFlag(out)
+		// Zero QDCOUNT, ANCOUNT, NSCOUNT and ARCOUNT.
+		clear(out[4:headerBytes])
+		return out
+	}
+
+	var p dns.Parser
+	h, err := p.Start(response)
+	if err != nil {
+		return headerOnly()
+	}
+	questions, err := p.AllQuestions()
+	if err != nil {
+		return headerOnly()
+	}
+
+	var (
+		optHeader dns.ResourceHeader
+		optBody   dns.OPTResource
+		haveOPT   bool
+	)
+	if includeOPT {
+		haveOPT = findResponseOPT(&p, &optHeader, &optBody)
+	}
+
+	build := func(withOPT bool) ([]byte, error) {
+		hdr := h
+		hdr.Truncated = true
+		b := dns.NewBuilder(make([]byte, 0, maxSize), hdr)
+		if err := b.StartQuestions(); err != nil {
+			return nil, err
+		}
+		for _, q := range questions {
+			if err := b.Question(q); err != nil {
+				return nil, err
+			}
+		}
+		if withOPT {
+			if err := b.StartAdditionals(); err != nil {
+				return nil, err
+			}
+			if err := b.OPTResource(optHeader, optBody); err != nil {
+				return nil, err
+			}
+		}
+		return b.Finish()
+	}
+
+	if haveOPT {
+		if out, err := build(true); err == nil && len(out) <= maxSize {
+			return out
+		}
+	}
+	if out, err := build(false); err == nil && len(out) <= maxSize {
+		return out
+	}
+	return headerOnly()
+}
+
+// findResponseOPT skips the answer and authority sections of the message p is
+// positioned at (just after the question section) and looks for an OPT
+// pseudo-RR in the additional section. It reports whether one was found and,
+// if so, stores it in hdr and body. Parse errors (e.g. a message that was
+// already cut short) are treated as "no OPT record".
+func findResponseOPT(p *dns.Parser, hdr *dns.ResourceHeader, body *dns.OPTResource) bool {
+	if err := p.SkipAllAnswers(); err != nil {
+		return false
+	}
+	if err := p.SkipAllAuthorities(); err != nil {
+		return false
+	}
+	for {
+		h, err := p.AdditionalHeader()
+		if err != nil {
+			// Either dns.ErrSectionDone or a parse error.
+			return false
+		}
+		if h.Type != dns.TypeOPT {
+			if err := p.SkipAdditional(); err != nil {
+				return false
+			}
+			continue
+		}
+		opt, err := p.OPTResource()
+		if err != nil {
+			return false
+		}
+		*hdr = h
+		*body = opt
+		return true
+	}
 }
 
 // dnsForwarderFailing should be raised when the forwarder is unable to reach the
@@ -836,6 +947,9 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		case dns.RCodeServerFailure, dns.RCodeRefused:
 			return nil, rcodeResponseError{rcode, resp}
 		}
+		// The response may have come from the TCP fallback (e.g. the
+		// UDP query timed out); make sure it fits the UDP client too.
+		resp = checkResponseSizeAndSetTC(resp, fq.packet, fq.family, f.logf)
 		return &Response{Bs: resp}, nil
 	}
 
