@@ -49,6 +49,10 @@ type message interface {
 
 // osMon is the interface that each operating system-specific
 // implementation of the link monitor must implement.
+//
+// Lock order: Monitor.mu is acquired after any osMon lock. An osMon
+// may acquire Monitor.mu (e.g. winMon calls Monitor.isActive from OS
+// callbacks); Monitor must not call osMon methods while holding it.
 type osMon interface {
 	Close() error
 
@@ -72,7 +76,7 @@ type Monitor struct {
 	b       *eventbus.Client
 	changed *eventbus.Publisher[ChangeDelta]
 
-	om     osMon         // nil means not supported on this platform
+	om     osMon         // nil means not supported on this platform; its methods must not be called with mu held
 	change chan bool     // send false to wake poller, true to also force ChangeDeltas be sent
 	stop   chan struct{} // closed on Stop
 	static bool          // static Monitor that doesn't actually monitor
@@ -522,14 +526,14 @@ func (m *Monitor) Close() error {
 	if m.wallTimer != nil {
 		m.wallTimer.Stop()
 	}
+	started := m.started
+	m.mu.Unlock()
 
+	// Close the OS monitor without holding m.mu; see the osMon lock order.
 	var err error
 	if m.om != nil {
 		err = m.om.Close()
 	}
-
-	started := m.started
-	m.mu.Unlock()
 
 	if started {
 		m.goroutines.Wait()
