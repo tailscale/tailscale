@@ -89,7 +89,9 @@ and the module's sends don't go through the socket send path at all.
   out-of-tree Rust modules need a kernel built with CONFIG_RUST and a
   matching rustc, which most distro kernels can't provide. Revisit later.
 * Changing the WireGuard wire protocol. tswg must interoperate with every
-  existing Tailscale peer running wireguard-go.
+  existing Tailscale peer running wireguard-go. (But see "Hybrid
+  post-quantum handshakes": wireguard-go is about to grow a handshake
+  tswg doesn't have.)
 * Multipath or "spray" sending in the kernel. When disco hasn't yet
   trusted a direct path, tailscaled sprays from userspace (see "DERP and
   spray").
@@ -272,22 +274,108 @@ Implemented 2026-11-06:
 Changing a peer's endpoint does not re-key or reset the noise session in
 upstream WireGuard either; that is already fine.
 
-### DERP and spray
+### DERP, peer relays and spray: the loopback bridge
 
-DERP stays in tailscaled. A peer whose current path is DERP gets a
-loopback endpoint (as planned back in 2020):
+Implemented 2026-11-07 in tailscaled (`wgengine/kerneldp_linux.go`); it
+needed no kernel changes. The rule: the kernel handles direct UDP paths
+by itself; everything else (DERP, peer relays, and the untrusted-path
+spray) goes through tailscaled's loopback bridge.
 
-* Each DERP-pathed peer gets its own address in 127.0.0.0/8 with a common
-  port P, so tailscaled can bind one socket on `*:P`, read the destination
-  with `IP_PKTINFO` and map it back to the peer. That mapping is needed
-  because WireGuard transport messages only carry a receiver index.
-* For inbound DERP traffic, tailscaled sends to tswg's socket from
-  127.x.y.z:P (setting the source with `ipi_spec_dst`).
-* Spray mode (untrusted direct path): tailscaled points the peer at its
-  loopback endpoint, forwards each ciphertext packet to DERP, and also
-  sends a copy to the candidate direct address via the shared socket (same
-  source port). Once disco trusts the direct path, tailscaled switches the
-  kernel endpoint to it.
+* The bridge is one UDP socket bound to `0.0.0.0:P` with
+  `SO_BINDTODEVICE lo` (so only local traffic reaches it) and `IP_PKTINFO`.
+* Each peer gets its own address in 127.0.0.0/8 (127.0.0.2 upwards; the
+  mapping lives for the process's lifetime). When the kernel shouldn't
+  send to a peer directly, the peer's kernel endpoint is set to that
+  address and port P. The bridge reads what the kernel sends there, maps
+  the destination (from `IP_PKTINFO`) back to the peer, and hands the
+  ciphertext to magicsock's `endpoint.send`, which sends it the way it
+  would a packet from wireguard-go: DERP, a peer relay, or both DERP and
+  the candidate UDP path while that isn't trusted yet (the spray).
+* In kernel mode, magicsock passes every WireGuard packet it would have
+  handed to wireguard-go (from DERP, or Geneve-wrapped from a peer relay)
+  to the bridge instead (`magicsock.Options.KernelWGRecv`), which injects
+  it into the kernel by sending it to `127.0.0.1:<kernel listen port>`
+  from the peer's 127.x.y.z:P (`ipi_spec_dst`). The kernel finds the peer
+  by receiver index (or, for handshake initiations, by decrypting the
+  static key), so the source only matters for handshake rate limiting and
+  cookie replies, which stay per-peer because each peer has its own
+  address. Packets from unknown peers are injected from 127.0.0.1.
+* A reconcile loop (every second, and on `SyncDevicePeer` and key
+  changes) sets each peer's kernel endpoint: magicsock's best address if
+  it's direct and trusted (`magicsock.Conn.KernelPeerPaths`), else the
+  peer's bridge address.
+
+### tailscaled integration
+
+Implemented 2026-11-07 on the tailscale.com `bradfitz/tswg` branch. Opt
+in with `TS_DEBUG_TSWG=1` on Linux; the code is behind the `tswg` feature
+tag (`ts_omit_tswg` drops it, and the minimal builds don't include it).
+
+* Startup: if the module is loaded, tailscaled creates a tswg device
+  named tailscale0 (replacing any stale one) with the usual TUN MTU, and
+  gives the engine and router a fake `tun.Device` that only reports that
+  name (`tswg.NewTailscaleDevice`), so the router configures addresses
+  and routes on the tswg device. If the module isn't loaded, tailscaled
+  logs why and falls back to TUN and wireguard-go. tailscaled doesn't load
+  the module itself.
+* The engine (`wgengine.Config.KernelWG`) keeps wireguard-go running with
+  no peers, since its receive loops are what drive magicsock's socket
+  reads (disco, STUN). The kernel data plane:
+  * sets the device fwmark to Tailscale's bypass mark
+    (`tsconst.LinuxBypassMarkNum`), so the kernel's encrypted packets
+    don't route into tailscale0 (for example via an exit node's default
+    route), as magicsock's sockets do;
+  * shares magicsock's first UDP socket per family with the kernel, again
+    after every rebind (`magicsock.Conn.SetKernelSocketHook`);
+  * reconciles the kernel's peers with magicsock's peers and the live
+    per-peer config (`SetPeerConfigFunc`, whose peer set is otherwise
+    lazy): allowed IPs, preshared key, endpoint, and no-roam on all of
+    them, in netlink messages of at most 32 peers;
+  * reads the kernel's per-peer counters back each second, feeds direct
+    path activity to magicsock (`NoteKernelActivity`), so it keeps
+    heartbeating active sessions and the direct path stays trusted, and
+    reports per-peer status (bytes, last handshake) in the engine status.
+* Tests: `TestTSWGTailscaledDirect` (two gokrazy VMs behind easy NATs;
+  the kernel ends up sending directly to the peer's NAT-traversed public
+  address) and `TestTSWGTailscaledDERP` (hard NATs on both sides; the
+  kernel peer stays on its bridge address and everything flows over
+  DERP). Both start tailscaled before the module is loaded, so they also
+  cover the TUN fallback, then load the module and restart tailscaled.
+
+Known gaps in kernel mode (all TODOs):
+
+* No packet filter: the engine's filter runs on packets passing through
+  userspace, which kernel-mode packets don't. Peers can reach anything
+  on the node. This must be fixed (nftables, or in the module) before
+  anyone uses this for real.
+* No netstack, so no MagicDNS at 100.100.100.100, Taildrop, Tailscale SSH
+  via netstack, or TSMP; peerapi and the like must use kernel sockets.
+* `MarkDevicePeerForHandshake` (peer restarted, stale keys) doesn't make
+  the kernel re-handshake.
+* Path switches lag by up to a second (polling); an event from magicsock
+  when a peer's best path changes would make them immediate.
+* Only magicsock's first socket per family is shared; `UDPSockets` > 1
+  isn't supported.
+* Polling every peer every second won't scale to huge tailnets.
+
+### Hybrid post-quantum handshakes
+
+Found 2026-11-07: Tailscale's wireguard-go fork has a hybrid
+post-quantum handshake (`wgcfg.PeerConfig.Hybrid`, different message
+sizes), wired up in tailscale.com on 2026-10-29, with a control
+"disable hybrid" capability for the initial rollout (2026-11-03). Nothing
+sets `Hybrid` yet, but once it's in use between two nodes, a kernel-mode
+node can't talk to a hybrid-only peer, since tswg only does classic
+WireGuard. So the "wire-compatible with every Tailscale peer" assumption
+no longer holds. Options:
+
+* a kernel-mode node advertises (to control) that it doesn't do hybrid
+  handshakes, so peers use classic handshakes with it; or
+* implement the hybrid handshake in tswg (needs a kernel ML-KEM, or a
+  vendored one).
+
+For now the kernel data plane logs any peer that asks for a hybrid
+handshake and uses a classic handshake.
 
 ### What doesn't need kernel work
 
@@ -448,10 +536,22 @@ Everything else:
 - [ ] tailscaled: keep the shared sockets in systemd's fd store across
       restarts.
 - [x] Per-peer no-auto-roam flag (`TestTSWG{Gokrazy,Ubuntu}NoRoam`).
-- [ ] Loopback DERP endpoints; vmtest with DERP-only path.
-- [ ] tailscaled integration (wgengine backend that programs tswg) on a
-      tailscale.com branch.
-- [ ] Fallback to wireguard-go when tswg is unavailable.
+- [x] Loopback DERP endpoints; vmtest with DERP-only path
+      (`TestTSWGTailscaledDERP`).
+- [x] tailscaled integration on the tailscale.com `bradfitz/tswg` branch
+      (`TestTSWGTailscaledDirect`).
+- [ ] Kernel mode: packet filter (security; required before real use).
+- [ ] Kernel mode: hybrid PQ handshakes (advertise no support, or
+      implement them in tswg).
+- [ ] Kernel mode: MagicDNS, TSMP and the other netstack-provided
+      services.
+- [ ] Kernel mode: force a re-handshake on MarkDevicePeerForHandshake.
+- [ ] Kernel mode: event-driven path switches instead of 1s polling.
+- [ ] Kernel mode: IPv6-only and dual-stack vmtests.
+- [x] Fallback to wireguard-go when tswg is unavailable (module not
+      loaded).
+- [ ] Fallback on version or feature mismatch between tailscaled and
+      the loaded module.
 - [ ] Decide minimum supported kernel.
 - [ ] dkms.conf and packaging.
 - [ ] Custom debug kernel (KASAN, lockdep) in the testbed.
