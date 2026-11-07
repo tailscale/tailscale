@@ -60,8 +60,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := setupNetwork(params["tswgbench.ip4"], params["tswgbench.ip6"]); err != nil {
-		log.Fatalf("network: %v", err)
+	// On a machine that's already networked (an EC2 instance, in the
+	// harness's remote mode), there are no tswgbench parameters, and we
+	// leave the network alone.
+	if params["tswgbench.ip4"] != "" || params["tswgbench.ip6"] != "" {
+		if err := setupNetwork(params["tswgbench.ip4"], params["tswgbench.ip6"]); err != nil {
+			log.Fatalf("network: %v", err)
+		}
 	}
 
 	mux := http.NewServeMux()

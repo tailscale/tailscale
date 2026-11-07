@@ -268,12 +268,20 @@ func setupNetwork(t testing.TB, vms, queues int) {
 	}
 }
 
-// vm is one of the lab's VMs.
+// vm is one of the lab's VMs: a local QEMU VM, or in remote mode, a
+// machine elsewhere (see remote_test.go).
 type vm struct {
-	i       int
-	cmd     *exec.Cmd
-	logPath string
-	client  *http.Client
+	i      int
+	ctl    netip.AddrPort // the agent's address
+	under4 netip.Addr     // the underlay addresses the tunnel runs over
+	under6 netip.Addr
+	client *http.Client
+
+	// console returns the VM's kernel messages so far.
+	console func() []byte
+
+	cmd     *exec.Cmd // QEMU, for local VMs
+	logPath string    // QEMU's serial console, for local VMs
 }
 
 // lab is a pair of VMs.
@@ -294,9 +302,13 @@ var kernelSplats = []string{
 }
 
 // newLab boots two VMs with cpus virtual CPUs (and as many NIC queues)
-// each.
+// each, or in remote mode (TSWG_REMOTE), sets up the remote machines,
+// whatever their size.
 func newLab(t testing.TB, cpus int) *lab {
 	t.Helper()
+	if os.Getenv("TSWG_REMOTE") != "" {
+		return newRemoteLab(t)
+	}
 	requireLab(t)
 	kernel, initrd := buildArtifacts(t)
 	setupNetwork(t, 2, cpus)
@@ -306,8 +318,15 @@ func newLab(t testing.TB, cpus int) *lab {
 	for i := range l.vms {
 		v := &vm{
 			i:       i,
+			ctl:     netip.AddrPortFrom(underlay4(i), agentPort),
+			under4:  underlay4(i),
+			under6:  underlay6(i),
 			logPath: filepath.Join(logDir, fmt.Sprintf("vm%d.log", i)),
 			client:  &http.Client{},
+		}
+		v.console = func() []byte {
+			b, _ := os.ReadFile(v.logPath)
+			return b
 		}
 		netdev := fmt.Sprintf("tap,id=n0,ifname=%s%d,script=no,downscript=no,vhost=on", tapPrefix, i)
 		nic := fmt.Sprintf("virtio-net-pci,netdev=n0,mac=52:54:00:77:00:%02x", i+2)
@@ -351,13 +370,24 @@ func newLab(t testing.TB, cpus int) *lab {
 		})
 		l.vms[i] = v
 	}
-	// Fail the test if a kernel reported a bug (an oops, a KASAN or
-	// lockdep report, a warning), and on failure, show the end of each
-	// VM's console, where that would be. Cleanups run in reverse order, so
-	// this runs before the VMs are killed.
+	l.checkConsoles()
+	for _, v := range l.vms {
+		if err := v.waitHealthy(30 * time.Second); err != nil {
+			t.Fatalf("VM %d didn't come up: %v\nconsole:\n%s", v.i, err, v.console())
+		}
+	}
+	return l
+}
+
+// checkConsoles arranges to fail the test if a VM's kernel reports a bug
+// (an oops, a KASAN or lockdep report, a warning), and on failure, to show
+// the end of each VM's console, where that would be. Cleanups run in
+// reverse order, so this runs before the VMs are killed.
+func (l *lab) checkConsoles() {
+	t := l.t
 	t.Cleanup(func() {
 		for _, v := range l.vms {
-			log, _ := os.ReadFile(v.logPath)
+			log := v.console()
 			for _, bad := range kernelSplats {
 				if i := bytes.Index(log, []byte(bad)); i >= 0 {
 					t.Errorf("VM %d kernel reported %q", v.i, bad)
@@ -369,22 +399,15 @@ func newLab(t testing.TB, cpus int) *lab {
 			return
 		}
 		for _, v := range l.vms {
-			log, _ := os.ReadFile(v.logPath)
+			log := v.console()
 			lines := strings.Split(strings.TrimRight(string(log), "\n"), "\n")
 			t.Logf("VM %d console (tail):\n%s", v.i, strings.Join(lines[max(0, len(lines)-150):], "\n"))
 		}
 	})
-	for _, v := range l.vms {
-		if err := v.waitHealthy(30 * time.Second); err != nil {
-			log, _ := os.ReadFile(v.logPath)
-			t.Fatalf("VM %d didn't come up: %v\nconsole:\n%s", v.i, err, log)
-		}
-	}
-	return l
 }
 
 func (v *vm) url(path string) string {
-	return fmt.Sprintf("http://%s/%s", netip.AddrPortFrom(underlay4(v.i), agentPort), strings.TrimPrefix(path, "/"))
+	return fmt.Sprintf("http://%s/%s", v.ctl, strings.TrimPrefix(path, "/"))
 }
 
 func (v *vm) waitHealthy(timeout time.Duration) error {
@@ -456,10 +479,11 @@ var allModes = []string{modePlain, modeKernelWG, modeTSWG, modeWGGo}
 // for modePlain, its underlay address.
 func (l *lab) setup(mode string, v6 bool) netip.Addr {
 	l.t.Helper()
-	under := underlay4
+	under := func(i int) netip.Addr { return l.vms[i].under4 }
 	tun := tunnel4
 	if v6 {
-		under, tun = underlay6, tunnel6
+		under = func(i int) netip.Addr { return l.vms[i].under6 }
+		tun = tunnel6
 	}
 	for _, v := range l.vms {
 		if err := v.do("POST", "/teardown", nil); err != nil {
