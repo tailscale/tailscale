@@ -48,15 +48,30 @@ which the router forwards to, masquerading. Updated 2026-11-07.
 | c7i.16xlarge, 8 CPUs online | 20 x 8 | 23.0 Gbps | 6.4 | 16.9 | 3.6x | 2.62 / 4.56 / 3.98 | 0.57x |
 | c7i.48xlarge, 192 CPUs | 8 x 16 | 31.5 Gbps | 7.2 | 12.3 | 4.3x | 3.90 / 3.87 / 94.7 | 1.01x |
 | c7i.48xlarge, 192 CPUs | 24 x 8 | 40.0 Gbps | 7.1 | 13.5 | 5.6x | 4.49 / 4.60 / 95.4 | 0.98x |
+| c6in.32xlarge, 128 CPUs | 20 x 8 | 57.6 Gbps | 5.8 | 8.1 | 9.9x | 5.26 / 4.72 / 130 | 1.11x |
+| c6in.32xlarge, 128 CPUs | 40 x 8 | 72.1 Gbps | | | | 6.14 / - / - | |
+| **c6in.32xlarge, 128 CPUs** | **60 x 4** | **74.3 Gbps** | 6.2 | 8.1 | **12.0x** | 6.25 / 5.57 / 130 | 1.12x |
 | c7i.48xlarge, MTU 8920 (data point only) | 8 x 16 | 49.6 Gbps (line rate) | 17.5 | 49.2 | 2.8x | 2.18 / 1.86 / 15.0 | 1.17x |
 
-* Limits: wireguard-go about 7 Gbps however many peers or CPUs (a
-  serial stage); tswg on small routers its CPUs, and on the 192-CPU one
+* Limits: wireguard-go about 6-7 Gbps however many peers or CPUs (a
+  serial stage). tswg: on small routers, its CPUs; on the c7i.48xlarge,
   EC2's packet rate allowance (about 12M packets per second through the
-  router at 40 Gbps). On the 192-CPU router, neither is CPU-bound, so
-  their CPU per byte is about even; where CPU is the limit, tswg uses
-  about 0.6x wireguard-go's. Kernel WireGuard's per-packet round-robin
-  worker kicks keep most of a big machine's CPUs busy.
+  router at 40 Gbps); on the c6in.32xlarge (200 Gbps, and no EC2
+  allowance exceeded), about 75 Gbps, where the NIC's interrupt CPUs
+  saturate: ENA allocates a fresh page per received packet, and pages
+  allocated on one CPU and freed on another (transmit completions) contend
+  for the page allocator's zone lock, 14-20% of those CPUs, plus zeroing
+  (`init_on_alloc`). Tried there, no better: RPS, bigger per-CPU page
+  lists (`vm.percpu_pagelist_high_fraction=8`), capping wg0's GRO size
+  (for hardware TSO on forwarding). More clients helped until about 40
+  (20: 56 Gbps, 40: 72, 60: 74).
+* On the big routers, tswg isn't CPU-bound (45% of 128 CPUs at 74 Gbps),
+  so its CPU per byte is about even with wireguard-go's; where CPU is the
+  limit, tswg uses about 0.6x wireguard-go's. Kernel WireGuard's
+  per-packet round-robin worker kicks keep all of a big machine's CPUs
+  busy (98% of 128 for 8 Gbps).
+* Clients on c6in were c6in.2xlarge and c6in.large; none was busy (5-27%
+  CPU), nor the backend (13%).
 
 Point to point (`TestLeanBenchmark`, `scripts/leanbench.sh`): one tunnel
 between two machines, 4 vCPUs each. Updated 2026-11-07.
@@ -1036,8 +1051,12 @@ Performance (the primary motivation; see "Performance"):
       (udp_tunnel, ip6_udp_tunnel, libcurve25519 are modules on Ubuntu);
       the harness agent does (`loadModuleDeps`).
 - [x] Benchmarks on cloud VMs (EC2, harness remote mode, `scripts/ec2.sh`).
-- [ ] Subnet router beyond 40 Gbps at MTU 1280: c6in instances (allowed
-      as of 2026-11-07, offered in us-west-2a-c), pending bigger vCPU quota.
+- [x] Subnet router beyond 40 Gbps at MTU 1280: c6in.32xlarge, 74 Gbps
+      with 60 clients (12x wireguard-go).
+- [ ] Subnet router past 75 Gbps at MTU 1280: the ENA interrupt CPUs'
+      page allocator contention. Ideas: fewer pages per packet on our side
+      (decrypted packets from slab or a recycling pool), ENA with a page
+      pool (upstream driver work), other NICs (mlx5 on bare metal).
 - [ ] EC2: c7i.large (2 vCPUs, CPU-bound), and the QEMU lab on a
       c7i.metal-24xl (to see what nesting cost the lab's numbers).
 - [ ] vmtest: shared socket with `UDP_GRO` enabled still works.
