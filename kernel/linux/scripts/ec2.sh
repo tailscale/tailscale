@@ -27,7 +27,9 @@
 #
 # usage:
 #   ec2.sh up [COUNT [TYPE]]   launch COUNT (default 2) instances of TYPE (default c7i.xlarge)
-#   ec2.sh start               start stopped instances, and rewrite the hosts file
+#   ec2.sh start [N...]        start stopped instances (all, or those numbered N),
+#                              and rewrite the hosts file
+#   ec2.sh resize TYPE N...    change stopped instances N... to TYPE
 #   ec2.sh stop                stop the instances (as ec2-idle-stop.sh does)
 #   ec2.sh hosts               rewrite the hosts file from the running instances
 #   ec2.sh ssh N [CMD...]      ssh to instance N (0-based)
@@ -67,6 +69,16 @@ instance_ids() {
 	ec2 describe-instances --filters "Name=tag:owner,Values=claude-tswg" \
 		"Name=instance-state-name,Values=pending,running,stopping,stopped" \
 		--query 'Reservations[].Instances[].InstanceId' --output text
+}
+
+# ids_of N... prints the IDs of our (not terminated) instances numbered N.
+ids_of() {
+	for n in "$@"; do
+		ec2 describe-instances --filters "Name=tag:owner,Values=claude-tswg" \
+			"Name=tag:Name,Values=$name-$n" \
+			"Name=instance-state-name,Values=pending,running,stopping,stopped" \
+			--query 'Reservations[].Instances[].InstanceId' --output text
+	done | tr '\n' ' '
 }
 
 ensure_key() {
@@ -178,16 +190,12 @@ up)
 	ami=$(aws ssm get-parameter \
 		--name /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id \
 		--query Parameter.Value --output text)
-	stopped=$(ec2 describe-instances --filters "Name=tag:owner,Values=claude-tswg" \
-		"Name=instance-state-name,Values=stopping,stopped" \
-		--query 'length(Reservations[].Instances[])' --output text)
-	if [ "$stopped" != 0 ]; then
-		echo "$stopped instances are stopped; use \"$0 start\" (or \"$0 down\" first)" >&2
-		exit 1
-	fi
+	# Number new instances after all existing ones, stopped ones included.
 	existing=$(ec2 describe-instances --filters "Name=tag:owner,Values=claude-tswg" \
-		"Name=instance-state-name,Values=pending,running" \
-		--query 'length(Reservations[].Instances[])' --output text)
+		"Name=instance-state-name,Values=pending,running,stopping,stopped" \
+		--query 'Reservations[].Instances[].Tags[?Key==`Name`].Value[]' --output text |
+		tr '\t' '\n' | sed -n "s/^$name-//p" | sort -n | tail -1)
+	existing=$((${existing:--1} + 1))
 	ids=""
 	i=$existing
 	while [ "$i" -lt $((existing + count)) ]; do
@@ -214,9 +222,13 @@ up)
 	cat "$hosts"
 	;;
 start)
-	ids=$(ec2 describe-instances --filters "Name=tag:owner,Values=claude-tswg" \
-		"Name=instance-state-name,Values=stopping,stopped" \
-		--query 'Reservations[].Instances[].InstanceId' --output text)
+	if [ $# -gt 0 ]; then
+		ids=$(ids_of "$@")
+	else
+		ids=$(ec2 describe-instances --filters "Name=tag:owner,Values=claude-tswg" \
+			"Name=instance-state-name,Values=stopping,stopped" \
+			--query 'Reservations[].Instances[].InstanceId' --output text)
+	fi
 	if [ -n "$ids" ]; then
 		# shellcheck disable=SC2086
 		ec2 wait instance-stopped --instance-ids $ids
@@ -229,6 +241,17 @@ start)
 	write_hosts > /dev/null
 	wait_ready
 	cat "$hosts"
+	;;
+resize)
+	type=$1
+	shift
+	ids=$(ids_of "$@")
+	# shellcheck disable=SC2086
+	ec2 wait instance-stopped --instance-ids $ids
+	for id in $ids; do
+		ec2 modify-instance-attribute --instance-id "$id" --instance-type "Value=$type"
+		echo "$id is now $type" >&2
+	done
 	;;
 stop)
 	ids=$(instance_ids)

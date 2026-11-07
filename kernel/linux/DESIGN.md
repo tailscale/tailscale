@@ -346,6 +346,32 @@ its one goroutine reading the UDP socket. Upstream kernel WireGuard
 scales with peers (each has its own tx worker and NAPI), from 10.0 to
 16.9 Gbps at 8 CPUs.
 
+At 50 Gbps (2026-11-07): router and backend c7i.48xlarge (192 vCPUs,
+50 Gbps), 8 clients c7i.8xlarge (12.5 Gbps sustained), 16 flows each, all
+192 router CPUs:
+
+| tunnel MTU | tswg | wireguard-go | kernel WG | plain |
+|---|---|---|---|---|
+| 1280 | 31504 Mbps (3.90 CPU-s/GB) | 7247 (3.87) | 12335 (94.7) | 49911 |
+| 8920 | 49611 (2.18) | 17475 (1.86) | 49156 (15.0) | 49900 |
+
+* Jumbo MTUs are rare among Tailscale's customers (decided 2026-11-07:
+  the target is MTU 1280; jumbo results are only a data point). With
+  them (the VPC's MTU is 9001), tswg forwards at line rate, 2.8x
+  wireguard-go, using about 13 of the 192 CPUs. Kernel
+  WireGuard gets there too but with 7x the CPU per byte: its per-packet
+  round-robin worker kicks reach all 192 CPUs (at MTU 1280, 137 of them
+  busy for 12 Gbps), which tswg's on-demand kicks avoid.
+* At Tailscale's MTU, 1280, EC2 limits each NIC receive queue to about
+  715k packets per second (the router's ENA has 16), about 7.3 Gbps of
+  tunnel packets, and a peer's tunnel is one UDP flow, so one queue: a
+  single tunnel tops out there (tswg and wireguard-go alike, between any
+  c7i sizes), and with 8 peers, flows collide on queues (4 clients on 3
+  queues: the two sharing got half each). More peers spread better; a
+  larger MTU needs 7x fewer packets. The router's CPUs weren't the limit.
+* For 100 Gbps, the next step: c6in instances (up to 200 Gbps), which
+  the IAM policy doesn't allow yet.
+
 Profile of the tswg router at 4 CPUs (CPU-bound), before the
 optimizations: ChaCha20-Poly1305 about 23% (of which 5.5% was a scalar
 ChaCha20 block per message for its Poly1305 key), the ENA driver about
