@@ -300,10 +300,9 @@ spray) goes through tailscaled's loopback bridge.
   static key), so the source only matters for handshake rate limiting and
   cookie replies, which stay per-peer because each peer has its own
   address. Packets from unknown peers are injected from 127.0.0.1.
-* A reconcile loop (every second, and on `SyncDevicePeer` and key
-  changes) sets each peer's kernel endpoint: magicsock's best address if
-  it's direct and trusted (`magicsock.Conn.KernelPeerPaths`), else the
-  peer's bridge address.
+* Each peer's kernel endpoint is magicsock's best address if it's direct
+  and trusted (`magicsock.Conn.KernelPeerPath`), else the peer's bridge
+  address; see "No polling" for how changes reach the kernel.
 
 ### tailscaled integration
 
@@ -331,10 +330,11 @@ tag (`ts_omit_tswg` drops it, and the minimal builds don't include it).
     per-peer config (`SetPeerConfigFunc`, whose peer set is otherwise
     lazy): allowed IPs, preshared key, endpoint, and no-roam on all of
     them, in netlink messages of at most 32 peers;
-  * reads the kernel's per-peer counters back each second, feeds direct
-    path activity to magicsock (`NoteKernelActivity`), so it keeps
-    heartbeating active sessions and the direct path stays trusted, and
-    reports per-peer status (bytes, last handshake) in the engine status.
+  * feeds direct-path activity, from the kernel's peer events, to
+    magicsock (`NoteKernelActivity`), so it keeps heartbeating active
+    sessions and the direct path stays trusted, and reports per-peer
+    status (bytes, last handshake) in the engine status, from a dump
+    when asked.
 * Tests: `TestTSWGTailscaledDirect` (two gokrazy VMs behind easy NATs;
   the kernel ends up sending directly to the peer's NAT-traversed public
   address) and `TestTSWGTailscaledDERP` (hard NATs on both sides; the
@@ -372,11 +372,56 @@ TUN device and wireguard-go. In kernel mode:
   with ICMP protocol unreachable.
 * wireguard-go sends a "priority message" (a TSMP disco key
   advertisement) whenever it establishes a session. The kernel data plane
-  does the same when the kernel's last-handshake time for a peer moves
-  (so up to a second late).
+  does the same on the kernel's session event for the peer (see "No
+  polling").
 * Tested by `TestTSWGTailscaledTSMP`: TSMP pings both ways, and each side
   receives the other's disco key advertisement
   (`magicsock_tsmp_disco_key_advertisement_received`).
+
+### No polling
+
+Done 2026-11-07 (at first the data plane polled every second). Nothing
+in the kernel data plane runs on a timer now; everything is driven by
+events:
+
+* Peer set and config: `SyncDevicePeer`, `SetPeerConfigFunc` and private
+  key changes request a full sync.
+* Paths: magicsock calls a hook (`Conn.SetKernelPathHook`) whenever a
+  peer's kernel path flips between direct-and-trusted and not. All
+  changes to `bestAddr` go through `setBestAddrLocked` and all changes to
+  `trustBestAddrUntil` through `setTrustBestAddrUntilLocked`, which check
+  for a flip. Trust lapsing is an event with no packet attached, so while
+  a peer's kernel path is direct, magicsock keeps a timer armed for
+  `trustBestAddrUntil` (re-armed if trust was extended meanwhile). The
+  data plane then updates just that peer's endpoint.
+* While a session is active, the fallback when a direct path dies comes
+  from magicsock's heartbeat ping timing out after trust lapsed
+  (`discoPingTimeout` clears the best address). The trust timer is what
+  covers idle sessions: once magicsock stops heartbeating (45 seconds
+  without traffic), trust lapses silently, and the kernel must stop
+  sending directly so that the next packets go through magicsock (DERP
+  plus the candidate path) until the path is trusted again, as with
+  wireguard-go.
+* Kernel to tailscaled: the module multicasts peer events
+  (`TSWG_CMD_PEER_EVENT` on the "events" genetlink group): a new session
+  (`TSWGEVENT_F_SESSION`, from `wg_timers_session_derived`), and TX and
+  RX activity (`TSWGEVENT_F_TX`, `TSWGEVENT_F_RX`), each rate limited to
+  one per peer every 2 seconds (`TSWG_ACTIVITY_EVENT_INTERVAL`) with a
+  single comparison on the packet path. Messages are only built when
+  someone listens. tailscaled sends the disco key advertisement on session
+  events and feeds direct-path activity to magicsock. If the event socket
+  overruns, events are lost but harmlessly: activity recurs, and the
+  advertisement is an optimization.
+* All changes to the kernel's peers are applied by one goroutine: hooks
+  only record what to do (full sync, dirty paths, session clears) and
+  kick it, so a sync that read paths a moment ago can't overwrite a
+  newer endpoint, and callers holding LocalBackend locks never wait on
+  a sync that needs them.
+* Tests: `TestTSWGTailscaledPathFallback` (a direct path dies mid-session;
+  the kernel falls back to the bridge and DERP about 8 seconds later) and
+  `TestTSWGTailscaledIdleTrustExpiry` (a session goes idle; the kernel
+  moves to the bridge once trust lapses, and back to direct when traffic
+  resumes; fails without the trust timer).
 
 ### Peer restarts
 
@@ -409,11 +454,10 @@ Deliberately deferred (2026-11-07: "easy later, not a priority yet"):
 
 Other TODOs:
 
-* Path switches lag by up to a second (polling); an event from magicsock
-  when a peer's best path changes would make them immediate.
 * Only magicsock's first socket per family is shared; `UDPSockets` > 1
   isn't supported.
-* Polling every peer every second won't scale to huge tailnets.
+* A full sync (on any config change) still walks every peer; fine for
+  now, but worth making incremental for huge tailnets.
 
 ### Hybrid post-quantum handshakes
 
@@ -606,7 +650,8 @@ Everything else:
       (deferred).
 - [x] Kernel mode: clear the session on MarkDevicePeerForHandshake
       (`TestTSWGTailscaledPeerRestart`).
-- [ ] Kernel mode: event-driven path switches instead of 1s polling.
+- [x] Kernel mode: event-driven everything, no polling
+      (`TestTSWGTailscaledPathFallback`, `TestTSWGTailscaledIdleTrustExpiry`).
 - [ ] Kernel mode: IPv6-only and dual-stack vmtests.
 - [x] Fallback to wireguard-go when tswg is unavailable (module not
       loaded).
