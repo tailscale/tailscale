@@ -638,6 +638,7 @@ static void wg_packet_consume_data(struct wg_device *wg, struct sk_buff *skb)
 		goto err;
 
 	PACKET_CB(skb)->tswg_out = NULL; /* TSWG */
+	PACKET_CB(skb)->tswg_count = skb_is_gso(skb) ? skb_shinfo(skb)->gso_segs : 1;
 	ret = wg_queue_enqueue_per_device_and_peer(&wg->decrypt_queue, &peer->rx_queue, skb,
 						   wg->packet_crypt_wq,
 						   skb_is_gso(skb) ?

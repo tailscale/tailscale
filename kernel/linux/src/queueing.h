@@ -62,6 +62,7 @@ struct packet_cb {
 	atomic_t state;
 	u32 mtu;
 	u8 ds;
+	u16 tswg_count; /* TSWG: packets in this peer queue entry */
 	/*
 	 * TSWG: on the first packet of a list being encrypted, the encrypted
 	 * packets to send (see tswg_encrypt_list); NULL until then.
@@ -290,7 +291,16 @@ static inline void wg_queue_enqueue_per_peer_tx(struct sk_buff *skb, enum packet
 	struct wg_peer *peer = wg_peer_get(PACKET_PEER(skb));
 
 	atomic_set_release(&PACKET_CB(skb)->state, state);
-	tswg_queue_work_on(wg_cpumask_choose_online(&peer->serial_work_cpu, peer->internal_id),
+	/*
+	 * TSWG: upstream runs a peer's tx worker on one CPU chosen by the
+	 * peer's ID (serial_work_cpu). When that's also the CPU handling the
+	 * NIC's interrupts, softirq work starves the worker, and encrypted
+	 * packets waited up to 20ms to be sent, behind the in-order queue's
+	 * head. Queue it here instead, on a CPU running our own crypto work
+	 * (and already awake, so without an IPI). The workqueue still runs
+	 * it on one CPU at a time.
+	 */
+	tswg_queue_work_on(raw_smp_processor_id(),
 			   peer->device->packet_crypt_wq, &peer->transmit_packet_work);
 	wg_peer_put(peer);
 }

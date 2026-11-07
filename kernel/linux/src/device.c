@@ -29,6 +29,9 @@
 
 static LIST_HEAD(device_list);
 
+/* TSWG: TCP's sk_pacing_shift for local sockets sending over tswg; see wg_xmit. */
+#define TSWG_PACING_SHIFT 9
+
 static int wg_open(struct net_device *dev)
 {
 	struct in_device *dev_v4 = __in_dev_get_rtnl(dev);
@@ -172,6 +175,16 @@ static netdev_tx_t wg_xmit(struct sk_buff *skb, struct net_device *dev)
 	}
 
 	mtu = skb_valid_dst(skb) ? dst_mtu(skb_dst(skb)) : dev->mtu;
+
+	/*
+	 * TSWG: a local socket's packets stay charged to it until the NIC has
+	 * sent their encrypted packets (see tswg_move_owner), and TCP's small
+	 * queues then allow it only about 1ms of data in flight below it
+	 * (its pacing rate >> sk_pacing_shift, 10), which isn't enough to
+	 * cover encryption too: throughput fell 15-20%. Allow it about 2ms,
+	 * as Wi-Fi drivers do (with 8) for their aggregation.
+	 */
+	sk_pacing_shift_update(skb->sk, TSWG_PACING_SHIFT);
 
 	__skb_queue_head_init(&packets);
 	if (!skb_is_gso(skb)) {

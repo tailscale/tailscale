@@ -78,19 +78,22 @@ static void __wg_prev_queue_enqueue(struct prev_queue *queue, struct sk_buff *sk
 }
 
 /*
- * TSWG: TSWG_MAX_QUEUED_PEER is how many entries a peer's in-order queue
- * holds. Upstream's MAX_QUEUED_PACKETS (1024) is only about 1.5ms of
- * packets at 7 Gbps, so a decrypt worker briefly held up (by its vCPU being
- * descheduled, say) made the queue overflow and drop packets, which TCP
- * then took as congestion. wireguard-go's queues hold batches of up to
- * 128 packets, so 1024 entries there go much further.
+ * TSWG: TSWG_MAX_QUEUED_PEER is how many packets a peer's in-order queue
+ * holds. Upstream counts entries, which were single packets on receive,
+ * but with GRO (and on send, as upstream already had) an entry can be
+ * dozens of packets, and TCP fills whatever queue it's given: counting
+ * entries let a standing queue of over 10ms build under one TCP flow.
  */
-#define TSWG_MAX_QUEUED_PEER (4 * MAX_QUEUED_PACKETS)
+#define TSWG_MAX_QUEUED_PEER 2048
 
 bool wg_prev_queue_enqueue(struct prev_queue *queue, struct sk_buff *skb)
 {
-	if (!atomic_add_unless(&queue->count, 1, TSWG_MAX_QUEUED_PEER))
+	unsigned int n = PACKET_CB(skb)->tswg_count;
+
+	if (atomic_add_return(n, &queue->count) > TSWG_MAX_QUEUED_PEER) {
+		atomic_sub(n, &queue->count);
 		return false;
+	}
 	__wg_prev_queue_enqueue(queue, skb);
 	return true;
 }
@@ -108,7 +111,7 @@ struct sk_buff *wg_prev_queue_dequeue(struct prev_queue *queue)
 	}
 	if (next) {
 		queue->tail = next;
-		atomic_dec(&queue->count);
+		atomic_sub(PACKET_CB(tail)->tswg_count, &queue->count);
 		return tail;
 	}
 	if (tail != READ_ONCE(queue->head))
@@ -117,7 +120,7 @@ struct sk_buff *wg_prev_queue_dequeue(struct prev_queue *queue)
 	next = smp_load_acquire(&NEXT(tail));
 	if (next) {
 		queue->tail = next;
-		atomic_dec(&queue->count);
+		atomic_sub(PACKET_CB(tail)->tswg_count, &queue->count);
 		return tail;
 	}
 	return NULL;

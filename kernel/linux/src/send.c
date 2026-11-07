@@ -245,6 +245,72 @@ static bool tswg_encrypt_into(struct sk_buff *out, struct sk_buff *skb,
 	return true;
 }
 
+/*
+ * tswg_owner_movable reports whether skb's socket ownership can move to
+ * another packet: whether its destructor just uncharges skb->truesize from
+ * skb->sk. That's sock_wfree, and for TCP, tcp_wfree and __sock_wfree
+ * (which aren't exported). Others, like AF_PACKET's for its mmapped ring,
+ * need the very skb they were set on.
+ */
+static bool tswg_owner_movable(const struct sk_buff *skb)
+{
+	const struct sock *sk = skb->sk;
+
+	if (!sk || !skb->destructor)
+		return false;
+	if (skb->destructor == sock_wfree)
+		return true;
+	return sk_fullsock(sk) && sk->sk_protocol == IPPROTO_TCP;
+}
+
+/*
+ * tswg_move_owner moves skb's socket ownership, and the socket's charge for
+ * it (which it adds to *charged), to out, the packet skb was encrypted
+ * into, if it can. tswg_settle_charge then makes the charge out's size.
+ *
+ * Upstream encrypts in place, so a packet stays its socket's (for TCP,
+ * counted against its small queues limit) until the NIC is done sending
+ * it, and TCP is held back by the NIC's pace. Our encrypted packets are
+ * new, and without this, would let TCP fill the NIC's qdisc as fast as we
+ * could encrypt: RTT under load went from about 5ms to over 10ms.
+ */
+static void tswg_move_owner(struct sk_buff *out, struct sk_buff *skb,
+			    unsigned int *charged)
+{
+	if (!tswg_owner_movable(skb))
+		return;
+	if (!out->destructor) {
+		out->sk = skb->sk;
+		out->destructor = skb->destructor;
+	} else if (out->sk != skb->sk || out->destructor != skb->destructor) {
+		return;
+	}
+	*charged += skb->truesize;
+	skb->sk = NULL;
+	skb->destructor = NULL;
+}
+
+/*
+ * tswg_settle_charge adjusts the socket's charge for out from charged, what
+ * its packets were charged, to out->truesize, which out's destructor will
+ * uncharge. The packets' truesize (for TCP segments, about twice their
+ * length) overstates what's in flight, and with it, TCP's small queues
+ * limit (about a millisecond's worth) held throughput 20% below what it
+ * is without.
+ */
+static void tswg_settle_charge(struct sk_buff *out, unsigned int charged)
+{
+	struct sock *sk = out->sk;
+
+	if (!out->destructor)
+		return;
+	if (charged > out->truesize)
+		WARN_ON_ONCE(refcount_sub_and_test(charged - out->truesize,
+						   &sk->sk_wmem_alloc));
+	else if (charged < out->truesize)
+		refcount_add(out->truesize - charged, &sk->sk_wmem_alloc);
+}
+
 /* tswg_finish_out makes out a GSO packet, if it has more than one segment. */
 static void tswg_finish_out(struct sk_buff *out, unsigned int mss,
 			    unsigned int segs)
@@ -266,7 +332,7 @@ static bool tswg_encrypt_list(struct sk_buff *first, struct page_frag *pfrag)
 {
 	struct noise_keypair *keypair = PACKET_CB(first)->keypair;
 	struct sk_buff **tail = &PACKET_CB(first)->tswg_out;
-	unsigned int mss = 0, segs = 0;
+	unsigned int mss = 0, segs = 0, charged = 0;
 	struct sk_buff *skb, *out = NULL;
 	bool ok = true;
 
@@ -283,6 +349,7 @@ static bool tswg_encrypt_list(struct sk_buff *first, struct page_frag *pfrag)
 			    skb_shinfo(out)->nr_frags >= MAX_SKB_FRAGS ||
 			    PACKET_CB(skb)->ds != PACKET_CB(out)->ds)) {
 			tswg_finish_out(out, mss, segs);
+			tswg_settle_charge(out, charged);
 			out = NULL;
 		}
 		if (!out) {
@@ -301,16 +368,20 @@ static bool tswg_encrypt_list(struct sk_buff *first, struct page_frag *pfrag)
 			tail = &out->next;
 			mss = msg_len;
 			segs = 0;
+			charged = 0;
 		}
 		if (unlikely(!tswg_encrypt_into(out, skb, msg_len, keypair,
 						pfrag))) {
 			ok = false;
 			break;
 		}
+		tswg_move_owner(out, skb, &charged);
 		segs++;
 	}
-	if (out)
+	if (out) {
 		tswg_finish_out(out, mss, segs);
+		tswg_settle_charge(out, charged);
+	}
 	return ok;
 }
 
@@ -359,10 +430,10 @@ static void wg_packet_create_data_done(struct wg_peer *peer, struct sk_buff *fir
 
 	/*
 	 * TSWG: free the originals here, on the peer's one tx worker CPU,
-	 * rather than in the encrypt workers. For TCP, freeing releases the
-	 * socket's small queues accounting (tcp_wfree), and from several
-	 * CPUs at once, the resulting TSQ handlers fight over the socket
-	 * lock.
+	 * rather than in the encrypt workers. For TCP, freeing those that
+	 * still have their socket (see tswg_move_owner) releases its small
+	 * queues accounting (tcp_wfree), and from several CPUs at once, the
+	 * resulting TSQ handlers fight over the socket lock.
 	 */
 	for (skb = first; skb; skb = next) {
 		next = skb->next;
@@ -502,6 +573,7 @@ void wg_packet_send_staged_packets(struct wg_peer *peer)
 	wg_peer_get(keypair->entry.peer);
 	PACKET_CB(packets.next)->keypair = keypair;
 	PACKET_CB(packets.next)->tswg_out = NULL; /* TSWG */
+	PACKET_CB(packets.next)->tswg_count = min_t(u32, skb_queue_len(&packets), U16_MAX);
 	wg_packet_create_data(peer, packets.next);
 	return;
 
