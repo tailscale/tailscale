@@ -1753,6 +1753,11 @@ type udpReceiveConfig struct {
 	directBytes, peerRelayBytes     *expvar.Int
 }
 
+const (
+	// readErrRetryDelay paces a [conn.ReceiveFunc]'s read errors.
+	readErrRetryDelay = 100 * time.Millisecond
+)
+
 func (c *Conn) mkReceiveFunc(cfg udpReceiveConfig) conn.ReceiveFunc {
 	ruc := cfg.ruc
 	directPacketMetric, peerRelayPacketMetric := cfg.directPackets, cfg.peerRelayPackets
@@ -1793,7 +1798,16 @@ func (c *Conn) mkReceiveFunc(cfg udpReceiveConfig) conn.ReceiveFunc {
 					metricRecvUDPErrorReachability.Add(1)
 					continue
 				}
-				return 0, err
+				if !neterror.IsTransientReadError(err) {
+					return 0, err
+				}
+
+				metricRecvUDPErrorTransient.Add(1)
+				select {
+				case <-c.connCtx.Done():
+				case <-time.After(readErrRetryDelay):
+				}
+				continue
 			}
 
 			reportToCaller := false
@@ -4351,6 +4365,8 @@ var (
 
 	// UDP reads matching neterror.IsUDPReadFeedback.
 	metricRecvUDPErrorReachability = clientmetric.NewCounter("magicsock_recv_udp_error_reachability")
+	// UDP reads matching neterror.IsTransientReadError.
+	metricRecvUDPErrorTransient = clientmetric.NewCounter("magicsock_recv_udp_error_transient")
 
 	// Sends (data)
 	//

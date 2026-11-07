@@ -18,6 +18,12 @@ func IsUDPReadFeedback(err error) bool {
 	return errors.Is(err, windows.WSAEHOSTUNREACH) || errors.Is(err, windows.WSAENETUNREACH)
 }
 
+// IsTransientReadError reports whether err is a UDP read error that may
+// clear up if the socket is read again later.
+func IsTransientReadError(err error) bool {
+	return errors.Is(err, windows.WSAEADDRNOTAVAIL)
+}
+
 // IsClosedPipeError reports whether err resulted from reading or writing to a closed or broken pipe.
 func IsClosedPipeError(err error) bool {
 	return errors.Is(err, windows.ERROR_NO_DATA) ||
