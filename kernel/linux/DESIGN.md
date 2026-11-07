@@ -332,14 +332,42 @@ kernel WireGuard 3.2-7.3, plain 0.2-0.4. Medians of 3 interleaved runs.
 * Upstream kernel WireGuard does better than wireguard-go but well below
   tswg, and least fairly (clients from 0.8 to 2.8 Gbps).
 
-Profile of the tswg router at 4 CPUs (CPU-bound): ChaCha20-Poly1305
-about 23%, the ENA driver about 20%, packet allocation and freeing about
-15%, copying decrypted messages out 8%, zeroing new pages 5% (Ubuntu
-enables `init_on_alloc`). Zero-copy receive (decrypting in place in the
-received pages and handing out packets that reference them) was tried
-and was 7% worse: scatterlist decryption costs more than linear
-decryption of an L1-hot copy, and page-fragment packets cost more
-downstream (header pulls for NAT, more transmit descriptors).
+With many more peers (20 clients: the 4 above plus 16 c7i.large, 8
+flows each, 160 flows; after the optimizations below):
+
+| router CPUs | tswg | wireguard-go | kernel WG | plain | tswg/wg |
+|---|---|---|---|---|---|
+| 4 | 13893 Mbps (2.38 CPU-s/GB) | 6268 (3.87) | 10155 (3.35) | 24908 | 2.2x |
+| 8 | 23031 (2.62) | 6444 (4.56) | 16935 (3.98) | 24940 | 3.6x |
+
+wireguard-go doesn't scale with peers either (6.4 Gbps with 4 or 20, at
+45% of 8 CPUs), so its limit is global rather than per peer: most likely
+its one goroutine reading the UDP socket. Upstream kernel WireGuard
+scales with peers (each has its own tx worker and NAPI), from 10.0 to
+16.9 Gbps at 8 CPUs.
+
+Profile of the tswg router at 4 CPUs (CPU-bound), before the
+optimizations: ChaCha20-Poly1305 about 23% (of which 5.5% was a scalar
+ChaCha20 block per message for its Poly1305 key), the ENA driver about
+20%, packet allocation and freeing about 15%, copying decrypted messages
+out 8%, zeroing new pages 5% (Ubuntu enables `init_on_alloc`).
+
+* Kept: decrypting straight from the received packet when a message is
+  contiguous there (`tswg_contig`), and our own ChaCha20-Poly1305
+  (`tswg_aead.h`), which gets the Poly1305 key in the same SIMD pass as
+  the message by running ChaCha20 from block 0 over the 64 bytes before
+  it too and XORing them back out. With 4 clients: 14.1 to 14.9 Gbps,
+  2.30 to 2.18 CPU-s/GB.
+* Tried, not kept: zero-copy receive (decrypting in place in the received
+  pages, handing out packets that reference them), 7% worse:
+  scatterlist decryption costs more than linear decryption of an L1-hot
+  copy, and page-fragment packets cost more downstream (header pulls for
+  NAT, more transmit descriptors). A page pool per decrypt worker for
+  decrypted packets, to avoid allocating and zeroing pages: they didn't
+  come back in time, so it still allocated, and was no better. Capping
+  wg0's `gro_max_size` at 17 segments (so forwarded GRO packets have no
+  frag_list and the NIC does TSO in hardware): worse, since bigger GRO
+  packets save more in forwarding than software segmentation costs.
 
 EC2 tooling: `scripts/ec2.sh` (`up`, `start`, `stop`, `down`, `ssh`,
 `status`) manages instances in the sandbox account (profile
