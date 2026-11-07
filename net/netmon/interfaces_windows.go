@@ -15,11 +15,15 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/tsconst"
+	"tailscale.com/util/mak"
+	"tailscale.com/util/must"
 )
 
 const (
 	fallbackInterfaceMetric = uint32(0) // Used if we cannot get the actual interface metric
 )
+
+var wintunInterfaceGUID = must.Get(windows.GUIDFromString(tsconst.WintunInterfaceGUID))
 
 func init() {
 	likelyHomeRouterIP = likelyHomeRouterIPWindows
@@ -155,26 +159,18 @@ func getInterfaces(family winipcfg.AddressFamily, flags winipcfg.GAAFlags, match
 // It returns (nil, nil) if no interface is found.
 //
 // The family must be one of AF_INET or AF_INET6.
-func GetWindowsDefault(family winipcfg.AddressFamily) (*winipcfg.IPAdapterAddresses, error) {
-	ifs, err := getInterfaces(family, winipcfg.GAAFlagIncludeAllInterfaces, func(iface *winipcfg.IPAdapterAddresses) bool {
-		switch iface.IfType {
-		case winipcfg.IfTypeSoftwareLoopback:
-			return false
+func GetWindowsDefault(family winipcfg.AddressFamily) (*winipcfg.MibIfRow2, error) {
+	var ipInterfaceCache map[winipcfg.LUID]*winipcfg.MibIPInterfaceRow
+	getIPInterface := func(luid winipcfg.LUID) (*winipcfg.MibIPInterfaceRow, error) {
+		if ipif, ok := ipInterfaceCache[luid]; ok {
+			return ipif, nil
 		}
-		switch family {
-		case windows.AF_INET:
-			if iface.Flags&winipcfg.IPAAFlagIpv4Enabled == 0 {
-				return false
-			}
-		case windows.AF_INET6:
-			if iface.Flags&winipcfg.IPAAFlagIpv6Enabled == 0 {
-				return false
-			}
+		ipif, err := luid.IPInterface(family)
+		if err != nil {
+			return nil, err
 		}
-		return iface.OperStatus == winipcfg.IfOperStatusUp && notTailscaleInterface(iface)
-	})
-	if err != nil {
-		return nil, err
+		mak.Set(&ipInterfaceCache, luid, ipif)
+		return ipif, nil
 	}
 
 	routes, err := winipcfg.GetIPForwardTable2(family)
@@ -183,14 +179,14 @@ func GetWindowsDefault(family winipcfg.AddressFamily) (*winipcfg.IPAdapterAddres
 	}
 
 	bestMetric := ^uint32(0)
-	var bestIface *winipcfg.IPAdapterAddresses
+	var bestIface *winipcfg.MibIfRow2
 	for _, route := range routes {
 		if route.DestinationPrefix.PrefixLength != 0 {
 			// Not a default route.
 			continue
 		}
-		iface := ifs[route.InterfaceLUID]
-		if iface == nil {
+		ipif, err := getIPInterface(route.InterfaceLUID)
+		if err != nil {
 			continue
 		}
 
@@ -201,17 +197,24 @@ func GetWindowsDefault(family winipcfg.AddressFamily) (*winipcfg.IPAdapterAddres
 		// metric offset specified in the Metric member of the
 		// MIB_IPFORWARD_ROW2 structure and the interface
 		// metric specified in this member for IPv4"
-		metric := route.Metric
-		switch family {
-		case windows.AF_INET:
-			metric += iface.Ipv4Metric
-		case windows.AF_INET6:
-			metric += iface.Ipv6Metric
+		metric := route.Metric + ipif.Metric
+		if metric >= bestMetric {
+			continue
 		}
-		if metric < bestMetric {
-			bestMetric = metric
-			bestIface = iface
+
+		iface, err := route.InterfaceLUID.Interface()
+		if err != nil || iface.OperStatus != winipcfg.IfOperStatusUp {
+			continue
 		}
+		if iface.Type == winipcfg.IfTypeSoftwareLoopback {
+			continue
+		}
+		if iface.InterfaceGUID == wintunInterfaceGUID {
+			continue
+		}
+
+		bestMetric = metric
+		bestIface = iface
 	}
 
 	return bestIface, nil
@@ -226,9 +229,9 @@ func defaultRoute() (d DefaultRouteDetails, err error) {
 		return d, err
 	}
 	if iface != nil {
-		d.InterfaceName = iface.FriendlyName()
+		d.InterfaceName = iface.Alias()
 		d.InterfaceDesc = iface.Description()
-		d.InterfaceIndex = int(iface.IfIndex)
+		d.InterfaceIndex = int(iface.InterfaceIndex)
 	}
 	return d, nil
 }

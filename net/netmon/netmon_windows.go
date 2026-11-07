@@ -120,7 +120,7 @@ func (m *Monitor) WindowsDefaultInterfaceIndex(family winipcfg.AddressFamily) (u
 		if err != nil || iface == nil {
 			return 0, err
 		}
-		return iface.IfIndex, nil
+		return iface.InterfaceIndex, nil
 	}
 	if cache == nil {
 		return lookup()
