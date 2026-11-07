@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/netip"
 	"runtime"
+	"slices"
 	"sort"
 	"sync"
 	"syscall"
@@ -123,6 +124,10 @@ type Report struct {
 	GlobalV4 netip.AddrPort
 	GlobalV6 netip.AddrPort
 
+	// RequiredSTUNEndpoints contains mappings observed by required probes.
+	// [Report.GetGlobalAddrs] includes them even after a single observation.
+	RequiredSTUNEndpoints []netip.AddrPort
+
 	// CaptivePortal is set when we think there's a captive portal that is
 	// intercepting HTTP traffic.
 	CaptivePortal opt.Bool
@@ -132,8 +137,8 @@ type Report struct {
 
 // GetGlobalAddrs returns the v4 and v6 global addresses observed during the
 // netcheck, which includes the best latency endpoint first, followed by any
-// other endpoints that were observed repeatedly. It excludes singular endpoints
-// that are likely only the result of a hard NAT.
+// other endpoints that were observed repeatedly or through required probes.
+// It excludes other singular endpoints that are likely only the result of a hard NAT.
 func (r *Report) GetGlobalAddrs() (v4, v6 []netip.AddrPort) {
 	// Always add the best latency entries first.
 	if r.GlobalV4.IsValid() {
@@ -164,6 +169,13 @@ func (r *Report) GetGlobalAddrs() (v4, v6 []netip.AddrPort) {
 			v6 = append(v6, ipp)
 		}
 	}
+	for _, ipp := range r.RequiredSTUNEndpoints {
+		if ipp.Addr().Is4() && !slices.Contains(v4, ipp) {
+			v4 = append(v4, ipp)
+		} else if ipp.Addr().Is6() && !slices.Contains(v6, ipp) {
+			v6 = append(v6, ipp)
+		}
+	}
 	return v4, v6
 }
 
@@ -182,6 +194,7 @@ func (r *Report) Clone() *Report {
 	r2.RegionV6Latency = maps.Clone(r2.RegionV6Latency)
 	r2.GlobalV4Counters = maps.Clone(r2.GlobalV4Counters)
 	r2.GlobalV6Counters = maps.Clone(r2.GlobalV6Counters)
+	r2.RequiredSTUNEndpoints = slices.Clone(r2.RequiredSTUNEndpoints)
 	return &r2
 }
 
@@ -790,6 +803,12 @@ type GetReportOpts struct {
 	// If no communication with that region has occurred, or it occurred
 	// too far in the past, this function should return the zero time.
 	GetLastDERPActivity func(tailcfg.DERPRegionID) time.Time
+
+	// RequiredSTUNServers are additional servers to probe when UDP probing
+	// is enabled, independently of ordinary scheduling and early completion.
+	// Results do not contribute to DERP latency measurements.
+	RequiredSTUNServers views.Slice[STUNServer]
+
 	// OnlyTCP443 constrains netcheck reporting to measurements over TCP port
 	// 443.
 	OnlyTCP443 bool
@@ -939,8 +958,12 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 	// Without NAT traversal, we never send STUN: we behave as if UDP were
 	// blocked and measure DERP latency over HTTPS (and ICMP) instead.
 	var plan probePlan
+	requiredDone := syncs.ClosedChan()
 	if buildfeatures.HasNATTraversal && (opts == nil || !opts.OnlyTCP443) {
 		plan = makeProbePlan(dm, ifState, last, preferredDERP)
+		if opts != nil && opts.RequiredSTUNServers.Len() > 0 {
+			requiredDone = rs.startRequiredSTUNProbes(ctx, ifState)
+		}
 	}
 
 	// If we're doing a full probe, also check for a captive portal. We
@@ -990,6 +1013,11 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 		// got a bunch of STUN responses.
 		captivePortalStop()
 	}
+
+	// Ordinary probe completion must not cancel explicitly requested targets.
+	// They share the report's transport and transaction dispatcher, but have
+	// their own bounded timeout and do not affect DERP latency measurements.
+	<-requiredDone
 
 	if !c.SkipExternalNetwork && c.PortMapper != nil {
 		rs.waitPortMap.Wait()
@@ -1067,6 +1095,18 @@ func (c *Client) finishAndStoreReport(rs *reportState, dm *tailcfg.DERPMap) *Rep
 	rs.mu.Lock()
 	report := rs.report.Clone()
 	rs.mu.Unlock()
+
+	// Merge required-probe availability only after ordinary measurements. A
+	// custom STUN response must not suppress HTTPS latency fallback when the
+	// DERP map's own STUN servers are unreachable.
+	for _, ipp := range report.RequiredSTUNEndpoints {
+		report.UDP = true
+		if ipp.Addr().Is4() {
+			report.IPv4, report.IPv4CanSend = true, true
+		} else {
+			report.IPv6, report.IPv6CanSend = true, true
+		}
+	}
 
 	c.addReportHistoryAndSetPreferredDERP(rs, report, dm.View(), c.timeNow())
 	c.logConciseReport(report, dm)
@@ -1641,19 +1681,26 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 		return
 	}
 
-	switch probe.proto {
+	rs.sendSTUNPacket(req, addr, probe.proto)
+
+	c.vlogf("sent to %v", addr)
+}
+
+// sendSTUNPacket sends a STUN request and records whether its address family can send UDP.
+func (rs *reportState) sendSTUNPacket(req []byte, addr netip.AddrPort, proto probeProto) {
+	switch proto {
 	case probeIPv4:
 		metricSTUNSend4.Add(1)
 	case probeIPv6:
 		metricSTUNSend6.Add(1)
 	default:
-		panic("bad probe proto " + fmt.Sprint(probe.proto))
+		panic("bad probe proto " + fmt.Sprint(proto))
 	}
 
 	n, err := rs.c.SendPacket(req, addr)
 	if n == len(req) && err == nil || neterror.TreatAsLostUDP(err) {
 		rs.mu.Lock()
-		switch probe.proto {
+		switch proto {
 		case probeIPv4:
 			rs.report.IPv4CanSend = true
 		case probeIPv6:
@@ -1661,8 +1708,6 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 		}
 		rs.mu.Unlock()
 	}
-
-	c.vlogf("sent to %v", addr)
 }
 
 // nodeAddrPort returns the IP:port to send a STUN queries to for a given node.
