@@ -155,7 +155,7 @@ write_hosts() {
 		--query 'Reservations[].Instances[].{name:Tags[?Key==`Name`]|[0].Value,id:InstanceId,type:InstanceType,public:PublicIpAddress,private4:PrivateIpAddress,ip6:Ipv6Address}' \
 		--output json | python3 -c '
 import json, sys
-hosts = sorted(json.load(sys.stdin), key=lambda h: h["name"])
+hosts = sorted(json.load(sys.stdin), key=lambda h: int(h["name"].rsplit("-", 1)[1]))
 for h in hosts:
     h["user"] = "ubuntu"
     h["key"] = sys.argv[1]

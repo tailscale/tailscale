@@ -29,7 +29,7 @@ srcname=${tarball%.tar.*}
 config=$(mktemp)
 trap 'rm -f "$config"' EXIT
 "$(dirname "$0")/extract-ikconfig" "$pkg/vmlinuz" > "$config"
-hash=$(sha256sum "$config" "$0" | sha256sum | cut -c1-12)
+hash=$(cat "$config" "$0" | sha256sum | cut -c1-12)
 
 kdir=$cache/gokrazy/$srcname-$hash-debug
 if [ -f "$kdir/.tswg-built" ]; then
