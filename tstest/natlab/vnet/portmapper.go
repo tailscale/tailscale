@@ -260,7 +260,7 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 		//   00 00 1c 20 suggested lifetime in seconds (7200 sec = 2 hours)
 		internalPort := binary.BigEndian.Uint16(req.Payload[4:6])
 		wantExtPort := binary.BigEndian.Uint16(req.Payload[6:8])
-		lifetimeSec := binary.BigEndian.Uint32(req.Payload[8:12])
+		lifetimeSec := n.grantedPortMapLifetime(binary.BigEndian.Uint32(req.Payload[8:12]))
 		gotPort, ok := n.doPortMap(req.Src.Addr(), internalPort, wantExtPort, int(lifetimeSec), NATPMP)
 		if !ok {
 			// TODO(fmarier): handle portmap releases properly
@@ -350,7 +350,7 @@ func (n *network) handlePCPRequest(req UDPPacket) {
 		//   9f 40 internal port 40768
 		//   00 00 suggested external port
 		//   00 00 00 00 00 00 00 00 00 00 ff ff 00 00 00 00 suggested external IP
-		lifetimeSec := binary.BigEndian.Uint32(req.Payload[4:8])
+		lifetimeSec := n.grantedPortMapLifetime(binary.BigEndian.Uint32(req.Payload[4:8]))
 		internalPort := binary.BigEndian.Uint16(req.Payload[40:42])
 		// TODO(fmarier): reject wildcard mappings (internalPort = 0)
 		wantExtPort := binary.BigEndian.Uint16(req.Payload[42:44])
@@ -409,10 +409,17 @@ func (n *network) handlePCPRequest(req UDPPacket) {
 	n.logf("TODO: handle PCP packet % 02x", req.Payload)
 }
 
+func (n *network) grantedPortMapLifetime(sec uint32) uint32 {
+	if maxSec := uint32(n.portMapLifetime / time.Second); maxSec > 0 {
+		return min(sec, maxSec)
+	}
+	return sec
+}
+
 type PortMapping struct {
-	dst     netip.AddrPort // LAN IP:port
-	expiry  time.Time
-	Service NetworkService
+	dst       netip.AddrPort // LAN IP:port
+	ExpiresAt time.Time
+	Service   NetworkService
 }
 
 func (n *network) portMappings() map[netip.AddrPort]PortMapping {
@@ -421,7 +428,7 @@ func (n *network) portMappings() map[netip.AddrPort]PortMapping {
 	now := time.Now()
 	ret := maps.Clone(n.portMap)
 	maps.DeleteFunc(ret, func(_ netip.AddrPort, pm PortMapping) bool {
-		return now.After(pm.expiry)
+		return now.After(pm.ExpiresAt)
 	})
 	return ret
 }
@@ -453,9 +460,9 @@ func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec 
 	for k, v := range n.portMap {
 		if v.dst == dst {
 			n.portMap[k] = PortMapping{
-				dst:     dst,
-				expiry:  time.Now().Add(time.Duration(sec) * time.Second),
-				Service: service,
+				dst:       dst,
+				ExpiresAt: time.Now().Add(time.Duration(sec) * time.Second),
+				Service:   service,
 			}
 			n.logf("vnet: renewed %v mapping from %v to %v", service, wanAP, dst)
 			return k.Port(), true
@@ -465,9 +472,9 @@ func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec 
 	for range 20_000 {
 		if wanAP.Port() > 0 && !n.natTable.IsPublicPortUsed(wanAP) {
 			mak.Set(&n.portMap, wanAP, PortMapping{
-				dst:     dst,
-				expiry:  time.Now().Add(time.Duration(sec) * time.Second),
-				Service: service,
+				dst:       dst,
+				ExpiresAt: time.Now().Add(time.Duration(sec) * time.Second),
+				Service:   service,
 			})
 			n.logf("vnet: allocated %v mapping from %v to %v", service, wanAP, dst)
 			return wanAP.Port(), true
