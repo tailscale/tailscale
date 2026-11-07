@@ -44,6 +44,8 @@ import (
 //	                         TestLeanProfile
 //	TSWG_SUBNET_ROUTER_CMD   a shell command to run on the router after
 //	                         each setup, for experiments ($MODE is the mode)
+//	TSWG_SUBNET_ROUTER_STATS if set, log the router's wg0, UDP and TCP
+//	                         counters after each run, to see drops
 //	TSWG_COMPARE_RUNS        runs of each mode, interleaved (default 3)
 //	TSWG_BENCH_DUR           length of each run (default 10s)
 func TestLeanSubnetRouter(t *testing.T) {
@@ -121,9 +123,12 @@ func TestLeanSubnetRouter(t *testing.T) {
 					}.Encode(), &prof)
 				}()
 			}
-			r, err := netbench.RunTCPFanIn(senders, benchNode{backend}, []netbench.Node{benchNode{router}}, dst, streams, dur)
+			r, err := netbench.RunTCPFanIn(senders, benchNode{backend}, []netbench.Node{benchNode{router}, senders[0]}, dst, streams, dur)
 			if err != nil {
 				t.Fatalf("%s run %d: %v", mode, run, err)
+			}
+			if os.Getenv("TSWG_SUBNET_ROUTER_STATS") != "" {
+				s.logRouterStats(mode)
 			}
 			if profiling {
 				<-profDone
@@ -133,8 +138,8 @@ func TestLeanSubnetRouter(t *testing.T) {
 					t.Logf("router %s profile:\n%s", mode, formatProfile(prof))
 				}
 			}
-			t.Logf("run %d: router %s: %.0f Mbps, router CPU %.0f%% (%.2f CPU-s/GB), fairness %.3f, clients %s Mbps",
-				run, mode, r.Mbps, 100*r.WatchCPU[0], r.WatchCPUSecPerGB[0], r.Fairness, fmtMbps(r.SenderMbps))
+			t.Logf("run %d: router %s: %.0f Mbps, router CPU %.0f%% (%.2f CPU-s/GB), backend CPU %.0f%%, client 0 CPU %.0f%%, fairness %.3f, clients %s Mbps",
+				run, mode, r.Mbps, 100*r.WatchCPU[0], r.WatchCPUSecPerGB[0], 100*r.ReceiverCPU, 100*r.WatchCPU[1], r.Fairness, fmtMbps(r.SenderMbps))
 			for metric, v := range map[string]float64{
 				"Mbps":            r.Mbps,
 				"router CPU %":    100 * r.WatchCPU[0],
@@ -170,6 +175,26 @@ type subnetLab struct {
 	backend    *vm
 	clients    []*vm
 	clientMode string
+}
+
+// logRouterStats logs the router's wg0 interface counters, UDP and TCP
+// counters, and NIC drop counters.
+func (s *subnetLab) logRouterStats(mode string) {
+	file := func(path string) string {
+		return s.router.getText("/file?" + url.Values{"path": {path}}.Encode())
+	}
+	var lines []string
+	for line := range strings.SplitSeq(file("/proc/net/dev"), "\n") {
+		if strings.Contains(line, "wg0:") || strings.Contains(line, "Inter-") || strings.Contains(line, " face ") {
+			lines = append(lines, line)
+		}
+	}
+	snmp := file("/proc/net/snmp")
+	t := s.l.t
+	t.Logf("router %s counters:\n%s\n%s\n%s", mode, strings.Join(lines, "\n"), snmpLines(snmp, "Udp:"), snmpLines(snmp, "Ip:"))
+	if out, err := s.router.host.ssh(`dev=$(ip -o route get 172.31.0.1 | sed -n "s/.* dev \([^ ]*\).*/\1/p"); sudo ethtool -S $dev | grep -E "drop|miss|err|allowance_exceeded" | grep -v ": 0$"`, nil); err == nil {
+		t.Logf("router %s NIC counters (nonzero):\n%s", mode, out)
+	}
 }
 
 // mtu returns the tunnel MTU to use.
