@@ -655,6 +655,14 @@ int tswg_set_peer(struct wg_peer *peer, struct nlattr *attr)
 
 		WRITE_ONCE(peer->tswg_no_roam, !!(flags & TSWGPEER_F_NO_ROAM));
 	}
+	if (tb[TSWGPEER_A_CLEAR_SESSION]) {
+		/* As wg_pm_notification does for every peer before suspend. */
+		timer_delete(&peer->timer_zero_key_material);
+		wg_noise_handshake_clear(&peer->handshake);
+		wg_noise_keypairs_clear(&peer->keypairs);
+		/* Don't make the next handshake wait for REKEY_TIMEOUT. */
+		wg_noise_reset_last_sent_handshake(&peer->last_sent_handshake);
+	}
 	return 0;
 }
 

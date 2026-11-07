@@ -107,6 +107,14 @@ enum tswgpeer_flag {
 enum tswgpeer_attribute {
 	TSWGPEER_A_UNSPEC,
 	TSWGPEER_A_FLAGS, /* NLA_U32 of enum tswgpeer_flag; set replaces all */
+	/*
+	 * NLA_FLAG, set only: forget the peer's session keys and any
+	 * handshake in progress, as on suspend, so that the next packet to the
+	 * peer starts a new handshake right away. For when userspace learns
+	 * that the peer restarted (and so lost its keys), such as from a new
+	 * disco key.
+	 */
+	TSWGPEER_A_CLEAR_SESSION,
 
 	__TSWGPEER_A_LAST
 };
