@@ -63,7 +63,12 @@ which the router forwards to, masquerading. Updated 2026-11-07.
   for the page allocator's zone lock, 14-20% of those CPUs, plus zeroing
   (`init_on_alloc`). Tried there, no better: RPS, bigger per-CPU page
   lists (`vm.percpu_pagelist_high_fraction=8`), capping wg0's GRO size
-  (for hardware TSO on forwarding). More clients helped until about 40
+  (for hardware TSO on forwarding), and zero-copy receive (module
+  parameter `rx_zerocopy`, off by default), which took tswg's own page
+  allocations out (page zeroing 4.7% to 1.1%, zone lock time 9-11% to
+  7%) but cost more in scatterlist decryption: with 24 clients, 62.5-63.3
+  Gbps and 6.05 CPU-s/GB against 63.4-64.7 and 5.47 copying. So tswg's
+  allocations weren't what binds; ENA's page per received packet is. More clients helped until about 40
   (20: 56 Gbps, 40: 72, 60: 74).
 * On the big routers, tswg isn't CPU-bound (45% of 128 CPUs at 74 Gbps),
   so its CPU per byte is about even with wireguard-go's; where CPU is the
@@ -1033,8 +1038,9 @@ Performance (the primary motivation; see "Performance"):
       when nothing is busy (encrypt or decrypt inline, send from the
       encrypt worker), without bringing back softirq starvation of
       workers on the NIC's CPU under load.
-- [x] Zero-copy receive: tried, 7% worse for the subnet router (see
-      "Subnet router"); kept out of tree.
+- [x] Zero-copy receive: tried, 7% worse on a CPU-bound subnet router,
+      and no better on a 200 Gbps one where page allocation is the limit
+      (see "Results at a glance"); kept behind `rx_zerocopy`, off.
 - [ ] TSO from the inner GSO packet: encrypt straight from it, building
       each segment's headers, instead of `skb_gso_segment` in `wg_xmit`
       (per-segment skb allocation).
@@ -1054,9 +1060,10 @@ Performance (the primary motivation; see "Performance"):
 - [x] Subnet router beyond 40 Gbps at MTU 1280: c6in.32xlarge, 74 Gbps
       with 60 clients (12x wireguard-go).
 - [ ] Subnet router past 75 Gbps at MTU 1280: the ENA interrupt CPUs'
-      page allocator contention. Ideas: fewer pages per packet on our side
-      (decrypted packets from slab or a recycling pool), ENA with a page
-      pool (upstream driver work), other NICs (mlx5 on bare metal).
+      page allocator contention, from ENA allocating a page per received
+      packet (zero-copy receive, taking tswg's own allocations out, didn't
+      help). Ideas: ENA with a page pool (upstream driver work); NICs
+      outside EC2 (mlx5 has a page pool); EC2 metal uses ENA too.
 - [ ] EC2: c7i.large (2 vCPUs, CPU-bound), and the QEMU lab on a
       c7i.metal-24xl (to see what nesting cost the lab's numbers).
 - [ ] vmtest: shared socket with `UDP_GRO` enabled still works.

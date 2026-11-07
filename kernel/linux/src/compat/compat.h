@@ -19,6 +19,19 @@
 #include <linux/kconfig.h>
 #include <linux/types.h>
 
+#ifdef HAVE_SKBUFF_REF_H
+#include <linux/skbuff_ref.h> /* skb_frag_ref, which was in skbuff.h */
+#endif
+
+#ifndef HAVE_SKB_FRAGS_READABLE
+#include <linux/skbuff.h>
+/* Before devmem TCP, every skb's frags were readable. */
+static inline bool skb_frags_readable(const struct sk_buff *skb)
+{
+	return true;
+}
+#endif
+
 #ifndef HAVE_UDP_GET_LEN_SHORT
 #include <linux/udp.h>
 static inline unsigned int udp_get_len_short(const struct udphdr *uh)

@@ -257,6 +257,153 @@ static bool keypair_may_receive(struct noise_keypair *keypair)
 }
 
 /*
+ * TSWG: TSWG_RX_COPYBREAK is the plaintext size below which
+ * tswg_decrypt_gso copies a message out rather than decrypting it in place
+ * and referencing its pages: for small ones (TCP ACKs, say), copying is
+ * cheap, and holding on to a page for them wastes memory.
+ * TSWG_RX_HEADROOM is the headroom we give packets that reference pages,
+ * for the link layer header if they're forwarded.
+ */
+#define TSWG_RX_COPYBREAK 256
+
+/*
+ * TSWG: rx_zerocopy turns on decrypting in place (tswg_decrypt_message_zc).
+ * It's off by default: on a CPU-bound router it was 7% slower than
+ * copying, since scatterlist decryption costs more than linear decryption
+ * of a cache-hot copy; it may win where page allocation is the limit.
+ */
+static bool tswg_rx_zerocopy;
+module_param_named(rx_zerocopy, tswg_rx_zerocopy, bool, 0644);
+MODULE_PARM_DESC(rx_zerocopy, "decrypt received data messages in place, without copying them out");
+#define TSWG_RX_HEADROOM (NET_SKB_PAD + LL_MAX_HEADER)
+
+/*
+ * tswg_writable reports whether we may change skb's data in place: no one
+ * else can see it (as a clone, or a tap's copy, would), and it's all in
+ * memory we can read (not devmem).
+ */
+static bool tswg_writable(struct sk_buff *skb)
+{
+	return !skb_cloned(skb) && !skb_has_shared_frag(skb) &&
+	       skb_frags_readable(skb);
+}
+
+/*
+ * tswg_ref_range appends to nskb's frags references to the len bytes of
+ * skb's data at off, as skb_segment does. They must be in skb's head (if
+ * that's a page fragment), its page frags, or (recursively) its frag_list
+ * members, all writable. It reports whether it could.
+ */
+static bool tswg_ref_range(struct sk_buff *nskb, struct sk_buff *skb,
+			   unsigned int off, unsigned int len)
+{
+	struct skb_shared_info *si = skb_shinfo(skb);
+	unsigned int headlen = skb_headlen(skb);
+	struct sk_buff *member;
+	int i;
+
+	if (!tswg_writable(skb) ||
+	    (skb_shinfo(nskb)->nr_frags && nskb->pp_recycle != skb->pp_recycle))
+		return false;
+	nskb->pp_recycle = skb->pp_recycle;
+	if (off < headlen) {
+		unsigned int n = min(len, headlen - off);
+		struct page *page;
+		skb_frag_t *f;
+
+		if (!skb->head_frag || skb_shinfo(nskb)->nr_frags >= MAX_SKB_FRAGS)
+			return false;
+		page = virt_to_head_page(skb->head);
+		f = &skb_shinfo(nskb)->frags[skb_shinfo(nskb)->nr_frags];
+		skb_frag_fill_page_desc(f, page,
+					skb->data + off - (unsigned char *)page_address(page), n);
+		skb_frag_ref(nskb, skb_shinfo(nskb)->nr_frags++);
+		off += n;
+		len -= n;
+	}
+	off -= min(off, headlen);
+	for (i = 0; len && i < si->nr_frags; i++) {
+		unsigned int size = skb_frag_size(&si->frags[i]), n;
+		skb_frag_t *f;
+
+		if (off >= size) {
+			off -= size;
+			continue;
+		}
+		if (skb_shinfo(nskb)->nr_frags >= MAX_SKB_FRAGS)
+			return false;
+		n = min(len, size - off);
+		f = &skb_shinfo(nskb)->frags[skb_shinfo(nskb)->nr_frags];
+		*f = si->frags[i];
+		skb_frag_off_add(f, off);
+		skb_frag_size_set(f, n);
+		skb_frag_ref(nskb, skb_shinfo(nskb)->nr_frags++);
+		off = 0;
+		len -= n;
+	}
+	/*
+	 * Past the frags (the loop has taken their sizes off off), off is
+	 * relative to the frag_list's data. Its members are whole datagrams
+	 * (see tswg_gro_merge), so a message doesn't usually straddle them.
+	 */
+	skb_walk_frags(skb, member) {
+		unsigned int n;
+
+		if (!len)
+			break;
+		if (off >= member->len) {
+			off -= member->len;
+			continue;
+		}
+		n = min(len, member->len - off);
+		if (!tswg_ref_range(nskb, member, off, n))
+			return false;
+		off = 0;
+		len -= n;
+	}
+	return !len;
+}
+
+/*
+ * tswg_decrypt_message_zc decrypts the message at off in skb, of enc_len
+ * bytes after its header, in place, and returns a new packet that
+ * references its plaintext. It returns NULL if it can't, leaving skb
+ * untouched, or ERR_PTR(-EBADMSG) if the message doesn't authenticate.
+ */
+static noinline_for_stack struct sk_buff *
+tswg_decrypt_message_zc(struct sk_buff *skb, unsigned int off,
+			unsigned int enc_len, u64 nonce,
+			struct noise_keypair *keypair)
+{
+	unsigned int plain_len = enc_len - noise_encrypted_len(0);
+	struct scatterlist sg[MAX_SKB_FRAGS + 2];
+	struct sk_buff *nskb;
+	int n;
+
+	nskb = alloc_skb(TSWG_RX_HEADROOM, GFP_ATOMIC);
+	if (unlikely(!nskb))
+		return NULL;
+	skb_reserve(nskb, TSWG_RX_HEADROOM);
+	if (unlikely(!tswg_ref_range(nskb, skb, off, plain_len)))
+		goto fail;
+	sg_init_table(sg, ARRAY_SIZE(sg));
+	n = skb_to_sgvec(skb, sg, off, enc_len);
+	if (unlikely(n <= 0))
+		goto fail;
+	if (!chacha20poly1305_decrypt_sg_inplace(sg, enc_len, NULL, 0, nonce,
+						 keypair->receiving.key)) {
+		kfree_skb(nskb);
+		return ERR_PTR(-EBADMSG);
+	}
+	nskb->len = nskb->data_len = plain_len;
+	nskb->truesize += plain_len;
+	return nskb;
+fail:
+	kfree_skb(nskb);
+	return NULL;
+}
+
+/*
  * TSWG: tswg_contig returns a pointer to the len bytes of skb's data at off
  * if they're contiguous in memory: in its head, or in one page frag (of
  * its own or of a frag_list member's), which is where a message received
@@ -304,6 +451,49 @@ static const u8 *tswg_contig(const struct sk_buff *skb, unsigned int off,
 }
 
 /*
+ * TSWG: tswg_decrypt_message_copy decrypts the message at off in skb, of
+ * enc_len bytes after its header, into a new packet, which it returns, or
+ * NULL if it can't or the message doesn't authenticate.
+ */
+static noinline_for_stack struct sk_buff *
+tswg_decrypt_message_copy(struct sk_buff *skb, unsigned int off,
+			  unsigned int enc_len, u64 nonce,
+			  struct noise_keypair *keypair, struct net_device *dev)
+{
+	struct sk_buff *nskb;
+	const u8 *src;
+	bool ok, ahead;
+
+	nskb = netdev_alloc_skb(dev, enc_len);
+	if (unlikely(!nskb))
+		return NULL;
+	/*
+	 * Decrypt straight from skb when the message is contiguous there, as
+	 * it usually is, rather than copy it out and decrypt the copy in
+	 * place: one pass over it fewer.
+	 */
+	src = tswg_contig(skb, off, enc_len, &ahead);
+	if (likely(src && ahead && skb_headroom(nskb) >= CHACHA_BLOCK_SIZE)) {
+		ok = tswg_aead_decrypt_ahead(skb_put(nskb, enc_len - noise_encrypted_len(0)),
+					     src, enc_len, nonce,
+					     keypair->receiving.key);
+	} else if (src) {
+		ok = tswg_aead_decrypt(skb_put(nskb, enc_len - noise_encrypted_len(0)),
+				       src, enc_len, nonce, keypair->receiving.key);
+	} else {
+		ok = !skb_copy_bits(skb, off, skb_put(nskb, enc_len), enc_len) &&
+		     tswg_aead_decrypt(nskb->data, nskb->data, enc_len, nonce,
+				       keypair->receiving.key);
+		__skb_trim(nskb, enc_len - noise_encrypted_len(0));
+	}
+	if (unlikely(!ok)) {
+		kfree_skb(nskb);
+		return NULL;
+	}
+	return nskb;
+}
+
+/*
  * TSWG: tswg_decrypt_gso decrypts each data message of skb, a packet merged
  * by tswg_gro_receive, into a new packet, listed in
  * PACKET_CB(skb)->tswg_out. Messages that fail to decrypt are dropped,
@@ -323,8 +513,6 @@ static bool tswg_decrypt_gso(struct sk_buff *skb, struct noise_keypair *keypair)
 		const struct message_data *hdr;
 		unsigned int enc_len;
 		struct sk_buff *nskb;
-		const u8 *src;
-		bool ok, ahead;
 		u64 nonce;
 
 		len = min(mss, skb->len - off);
@@ -335,34 +523,19 @@ static bool tswg_decrypt_gso(struct sk_buff *skb, struct noise_keypair *keypair)
 			break;
 		nonce = le64_to_cpu(hdr->counter);
 		enc_len = len - sizeof(*hdr);
-		nskb = netdev_alloc_skb(dev, enc_len);
+		nskb = NULL;
+		if (READ_ONCE(tswg_rx_zerocopy) &&
+		    enc_len - noise_encrypted_len(0) >= TSWG_RX_COPYBREAK) {
+			nskb = tswg_decrypt_message_zc(skb, off + sizeof(*hdr),
+						       enc_len, nonce, keypair);
+			if (IS_ERR(nskb))
+				continue;
+		}
+		if (!nskb)
+			nskb = tswg_decrypt_message_copy(skb, off + sizeof(*hdr),
+							 enc_len, nonce, keypair, dev);
 		if (unlikely(!nskb))
 			continue;
-		/*
-		 * Decrypt straight from skb when the message is contiguous
-		 * there, as it usually is, rather than copy it out and
-		 * decrypt the copy in place: one pass over it fewer.
-		 */
-		src = tswg_contig(skb, off + sizeof(*hdr), enc_len, &ahead);
-		if (likely(src && ahead && skb_headroom(nskb) >= CHACHA_BLOCK_SIZE)) {
-			ok = tswg_aead_decrypt_ahead(skb_put(nskb, enc_len - noise_encrypted_len(0)),
-						     src, enc_len, nonce,
-						     keypair->receiving.key);
-		} else if (src) {
-			ok = tswg_aead_decrypt(skb_put(nskb, enc_len - noise_encrypted_len(0)),
-					       src, enc_len, nonce,
-					       keypair->receiving.key);
-		} else {
-			ok = !skb_copy_bits(skb, off + sizeof(*hdr),
-					    skb_put(nskb, enc_len), enc_len) &&
-			     tswg_aead_decrypt(nskb->data, nskb->data, enc_len,
-					       nonce, keypair->receiving.key);
-			__skb_trim(nskb, enc_len - noise_encrypted_len(0));
-		}
-		if (unlikely(!ok)) {
-			kfree_skb(nskb);
-			continue;
-		}
 		skb_reset_mac_header(nskb);
 		skb_reset_network_header(nskb);
 		PACKET_CB(nskb)->nonce = nonce;
