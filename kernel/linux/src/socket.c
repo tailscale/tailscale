@@ -20,6 +20,21 @@
 #include <net/udp_tunnel.h>
 #include <net/ipv6.h>
 
+/*
+ * TSWG: tswg_prepare_gso sets up the checksum of a UDP GSO packet from
+ * tswg_coalesce (in send.c) as UDP GSO needs it: partial, starting at the UDP
+ * header that udp_tunnel_xmit_skb is about to push. udp_set_csum then fills
+ * in the pseudo-header sum, as for a UDP_SEGMENT socket's packets.
+ */
+static void tswg_prepare_gso(struct sk_buff *skb)
+{
+	if (!skb_is_gso(skb))
+		return;
+	skb->ip_summed = CHECKSUM_PARTIAL;
+	skb->csum_start = skb_headroom(skb) - sizeof(struct udphdr);
+	skb->csum_offset = offsetof(struct udphdr, check);
+}
+
 static int send4(struct wg_device *wg, struct sk_buff *skb,
 		 struct endpoint *endpoint, u8 ds, struct dst_cache *cache)
 {
@@ -85,6 +100,7 @@ static int send4(struct wg_device *wg, struct sk_buff *skb,
 	}
 
 	skb->ignore_df = 1;
+	tswg_prepare_gso(skb); /* TSWG */
 	udp_tunnel_xmit_skb(rt, sock, skb, fl.saddr, fl.daddr, ds,
 			    ip4_dst_hoplimit(&rt->dst), 0, fl.fl4_sport,
 			    fl.fl4_dport, false, false, 0);
@@ -151,6 +167,7 @@ static int send6(struct wg_device *wg, struct sk_buff *skb,
 	}
 
 	skb->ignore_df = 1;
+	tswg_prepare_gso(skb); /* TSWG */
 	udp_tunnel6_xmit_skb(dst, sock, skb, skb->dev, &fl.saddr, &fl.daddr, ds,
 			     ip6_dst_hoplimit(dst), 0, fl.fl6_sport,
 			     fl.fl6_dport, false, 0);

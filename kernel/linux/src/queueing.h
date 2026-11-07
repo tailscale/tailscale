@@ -128,6 +128,47 @@ static inline int wg_cpumask_next_online(int *last_cpu)
 	return cpu;
 }
 
+/*
+ * TSWG: TSWG_CRYPT_BATCH is how many packets in a row go to the same crypt
+ * worker before moving on to the next CPU. Upstream moves on with every
+ * packet, so every packet queues (and usually wakes, with an IPI) another
+ * CPU's worker, which profiling showed to be the main cost on the receive
+ * path's single softirq CPU. All workers drain the same ring, so batching
+ * doesn't strand packets; it just means fewer, longer worker runs.
+ */
+#define TSWG_CRYPT_BATCH 16
+
+/* tswg_crypt_queue_cpu returns the CPU whose crypt worker to kick. */
+static inline int tswg_crypt_queue_cpu(struct crypt_queue *queue)
+{
+	unsigned int n = READ_ONCE(queue->tswg_batch);
+
+	if (n < TSWG_CRYPT_BATCH) {
+		int cpu = READ_ONCE(queue->last_cpu);
+
+		if (likely(cpu < nr_cpu_ids && cpu_online(cpu))) {
+			WRITE_ONCE(queue->tswg_batch, n + 1);
+			return cpu;
+		}
+	}
+	WRITE_ONCE(queue->tswg_batch, 1);
+	return wg_cpumask_next_online(&queue->last_cpu);
+}
+
+/*
+ * TSWG: tswg_queue_work_on is queue_work_on, skipping the call when the work
+ * is already pending (queued but not yet started, so it will see whatever
+ * was just enqueued). That check is a read; queue_work_on's own check is
+ * an atomic test-and-set on a cache line that the worker's CPU writes.
+ */
+static inline void tswg_queue_work_on(int cpu, struct workqueue_struct *wq,
+				      struct work_struct *work)
+{
+	if (work_pending(work))
+		return;
+	queue_work_on(cpu, wq, work);
+}
+
 void wg_prev_queue_init(struct prev_queue *queue);
 
 /* Multi producer */
@@ -167,10 +208,10 @@ static inline int wg_queue_enqueue_per_device_and_peer(
 	/* Then we queue it up in the device queue, which consumes the
 	 * packet as soon as it can.
 	 */
-	cpu = wg_cpumask_next_online(&device_queue->last_cpu);
+	cpu = tswg_crypt_queue_cpu(device_queue);
 	if (unlikely(ptr_ring_produce_bh(&device_queue->ring, skb)))
 		return -EPIPE;
-	queue_work_on(cpu, wq, &per_cpu_ptr(device_queue->worker, cpu)->work);
+	tswg_queue_work_on(cpu, wq, &per_cpu_ptr(device_queue->worker, cpu)->work);
 	return 0;
 }
 
@@ -182,8 +223,8 @@ static inline void wg_queue_enqueue_per_peer_tx(struct sk_buff *skb, enum packet
 	struct wg_peer *peer = wg_peer_get(PACKET_PEER(skb));
 
 	atomic_set_release(&PACKET_CB(skb)->state, state);
-	queue_work_on(wg_cpumask_choose_online(&peer->serial_work_cpu, peer->internal_id),
-		      peer->device->packet_crypt_wq, &peer->transmit_packet_work);
+	tswg_queue_work_on(wg_cpumask_choose_online(&peer->serial_work_cpu, peer->internal_id),
+			   peer->device->packet_crypt_wq, &peer->transmit_packet_work);
 	wg_peer_put(peer);
 }
 

@@ -239,6 +239,79 @@ void wg_packet_send_keepalive(struct wg_peer *peer)
 	wg_packet_send_staged_packets(peer);
 }
 
+/*
+ * TSWG: outer UDP GSO. Upstream sends each encrypted packet through the
+ * UDP/IP stack and the device on its own, which profiling showed to be a
+ * main cost on the transmit path (with virtio, a device kick, so a VM exit,
+ * per packet). Packets that came from one GSO packet on the WireGuard
+ * device all encrypt to the same size (WireGuard pads to 16 bytes), except
+ * perhaps the last, which is what UDP GSO (SKB_GSO_UDP_L4) needs. So we
+ * chain each such run, without copying, as the frag_list of its first
+ * packet, and send it as one UDP GSO packet; the stack (or the device, if
+ * it can) segments it, and the segments go to the device together.
+ *
+ * TSWG_GSO_MAX_SEGS and TSWG_GSO_MAX_BYTES bound a run; the IP and UDP
+ * length fields are 16 bits.
+ */
+#define TSWG_GSO_MAX_SEGS 64
+#define TSWG_GSO_MAX_BYTES (65535 - sizeof(struct ipv6hdr) - sizeof(struct udphdr))
+
+/*
+ * tswg_coalesce takes the run of packets starting at skb that can be sent
+ * as one UDP GSO packet, makes them one (if more than one), and returns the
+ * packet after the run.
+ */
+static struct sk_buff *tswg_coalesce(struct sk_buff *skb)
+{
+	unsigned int mss = skb->len, total = skb->len, segs = 1;
+	struct sk_buff *last = skb, *next = skb->next, *frag;
+
+	if (mss == message_data_len(0))
+		goto out; /* keepalive */
+	while (next && segs < TSWG_GSO_MAX_SEGS && next->len <= mss &&
+	       total + next->len <= TSWG_GSO_MAX_BYTES &&
+	       next->len != message_data_len(0) &&
+	       PACKET_CB(next)->ds == PACKET_CB(skb)->ds) {
+		bool shorter = next->len < mss;
+
+		total += next->len;
+		segs++;
+		last = next;
+		next = next->next;
+		if (shorter)
+			break; /* only the last segment may be shorter */
+	}
+	if (segs == 1)
+		goto out;
+
+	frag = skb->next;
+	skb->next = NULL;
+	last->next = NULL;
+	/*
+	 * The packets still belong to the inner socket (for TCP, with
+	 * tcp_wfree as their destructor, for TCP small queues). Release them
+	 * now: segmenting a GSO packet with a frag_list of socket-owned
+	 * packets uncharges the socket more than it charged (refcount
+	 * underflows in tcp_wfree). It's what happens with wireguard-go too,
+	 * whose TUN device frees the inner packet once it's read.
+	 */
+	skb_orphan(skb);
+	for (struct sk_buff *f = frag; f; f = f->next) {
+		skb_orphan(f);
+		skb->truesize += f->truesize;
+	}
+	skb_shinfo(skb)->frag_list = frag;
+	skb->len = total;
+	skb->data_len += total - mss;
+	skb_shinfo(skb)->gso_size = mss;
+	skb_shinfo(skb)->gso_type = SKB_GSO_UDP_L4;
+	skb_shinfo(skb)->gso_segs = segs;
+	return next;
+out:
+	skb->next = NULL;
+	return next;
+}
+
 static void wg_packet_create_data_done(struct wg_peer *peer, struct sk_buff *first)
 {
 	struct sk_buff *skb, *next;
@@ -246,8 +319,9 @@ static void wg_packet_create_data_done(struct wg_peer *peer, struct sk_buff *fir
 
 	wg_timers_any_authenticated_packet_traversal(peer);
 	wg_timers_any_authenticated_packet_sent(peer);
-	skb_list_walk_safe(first, skb, next) {
+	for (skb = first; skb; skb = next) {
 		is_keepalive = skb->len == message_data_len(0);
+		next = tswg_coalesce(skb); /* TSWG */
 		if (likely(!wg_socket_send_skb_to_peer(peer, skb,
 				PACKET_CB(skb)->ds) && !is_keepalive))
 			data_sent = true;

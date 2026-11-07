@@ -29,6 +29,7 @@ struct crypt_queue {
 	struct ptr_ring ring;
 	struct multicore_worker __percpu *worker;
 	int last_cpu;
+	unsigned int tswg_batch; /* TSWG: packets queued since last_cpu changed */
 };
 
 struct prev_queue {
