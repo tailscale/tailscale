@@ -85,14 +85,23 @@ type Client struct {
 
 // Open opens a Client. It fails if the tswg module isn't loaded.
 func Open() (*Client, error) {
+	return OpenFamily(FamilyName)
+}
+
+// OpenFamily is like Open, for the generic netlink family name. Since tswg
+// keeps upstream WireGuard's attributes, OpenFamily("wireguard") gives a
+// Client for the kernel's own WireGuard, which benchmarks use as a
+// baseline. The tswg additions (Config.SocketFD4 and so on) don't work on
+// it.
+func OpenFamily(name string) (*Client, error) {
 	c, err := genetlink.Dial(nil)
 	if err != nil {
 		return nil, err
 	}
-	fam, err := c.GetFamily(FamilyName)
+	fam, err := c.GetFamily(name)
 	if err != nil {
 		c.Close()
-		return nil, fmt.Errorf("tswg: getting genetlink family %q (is tswg.ko loaded?): %w", FamilyName, err)
+		return nil, fmt.Errorf("tswg: getting genetlink family %q (is its module loaded?): %w", name, err)
 	}
 	return &Client{c: c, fam: fam}, nil
 }

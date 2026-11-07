@@ -41,9 +41,16 @@ func LoadModule(image []byte) error {
 
 // AddLink creates a tswg network device named name.
 func AddLink(name string) error {
+	return AddLinkType(name, LinkType)
+}
+
+// AddLinkType creates a network device named name of the given rtnetlink
+// link kind, such as LinkType, or "wireguard" for the kernel's own
+// WireGuard (see OpenFamily).
+func AddLinkType(name, kind string) error {
 	err := netlink.LinkAdd(&netlink.GenericLink{
 		LinkAttrs: netlink.LinkAttrs{Name: name},
-		LinkType:  LinkType,
+		LinkType:  kind,
 	})
 	if err != nil {
 		return fmt.Errorf("tswg: creating link %q: %w", name, err)

@@ -18,6 +18,7 @@ import (
 
 	"github.com/tailscale/netlink"
 	"golang.org/x/sys/unix"
+	"tailscale.com/tstest/tswgbench/netbench"
 	"tailscale.com/types/key"
 	"tailscale.com/wgengine/tswg"
 )
@@ -33,12 +34,7 @@ func init() {
 	mux.HandleFunc("GET /tswg/sock-recv", tswgSockRecv)
 	mux.HandleFunc("POST /tswg/sock-close", tswgSockClose)
 	mux.HandleFunc("POST /tswg/drop-udp-from", tswgDropUDPFrom)
-	mux.HandleFunc("POST /tswg/bench/serve", benchServe)
-	mux.HandleFunc("GET /tswg/bench/stats", benchStats)
-	mux.HandleFunc("GET /tswg/bench/cpu", benchCPU)
-	mux.HandleFunc("GET /tswg/bench/tcp", benchTCP)
-	mux.HandleFunc("GET /tswg/bench/udp", benchUDP)
-	mux.HandleFunc("GET /tswg/bench/rtt", benchRTT)
+	netbench.Register(mux, "/tswg/bench/")
 	tswgHandler = mux
 }
 

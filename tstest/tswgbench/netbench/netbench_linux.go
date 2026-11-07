@@ -1,11 +1,7 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-package main
-
-// This file has tta's /tswg/bench/ endpoints, a minimal iperf-like toolkit
-// for comparing data planes (tswg kernel mode versus wireguard-go) on
-// natlab VMs, which have no benchmarking tools of their own.
+package netbench
 
 import (
 	"bufio"
@@ -25,6 +21,28 @@ import (
 	"time"
 )
 
+// Register registers the benchmark endpoints on mux under prefix (such as
+// "/bench/"):
+//
+//   - POST serve?port=N starts (once) a TCP sink and a UDP sink and echo
+//     server on port N.
+//   - GET stats returns the server's counters ([Stats]).
+//   - GET cpu returns the node's CPU time ([CPU]).
+//   - GET tcp?addr=IP:PORT&dur=D&streams=N sends to a TCP sink for D over
+//     N streams ([Result]).
+//   - GET udp?addr=IP:PORT&dur=D&size=N floods a UDP sink with N-byte
+//     datagrams for D ([Result]).
+//   - GET rtt?addr=IP:PORT&n=N&interval=D measures N UDP round trips to an
+//     echo server, D apart ([RTT]).
+func Register(mux *http.ServeMux, prefix string) {
+	mux.HandleFunc("POST "+prefix+"serve", benchServe)
+	mux.HandleFunc("GET "+prefix+"stats", benchStats)
+	mux.HandleFunc("GET "+prefix+"cpu", benchCPU)
+	mux.HandleFunc("GET "+prefix+"tcp", benchTCP)
+	mux.HandleFunc("GET "+prefix+"udp", benchUDP)
+	mux.HandleFunc("GET "+prefix+"rtt", benchRTT)
+}
+
 // Benchmark server counters.
 var (
 	benchServeOnce  sync.Once
@@ -39,13 +57,6 @@ const (
 	benchUDPSink = 'S' // count it
 	benchUDPEcho = 'E' // send it back
 )
-
-// BenchStats are the benchmark server's cumulative counters.
-type BenchStats struct {
-	TCPBytes   int64
-	UDPPackets int64
-	UDPBytes   int64
-}
 
 // benchServe starts (once) the benchmark server on the port query
 // parameter: a TCP sink, and a UDP sink and echo server.
@@ -106,18 +117,11 @@ func benchServe(w http.ResponseWriter, r *http.Request) {
 }
 
 func benchStats(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, BenchStats{
+	writeJSON(w, Stats{
 		TCPBytes:   benchTCPBytes.Load(),
 		UDPPackets: benchUDPPackets.Load(),
 		UDPBytes:   benchUDPBytes.Load(),
 	})
-}
-
-// BenchCPU is a snapshot of the node's CPU time, in USER_HZ ticks, summed
-// over all CPUs.
-type BenchCPU struct {
-	Busy, Total int64
-	NumCPU      int
 }
 
 // benchCPU reports the node's CPU time from /proc/stat.
@@ -135,7 +139,7 @@ func benchCPU(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		// user nice system idle iowait irq softirq steal guest guest_nice
-		var c BenchCPU
+		var c CPU
 		for i, s := range fields[1:] {
 			v, _ := strconv.ParseInt(s, 10, 64)
 			if i >= 7 {
@@ -153,13 +157,6 @@ func benchCPU(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Error(w, "no cpu line in /proc/stat", http.StatusInternalServerError)
-}
-
-// BenchResult is the result of a benchmark client run.
-type BenchResult struct {
-	Bytes   int64
-	Packets int64
-	Seconds float64
 }
 
 func benchParams(r *http.Request) (addr string, dur time.Duration, err error) {
@@ -216,7 +213,7 @@ func benchTCP(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	wg.Wait()
-	writeJSON(w, BenchResult{Bytes: total.Load(), Seconds: time.Since(start).Seconds()})
+	writeJSON(w, Result{Bytes: total.Load(), Seconds: time.Since(start).Seconds()})
 }
 
 // benchUDP sends size-byte datagrams as fast as it can to the UDP sink at
@@ -237,7 +234,7 @@ func benchUDP(w http.ResponseWriter, r *http.Request) {
 	defer c.Close()
 	buf := make([]byte, size)
 	buf[0] = benchUDPSink
-	var res BenchResult
+	var res Result
 	start := time.Now()
 	deadline := start.Add(dur)
 	for i := 0; ; i++ {
@@ -254,15 +251,6 @@ func benchUDP(w http.ResponseWriter, r *http.Request) {
 	}
 	res.Seconds = time.Since(start).Seconds()
 	writeJSON(w, res)
-}
-
-// BenchRTT is the result of an RTT run, in milliseconds.
-type BenchRTT struct {
-	Samples  int
-	Lost     int
-	P50, P90 float64
-	P99, Max float64
-	Mean     float64
 }
 
 // benchRTT measures UDP round trips to the echo server at addr: n probes,
@@ -283,7 +271,7 @@ func benchRTT(w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.Close()
 	var rtts []float64
-	var res BenchRTT
+	var res RTT
 	buf := make([]byte, 64)
 	in := make([]byte, 64)
 	for i := range n {
