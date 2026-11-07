@@ -173,6 +173,10 @@ func TestPortmapCreate(t *testing.T) {
 // TestPortmapRenew checks that a node renews its port mapping before it
 // expires when its router grants a short lifetime.
 func TestPortmapRenew(t *testing.T) {
+	// TODO(fmarier): run by default once there is a debug interface
+	// (https://github.com/tailscale/corp/issues/48412), and drop this
+	// test from the exclude list in .github/workflows/natlab-test.yml.
+	skipIfNotSlowTests(t)
 	tests := []struct {
 		name string
 		svc  vnet.NetworkService

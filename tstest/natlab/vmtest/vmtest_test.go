@@ -6,6 +6,7 @@ package vmtest_test
 import (
 	"bytes"
 	"context"
+	"flag"
 	"fmt"
 	"net/netip"
 	"runtime"
@@ -26,6 +27,16 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/set"
 )
+
+var runSlowTests = flag.Bool("run-slow-tests", false, "run tests that are too slow for the default suite")
+
+// skipIfNotSlowTests skips the test unless --run-slow-tests is set.
+func skipIfNotSlowTests(t *testing.T) {
+	t.Helper()
+	if !*runSlowTests {
+		t.Skip("skipping slow test; set --run-slow-tests to run")
+	}
+}
 
 // skipIfNotMacOSArm64 skips the test when the host isn't a macOS arm64 host.
 // macOS VM tests require Apple Virtualization.framework via tailmac.
