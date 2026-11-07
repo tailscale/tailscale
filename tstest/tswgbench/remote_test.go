@@ -22,7 +22,8 @@ import (
 
 // Remote mode runs the lean tests on machines elsewhere, such as EC2
 // instances from tslinux's scripts/ec2.sh, rather than local QEMU VMs:
-// TSWG_REMOTE names a JSON file of remoteHosts (the first two are used).
+// TSWG_REMOTE names a JSON file of remoteHosts. Two-machine tests use the
+// first two; TestLeanSubnetRouter uses them all.
 // Each machine must be a Linux box we can ssh to that has sudo, the build
 // tools and headers for its running kernel, and lets us reach port 8080
 // (the agent) and lets the machines reach each other on any port.
@@ -141,7 +142,7 @@ func newRemoteLab(t testing.TB) *lab {
 		t.Fatal(remoteArtifacts.err)
 	}
 
-	l := &lab{t: t}
+	l := &lab{t: t, vms: make([]*vm, len(hosts))}
 	var wg sync.WaitGroup
 	errs := make([]error, len(l.vms))
 	for i := range l.vms {
@@ -150,6 +151,7 @@ func newRemoteLab(t testing.TB) *lab {
 			i:      i,
 			ctl:    netip.AddrPortFrom(netip.MustParseAddr(h.Public), agentPort),
 			client: &http.Client{},
+			host:   &h,
 		}
 		if v.under4, err = netip.ParseAddr(h.Private4); err != nil {
 			t.Fatalf("%s: private4: %v", h.Name, err)

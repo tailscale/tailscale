@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -191,6 +190,10 @@ func atomicLoad64(b *byte) uint64 {
 }
 
 func profile(dur time.Duration, top int, focus string) (*Profile, error) {
+	cpus, err := onlineCPUs()
+	if err != nil {
+		return nil, err
+	}
 	syms, err := loadSymbols()
 	if err != nil {
 		return nil, err
@@ -201,7 +204,7 @@ func profile(dur time.Duration, top int, focus string) (*Profile, error) {
 			p.close()
 		}
 	}()
-	for cpu := range runtime.NumCPU() {
+	for _, cpu := range cpus {
 		p, err := openPerfCPU(cpu)
 		if err != nil {
 			return nil, err
@@ -300,7 +303,7 @@ func profile(dur time.Duration, top int, focus string) (*Profile, error) {
 	if len(prof.Focus) > 10 {
 		prof.Focus = prof.Focus[:10]
 	}
-	for cpu := range runtime.NumCPU() {
+	for _, cpu := range cpus {
 		pc := ProfileCPU{CPU: cpu, Samples: cpuSamples[cpu]}
 		if pc.Samples > 0 {
 			pc.Busy = float64(cpuBusy[cpu]) / float64(pc.Samples)
@@ -409,4 +412,32 @@ func (t *symTable) lookup(ip uint64, ours bool) string {
 		return fmt.Sprintf("%#x", ip)
 	}
 	return tab[i].name
+}
+
+// onlineCPUs returns the online CPUs' numbers, from
+// /sys/devices/system/cpu/online (such as "0-3,8"). runtime.NumCPU counts
+// CPUs taken offline after the process started, too.
+func onlineCPUs() ([]int, error) {
+	b, err := os.ReadFile("/sys/devices/system/cpu/online")
+	if err != nil {
+		return nil, err
+	}
+	var cpus []int
+	for r := range strings.SplitSeq(strings.TrimSpace(string(b)), ",") {
+		lo, hi, isRange := strings.Cut(r, "-")
+		a, err := strconv.Atoi(lo)
+		if err != nil {
+			return nil, fmt.Errorf("parsing online CPUs %q: %w", b, err)
+		}
+		z := a
+		if isRange {
+			if z, err = strconv.Atoi(hi); err != nil {
+				return nil, fmt.Errorf("parsing online CPUs %q: %w", b, err)
+			}
+		}
+		for c := a; c <= z; c++ {
+			cpus = append(cpus, c)
+		}
+	}
+	return cpus, nil
 }

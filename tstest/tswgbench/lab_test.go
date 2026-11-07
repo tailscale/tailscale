@@ -280,14 +280,16 @@ type vm struct {
 	// console returns the VM's kernel messages so far.
 	console func() []byte
 
-	cmd     *exec.Cmd // QEMU, for local VMs
-	logPath string    // QEMU's serial console, for local VMs
+	cmd     *exec.Cmd   // QEMU, for local VMs
+	logPath string      // QEMU's serial console, for local VMs
+	host    *remoteHost // the machine, in remote mode
 }
 
-// lab is a pair of VMs.
+// lab is a set of VMs: a pair for local QEMU VMs, and all the hosts in
+// remote mode. Two-VM tests use the first two.
 type lab struct {
 	t   testing.TB
-	vms [2]*vm
+	vms []*vm
 }
 
 // kernelSplats are console messages that mean a kernel found a bug.
@@ -313,7 +315,7 @@ func newLab(t testing.TB, cpus int) *lab {
 	kernel, initrd := buildArtifacts(t)
 	setupNetwork(t, 2, cpus)
 
-	l := &lab{t: t}
+	l := &lab{t: t, vms: make([]*vm, 2)}
 	logDir := t.TempDir()
 	for i := range l.vms {
 		v := &vm{
@@ -494,7 +496,7 @@ func (l *lab) setup(mode string, v6 bool) netip.Addr {
 		return under(1)
 	}
 	keys := [2]key.NodePrivate{key.NewNode(), key.NewNode()}
-	for i, v := range l.vms {
+	for i, v := range l.vms[:2] {
 		j := 1 - i
 		priv, _ := keys[i].MarshalText()
 		q := url.Values{

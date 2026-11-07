@@ -22,15 +22,19 @@
 package main
 
 import (
+	"bytes"
+	"debug/elf"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -184,7 +188,7 @@ var (
 	moduleErr  error
 )
 
-// handleSetup sets up the tunnel device wg0 with one peer.
+// handleSetup sets up the tunnel device wg0 and routes.
 //
 // Query parameters:
 //
@@ -192,12 +196,16 @@ var (
 //	             (the tswg module, from /tswg.ko), or wggo (Tailscale's
 //	             wireguard-go with a TUN device)
 //	private-key  privkey:...
-//	peer         nodekey:...
-//	endpoint     the peer's IP:port
+//	peer         nodekey:..., repeated for each peer
+//	endpoint     each peer's IP:port, in the same order
+//	allowed-ips  each peer's comma-separated allowed IP prefixes, in the
+//	             same order
 //	port         UDP listen port
 //	addrs        comma-separated CIDRs for wg0
-//	allowed-ips  comma-separated peer allowed IP prefixes
 //	mtu          wg0's MTU (default 1280, Tailscale's)
+//	route        a route to add, repeated: "PREFIX" (via wg0) or "PREFIX
+//	             via GATEWAY" (on the underlay, also in plain mode);
+//	             teardown removes them
 func handleSetup(w http.ResponseWriter, r *http.Request) {
 	if err := setup(r.URL.Query()); err != nil {
 		log.Printf("setup: %v", err)
@@ -205,6 +213,13 @@ func handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	io.WriteString(w, "OK\n")
+}
+
+// peerSetup is one peer of wg0.
+type peerSetup struct {
+	key      key.NodePublic
+	endpoint netip.AddrPort
+	allowed  []netip.Prefix
 }
 
 func setup(q map[string][]string) error {
@@ -215,32 +230,41 @@ func setup(q map[string][]string) error {
 		return ""
 	}
 	mode := get("mode")
+	mu.Lock()
+	defer mu.Unlock()
+	teardownLocked()
 	if mode == "plain" {
-		return nil
+		return addRoutes(q["route"])
 	}
 	var priv key.NodePrivate
 	if err := priv.UnmarshalText([]byte(get("private-key"))); err != nil {
 		return fmt.Errorf("private-key: %w", err)
 	}
-	var peer key.NodePublic
-	if err := peer.UnmarshalText([]byte(get("peer"))); err != nil {
-		return fmt.Errorf("peer: %w", err)
+	if len(q["endpoint"]) != len(q["peer"]) || len(q["allowed-ips"]) != len(q["peer"]) {
+		return fmt.Errorf("need an endpoint and allowed-ips for each of %d peers", len(q["peer"]))
 	}
-	ep, err := netip.ParseAddrPort(get("endpoint"))
-	if err != nil {
-		return fmt.Errorf("endpoint: %w", err)
+	var peers []peerSetup
+	for i, pk := range q["peer"] {
+		var p peerSetup
+		if err := p.key.UnmarshalText([]byte(pk)); err != nil {
+			return fmt.Errorf("peer: %w", err)
+		}
+		var err error
+		if p.endpoint, err = netip.ParseAddrPort(q["endpoint"][i]); err != nil {
+			return fmt.Errorf("endpoint: %w", err)
+		}
+		for s := range strings.SplitSeq(q["allowed-ips"][i], ",") {
+			pfx, err := netip.ParsePrefix(s)
+			if err != nil {
+				return fmt.Errorf("allowed-ips: %w", err)
+			}
+			p.allowed = append(p.allowed, pfx)
+		}
+		peers = append(peers, p)
 	}
 	port, err := strconv.ParseUint(get("port"), 10, 16)
 	if err != nil {
 		return fmt.Errorf("port: %w", err)
-	}
-	var allowed []netip.Prefix
-	for s := range strings.SplitSeq(get("allowed-ips"), ",") {
-		p, err := netip.ParsePrefix(s)
-		if err != nil {
-			return fmt.Errorf("allowed-ips: %w", err)
-		}
-		allowed = append(allowed, p)
 	}
 	mtu := 1280
 	if s := get("mtu"); s != "" {
@@ -249,9 +273,6 @@ func setup(q map[string][]string) error {
 		}
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
-	teardownLocked()
 	switch mode {
 	case "kernelwg", "tswg":
 		family, kind := "wireguard", "wireguard"
@@ -259,6 +280,7 @@ func setup(q map[string][]string) error {
 			moduleOnce.Do(func() {
 				var ko []byte
 				if ko, moduleErr = os.ReadFile("/tswg.ko"); moduleErr == nil {
+					loadModuleDeps(ko)
 					moduleErr = tswg.LoadModule(ko)
 				}
 			})
@@ -276,15 +298,15 @@ func setup(q map[string][]string) error {
 		}
 		defer c.Close()
 		port16 := uint16(port)
-		if err := c.ConfigureDevice(tunnelDev, tswg.Config{
-			PrivateKey: &priv,
-			ListenPort: &port16,
-			Peers: []tswg.PeerConfig{{
-				PublicKey:  peer,
-				Endpoint:   ep,
-				AllowedIPs: allowed,
-			}},
-		}); err != nil {
+		cfg := tswg.Config{PrivateKey: &priv, ListenPort: &port16}
+		for _, p := range peers {
+			cfg.Peers = append(cfg.Peers, tswg.PeerConfig{
+				PublicKey:  p.key,
+				Endpoint:   p.endpoint,
+				AllowedIPs: p.allowed,
+			})
+		}
+		if err := c.ConfigureDevice(tunnelDev, cfg); err != nil {
 			return err
 		}
 	case "wggo":
@@ -293,12 +315,15 @@ func setup(q map[string][]string) error {
 			return fmt.Errorf("creating TUN: %w", err)
 		}
 		dev := device.NewDevice(tdev, conn.NewStdNetBind(), device.NewLogger(device.LogLevelError, "wggo: "))
-		privRaw, peerRaw := priv.Raw32(), peer.Raw32()
+		privRaw := priv.Raw32()
 		var uapi strings.Builder
 		fmt.Fprintf(&uapi, "private_key=%s\nlisten_port=%d\n", hex.EncodeToString(privRaw[:]), port)
-		fmt.Fprintf(&uapi, "public_key=%s\nendpoint=%s\n", hex.EncodeToString(peerRaw[:]), ep)
-		for _, p := range allowed {
-			fmt.Fprintf(&uapi, "allowed_ip=%s\n", p)
+		for _, p := range peers {
+			peerRaw := p.key.Raw32()
+			fmt.Fprintf(&uapi, "public_key=%s\nendpoint=%s\n", hex.EncodeToString(peerRaw[:]), p.endpoint)
+			for _, pfx := range p.allowed {
+				fmt.Fprintf(&uapi, "allowed_ip=%s\n", pfx)
+			}
 		}
 		if err := dev.IpcSet(uapi.String()); err != nil {
 			dev.Close()
@@ -323,7 +348,81 @@ func setup(q map[string][]string) error {
 	if err := addAddrs(tunnelDev, strings.Split(get("addrs"), ",")...); err != nil {
 		return err
 	}
-	return netlink.LinkSetUp(link)
+	if err := netlink.LinkSetUp(link); err != nil {
+		return err
+	}
+	return addRoutes(q["route"])
+}
+
+// loadModuleDeps loads the modules that the kernel module image ko depends
+// on (its .modinfo "depends="), as modprobe would: where they're modules
+// rather than built in, as on Ubuntu (udp_tunnel, libcurve25519), loading
+// ko itself would fail with unknown symbols. Failures are left for loading
+// ko to report.
+func loadModuleDeps(ko []byte) {
+	f, err := elf.NewFile(bytes.NewReader(ko))
+	if err != nil {
+		return
+	}
+	sec := f.Section(".modinfo")
+	if sec == nil {
+		return
+	}
+	info, err := sec.Data()
+	if err != nil {
+		return
+	}
+	for kv := range bytes.SplitSeq(info, []byte{0}) {
+		deps, ok := bytes.CutPrefix(kv, []byte("depends="))
+		if !ok {
+			continue
+		}
+		for dep := range strings.SplitSeq(string(deps), ",") {
+			if dep == "" {
+				continue
+			}
+			if out, err := exec.Command("modprobe", dep).CombinedOutput(); err != nil {
+				log.Printf("modprobe %s: %v: %s", dep, err, bytes.TrimSpace(out))
+			}
+		}
+	}
+}
+
+// routes are the routes setup added, for teardown to remove. mu guards it.
+var routes []*netlink.Route
+
+// addRoutes adds routes (see handleSetup's route parameter). mu must be
+// held.
+func addRoutes(specs []string) error {
+	for _, spec := range specs {
+		dst, via, hasVia := strings.Cut(spec, " via ")
+		pfx, err := netip.ParsePrefix(dst)
+		if err != nil {
+			return fmt.Errorf("route %q: %w", spec, err)
+		}
+		r := &netlink.Route{Dst: &net.IPNet{
+			IP:   pfx.Addr().AsSlice(),
+			Mask: net.CIDRMask(pfx.Bits(), pfx.Addr().BitLen()),
+		}}
+		if hasVia {
+			gw, err := netip.ParseAddr(via)
+			if err != nil {
+				return fmt.Errorf("route %q: %w", spec, err)
+			}
+			r.Gw = gw.AsSlice()
+		} else {
+			link, err := netlink.LinkByName(tunnelDev)
+			if err != nil {
+				return err
+			}
+			r.LinkIndex = link.Attrs().Index
+		}
+		if err := netlink.RouteReplace(r); err != nil {
+			return fmt.Errorf("route %q: %w", spec, err)
+		}
+		routes = append(routes, r)
+	}
+	return nil
 }
 
 func handleTeardown(w http.ResponseWriter, r *http.Request) {
@@ -335,6 +434,10 @@ func handleTeardown(w http.ResponseWriter, r *http.Request) {
 
 // teardownLocked removes the tunnel device, if any. mu must be held.
 func teardownLocked() {
+	for _, r := range routes {
+		netlink.RouteDel(r)
+	}
+	routes = nil
 	if wggoDev != nil {
 		wggoDev.Close()
 		wggoDev = nil
