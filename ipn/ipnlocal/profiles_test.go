@@ -492,6 +492,59 @@ func TestProfileManagement(t *testing.T) {
 	}
 }
 
+// TestSwitchToNewProfileKeepsOperator tests that the operator user carries
+// over when switching to a new, empty profile, as during "tailscale login".
+// See tailscale/tailscale#18294: switching to a new profile used to reset
+// the prefs to defaults, locking the operator out partway through the login
+// flow and losing the operator setting entirely.
+func TestSwitchToNewProfileKeepsOperator(t *testing.T) {
+	store := new(mem.Store)
+	pm, err := newProfileManagerWithGOOS(store, logger.Discard, health.NewTracker(eventbustest.NewBus(t)), "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Set the operator on the initial empty profile,
+	// as "sudo tailscale set --operator=$USER" would.
+	prefs := pm.CurrentPrefs().AsStruct()
+	prefs.OperatorUser = "operator"
+	if err := pm.SetPrefs(prefs.View(), ipn.NetworkProfile{}); err != nil {
+		t.Fatal(err)
+	}
+
+	pm.SwitchToNewProfile()
+	if got := pm.CurrentPrefs().OperatorUser(); got != "operator" {
+		t.Errorf("OperatorUser after switch from empty profile = %q; want %q", got, "operator")
+	}
+
+	// Log in and change another pref, then switch to a new profile again.
+	// The operator should carry over, but other prefs should reset.
+	prefs = pm.CurrentPrefs().AsStruct()
+	prefs.Persist = &persist.Persist{
+		PrivateNodeKey: key.NewNode(),
+		UserProfile: tailcfg.UserProfile{
+			ID:        1,
+			LoginName: "user@example.com",
+		},
+		NodeID: "node1",
+	}
+	prefs.Hostname = "buffalo"
+	if err := pm.SetPrefs(prefs.View(), ipn.NetworkProfile{}); err != nil {
+		t.Fatal(err)
+	}
+
+	pm.SwitchToNewProfile()
+	if id := pm.CurrentProfile().ID(); id != "" {
+		t.Errorf("CurrentProfile().ID() after switch = %q; want empty", id)
+	}
+	if got := pm.CurrentPrefs().OperatorUser(); got != "operator" {
+		t.Errorf("OperatorUser after switch from logged-in profile = %q; want %q", got, "operator")
+	}
+	if got := pm.CurrentPrefs().Hostname(); got != "" {
+		t.Errorf("Hostname after switch = %q; want empty", got)
+	}
+}
+
 // TestProfileManagementWindows tests going into and out of Unattended mode on
 // Windows.
 func TestProfileManagementWindows(t *testing.T) {
