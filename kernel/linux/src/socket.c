@@ -18,6 +18,7 @@
 #include <linux/if_ether.h>
 #include <linux/inetdevice.h>
 #include <net/udp_tunnel.h>
+#include <net/gro.h>
 #include <net/ipv6.h>
 
 /*
@@ -356,6 +357,216 @@ static bool tswg_is_wg_message(struct sk_buff *skb)
 	       !h[1] && !h[2] && !h[3];
 }
 
+/*
+ * TSWG: GRO for WireGuard data messages.
+ *
+ * As a UDP tunnel, our sockets get their packets' GRO callbacks. We merge
+ * consecutive data messages of a flow (same addresses and ports) that use
+ * the same receiving key, and are all the same size but perhaps the last,
+ * into one packet, which UDP then passes to encap_rcv whole (it's marked
+ * SKB_GSO_UDP_TUNNEL). We decrypt it as one unit; see tswg_decrypt_gso.
+ * Upstream gets no GRO for the outer packets at all, so it pays the IP and
+ * UDP receive path, and a decrypt worker handoff, per packet.
+ *
+ * Only data messages are merged, so on user sockets, everything that's
+ * left for the user (disco, STUN) passes through as is.
+ */
+#define TSWG_GRO_MAX_SEGS 64
+
+/*
+ * tswg_gro_merge is skb_gro_receive (net/core/gro.c, as of 7.4), which isn't
+ * exported to modules: it appends skb's payload to p's, by moving skb's
+ * page frags (or stealing its head, if it's a page fragment) to the last
+ * packet of p, or else by chaining skb on p's frag_list.
+ */
+static int tswg_gro_merge(struct sk_buff *p, struct sk_buff *skb)
+{
+	struct skb_shared_info *pinfo, *skbinfo = skb_shinfo(skb);
+	unsigned int offset = skb_gro_offset(skb);
+	unsigned int headlen = skb_headlen(skb);
+	unsigned int len = skb_gro_len(skb);
+	unsigned int delta_truesize;
+	unsigned int new_truesize;
+	struct sk_buff *lp;
+	int segs;
+
+	if (p->pp_recycle != skb->pp_recycle)
+		return -ETOOMANYREFS;
+	if (skb_zcopy(p) || skb_zcopy(skb))
+		return -ETOOMANYREFS;
+	if (unlikely(p->len + len >= min_t(unsigned int, GRO_LEGACY_MAX_SIZE,
+					   netif_get_gro_max_size(p->dev, p)) ||
+		     NAPI_GRO_CB(skb)->flush))
+		return -E2BIG;
+
+	segs = NAPI_GRO_CB(skb)->count;
+	lp = NAPI_GRO_CB(p)->last;
+	pinfo = skb_shinfo(lp);
+
+	if (headlen <= offset) {
+		skb_frag_t *frag;
+		skb_frag_t *frag2;
+		int i = skbinfo->nr_frags;
+		int nr_frags = pinfo->nr_frags + i;
+
+		if (nr_frags > MAX_SKB_FRAGS)
+			goto merge;
+
+		offset -= headlen;
+		pinfo->nr_frags = nr_frags;
+		skbinfo->nr_frags = 0;
+
+		frag = pinfo->frags + nr_frags;
+		frag2 = skbinfo->frags + i;
+		do {
+			*--frag = *--frag2;
+		} while (--i);
+
+		skb_frag_off_add(frag, offset);
+		skb_frag_size_sub(frag, offset);
+
+		/* All fragments' truesize: remove (head size + sk_buff). */
+		new_truesize = SKB_TRUESIZE(skb_end_offset(skb));
+		delta_truesize = skb->truesize - new_truesize;
+
+		skb->truesize = new_truesize;
+		skb->len -= skb->data_len;
+		skb->data_len = 0;
+
+		NAPI_GRO_CB(skb)->free = NAPI_GRO_FREE;
+		goto done;
+	} else if (skb->head_frag) {
+		int nr_frags = pinfo->nr_frags;
+		skb_frag_t *frag = pinfo->frags + nr_frags;
+		struct page *page = virt_to_head_page(skb->head);
+		unsigned int first_size = headlen - offset;
+		unsigned int first_offset;
+
+		if (nr_frags + 1 + skbinfo->nr_frags > MAX_SKB_FRAGS)
+			goto merge;
+
+		first_offset = skb->data -
+			       (unsigned char *)page_address(page) +
+			       offset;
+
+		pinfo->nr_frags = nr_frags + 1 + skbinfo->nr_frags;
+
+		skb_frag_fill_page_desc(frag, page, first_offset, first_size);
+
+		memcpy(frag + 1, skbinfo->frags, sizeof(*frag) * skbinfo->nr_frags);
+
+		new_truesize = SKB_DATA_ALIGN(sizeof(struct sk_buff));
+		delta_truesize = skb->truesize - new_truesize;
+		skb->truesize = new_truesize;
+		NAPI_GRO_CB(skb)->free = NAPI_GRO_FREE_STOLEN_HEAD;
+		goto done;
+	}
+
+merge:
+	/* sk ownership, if any, completely transferred to the aggregate */
+	skb->destructor = NULL;
+	skb->sk = NULL;
+	delta_truesize = skb->truesize;
+	if (offset > headlen) {
+		unsigned int eat = offset - headlen;
+
+		skb_frag_off_add(&skbinfo->frags[0], eat);
+		skb_frag_size_sub(&skbinfo->frags[0], eat);
+		skb->data_len -= eat;
+		skb->len -= eat;
+		offset = headlen;
+	}
+
+	__skb_pull(skb, offset);
+
+	if (NAPI_GRO_CB(p)->last == p)
+		skb_shinfo(p)->frag_list = skb;
+	else
+		NAPI_GRO_CB(p)->last->next = skb;
+	NAPI_GRO_CB(p)->last = skb;
+	__skb_header_release(skb);
+	lp = p;
+
+done:
+	NAPI_GRO_CB(p)->count += segs;
+	p->data_len += len;
+	p->truesize += delta_truesize;
+	p->len += len;
+	skb_shinfo(p)->flags |= skbinfo->flags & SKBFL_SHARED_FRAG;
+	if (lp != p) {
+		lp->data_len += len;
+		lp->truesize += delta_truesize;
+		lp->len += len;
+		skb_shinfo(lp)->flags |= skbinfo->flags & SKBFL_SHARED_FRAG;
+	}
+	NAPI_GRO_CB(skb)->same_flow = 1;
+	return 0;
+}
+
+static struct sk_buff *tswg_gro_receive(struct sock *sk,
+					struct list_head *head,
+					struct sk_buff *skb)
+{
+	unsigned int off = skb_gro_offset(skb), len = skb_gro_len(skb);
+	const struct message_data *hdr;
+	const struct udphdr *uh;
+	struct sk_buff *p;
+
+	hdr = skb_gro_header(skb, off + offsetofend(struct message_data, key_idx),
+			     off);
+	if (unlikely(!hdr) || hdr->header.type != cpu_to_le32(MESSAGE_DATA) ||
+	    len < message_data_len(0)) {
+		NAPI_GRO_CB(skb)->flush = 1;
+		return NULL;
+	}
+	uh = (const struct udphdr *)hdr - 1; /* contiguous with hdr */
+
+	list_for_each_entry(p, head, list) {
+		const struct udphdr *uh2;
+		__le32 idx_buf;
+		const __le32 *idx;
+		unsigned int mss;
+		int flush;
+
+		if (!NAPI_GRO_CB(p)->same_flow)
+			continue;
+		uh2 = (const struct udphdr *)(p->data + off - sizeof(*uh2));
+		mss = udp_get_len_short(uh2) - sizeof(*uh2);
+		idx = skb_header_pointer(p, off + offsetof(struct message_data, key_idx),
+					 sizeof(*idx), &idx_buf);
+		flush = NAPI_GRO_CB(p)->flush;
+#ifdef HAVE_GRO_RECEIVE_NETWORK_FLUSH
+		flush |= gro_receive_network_flush(uh, uh2, p);
+#endif
+		/*
+		 * Complete p and start anew with skb if skb doesn't fit: it's
+		 * longer than p's segments, or uses another key, or the
+		 * network headers differ (ECN marks, say).
+		 */
+		if (flush || !idx || *idx != hdr->key_idx || len > mss ||
+		    tswg_gro_merge(p, skb))
+			return p;
+		skb_shinfo(p)->gso_size = mss;
+		/* Only the last segment may be shorter. */
+		if (len < mss || NAPI_GRO_CB(p)->count >= TSWG_GRO_MAX_SEGS)
+			return p;
+		return NULL;
+	}
+	return NULL;
+}
+
+static int tswg_gro_complete(struct sock *sk, struct sk_buff *skb, int nhoff)
+{
+	/*
+	 * udp_gro_complete has made it SKB_GSO_UDP_TUNNEL(_CSUM), and UDP
+	 * only lets us merge packets whose checksums were verified.
+	 */
+	skb_shinfo(skb)->gso_segs = NAPI_GRO_CB(skb)->count;
+	skb->ip_summed = CHECKSUM_UNNECESSARY;
+	skb->csum_level = 0;
+	return 0;
+}
+
 static int wg_receive(struct sock *sk, struct sk_buff *skb)
 {
 	struct wg_device *wg;
@@ -409,7 +620,9 @@ int wg_socket_init(struct wg_device *wg, u16 port)
 	struct udp_tunnel_sock_cfg cfg = {
 		.sk_user_data = wg,
 		.encap_type = 1,
-		.encap_rcv = wg_receive
+		.encap_rcv = wg_receive,
+		.gro_receive = tswg_gro_receive, /* TSWG */
+		.gro_complete = tswg_gro_complete,
 	};
 	struct socket *new4 = NULL, *new6 = NULL;
 	struct udp_port_cfg port4 = {
@@ -555,6 +768,17 @@ static void tswg_detach_user_sock_locked(struct wg_device *wg, struct sock *sk)
 	 * its old value.
 	 */
 	lock_sock(sk);
+	/*
+	 * setup_udp_tunnel_sock may have made our gro_receive a static call,
+	 * which must not outlive the module, so undo that while gro_receive
+	 * still identifies it. Packets that GRO merged just before this may
+	 * still reach the socket's queue as one datagram; that's harmless.
+	 */
+#ifdef HAVE_UDP_TUNNEL_UPDATE_GRO_RCV
+	udp_tunnel_update_gro_rcv(sk, false);
+#endif
+	WRITE_ONCE(up->gro_receive, NULL);
+	WRITE_ONCE(up->gro_complete, NULL);
 	WRITE_ONCE(up->encap_rcv, NULL);
 	WRITE_ONCE(up->encap_destroy, NULL);
 	WRITE_ONCE(up->encap_type, 0);
@@ -629,6 +853,8 @@ int tswg_socket_set_user(struct wg_device *wg, int family, int fd,
 		.encap_type = 1,
 		.encap_rcv = wg_receive,
 		.encap_destroy = tswg_user_sock_destroy,
+		.gro_receive = tswg_gro_receive,
+		.gro_complete = tswg_gro_complete,
 	};
 	struct sock **slot, *old, *sk = NULL;
 	struct socket *sock;

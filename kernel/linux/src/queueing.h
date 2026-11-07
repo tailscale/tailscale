@@ -149,12 +149,13 @@ static inline int wg_cpumask_next_online(int *last_cpu)
  */
 
 /*
- * TSWG_DECRYPT_BACKLOG and TSWG_ENCRYPT_BACKLOG are how many ring entries
- * may wait before another worker is recruited. A decrypt entry is one
- * packet; an encrypt entry is a whole GSO packet's worth.
+ * TSWG_PACKET_BACKLOG and TSWG_BATCH_BACKLOG are how many ring entries may
+ * wait before another worker is recruited, when the entries are single
+ * packets, and when they're batches (a GSO packet's worth: encrypt entries
+ * are lists of packets, and decrypt entries can be packets merged by GRO).
  */
-#define TSWG_DECRYPT_BACKLOG 16
-#define TSWG_ENCRYPT_BACKLOG 1
+#define TSWG_PACKET_BACKLOG 16
+#define TSWG_BATCH_BACKLOG 1
 
 /*
  * tswg_crypt_backlog returns about how many entries are in the ring. It

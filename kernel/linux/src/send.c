@@ -438,7 +438,7 @@ static void wg_packet_create_data(struct wg_peer *peer, struct sk_buff *first)
 
 	ret = wg_queue_enqueue_per_device_and_peer(&wg->encrypt_queue, &peer->tx_queue, first,
 						   wg->packet_crypt_wq,
-						   TSWG_ENCRYPT_BACKLOG);
+						   TSWG_BATCH_BACKLOG);
 	if (unlikely(ret == -EPIPE))
 		wg_queue_enqueue_per_peer_tx(first, PACKET_STATE_DEAD);
 err:

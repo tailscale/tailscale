@@ -241,13 +241,8 @@ static void keep_key_fresh(struct wg_peer *peer)
 	}
 }
 
-static bool decrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
+static bool keypair_may_receive(struct noise_keypair *keypair)
 {
-	struct scatterlist sg[MAX_SKB_FRAGS + 8];
-	struct sk_buff *trailer;
-	unsigned int offset;
-	int num_frags;
-
 	if (unlikely(!keypair))
 		return false;
 
@@ -257,6 +252,73 @@ static bool decrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
 		WRITE_ONCE(keypair->receiving.is_valid, false);
 		return false;
 	}
+	return true;
+}
+
+/*
+ * TSWG: tswg_decrypt_gso decrypts each data message of skb, a packet merged
+ * by tswg_gro_receive, into a new packet, listed in
+ * PACKET_CB(skb)->tswg_out. Messages that fail to decrypt are dropped,
+ * like upstream drops packets that do.
+ */
+static bool tswg_decrypt_gso(struct sk_buff *skb, struct noise_keypair *keypair)
+{
+	struct sk_buff **tail = &PACKET_CB(skb)->tswg_out;
+	unsigned int mss = skb_shinfo(skb)->gso_size;
+	struct net_device *dev = keypair->entry.peer->device->dev;
+	unsigned int off, len;
+
+	if (unlikely(!mss))
+		return false;
+	for (off = 0; off < skb->len; off += len) {
+		struct message_data hdr_buf;
+		const struct message_data *hdr;
+		unsigned int enc_len;
+		struct sk_buff *nskb;
+		u64 nonce;
+
+		len = min(mss, skb->len - off);
+		if (unlikely(len < message_data_len(0)))
+			break;
+		hdr = skb_header_pointer(skb, off, sizeof(*hdr), &hdr_buf);
+		if (unlikely(!hdr))
+			break;
+		nonce = le64_to_cpu(hdr->counter);
+		enc_len = len - sizeof(*hdr);
+		nskb = netdev_alloc_skb(dev, enc_len);
+		if (unlikely(!nskb))
+			continue;
+		if (unlikely(skb_copy_bits(skb, off + sizeof(*hdr),
+					   skb_put(nskb, enc_len), enc_len) ||
+			     !chacha20poly1305_decrypt(nskb->data, nskb->data,
+						       enc_len, NULL, 0, nonce,
+						       keypair->receiving.key))) {
+			kfree_skb(nskb);
+			continue;
+		}
+		__skb_trim(nskb, enc_len - noise_encrypted_len(0));
+		skb_reset_mac_header(nskb);
+		skb_reset_network_header(nskb);
+		PACKET_CB(nskb)->nonce = nonce;
+		PACKET_CB(nskb)->keypair = keypair; /* skb holds the reference */
+		PACKET_CB(nskb)->ds = PACKET_CB(skb)->ds;
+		*tail = nskb;
+		tail = &nskb->next;
+	}
+	return true;
+}
+
+static bool decrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
+{
+	struct scatterlist sg[MAX_SKB_FRAGS + 8];
+	struct sk_buff *trailer;
+	unsigned int offset;
+	int num_frags;
+
+	if (unlikely(!keypair_may_receive(keypair)))
+		return false;
+	if (skb_is_gso(skb)) /* TSWG */
+		return tswg_decrypt_gso(skb, keypair);
 
 	PACKET_CB(skb)->nonce =
 		le64_to_cpu(((struct message_data *)skb->data)->counter);
@@ -438,6 +500,35 @@ packet_processed:
 	dev_kfree_skb(skb);
 }
 
+/*
+ * TSWG: tswg_receive_gso delivers the packets decrypted from skb (see
+ * tswg_decrypt_gso) and returns how many there were.
+ */
+static int tswg_receive_gso(struct wg_peer *peer, struct sk_buff *skb)
+{
+	struct noise_keypair *keypair = PACKET_CB(skb)->keypair;
+	struct sk_buff *nskb = PACKET_CB(skb)->tswg_out, *next;
+	struct endpoint endpoint;
+	bool have_endpoint;
+	int n = 0;
+
+	PACKET_CB(skb)->tswg_out = NULL;
+	have_endpoint = !wg_socket_endpoint_from_skb(&endpoint, skb);
+	for (; nskb; nskb = next) {
+		next = nskb->next;
+		skb_mark_not_on_list(nskb);
+		n++;
+		if (unlikely(!have_endpoint ||
+			     !counter_validate(&keypair->receiving_counter,
+					       PACKET_CB(nskb)->nonce))) {
+			dev_kfree_skb(nskb);
+			continue;
+		}
+		wg_packet_consume_data_done(peer, nskb, &endpoint);
+	}
+	return n;
+}
+
 int wg_packet_rx_poll(struct napi_struct *napi, int budget)
 {
 	struct wg_peer *peer = container_of(napi, struct wg_peer, napi);
@@ -461,6 +552,11 @@ int wg_packet_rx_poll(struct napi_struct *napi, int budget)
 		if (unlikely(state != PACKET_STATE_CRYPTED))
 			goto next;
 
+		if (skb_is_gso(skb)) { /* TSWG */
+			work_done += max(tswg_receive_gso(peer, skb), 1) - 1;
+			goto next;
+		}
+
 		if (unlikely(!counter_validate(&keypair->receiving_counter,
 					       PACKET_CB(skb)->nonce))) {
 			net_dbg_ratelimited("%s: Packet has invalid nonce %llu (max %llu)\n",
@@ -478,6 +574,15 @@ int wg_packet_rx_poll(struct napi_struct *napi, int budget)
 		free = false;
 
 next:
+		/*
+		 * TSWG: drop what tswg_decrypt_gso decrypted but we didn't
+		 * deliver. Only while we still own skb: once delivered, its cb
+		 * is GRO's.
+		 */
+		if (unlikely(free && PACKET_CB(skb)->tswg_out)) {
+			kfree_skb_list(PACKET_CB(skb)->tswg_out);
+			PACKET_CB(skb)->tswg_out = NULL;
+		}
 		wg_noise_keypair_put(keypair, false);
 		wg_peer_put(peer);
 		if (unlikely(free))
@@ -490,7 +595,8 @@ next:
 	if (work_done < budget)
 		napi_complete_done(napi, work_done);
 
-	return work_done;
+	/* TSWG: a GSO packet counts as all its segments, so may overshoot. */
+	return min(work_done, budget);
 }
 
 void wg_packet_decrypt_worker(struct work_struct *work)
@@ -531,9 +637,12 @@ static void wg_packet_consume_data(struct wg_device *wg, struct sk_buff *skb)
 	if (unlikely(READ_ONCE(peer->is_dead)))
 		goto err;
 
+	PACKET_CB(skb)->tswg_out = NULL; /* TSWG */
 	ret = wg_queue_enqueue_per_device_and_peer(&wg->decrypt_queue, &peer->rx_queue, skb,
 						   wg->packet_crypt_wq,
-						   TSWG_DECRYPT_BACKLOG);
+						   skb_is_gso(skb) ?
+							TSWG_BATCH_BACKLOG :
+							TSWG_PACKET_BACKLOG);
 	if (unlikely(ret == -EPIPE)) {
 		/* TSWG: count drops, which upstream doesn't. */
 		DEV_STATS_INC(wg->dev, rx_fifo_errors);
