@@ -1753,26 +1753,35 @@ type udpReceiveConfig struct {
 	directBytes, peerRelayBytes     *expvar.Int
 }
 
+const (
+	// readErrRetryDelay paces a [conn.ReceiveFunc]'s read errors.
+	readErrRetryDelay = 100 * time.Millisecond
+
+	// readErrBrokenAfter is how long a [conn.ReceiveFunc] must be failing
+	// before it reports itself broken to [health.Tracker].
+	readErrBrokenAfter = 30 * time.Second
+)
+
 func (c *Conn) mkReceiveFunc(cfg udpReceiveConfig) conn.ReceiveFunc {
 	ruc := cfg.ruc
 	directPacketMetric, peerRelayPacketMetric := cfg.directPackets, cfg.peerRelayPackets
 	directBytesMetric, peerRelayBytesMetric := cfg.directBytes, cfg.peerRelayBytes
 	name := c.receiveName(cfg.family, cfg.socket)
 	healthItem := c.health.ReceiveFuncStats(name)
+
+	healthItem.SetBroken(false) // in case we inherited health item from a gone Conn
+
+	var readErrsSince time.Time
+
 	// epCache caches an epAddr->endpoint for hot flows.
 	var epCache epAddrEndpointCache
 	var batchingPackets []batching.ReceivedPacket
 
-	return func(slab []byte, packets []conn.ReceivedPacket) (_ int, retErr error) {
+	return func(slab []byte, packets []conn.ReceivedPacket) (int, error) {
 		if buildfeatures.HasHealth && healthItem != nil {
 			healthItem.Enter()
 			defer healthItem.Exit()
 		}
-		defer func() {
-			if retErr != nil && !c.closing.Load() {
-				c.logf("Receive func %s exiting with error: %T, %v", name, retErr, retErr)
-			}
-		}()
 		if ruc == nil {
 			panic("nil RebindingUDPConn")
 		}
@@ -1789,11 +1798,37 @@ func (c *Conn) mkReceiveFunc(cfg udpReceiveConfig) conn.ReceiveFunc {
 				if neterror.PacketWasTruncated(err) {
 					continue
 				}
+				if errors.Is(err, net.ErrClosed) {
+					return 0, err
+				}
+				if c.connCtx.Err() != nil {
+					return 0, fmt.Errorf("%w: %w", net.ErrClosed, err)
+				}
+				metricRecvUDPError.Add(1)
 				if neterror.IsUDPReadFeedback(err) {
 					metricRecvUDPErrorReachability.Add(1)
 					continue
 				}
-				return 0, err
+				if readErrsSince.IsZero() {
+					readErrsSince = time.Now()
+					c.logf("magicsock: %s: read error: %v", name, err)
+				}
+				if time.Since(readErrsSince) >= readErrBrokenAfter {
+					healthItem.SetBroken(true)
+				}
+
+				select {
+				case <-c.connCtx.Done():
+				case <-time.After(readErrRetryDelay):
+				}
+				if c.bind.isClosed() {
+					return 0, fmt.Errorf("%w: %w", net.ErrClosed, err)
+				}
+				continue
+			}
+			if !readErrsSince.IsZero() {
+				readErrsSince = time.Time{}
+				healthItem.SetBroken(false)
 			}
 
 			reportToCaller := false
@@ -4351,6 +4386,7 @@ var (
 
 	// UDP reads matching neterror.IsUDPReadFeedback.
 	metricRecvUDPErrorReachability = clientmetric.NewCounter("magicsock_recv_udp_error_reachability")
+	metricRecvUDPError             = clientmetric.NewCounter("magicsock_recv_udp_error")
 
 	// Sends (data)
 	//
