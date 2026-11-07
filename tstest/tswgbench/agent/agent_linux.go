@@ -69,6 +69,22 @@ func main() {
 	mux.HandleFunc("POST /setup", handleSetup)
 	mux.HandleFunc("POST /teardown", handleTeardown)
 	mux.HandleFunc("GET /show", handleShow)
+	mux.HandleFunc("GET /profile", handleProfile)
+	// Debugging: read a /proc or /sys file, and the kernel log.
+	mux.HandleFunc("GET /file", func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Query().Get("path")
+		if !strings.HasPrefix(p, "/proc/") && !strings.HasPrefix(p, "/sys/") {
+			http.Error(w, "only /proc and /sys", http.StatusBadRequest)
+			return
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Write(b)
+	})
+	mux.HandleFunc("GET /dmesg", handleDmesg)
 	mux.HandleFunc("POST /shutdown", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "OK\n")
 		go func() {
@@ -320,6 +336,30 @@ func teardownLocked() {
 	}
 	if link, err := netlink.LinkByName(tunnelDev); err == nil {
 		netlink.LinkDel(link)
+	}
+}
+
+// handleDmesg writes the kernel log, read from /dev/kmsg with raw syscalls
+// (an *os.File would block in the netpoller at the end of the log).
+func handleDmesg(w http.ResponseWriter, r *http.Request) {
+	fd, err := unix.Open("/dev/kmsg", unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer unix.Close(fd)
+	buf := make([]byte, 8192)
+	for {
+		n, err := unix.Read(fd, buf)
+		if err == unix.EINTR || err == unix.EPIPE {
+			continue
+		}
+		if err != nil || n <= 0 {
+			return
+		}
+		if _, msg, ok := strings.Cut(string(buf[:n]), ";"); ok {
+			io.WriteString(w, msg)
+		}
 	}
 }
 
