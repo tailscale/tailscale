@@ -70,6 +70,10 @@ struct wg_peer {
 	 * one is set; userspace (disco) picks the path. Read locklessly.
 	 */
 	bool tswg_no_roam;
+	/* TSWG: bytes received since jiffy tswg_rx_jiffy; see tswg_rx_inline_ok */
+	unsigned long tswg_rx_jiffy;
+	unsigned int tswg_rx_bytes;
+	unsigned long tswg_rx_parallel_until; /* jiffies; see tswg_rx_inline_ok */
 
 	/* TSWG: jiffies of the last TX and RX activity events; see tswg.h. */
 	unsigned long tswg_tx_event, tswg_rx_event;

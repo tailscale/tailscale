@@ -17,6 +17,7 @@
 #include <linux/mutex.h>
 #include <linux/net.h>
 #include <linux/ptr_ring.h>
+#include <net/gro_cells.h> /* TSWG */
 
 struct wg_device;
 
@@ -47,6 +48,7 @@ struct prev_queue {
 struct wg_device {
 	struct net_device *dev;
 	struct crypt_queue encrypt_queue, decrypt_queue, handshake_queue;
+	struct gro_cells tswg_gro_cells; /* TSWG: see tswg_receive_now */
 	struct sock __rcu *sock4, *sock6;
 	struct net __rcu *creating_net;
 	struct noise_static_identity static_identity;

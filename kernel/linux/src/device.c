@@ -230,6 +230,12 @@ static netdev_tx_t wg_xmit(struct sk_buff *skb, struct net_device *dev)
 		__skb_queue_tail(&packets, skb);
 	}
 
+	/* TSWG: send them right here, if we can; see tswg_xmit_now. */
+	if (likely(!skb_queue_empty(&packets)) && tswg_xmit_now(peer, &packets)) {
+		wg_peer_put(peer);
+		return NETDEV_TX_OK;
+	}
+
 	spin_lock_bh(&peer->staged_packet_queue.lock);
 	/* If the queue is getting too big, we start removing the oldest packets
 	 * until it's small again. We do this before adding the new packet, so
@@ -260,7 +266,20 @@ err:
 	return ret;
 }
 
+/* TSWG: the device's per-CPU GRO cells; see tswg_receive_now. */
+static int wg_init(struct net_device *dev)
+{
+	return gro_cells_init(&((struct wg_device *)netdev_priv(dev))->tswg_gro_cells, dev);
+}
+
+static void wg_uninit(struct net_device *dev)
+{
+	gro_cells_destroy(&((struct wg_device *)netdev_priv(dev))->tswg_gro_cells);
+}
+
 static const struct net_device_ops netdev_ops = {
+	.ndo_init		= wg_init, /* TSWG */
+	.ndo_uninit		= wg_uninit, /* TSWG */
 	.ndo_open		= wg_open,
 	.ndo_stop		= wg_stop,
 	.ndo_start_xmit		= wg_xmit,

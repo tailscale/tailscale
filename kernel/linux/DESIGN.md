@@ -79,10 +79,17 @@ router, MTU 1280, runs interleaved:
 |---|---|---|---|
 | tswg before change 11 (encryption straight from GSO packets) | 14.7-17.4 (5 runs) | 60-75% | 37-55 |
 | tswg with change 11 | 35.6-37.9 (8 of 14 runs), 17.7-19.2 (6) | 94% / 64-73% | 27-28 / 39-44 |
+| **tswg with change 12 (run to completion)** | **68.4-69.3** (4 runs) | 24% | **3.7-3.8** |
+| tswg with change 12, and RPS on the router's NIC | 77.2-78.2 (4 runs) | 45-47% | 6.3-6.6 |
 | wireguard-go | 6.1-6.2 (2 runs) | 4% | 7.4-7.6 |
 
-So change 11 more than doubles it in 8 of 14 runs, and adds 10-20% in
-the rest: 2.9x wireguard-go at worst, 6.1x at best. But the router is bound by one lock, and the
+Uploads (the earlier load) with change 12: 67.5-68.1 Gbps at 3.05-3.08
+CPU-s/GB (before: 64-66 at 6.7-6.8); with RPS, 65 at 5.2. So run to
+completion is 11x wireguard-go in both directions, at under half its CPU
+per GB, and fetches at 0.87x plain routing with RPS.
+
+Change 11 alone more than doubled it in 8 of 14 runs, and added 10-20%
+in the rest. Without change 12, the router is bound by one lock, and the
 bimodality is unexplained: in both modes, 75-83% of the router's CPU is
 spinning on the encrypt ring's consumer lock (`ptr_ring_consume_bh` in
 `wg_packet_encrypt_worker`), with encryption itself 7%. Each entry is
@@ -96,7 +103,17 @@ entries for a newly recruited worker wait for its CPU to wake, and
 uniformly so; also locally, 10.3 -> 7.2 Gbps); recruiting workers only
 when the backlog exceeds one per active worker (no change: contention
 slows consumption, which grows the backlog, which recruits more);
-consuming up to 8 entries per lock (no change).
+consuming up to 8 entries per lock (no change). Change 12 removes the
+ring from the router's path instead.
+
+With change 12, the router's 32 CPUs that take the NIC's interrupts (its
+ENA has 32 queues) are at 100% and the other 96 idle, in both
+directions, which caps it near 68 Gbps. RPS
+(`/sys/class/net/*/queues/rx-*/rps_cpus` set to all CPUs) spreads the
+work past the NIC's CPUs, by flow hash, so without reordering: fetches
+gain 13%, uploads nothing (their limit is elsewhere), at more CPU per GB
+for the extra handoff. tailscaled could set it on subnet routers; see
+the TODO list.
 
 CPU accounting: rows before the last measured CPU from `/proc/stat`,
 which on Ubuntu's AWS kernels (no `CONFIG_IRQ_TIME_ACCOUNTING`) counts
@@ -276,6 +293,45 @@ this order. Each step's throughput is bulk TCP, 1 stream, IPv4, 4 vCPUs.
    `skb_gso_segment`'s, which `TestLeanGSOVerify` (TCP and UDP GSO, IPv4
    and IPv6) and `TestLeanGSOVerifyForwarded` do, finding them
    byte-identical (millions of segments, on the debug kernel too).
+12. Run to completion (2026-11-08; EC2 subnet router fetches, 37 -> 69
+   Gbps, 27 -> 3.7 CPU-s/GB; uploads 6.8 -> 3.1 CPU-s/GB). The life of a
+   forwarded packet through upstream's design: on the NIC's CPU, the
+   peer's staged queue (a spinlock), a nonce and keypair reference
+   (atomics), the peer's in-order queue (an `xchg`), the device's
+   encrypt ring (its producer lock, shared by all CPUs) and a kick of a
+   worker on another CPU (often an IPI); on that CPU, the ring's
+   consumer lock (shared by all workers: the 80% hotspot), encryption,
+   and a kick of the peer's tx worker; on a third CPU, the send. All of
+   that is to encrypt one flow's packets on many CPUs and put them back
+   in order, which forwarded packets don't need: RSS already spreads
+   flows over CPUs and keeps each in order on one. So:
+   * Transmit: `tswg_xmit_now` encrypts and sends packets with no
+     socket (forwarded) right in `wg_xmit`, on the CPU they arrived on,
+     as IPsec does: no queues, no locks but the peer's endpoint rwlock,
+     no other CPUs. (Not the earlier softirq starvation, which came from
+     handing work to a worker on a CPU busy with softirq work; this is
+     that work.) Local sockets' packets still go to the workers, to
+     encrypt one flow on several CPUs: "in softirq" alone isn't
+     "forwarded", since much of a TCP sender's sending happens in
+     softirq, as ACKs arrive, and inlining those cost one stream half its
+     throughput. Module parameter `tx_inline` (0 never, 1 forwarded, 2
+     always).
+   * Receive: `tswg_receive_now` decrypts a peer's packets in
+     `encap_rcv`, on the CPU its UDP flow arrives on, and delivers them
+     through the device's per-CPU GRO cells (as VXLAN does), rather than
+     through the decrypt ring, a worker, the peer's in-order queue and
+     its NAPI on yet another CPU. That's one CPU per peer, which a fast
+     peer outruns (one TCP stream: 12.2 -> 6.4 Gbps in the lab), so a
+     peer receiving more than `rx_inline_mbps` (default 4000) over 10ms
+     goes the parallel way for at least 100ms, and comes back once
+     that way has delivered all it had, so switching doesn't reorder
+     (but for packets still in the peer NAPI's GRO list as its queue
+     empties). Over a jiffy, GRO's bursts pushed a router's 2 Gbps peers
+     over the threshold, halving uploads.
+   Tried and not kept: a share of each CPU's time for inline transmit,
+   handing off the rest (it reorders flows at every switch); in the lab,
+   inline transmit's per-send virtio notifications (each a VM exit)
+   make forwarding from one veth slower, which EC2's ENA doesn't.
 
 The lean harness's VMs have guest USO off (decided 2026-11-07): with it,
 the host hands VM-to-VM UDP GSO packets to the receiving guest still
@@ -1197,11 +1253,16 @@ Performance (the primary motivation; see "Performance"):
 - [x] Benchmarks on cloud VMs (EC2, harness remote mode, `scripts/ec2.sh`).
 - [x] Subnet router beyond 40 Gbps at MTU 1280: c6in.32xlarge, 74 Gbps
       with 60 clients (12x wireguard-go).
-- [ ] The encrypt ring's consumer lock: on a 128-CPU subnet router
-      sending big responses (see "Results at a glance"), 75-83% of the
-      router's CPU contends for it. Needs fewer, bigger entries (batching
-      a peer's forwarded packets per NAPI poll?), or rings per group of
-      CPUs with work stealing; a ring per worker alone cost latency.
+- [x] The encrypt ring's consumer lock: on a 128-CPU subnet router
+      sending big responses, 75-83% of the router's CPU contended for it.
+      Change 12 (run to completion) takes forwarded packets off the ring.
+- [ ] The crypt rings still serve local sockets and fast peers, and so
+      would contend the same way on a big host with many busy local
+      flows (a server, rather than a router): rings per group of CPUs
+      with work stealing, or per-flow steering, as RPS does.
+- [ ] Subnet routers whose NIC has fewer queues than CPUs: set up RPS
+      (tailscaled, or document it): fetches through a 128-CPU router
+      with 32 NIC queues gain 13%.
 - [ ] Subnet router past 75 Gbps at MTU 1280: the ENA interrupt CPUs'
       page allocator contention, from ENA allocating a page per received
       packet (zero-copy receive, taking tswg's own allocations out, didn't

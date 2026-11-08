@@ -709,9 +709,14 @@ out:
 
 #include "selftest/counter.c"
 
+/*
+ * wg_packet_consume_data_done delivers skb. TSWG: through the device's
+ * per-CPU GRO cells if now (see tswg_receive_now), or else the peer's
+ * NAPI, whose poll this is.
+ */
 static void wg_packet_consume_data_done(struct wg_peer *peer,
 					struct sk_buff *skb,
-					struct endpoint *endpoint)
+					struct endpoint *endpoint, bool now)
 {
 	struct net_device *dev = peer->device->dev;
 	unsigned int len, len_before_trim;
@@ -786,7 +791,10 @@ static void wg_packet_consume_data_done(struct wg_peer *peer,
 	if (unlikely(routed_peer != peer))
 		goto dishonest_packet_peer;
 
-	napi_gro_receive(&peer->napi, skb);
+	if (now) /* TSWG */
+		gro_cells_receive(&peer->device->tswg_gro_cells, skb);
+	else
+		napi_gro_receive(&peer->napi, skb);
 	update_rx_stats(peer, message_data_len(len_before_trim));
 	return;
 
@@ -817,7 +825,8 @@ packet_processed:
  * TSWG: tswg_receive_gso delivers the packets decrypted from skb (see
  * tswg_decrypt_gso) and returns how many there were.
  */
-static int tswg_receive_gso(struct wg_peer *peer, struct sk_buff *skb)
+static int tswg_receive_gso(struct wg_peer *peer, struct sk_buff *skb,
+			    bool now)
 {
 	struct noise_keypair *keypair = PACKET_CB(skb)->keypair;
 	struct sk_buff *nskb = PACKET_CB(skb)->tswg_out, *next;
@@ -837,7 +846,7 @@ static int tswg_receive_gso(struct wg_peer *peer, struct sk_buff *skb)
 			dev_kfree_skb(nskb);
 			continue;
 		}
-		wg_packet_consume_data_done(peer, nskb, &endpoint);
+		wg_packet_consume_data_done(peer, nskb, &endpoint, now);
 	}
 	return n;
 }
@@ -866,7 +875,7 @@ int wg_packet_rx_poll(struct napi_struct *napi, int budget)
 			goto next;
 
 		if (skb_is_gso(skb)) { /* TSWG */
-			work_done += max(tswg_receive_gso(peer, skb), 1) - 1;
+			work_done += max(tswg_receive_gso(peer, skb, false), 1) - 1;
 			goto next;
 		}
 
@@ -883,7 +892,7 @@ int wg_packet_rx_poll(struct napi_struct *napi, int budget)
 			goto next;
 
 		wg_reset_packet(skb, false);
-		wg_packet_consume_data_done(peer, skb, &endpoint);
+		wg_packet_consume_data_done(peer, skb, &endpoint, false);
 		free = false;
 
 next:
@@ -933,6 +942,91 @@ again:
 		goto again;
 }
 
+/*
+ * TSWG: run-to-completion receive, as tswg_xmit_now is for transmit.
+ *
+ * Upstream hands each data packet to a crypt worker through a ring that
+ * all of a device's CPUs share, and the decrypted packet to the peer's
+ * NAPI through its in-order queue, so that one peer's packets can be
+ * decrypted on many CPUs in parallel and still be delivered in order: two
+ * device-wide locks, a wakeup or two, and two more CPUs per packet. But a
+ * peer's packets, one UDP flow, already arrive on one CPU, in order (RSS),
+ * so tswg_receive_now decrypts them there and delivers them through the
+ * device's per-CPU GRO cells, as tunnels like VXLAN do. It's called in
+ * softirq, from the UDP socket's encap_rcv, with the references
+ * wg_packet_consume_data took, which it drops.
+ *
+ * But that's one CPU per peer, which a single fast peer outruns: one TCP
+ * stream through a tunnel fell from 12.2 to 6.6 Gbps in the lab. So a peer
+ * goes the parallel way while it's receiving more than rx_inline_mbps
+ * (module parameter; 0 for never inline), over TSWG_RX_WINDOW (a jiffy was
+ * too short: GRO's bursts put peers of a router averaging 2 Gbps over 4),
+ * and for TSWG_RX_PARALLEL_FOR after (switching back and forth often cost
+ * more than either way), and back only once that way has delivered all it
+ * had, so that switching doesn't reorder the peer's packets; see
+ * tswg_rx_inline_ok.
+ */
+#define TSWG_RX_WINDOW max(HZ / 100, 1)
+#define TSWG_RX_PARALLEL_FOR (HZ / 10)
+
+static unsigned int tswg_rx_inline_mbps = 4000;
+module_param_named(rx_inline_mbps, tswg_rx_inline_mbps, uint, 0644);
+MODULE_PARM_DESC(rx_inline_mbps, "receive a peer's packets where they arrive while it's below this rate (0: never)");
+
+/*
+ * tswg_rx_inline_ok reports whether to receive skb, from peer, with
+ * tswg_receive_now, counting it in peer's rate.
+ */
+static bool tswg_rx_inline_ok(struct wg_peer *peer, struct sk_buff *skb)
+{
+	unsigned int mbps = READ_ONCE(tswg_rx_inline_mbps);
+	unsigned long now = jiffies;
+
+	if (now - READ_ONCE(peer->tswg_rx_jiffy) >= TSWG_RX_WINDOW) {
+		WRITE_ONCE(peer->tswg_rx_jiffy, now);
+		WRITE_ONCE(peer->tswg_rx_bytes, 0);
+	}
+	WRITE_ONCE(peer->tswg_rx_bytes, READ_ONCE(peer->tswg_rx_bytes) + skb->len);
+	if (!mbps)
+		return false;
+	if ((u64)READ_ONCE(peer->tswg_rx_bytes) * 8 * HZ >
+	    (u64)mbps * 1000000 * TSWG_RX_WINDOW) {
+		WRITE_ONCE(peer->tswg_rx_parallel_until, now + TSWG_RX_PARALLEL_FOR);
+		return false;
+	}
+	if (time_before(now, READ_ONCE(peer->tswg_rx_parallel_until)))
+		return false;
+	/* Not past packets still on their way the parallel way. */
+	return !atomic_read(&peer->rx_queue.count);
+}
+
+static void tswg_receive_now(struct wg_peer *peer, struct sk_buff *skb)
+{
+	struct noise_keypair *keypair = PACKET_CB(skb)->keypair;
+	struct endpoint endpoint;
+
+	if (unlikely(!decrypt_packet(skb, keypair)))
+		goto free;
+	if (skb_is_gso(skb)) {
+		tswg_receive_gso(peer, skb, true);
+		goto free;
+	}
+	if (unlikely(!counter_validate(&keypair->receiving_counter,
+				       PACKET_CB(skb)->nonce) ||
+		     wg_socket_endpoint_from_skb(&endpoint, skb)))
+		goto free;
+	wg_reset_packet(skb, false);
+	wg_packet_consume_data_done(peer, skb, &endpoint, true);
+	skb = NULL;
+free:
+	if (skb) {
+		kfree_skb_list(PACKET_CB(skb)->tswg_out);
+		dev_kfree_skb(skb);
+	}
+	wg_noise_keypair_put(keypair, false);
+	wg_peer_put(peer);
+}
+
 static void wg_packet_consume_data(struct wg_device *wg, struct sk_buff *skb)
 {
 	__le32 idx = ((struct message_data *)skb->data)->key_idx;
@@ -952,6 +1046,11 @@ static void wg_packet_consume_data(struct wg_device *wg, struct sk_buff *skb)
 
 	PACKET_CB(skb)->tswg_out = NULL; /* TSWG */
 	PACKET_CB(skb)->tswg_count = skb_is_gso(skb) ? skb_shinfo(skb)->gso_segs : 1;
+	if (tswg_rx_inline_ok(peer, skb)) { /* TSWG */
+		tswg_receive_now(peer, skb);
+		rcu_read_unlock_bh();
+		return;
+	}
 	/* TSWG: decrypt a lone packet here when the workers are idle. */
 	if (!skb_is_gso(skb) && tswg_inline_ok(&wg->decrypt_queue)) {
 		ret = tswg_enqueue_per_peer(&peer->rx_queue, skb);

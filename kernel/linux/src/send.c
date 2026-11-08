@@ -871,6 +871,99 @@ err:
 	kfree_skb_list(first);
 }
 
+/*
+ * TSWG: run-to-completion transmit.
+ *
+ * Upstream hands every packet to a crypt worker through a ring that all
+ * of a device's CPUs share, and the encrypted packets to the peer's tx
+ * worker through its in-order queue, so that one flow's packets can be
+ * encrypted on many CPUs in parallel and still go out in order. That's two
+ * device-wide locks (the ring's producer and consumer locks), a wakeup or
+ * two, and two more CPUs per packet; on a 128-CPU subnet router sending
+ * big responses to hundreds of flows, the workers spent 75-83% of the
+ * router's CPU contending for the ring's consumer lock.
+ *
+ * Packets being forwarded (arriving here in softirq, on the CPU that took
+ * them from the NIC, with no socket) need none of it: RSS already spreads
+ * the flows over CPUs, and keeps each flow's packets on one, in order. So tswg_xmit_now
+ * encrypts them and sends them right here, as IPsec does. That isn't the
+ * softirq starvation seen before, which came from handing work to a
+ * worker on a CPU busy with softirq work; this is that work. Packets of a
+ * peer's different flows, encrypted on different CPUs, may leave out of
+ * nonce order, which the receiver's replay window allows for.
+ *
+ * When the flows arrive on few CPUs (a NIC with few queues, or a veth with
+ * one), doing it all there can saturate them, where handing off would
+ * have spread the work: in the lab, forwarding one veth's traffic, 5.6
+ * Gbps became 3.3 (though mostly from virtio's per-send notifications,
+ * each a VM exit there). Handing off just the overflow, a share of each
+ * jiffy, was worse still, as it reorders flows each time it switches.
+ *
+ * tx_inline (module parameter): 0 never, 1 (the default) for packets with
+ * no socket (forwarded), 2 for all, including local sockets' (which costs
+ * a single flow its encryption on other CPUs: much of a TCP sender's
+ * sending happens in softirq too, as ACKs arrive, so being in softirq
+ * doesn't mean forwarding).
+ */
+static int tswg_tx_inline = 1;
+module_param_named(tx_inline, tswg_tx_inline, int, 0644);
+MODULE_PARM_DESC(tx_inline, "encrypt and send where packets arrive: 0 never, 1 forwarded ones, 2 always");
+
+bool tswg_xmit_now(struct wg_peer *peer, struct sk_buff_head *packets)
+{
+	int mode = READ_ONCE(tswg_tx_inline);
+	struct noise_keypair *keypair;
+	struct sk_buff *skb, *first;
+	unsigned int count = 0;
+	u64 nonce;
+
+	if (!mode || (mode == 1 && packets->next->sk))
+		return false;
+	/* Not past packets waiting for a handshake, nor without a key. */
+	if (!skb_queue_empty_lockless(&peer->staged_packet_queue))
+		return false;
+	rcu_read_lock_bh();
+	keypair = rcu_dereference_bh(peer->keypairs.current_keypair);
+	if (unlikely(!keypair || !READ_ONCE(keypair->sending.is_valid) ||
+		     wg_birthdate_has_expired(keypair->sending.birthdate,
+					      REJECT_AFTER_TIME)))
+		goto slow;
+	skb_queue_walk(packets, skb)
+		count += tswg_skb_segs(skb);
+	nonce = atomic64_add_return(count, &keypair->sending_counter) - count;
+	if (unlikely(nonce + count - 1 >= REJECT_AFTER_MESSAGES)) {
+		WRITE_ONCE(keypair->sending.is_valid, false);
+		goto slow;
+	}
+	skb_queue_walk(packets, skb) {
+		PACKET_CB(skb)->ds = ip_tunnel_ecn_encap(0, ip_hdr(skb), skb);
+		PACKET_CB(skb)->nonce = nonce;
+		nonce += tswg_skb_segs(skb);
+	}
+	first = packets->next;
+	packets->prev->next = NULL;
+	__skb_queue_head_init(packets);
+	/*
+	 * BHs are off, which makes this CPU's inline page frag ours, and the
+	 * keypair, which RCU frees, safe to use without a reference.
+	 */
+	PACKET_CB(first)->keypair = keypair;
+	PACKET_CB(first)->tswg_out = NULL;
+	if (likely(tswg_encrypt_list(first,
+			&this_cpu_ptr(peer->device->encrypt_queue.worker)->tswg_inline_frag))) {
+		wg_packet_create_data_done(peer, first);
+	} else {
+		kfree_skb_list(PACKET_CB(first)->tswg_out);
+		kfree_skb_list(first);
+	}
+	rcu_read_unlock_bh();
+	return true;
+
+slow:
+	rcu_read_unlock_bh();
+	return false;
+}
+
 void wg_packet_purge_staged_packets(struct wg_peer *peer)
 {
 	spin_lock_bh(&peer->staged_packet_queue.lock);
