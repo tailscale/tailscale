@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,9 +39,13 @@ import (
 //	TSWG_SUBNET_CLIENTS      clients to use (default all)
 //	TSWG_SUBNET_STREAMS      TCP flows per client (default 16)
 //	TSWG_SUBNET_LOAD         "upload" (the default: the clients send to the
-//	                         backend) or "fetch" (as HTTP: the clients make
+//	                         backend), "fetch" (as HTTP: the clients make
 //	                         requests, one at a time per flow, which the
-//	                         backend answers with big responses)
+//	                         backend answers with big responses), "serve"
+//	                         (fetch, but from the router itself, as a big
+//	                         server on the tailnet), or "crawl" (the router
+//	                         fetches from all the clients at once, as a
+//	                         crawler does)
 //	TSWG_SUBNET_FETCH_SIZE   for fetch, the response size (default 1 MiB)
 //	TSWG_SUBNET_FETCH_REQ    for fetch, the request size (default 500 bytes)
 //	TSWG_SUBNET_ROUTER_CPUS  CPUs to leave online on the router (default all)
@@ -54,6 +59,7 @@ import (
 //	                         TestLeanProfile
 //	TSWG_SUBNET_ROUTER_CMD   a shell command to run on the router after
 //	                         each setup, for experiments ($MODE is the mode)
+//	TSWG_SUBNET_CLIENT_CMD   likewise, on each client
 //	TSWG_SUBNET_ROUTER_STATS if set, log the router's wg0, UDP and TCP
 //	                         counters after each run, to see drops
 //	TSWG_SUBNET_PAUSE        a duration to pause after each setup, to debug
@@ -90,7 +96,8 @@ func TestLeanSubnetRouter(t *testing.T) {
 	}
 	streams := envInt("TSWG_SUBNET_STREAMS", 16)
 	runs := envInt("TSWG_COMPARE_RUNS", 3)
-	fetch := os.Getenv("TSWG_SUBNET_LOAD") == "fetch"
+	load := os.Getenv("TSWG_SUBNET_LOAD")
+	fetch := load == "fetch" || load == "serve" || load == "crawl"
 	fetchSize := envInt("TSWG_SUBNET_FETCH_SIZE", 1<<20)
 	fetchReq := envInt("TSWG_SUBNET_FETCH_REQ", 500)
 
@@ -104,8 +111,10 @@ func TestLeanSubnetRouter(t *testing.T) {
 	}
 	s := &subnetLab{l: l, router: router, backend: backend, clients: clients, clientMode: clientMode}
 	s.setupRouter(envInt("TSWG_SUBNET_ROUTER_CPUS", 0))
-	if err := backend.do("POST", fmt.Sprintf("/bench/serve?port=%d", benchPort), nil); err != nil {
-		t.Fatal(err)
+	for _, v := range append([]*vm{backend, router}, clients...) {
+		if err := v.do("POST", fmt.Sprintf("/bench/serve?port=%d", benchPort), nil); err != nil {
+			t.Fatal(err)
+		}
 	}
 	cpus := router.getText("/file?" + url.Values{"path": {"/sys/devices/system/cpu/online"}}.Encode())
 	t.Logf("router %s (CPUs %s), backend %s, %d clients (%s) with %d flows each, %v runs",
@@ -150,9 +159,26 @@ func TestLeanSubnetRouter(t *testing.T) {
 			watch := []netbench.Node{benchNode{router}, senders[0]}
 			var r netbench.FanInResult
 			var err error
-			if fetch {
+			// For serve and crawl, the router is an endpoint, reached
+			// at its tunnel address (or underlay, without a tunnel).
+			hostAddr := func(v *vm) netip.AddrPort {
+				if mode == modePlain {
+					return netip.AddrPortFrom(v.under4, benchPort)
+				}
+				return netip.AddrPortFrom(tunnel4(v.i), benchPort)
+			}
+			switch {
+			case load == "serve":
+				r, err = netbench.RunTCPFetch(senders, benchNode{router}, watch, hostAddr(router), streams, fetchSize, fetchReq, dur)
+			case load == "crawl":
+				var addrs []netip.AddrPort
+				for _, c := range clients {
+					addrs = append(addrs, hostAddr(c))
+				}
+				r, err = netbench.RunTCPCrawl(benchNode{router}, addrs, watch, streams, fetchSize, fetchReq, dur)
+			case fetch:
 				r, err = netbench.RunTCPFetch(senders, benchNode{backend}, watch, dst, streams, fetchSize, fetchReq, dur)
-			} else {
+			default:
 				r, err = netbench.RunTCPFanIn(senders, benchNode{backend}, watch, dst, streams, dur)
 			}
 			if err != nil {
@@ -303,14 +329,32 @@ func (s *subnetLab) setup(mode string) {
 	s.stopTailscaled()
 	backendRoute := netip.PrefixFrom(s.backend.under4, 32).String()
 	if mode == modePlain {
+		// With TSWG_SUBNET_PLAIN_MTU, the direct paths between the
+		// router and the clients (for the serve and crawl loads) get
+		// that MTU too, on the underlay device.
+		mtu := os.Getenv("TSWG_SUBNET_PLAIN_MTU")
+		direct := func(to netip.Addr) []string {
+			if mtu == "" {
+				return nil
+			}
+			return []string{netip.PrefixFrom(to, 32).String() + " dev underlay mtu " + mtu}
+		}
+		var routerRoutes []string
 		for _, c := range s.clients {
 			route := backendRoute + " via " + s.router.under4.String()
-			if m := os.Getenv("TSWG_SUBNET_PLAIN_MTU"); m != "" {
-				route += " mtu " + m
+			if mtu != "" {
+				route += " mtu " + mtu
 			}
-			q := url.Values{"mode": {modePlain}, "route": {route}}
+			q := url.Values{"mode": {modePlain}, "route": append([]string{route}, direct(s.router.under4)...)}
 			if err := c.do("POST", "/setup?"+q.Encode(), nil); err != nil {
 				t.Fatalf("setting up client: %v", err)
+			}
+			routerRoutes = append(routerRoutes, direct(c.under4)...)
+		}
+		if len(routerRoutes) > 0 {
+			q := url.Values{"mode": {modePlain}, "route": routerRoutes}
+			if err := s.router.do("POST", "/setup?"+q.Encode(), nil); err != nil {
+				t.Fatalf("setting up router: %v", err)
 			}
 		}
 		return
@@ -357,5 +401,16 @@ func (s *subnetLab) setup(mode string) {
 		if err := c.do("POST", "/setup?"+q.Encode(), nil); err != nil {
 			t.Fatalf("setting up client %d: %v", i, err)
 		}
+	}
+	if cmd := os.Getenv("TSWG_SUBNET_CLIENT_CMD"); cmd != "" {
+		var wg sync.WaitGroup
+		for _, c := range s.clients {
+			wg.Go(func() {
+				if _, err := c.host.ssh("MODE="+s.clientMode+"; "+cmd, nil); err != nil {
+					t.Errorf("TSWG_SUBNET_CLIENT_CMD on %s: %v", c.host.Name, err)
+				}
+			})
+		}
+		wg.Wait()
 	}
 }

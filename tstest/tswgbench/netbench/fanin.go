@@ -34,10 +34,12 @@ type FanInResult struct {
 // with streams connections, to receiver, whose sink is at addr, and
 // measures the CPU use of receiver and the watch nodes meanwhile.
 func RunTCPFanIn(senders []Node, receiver Node, watch []Node, addr netip.AddrPort, streams int, dur time.Duration) (FanInResult, error) {
-	return runFanIn(senders, receiver, watch, "tcp", url.Values{
-		"addr":    {addr.String()},
-		"dur":     {dur.String()},
-		"streams": {strconv.Itoa(streams)},
+	return runFanIn(senders, receiver, watch, "tcp", func(int) url.Values {
+		return url.Values{
+			"addr":    {addr.String()},
+			"dur":     {dur.String()},
+			"streams": {strconv.Itoa(streams)},
+		}
 	}, dur, false)
 }
 
@@ -47,19 +49,42 @@ func RunTCPFanIn(senders []Node, receiver Node, watch []Node, addr netip.AddrPor
 // server answers with size bytes each. Mbps is the total received by the
 // clients.
 func RunTCPFetch(clients []Node, server Node, watch []Node, addr netip.AddrPort, streams, size, reqLen int, dur time.Duration) (FanInResult, error) {
-	return runFanIn(clients, server, watch, "fetch", url.Values{
-		"addr":    {addr.String()},
-		"dur":     {dur.String()},
-		"streams": {strconv.Itoa(streams)},
-		"size":    {strconv.Itoa(size)},
-		"req":     {strconv.Itoa(reqLen)},
+	return runFanIn(clients, server, watch, "fetch", func(int) url.Values {
+		return url.Values{
+			"addr":    {addr.String()},
+			"dur":     {dur.String()},
+			"streams": {strconv.Itoa(streams)},
+			"size":    {strconv.Itoa(size)},
+			"req":     {strconv.Itoa(reqLen)},
+		}
 	}, dur, true)
 }
 
-// runFanIn runs the load at path with query on all of clients at once,
-// against server, measuring the CPU use of server and the watch nodes
-// meanwhile. With fetch, the data goes from server to the clients.
-func runFanIn(clients []Node, server Node, watch []Node, path string, query url.Values, dur time.Duration, fetch bool) (FanInResult, error) {
+// RunTCPCrawl is RunTCPFetch the other way around, as a crawler does:
+// crawler fetches from the TCP sinks at each of addrs at once, over
+// streams connections to each. Mbps is the total crawler received, and
+// SenderMbps what it received from each address.
+func RunTCPCrawl(crawler Node, addrs []netip.AddrPort, watch []Node, streams, size, reqLen int, dur time.Duration) (FanInResult, error) {
+	requesters := make([]Node, len(addrs))
+	for i := range requesters {
+		requesters[i] = crawler
+	}
+	return runFanIn(requesters, crawler, watch, "fetch", func(i int) url.Values {
+		return url.Values{
+			"addr":    {addrs[i].String()},
+			"dur":     {dur.String()},
+			"streams": {strconv.Itoa(streams)},
+			"size":    {strconv.Itoa(size)},
+			"req":     {strconv.Itoa(reqLen)},
+		}
+	}, dur, true)
+}
+
+// runFanIn runs the load at path, with query(i) for clients[i], on all of
+// clients at once, against server, measuring the CPU use of server and the
+// watch nodes meanwhile. With fetch, the data goes from server to the
+// clients.
+func runFanIn(clients []Node, server Node, watch []Node, path string, query func(int) url.Values, dur time.Duration, fetch bool) (FanInResult, error) {
 	senders, receiver := clients, server
 	cpuNodes := append([]Node{receiver}, watch...)
 	before := make([]CPU, len(cpuNodes))
@@ -85,7 +110,7 @@ func runFanIn(clients []Node, server Node, watch []Node, path string, query url.
 	var wg sync.WaitGroup
 	for i, n := range senders {
 		wg.Go(func() {
-			errs[i] = n.Do("GET", path+"?"+query.Encode(), &results[i])
+			errs[i] = n.Do("GET", path+"?"+query(i).Encode(), &results[i])
 		})
 	}
 	wg.Wait()

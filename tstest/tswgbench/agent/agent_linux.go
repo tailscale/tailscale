@@ -419,6 +419,7 @@ var routes []*netlink.Route
 func addRoutes(specs []string) error {
 	for _, spec := range specs {
 		rest, mtuStr, hasMTU := strings.Cut(spec, " mtu ")
+		rest, devName, hasDev := strings.Cut(rest, " dev ")
 		dst, via, hasVia := strings.Cut(rest, " via ")
 		pfx, err := netip.ParsePrefix(dst)
 		if err != nil {
@@ -435,11 +436,24 @@ func addRoutes(specs []string) error {
 			}
 			r.Gw = gw.AsSlice()
 		} else {
-			link, err := netlink.LinkByName(tunnelDev)
-			if err != nil {
-				return err
+			name := tunnelDev
+			if hasDev {
+				name = devName
 			}
-			r.LinkIndex = link.Attrs().Index
+			if name == "underlay" {
+				// The device that routes to dst now.
+				rs, err := netlink.RouteGet(pfx.Addr().AsSlice())
+				if err != nil || len(rs) == 0 {
+					return fmt.Errorf("route %q: no underlay route: %v", spec, err)
+				}
+				r.LinkIndex = rs[0].LinkIndex
+			} else {
+				link, err := netlink.LinkByName(name)
+				if err != nil {
+					return err
+				}
+				r.LinkIndex = link.Attrs().Index
+			}
 		}
 		if hasMTU {
 			mtu, err := strconv.Atoi(mtuStr)
