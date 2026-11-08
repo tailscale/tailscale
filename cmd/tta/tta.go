@@ -355,6 +355,35 @@ func main() {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Write(data)
 	})
+	ttaMux.HandleFunc("/dns-lookup", func(w http.ResponseWriter, r *http.Request) {
+		// Look up name's IP addresses by asking the DNS server
+		// server directly, over net ("udp", the default, or "tcp"),
+		// through the OS's network stack.
+		q := r.URL.Query()
+		server, name, network := q.Get("server"), q.Get("name"), q.Get("net")
+		if server == "" || name == "" {
+			http.Error(w, "missing server or name", http.StatusBadRequest)
+			return
+		}
+		if network == "" {
+			network = "udp"
+		}
+		res := &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, network, net.JoinHostPort(server, "53"))
+			},
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		addrs, err := res.LookupHost(ctx, name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		io.WriteString(w, strings.Join(addrs, "\n")+"\n")
+	})
 	ttaMux.HandleFunc("/http-get", func(w http.ResponseWriter, r *http.Request) {
 		targetURL := r.URL.Query().Get("url")
 		if targetURL == "" {

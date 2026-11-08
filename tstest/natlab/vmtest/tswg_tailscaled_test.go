@@ -42,6 +42,7 @@ func newTSWGTailscaled(t *testing.T, nat vnet.NAT) *tswgTailscaled {
 // tswgTailscaledOpts are options for newTSWGTailscaledOpts.
 type tswgTailscaledOpts struct {
 	env      []vnet.TailscaledEnv // more environment for both tailscaleds
+	vmOpts   []vmtest.EnvOption   // options for vmtest.New
 	tunNodes int                  // how many nodes, from the last, to leave in TUN mode (wireguard-go)
 	sameLAN  bool                 // put both nodes on one LAN, behind one NAT
 }
@@ -51,7 +52,7 @@ func newTSWGTailscaledOpts(t *testing.T, nat vnet.NAT, opts tswgTailscaledOpts) 
 	dir := tswgDir(t)
 	ko := buildTSWGForGokrazy(t, dir)
 
-	f := &tswgTailscaled{t: t, env: vmtest.New(t), ko: ko}
+	f := &tswgTailscaled{t: t, env: vmtest.New(t, opts.vmOpts...), ko: ko}
 	var lan *vnet.Network
 	if opts.sameLAN {
 		lan = f.env.AddNetwork("2.1.1.1", "192.168.1.1/24", nat)
