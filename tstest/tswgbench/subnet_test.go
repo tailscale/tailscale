@@ -37,6 +37,12 @@ import (
 //
 //	TSWG_SUBNET_CLIENTS      clients to use (default all)
 //	TSWG_SUBNET_STREAMS      TCP flows per client (default 16)
+//	TSWG_SUBNET_LOAD         "upload" (the default: the clients send to the
+//	                         backend) or "fetch" (as HTTP: the clients make
+//	                         requests, one at a time per flow, which the
+//	                         backend answers with big responses)
+//	TSWG_SUBNET_FETCH_SIZE   for fetch, the response size (default 1 MiB)
+//	TSWG_SUBNET_FETCH_REQ    for fetch, the request size (default 500 bytes)
 //	TSWG_SUBNET_ROUTER_CPUS  CPUs to leave online on the router (default all)
 //	TSWG_SUBNET_MTU          tunnel MTU (default 1280, Tailscale's; within an
 //	                         EC2 VPC, up to 8920 fits the 9001-byte underlay)
@@ -84,6 +90,9 @@ func TestLeanSubnetRouter(t *testing.T) {
 	}
 	streams := envInt("TSWG_SUBNET_STREAMS", 16)
 	runs := envInt("TSWG_COMPARE_RUNS", 3)
+	fetch := os.Getenv("TSWG_SUBNET_LOAD") == "fetch"
+	fetchSize := envInt("TSWG_SUBNET_FETCH_SIZE", 1<<20)
+	fetchReq := envInt("TSWG_SUBNET_FETCH_REQ", 500)
 
 	l := newLab(t, 0)
 	if len(l.vms) < 3 {
@@ -101,6 +110,9 @@ func TestLeanSubnetRouter(t *testing.T) {
 	cpus := router.getText("/file?" + url.Values{"path": {"/sys/devices/system/cpu/online"}}.Encode())
 	t.Logf("router %s (CPUs %s), backend %s, %d clients (%s) with %d flows each, %v runs",
 		router.host.Name, strings.TrimSpace(cpus), backend.host.Name, len(clients), clientMode, streams, dur)
+	if fetch {
+		t.Logf("load: fetches of %d bytes with %d-byte requests", fetchSize, fetchReq)
+	}
 
 	senders := make([]netbench.Node, len(clients))
 	for i, c := range clients {
@@ -110,6 +122,9 @@ func TestLeanSubnetRouter(t *testing.T) {
 	type key struct{ mode, metric string }
 	results := map[key][]float64{}
 	metrics := []string{"Mbps", "router CPU %", "router CPU-s/GB", "fairness", "min client Mbps"}
+	if fetch {
+		metrics = append(metrics, "responses/s")
+	}
 	for run := range runs {
 		for _, mode := range strings.Split(modes, ",") {
 			s.setup(mode)
@@ -132,7 +147,14 @@ func TestLeanSubnetRouter(t *testing.T) {
 					}.Encode(), &prof)
 				}()
 			}
-			r, err := netbench.RunTCPFanIn(senders, benchNode{backend}, []netbench.Node{benchNode{router}, senders[0]}, dst, streams, dur)
+			watch := []netbench.Node{benchNode{router}, senders[0]}
+			var r netbench.FanInResult
+			var err error
+			if fetch {
+				r, err = netbench.RunTCPFetch(senders, benchNode{backend}, watch, dst, streams, fetchSize, fetchReq, dur)
+			} else {
+				r, err = netbench.RunTCPFanIn(senders, benchNode{backend}, watch, dst, streams, dur)
+			}
 			if err != nil {
 				t.Fatalf("%s run %d: %v", mode, run, err)
 			}
@@ -155,7 +177,11 @@ func TestLeanSubnetRouter(t *testing.T) {
 				"router CPU-s/GB": r.WatchCPUSecPerGB[0],
 				"fairness":        r.Fairness,
 				"min client Mbps": slices.Min(r.SenderMbps),
+				"responses/s":     float64(r.Responses) / dur.Seconds(),
 			} {
+				if metric == "responses/s" && !fetch {
+					continue
+				}
 				results[key{mode, metric}] = append(results[key{mode, metric}], v)
 			}
 		}

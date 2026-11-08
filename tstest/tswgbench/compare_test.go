@@ -25,7 +25,8 @@ import (
 // alike, and reports each mode's median, minimum and maximum.
 // TSWG_COMPARE_STREAMS sets the number of TCP streams (default 1). With
 // TSWG_COMPARE_LOAD=rtt, it compares UDP round trip times instead, idle
-// and under a 1-stream TCP load.
+// and under a 1-stream TCP load; with TSWG_COMPARE_LOAD=fetch, fetches (as
+// netbench.RunTCPFetch) of 1 MiB from VM 0 by VM 1.
 func TestLeanCompare(t *testing.T) {
 	modes := os.Getenv("TSWG_LEAN_COMPARE")
 	if modes == "" {
@@ -53,6 +54,7 @@ func TestLeanCompare(t *testing.T) {
 	}
 
 	rtt := os.Getenv("TSWG_COMPARE_LOAD") == "rtt"
+	fetch := os.Getenv("TSWG_COMPARE_LOAD") == "fetch"
 
 	l := newLab(t, cpus)
 	// results maps a mode and metric ("Mbps", "idle p50 ms", ...) to the
@@ -72,6 +74,26 @@ func TestLeanCompare(t *testing.T) {
 			sender, receiver := benchNode{l.vms[0]}, benchNode{l.vms[1]}
 			if err := receiver.Do("POST", fmt.Sprintf("serve?port=%d", benchPort), nil); err != nil {
 				t.Fatal(err)
+			}
+			if fetch {
+				// VM 1 fetches from VM 0, so VM 0 sends the data, as
+				// in the other loads.
+				back := netip.AddrPortFrom(tunnel4(0), benchPort)
+				if mode == modePlain {
+					back = netip.AddrPortFrom(l.vms[0].under4, benchPort)
+				}
+				if err := sender.Do("POST", fmt.Sprintf("serve?port=%d", benchPort), nil); err != nil {
+					t.Fatal(err)
+				}
+				r, err := netbench.RunTCPFetch([]netbench.Node{receiver}, sender, nil, back, streams, 1<<20, 500, dur)
+				if err != nil {
+					t.Fatalf("%s run %d: %v", mode, run, err)
+				}
+				t.Logf("run %d: %s: %.0f Mbps, %d responses, sender %.2f CPU-s/GB",
+					run, mode, r.Mbps, r.Responses, r.ReceiverCPUSecPerGB)
+				record(mode, "Mbps", r.Mbps)
+				record(mode, "send CPU-s/GB", r.ReceiverCPUSecPerGB)
+				continue
 			}
 			if !rtt {
 				r, err := netbench.RunTCP(sender, receiver, addr, streams, dur)

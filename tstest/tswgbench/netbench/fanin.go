@@ -15,7 +15,7 @@ import (
 // FanInResult is the result of RunTCPFanIn.
 type FanInResult struct {
 	Mbps       float64   // total, as received
-	SenderMbps []float64 // each sender's, as sent
+	SenderMbps []float64 // each sender's, as sent (for fetches, each client's, as received)
 	// Fairness is Jain's fairness index of the senders' throughput: 1
 	// when all got the same, down to 1/n when one got everything.
 	Fairness float64
@@ -24,14 +24,43 @@ type FanInResult struct {
 	// router in the path), as a fraction of all of its CPUs, and in CPU
 	// seconds per gigabyte received.
 	WatchCPU, WatchCPUSecPerGB []float64
-	ReceiverCPU                float64
+	ReceiverCPU                float64 // the server's (for fetches, the sender of the data)
 	ReceiverCPUSecPerGB        float64
+
+	Responses int64 // for fetches, how many responses the clients got
 }
 
 // RunTCPFanIn runs TCP throughput tests from all of senders at once, each
 // with streams connections, to receiver, whose sink is at addr, and
 // measures the CPU use of receiver and the watch nodes meanwhile.
 func RunTCPFanIn(senders []Node, receiver Node, watch []Node, addr netip.AddrPort, streams int, dur time.Duration) (FanInResult, error) {
+	return runFanIn(senders, receiver, watch, "tcp", url.Values{
+		"addr":    {addr.String()},
+		"dur":     {dur.String()},
+		"streams": {strconv.Itoa(streams)},
+	}, dur, false)
+}
+
+// RunTCPFetch is like RunTCPFanIn, but in the other direction, as HTTP
+// is: each of clients makes requests of reqLen bytes over streams
+// connections to server's TCP sink at addr, one at a time on each, which
+// server answers with size bytes each. Mbps is the total received by the
+// clients.
+func RunTCPFetch(clients []Node, server Node, watch []Node, addr netip.AddrPort, streams, size, reqLen int, dur time.Duration) (FanInResult, error) {
+	return runFanIn(clients, server, watch, "fetch", url.Values{
+		"addr":    {addr.String()},
+		"dur":     {dur.String()},
+		"streams": {strconv.Itoa(streams)},
+		"size":    {strconv.Itoa(size)},
+		"req":     {strconv.Itoa(reqLen)},
+	}, dur, true)
+}
+
+// runFanIn runs the load at path with query on all of clients at once,
+// against server, measuring the CPU use of server and the watch nodes
+// meanwhile. With fetch, the data goes from server to the clients.
+func runFanIn(clients []Node, server Node, watch []Node, path string, query url.Values, dur time.Duration, fetch bool) (FanInResult, error) {
+	senders, receiver := clients, server
 	cpuNodes := append([]Node{receiver}, watch...)
 	before := make([]CPU, len(cpuNodes))
 	after := make([]CPU, len(cpuNodes))
@@ -56,11 +85,7 @@ func RunTCPFanIn(senders []Node, receiver Node, watch []Node, addr netip.AddrPor
 	var wg sync.WaitGroup
 	for i, n := range senders {
 		wg.Go(func() {
-			errs[i] = n.Do("GET", "tcp?"+url.Values{
-				"addr":    {addr.String()},
-				"dur":     {dur.String()},
-				"streams": {strconv.Itoa(streams)},
-			}.Encode(), &results[i])
+			errs[i] = n.Do("GET", path+"?"+query.Encode(), &results[i])
 		})
 	}
 	wg.Wait()
@@ -78,7 +103,16 @@ func RunTCPFanIn(senders []Node, receiver Node, watch []Node, addr netip.AddrPor
 	}
 
 	rx := float64(sb.TCPBytes - s.TCPBytes)
+	if fetch {
+		rx = 0
+		for _, res := range results {
+			rx += float64(res.Bytes)
+		}
+	}
 	r := FanInResult{Mbps: rx * 8 / dur.Seconds() / 1e6}
+	for _, res := range results {
+		r.Responses += res.Packets
+	}
 	var sum, sumSq float64
 	for _, res := range results {
 		mbps := 0.0

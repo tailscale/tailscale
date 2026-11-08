@@ -5,6 +5,7 @@ package netbench
 
 import (
 	"bufio"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +40,10 @@ import (
 //     a UDP GSO (UDP_SEGMENT) batch of M-byte datagrams.
 //   - GET rtt?addr=IP:PORT&n=N&interval=D measures N UDP round trips to an
 //     echo server, D apart ([RTT]).
+//   - GET fetch?addr=IP:PORT&dur=D&streams=N&size=S&req=R makes requests
+//     of R bytes over each of N connections to a TCP sink for D, one at
+//     a time, each answered with S bytes, as HTTP clients do with
+//     keep-alive connections ([Result], with Packets the responses).
 func Register(mux *http.ServeMux, prefix string) {
 	mux.HandleFunc("POST "+prefix+"serve", benchServe)
 	mux.HandleFunc("GET "+prefix+"stats", benchStats)
@@ -46,6 +51,7 @@ func Register(mux *http.ServeMux, prefix string) {
 	mux.HandleFunc("GET "+prefix+"tcp", benchTCP)
 	mux.HandleFunc("GET "+prefix+"udp", benchUDP)
 	mux.HandleFunc("GET "+prefix+"rtt", benchRTT)
+	mux.HandleFunc("GET "+prefix+"fetch", benchFetch)
 }
 
 // Benchmark server counters.
@@ -53,6 +59,7 @@ var (
 	benchServeOnce  sync.Once
 	benchServeErr   error
 	benchTCPBytes   atomic.Int64
+	benchTCPSent    atomic.Int64
 	benchUDPPackets atomic.Int64
 	benchUDPBytes   atomic.Int64
 )
@@ -88,12 +95,17 @@ func benchServe(w http.ResponseWriter, r *http.Request) {
 				go func() {
 					defer c.Close()
 					buf := make([]byte, 256<<10)
-					for {
-						n, err := c.Read(buf)
+					// A connection that starts with fetchMagic makes
+					// requests; see benchFetch.
+					n, err := io.ReadFull(c, buf[:len(fetchMagic)])
+					if err == nil && string(buf[:n]) == fetchMagic {
+						serveFetches(c)
+						return
+					}
+					benchTCPBytes.Add(int64(n))
+					for err == nil {
+						n, err = c.Read(buf)
 						benchTCPBytes.Add(int64(n))
-						if err != nil {
-							return
-						}
 					}
 				}()
 			}
@@ -121,11 +133,106 @@ func benchServe(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, "OK\n")
 }
 
+// fetchMagic starts a connection to the TCP sink that makes requests,
+// rather than just sending.
+const fetchMagic = "NBFETCH1"
+
+// fetchZeros is what the server's responses to fetches are made of.
+var fetchZeros = make([]byte, 1<<20)
+
+// serveFetches answers the requests on c: each is a big-endian uint32
+// response size and a uint32 request length (including those 8 bytes),
+// then the rest of the request, which is ignored.
+func serveFetches(c net.Conn) {
+	var hdr [8]byte
+	for {
+		if _, err := io.ReadFull(c, hdr[:]); err != nil {
+			return
+		}
+		size := int64(binary.BigEndian.Uint32(hdr[:4]))
+		reqLen := int64(binary.BigEndian.Uint32(hdr[4:]))
+		if _, err := io.CopyN(io.Discard, c, max(reqLen-8, 0)); err != nil {
+			return
+		}
+		for size > 0 {
+			n, err := c.Write(fetchZeros[:min(size, int64(len(fetchZeros)))])
+			benchTCPSent.Add(int64(n))
+			size -= int64(n)
+			if err != nil {
+				return
+			}
+		}
+	}
+}
+
+// benchFetch makes requests to the TCP sink at addr, which answers them
+// (see serveFetches), over streams connections, for dur.
+func benchFetch(w http.ResponseWriter, r *http.Request) {
+	addr, dur, err := benchParams(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	q := r.URL.Query()
+	streams, _ := strconv.Atoi(q.Get("streams"))
+	streams = max(streams, 1)
+	size, _ := strconv.Atoi(q.Get("size"))
+	size = max(size, 1)
+	reqLen, _ := strconv.Atoi(q.Get("req"))
+	reqLen = max(reqLen, 8)
+	var conns []net.Conn
+	for range streams {
+		c, err := net.DialTimeout("tcp", addr, 10*time.Second)
+		if err == nil {
+			_, err = io.WriteString(c, fetchMagic)
+		}
+		if err != nil {
+			for _, c := range conns {
+				c.Close()
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		conns = append(conns, c)
+	}
+	var total, responses atomic.Int64
+	var wg sync.WaitGroup
+	start := time.Now()
+	deadline := start.Add(dur)
+	for _, c := range conns {
+		wg.Go(func() {
+			defer c.Close()
+			c.SetDeadline(deadline)
+			req := make([]byte, reqLen)
+			binary.BigEndian.PutUint32(req[:4], uint32(size))
+			binary.BigEndian.PutUint32(req[4:8], uint32(reqLen))
+			buf := make([]byte, 256<<10)
+			for {
+				if _, err := c.Write(req); err != nil {
+					return
+				}
+				for got := 0; got < size; {
+					n, err := c.Read(buf[:min(len(buf), size-got)])
+					got += n
+					total.Add(int64(n))
+					if err != nil {
+						return
+					}
+				}
+				responses.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+	writeJSON(w, Result{Bytes: total.Load(), Packets: responses.Load(), Seconds: time.Since(start).Seconds()})
+}
+
 func benchStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, Stats{
-		TCPBytes:   benchTCPBytes.Load(),
-		UDPPackets: benchUDPPackets.Load(),
-		UDPBytes:   benchUDPBytes.Load(),
+		TCPSentBytes: benchTCPSent.Load(),
+		TCPBytes:     benchTCPBytes.Load(),
+		UDPPackets:   benchUDPPackets.Load(),
+		UDPBytes:     benchUDPBytes.Load(),
 	})
 }
 

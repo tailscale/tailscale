@@ -13,9 +13,10 @@ package netbench
 
 // Stats are the benchmark server's cumulative counters.
 type Stats struct {
-	TCPBytes   int64
-	UDPPackets int64
-	UDPBytes   int64
+	TCPBytes     int64 // received by the TCP sink
+	TCPSentBytes int64 // sent in responses to fetches; see RunTCPFetch
+	UDPPackets   int64
+	UDPBytes     int64
 }
 
 // CPU is a snapshot of the node's CPU time, in USER_HZ ticks, summed over
