@@ -922,7 +922,16 @@ Deliberately deferred (2026-11-07: "easy later, not a priority yet"):
   userspace, which kernel-mode packets don't. Peers can reach anything
   on the node. Must be done (nftables, or in the module) before anyone
   uses this for real.
-* No MagicDNS at 100.100.100.100 (or other netstack-provided services).
+
+MagicDNS and the other services at the Tailscale service IPs
+(100.100.100.100 and fd7a:115c:a1e0::53) work (2026-11-08), without the
+kernel knowing about them: in kernel mode, the tun.Device tailscaled's
+TUN wrapper wraps is a real TUN device, `tailscale0-svc`, rather than a
+fake, and the Linux router sends just the routes to the service IPs
+there (`serviceTUN` in wgengine/router/osrouter), so netstack answers
+them as in TUN mode, and its replies go back to the OS through it.
+Nothing else is routed to it. `TestTSWGTailscaledMagicDNS` checks UDP
+and TCP queries to both service IPs.
 
 Other TODOs:
 
@@ -973,8 +982,9 @@ asked for it. tswg does it (2026-11-08):
 
 * ACLs: nftables (tailscaled already has nftables and iptables code;
   conntrack handles return traffic).
-* MagicDNS, peerapi, Tailscale SSH, Taildrop: kernel sockets on the
-  tailscale0 address.
+* peerapi, Tailscale SSH, Taildrop: kernel sockets on the tailscale0
+  address. MagicDNS: a route to a TUN device in userspace (see "Known
+  gaps in kernel mode").
 * TSMP: raw socket on IP protocol 99.
 * Subnet routers and exit nodes: kernel forwarding.
 
@@ -1189,8 +1199,9 @@ Everything else:
 - [x] Kernel mode: hybrid PQ handshakes (2026-11-08; implemented in
       tswg, `TestTSWGTailscaledHybridTUN`).
 - [x] Kernel mode: TSMP (`TestTSWGTailscaledTSMP`).
-- [ ] Kernel mode: MagicDNS and the other netstack-provided services
-      (deferred).
+- [x] Kernel mode: MagicDNS and the other services at the service IPs,
+      via a TUN device for just their routes
+      (`TestTSWGTailscaledMagicDNS`).
 - [x] Kernel mode: clear the session on MarkDevicePeerForHandshake
       (`TestTSWGTailscaledPeerRestart`).
 - [x] Kernel mode: event-driven everything, no polling
@@ -1203,14 +1214,20 @@ Everything else:
       likely with many peers), and the engine never closing the kernel
       data plane, leaving tailscale0 behind for a later TUN-mode
       tailscaled to trip over.
-- [ ] A natlab test with many peers (the key race only showed with
-      dozens), and one for switching between kernel and TUN mode.
-- [ ] Flake: in 1 of 4 natlab benchmark runs, after both nodes restarted
-      tailscaled into kernel mode at nearly the same time, the tunnel
-      didn't carry traffic for over 10 seconds (n1 had cleared its
-      session with n2, and the kernel endpoints looked direct). Restarting
-      one peer at a time (`TestTSWGTailscaledPeerRestart`) is fine.
-      Investigate.
+- [x] natlab tests for switching between kernel and TUN mode, on both
+      nodes at once or one after the other
+      (`TestTSWGTailscaledModeSwitch{,Rolling}`), and for restarting both
+      at once (`TestTSWGTailscaledBothRestart`).
+- [x] Flake: in 1 of 4 natlab benchmark runs (2026-11-07), after both
+      nodes restarted tailscaled into kernel mode, the tunnel didn't carry
+      traffic for over 10 seconds, with the kernel endpoints looking
+      direct. Not seen since the kernel mode private key race was fixed
+      (2026-11-08; it left a new kernel device without its key until a
+      later reconcile), in 29 rounds of the tests above, each with the
+      tunnel working on the first ping both ways.
+- [ ] Scale to a 50,000-node tailnet: memory per peer, in the module and
+      in tailscaled's kernel data plane, and no O(N) work per peer change
+      (netlink pushes, reconcile, allowedips).
 - [x] Fallback to wireguard-go when tswg is unavailable (module not
       loaded).
 - [ ] Fallback on version or feature mismatch between tailscaled and
