@@ -508,6 +508,11 @@ func (l *lab) setup(mode string, v6 bool) netip.Addr {
 			"addrs":       {tunnel4(i).String() + "/24," + tunnel6(i).String() + "/64"},
 			"allowed-ips": {tunnel4(j).String() + "/32," + tunnel6(j).String() + "/128"},
 		}
+		// TSWG_NAPI_THREADED (0 or 1) sets whether the kernel tunnels'
+		// NAPI runs in kthreads or softirq.
+		if v := os.Getenv("TSWG_NAPI_THREADED"); v != "" && mode != modeWGGo {
+			q.Set("napi-threaded", v)
+		}
 		if err := v.do("POST", "/setup?"+q.Encode(), nil); err != nil {
 			l.t.Fatalf("setting up %s: %v", mode, err)
 		}

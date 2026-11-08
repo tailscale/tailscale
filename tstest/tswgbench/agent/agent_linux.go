@@ -203,6 +203,8 @@ var (
 //	port         UDP listen port
 //	addrs        comma-separated CIDRs for wg0
 //	mtu          wg0's MTU (default 1280, Tailscale's)
+//	napi-threaded  if set, 0 or 1, written to wg0's sysfs "threaded"
+//	             (whether its NAPI runs in kthreads or softirq)
 //	route        a route to add, repeated: "PREFIX" (via wg0) or "PREFIX
 //	             via GATEWAY" (on the underlay, also in plain mode),
 //	             optionally followed by " mtu N" (which also sets the MSS
@@ -351,6 +353,11 @@ func setup(q map[string][]string) error {
 	}
 	if err := netlink.LinkSetUp(link); err != nil {
 		return err
+	}
+	if v := get("napi-threaded"); v != "" {
+		if err := os.WriteFile("/sys/class/net/"+tunnelDev+"/threaded", []byte(v), 0644); err != nil {
+			return fmt.Errorf("napi-threaded: %w", err)
+		}
 	}
 	return addRoutes(q["route"])
 }
