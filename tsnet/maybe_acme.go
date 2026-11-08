@@ -9,4 +9,17 @@ package tsnet
 // [Server.ListenTLS], and related cert-fetch paths work out of the box.
 // Build with the ts_omit_acme tag to omit it.
 
-import _ "tailscale.com/feature/acme"
+import (
+	"crypto/tls"
+
+	_ "tailscale.com/feature/acme"
+)
+
+// getCert is the GetCertificate function used by ListenTLS and ListenFunnel.
+func (s *Server) getCert(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+	lc, err := s.LocalClient()
+	if err != nil {
+		return nil, err
+	}
+	return lc.GetCertificate(hi)
+}
