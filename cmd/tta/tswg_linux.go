@@ -26,6 +26,7 @@ import (
 func init() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /tswg/load", tswgLoad)
+	mux.HandleFunc("POST /tswg/unload", tswgUnload)
 	mux.HandleFunc("POST /tswg/up", tswgUp)
 	mux.HandleFunc("POST /tswg/peer", tswgPeer)
 	mux.HandleFunc("GET /tswg/show", tswgShow)
@@ -47,6 +48,15 @@ func tswgLoad(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := tswg.LoadModule(image); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	io.WriteString(w, "OK\n")
+}
+
+// tswgUnload unloads the tswg kernel module, which deletes its devices.
+func tswgUnload(w http.ResponseWriter, r *http.Request) {
+	if err := unix.DeleteModule("tswg", 0); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

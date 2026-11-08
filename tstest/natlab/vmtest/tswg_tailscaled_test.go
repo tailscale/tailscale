@@ -28,6 +28,7 @@ type tswgTailscaled struct {
 	t     *testing.T
 	env   *vmtest.Env
 	nodes []*vmtest.Node
+	ko    []byte // the tswg.ko image
 }
 
 // newTSWGTailscaled boots two gokrazy VMs behind NATs of type nat with
@@ -41,7 +42,8 @@ func newTSWGTailscaled(t *testing.T, nat vnet.NAT) *tswgTailscaled {
 // tswgTailscaledOpts are options for newTSWGTailscaledOpts.
 type tswgTailscaledOpts struct {
 	env      []vnet.TailscaledEnv // more environment for both tailscaleds
-	tunNode2 bool                 // leave the second node in TUN mode (wireguard-go)
+	tunNodes int                  // how many nodes, from the last, to leave in TUN mode (wireguard-go)
+	sameLAN  bool                 // put both nodes on one LAN, behind one NAT
 }
 
 // newTSWGTailscaledOpts is newTSWGTailscaled with options.
@@ -49,12 +51,20 @@ func newTSWGTailscaledOpts(t *testing.T, nat vnet.NAT, opts tswgTailscaledOpts) 
 	dir := tswgDir(t)
 	ko := buildTSWGForGokrazy(t, dir)
 
-	f := &tswgTailscaled{t: t, env: vmtest.New(t)}
+	f := &tswgTailscaled{t: t, env: vmtest.New(t), ko: ko}
+	var lan *vnet.Network
+	if opts.sameLAN {
+		lan = f.env.AddNetwork("2.1.1.1", "192.168.1.1/24", nat)
+	}
 	for i := range 2 {
-		nodeOpts := []any{
-			f.env.AddNetwork(
+		net := lan
+		if net == nil {
+			net = f.env.AddNetwork(
 				fmt.Sprintf("2.%d.%d.%d", i+1, i+1, i+1),
-				fmt.Sprintf("192.168.%d.1/24", i+1), nat),
+				fmt.Sprintf("192.168.%d.1/24", i+1), nat)
+		}
+		nodeOpts := []any{
+			net,
 			vmtest.OS(vmtest.Gokrazy),
 			vnet.TailscaledEnv{Key: "TS_DEBUG_TSWG", Value: "1"},
 		}
@@ -65,10 +75,7 @@ func newTSWGTailscaledOpts(t *testing.T, nat vnet.NAT, opts tswgTailscaledOpts) 
 	}
 	f.env.Start()
 
-	kernelNodes := f.nodes
-	if opts.tunNode2 {
-		kernelNodes = f.nodes[:1]
-	}
+	kernelNodes := f.nodes[:len(f.nodes)-opts.tunNodes]
 	for _, n := range kernelNodes {
 		tta(t, n, "POST", "/tswg/load", ko)
 		f.env.RestartTailscaled(n)
@@ -340,7 +347,7 @@ var hybridEnv = vnet.TailscaledEnv{Key: "TS_DEBUG_FORCE_HYBRID_HANDSHAKES", Valu
 func TestTSWGTailscaledHybridTUN(t *testing.T) {
 	f := newTSWGTailscaledOpts(t, vnet.EasyNAT, tswgTailscaledOpts{
 		env:      []vnet.TailscaledEnv{hybridEnv},
-		tunNode2: true,
+		tunNodes: 1,
 	})
 	n1, n2 := f.nodes[0], f.nodes[1]
 	ip1, ip2 := f.ip(n1), f.ip(n2)
