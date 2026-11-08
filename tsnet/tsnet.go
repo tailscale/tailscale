@@ -208,6 +208,7 @@ import (
 	"tailscale.com/logtail/filch"
 	"tailscale.com/net/memnet"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netx"
 	"tailscale.com/net/proxymux"
 	"tailscale.com/net/socks5"
 	"tailscale.com/net/tsdial"
@@ -324,6 +325,17 @@ type Server struct {
 	// If empty, it defaults to the TS_CONTROL_URL environment variable.
 	// If that is also empty, the Tailscale default is used.
 	ControlURL string
+
+	// SystemDial, if non-nil, replaces the default dialer for
+	// connections that go over the host network rather than the
+	// tailnet, such as those to the control server. It is not used for
+	// DERP or WireGuard traffic. Hostnames may already be resolved to
+	// IP addresses before SystemDial is called.
+	//
+	// This field must be set before calling Start. If it is not set,
+	// host network dials use a [netns.Dialer] constructed from the server's
+	// network monitor, if available; otherwise host network dials fail.
+	SystemDial netx.DialFunc
 
 	// RunWebClient, if true, runs a client for managing this node over
 	// its Tailscale interface on port 5252.
@@ -907,6 +919,7 @@ func (s *Server) start() (reterr error) {
 
 	s.dialer = &tsdial.Dialer{Logf: tsLogf} // mutated below (before used)
 	s.dialer.SetBus(sys.Bus.Get())
+	s.dialer.SetSystemDialer(s.SystemDial)
 	// LookupIP handles names not resolved by the MagicDNS hook.
 	if buildfeatures.HasDNS {
 		s.dialer.SetUserDialResolver(s.userDialResolve)

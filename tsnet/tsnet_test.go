@@ -53,6 +53,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
+	"tailscale.com/net/memnet"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
@@ -834,6 +835,42 @@ func TestTailscaleIPs(t *testing.T) {
 	if !(upIp4 == sIp4 && upIp6 == sIp6) {
 		t.Errorf("s1.TailscaleIPs returned a different result than S1.Up, (%s, %s) != (%s, %s)",
 			sIp4, upIp4, sIp6, upIp6)
+	}
+}
+
+// TestSystemDial verifies that Server.SystemDial carries the control
+// connection, by serving control only on an in-memory listener.
+func TestSystemDial(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	_, control := startControl(t)
+
+	// Nothing listens on this host port, so control is only reachable
+	// via SystemDial.
+	const controlAddr = "127.0.0.1:1"
+	ln := memnet.Listen(controlAddr)
+	defer ln.Close()
+	go http.Serve(ln, control)
+
+	s := &Server{
+		Dir:        t.TempDir(),
+		ControlURL: "http://" + controlAddr,
+		Hostname:   "s1",
+		Store:      new(mem.Store),
+		Ephemeral:  true,
+		SystemDial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if addr == controlAddr {
+				return ln.Dial(ctx, network, addr)
+			}
+			var d net.Dialer
+			return d.DialContext(ctx, network, addr)
+		},
+	}
+	defer s.Close()
+
+	if _, err := s.Up(ctx); err != nil {
+		t.Fatal(err)
 	}
 }
 
