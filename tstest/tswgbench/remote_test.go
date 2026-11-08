@@ -71,11 +71,17 @@ func shellQuote(s string) string {
 
 // remoteSetupScript stops any previous agent and unloads the module, builds
 // tswg.ko from ~/tswg against the running kernel with the compiler that
-// built it, and starts the agent.
+// built it, and starts the agent, with the environment in $AGENT_ENV (see
+// TSWG_AGENT_ENV).
 const remoteSetupScript = `
 set -e
 sudo systemctl stop tswgbench-agent 2>/dev/null || true
 sudo systemctl reset-failed tswgbench-agent 2>/dev/null || true
+# Wait for systemd to unload the old unit, or starting the new one fails.
+for i in $(seq 50); do
+	systemctl list-units --all --quiet tswgbench-agent.service | grep -q . || break
+	sleep 0.1
+done
 sudo ip link del wg0 2>/dev/null || true
 sudo rmmod tswg 2>/dev/null || true
 cc=$(grep -o 'gcc-[0-9]*' /proc/version | head -1)
@@ -85,7 +91,9 @@ ko=$(PATH=$HOME/tswg-cc:$PATH ~/tswg/scripts/build.sh "/lib/modules/$(uname -r)/
 	{ tail -40 ~/tswg-build.log >&2; exit 1; }
 sudo cp "$ko" /tswg.ko
 sudo dmesg -C
-sudo systemd-run --quiet --unit=tswgbench-agent --collect "$HOME/tswgbench-agent"
+setenv=
+for kv in $AGENT_ENV; do setenv="$setenv --setenv=$kv"; done
+sudo systemd-run --quiet --unit=tswgbench-agent --collect $setenv "$HOME/tswgbench-agent"
 uname -r
 `
 
@@ -172,7 +180,9 @@ func newRemoteLab(t testing.TB) *lab {
 				if _, err := h.ssh("cat > ~/tswgbench-agent.new && chmod +x ~/tswgbench-agent.new && mv ~/tswgbench-agent.new ~/tswgbench-agent", remoteArtifacts.agent); err != nil {
 					return err
 				}
-				kernel, err := h.ssh(remoteSetupScript, nil)
+				// TSWG_AGENT_ENV (space-separated K=V) is environment
+				// for the agents, such as GOGC for wireguard-go.
+				kernel, err := h.ssh("AGENT_ENV='"+os.Getenv("TSWG_AGENT_ENV")+"'\n"+remoteSetupScript, nil)
 				if err != nil {
 					return err
 				}
