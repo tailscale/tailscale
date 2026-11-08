@@ -53,6 +53,12 @@ struct crypt_queue {
 	struct ptr_ring ring;
 	struct multicore_worker __percpu *worker;
 	int last_cpu;
+	/* TSWG: the workers' CPUs; see tswg_crypt_recruit_cpu */
+	atomic_t tswg_active; /* workers draining now */
+	unsigned int tswg_peak; /* most draining at once, this window */
+	unsigned int tswg_width; /* CPUs to recruit from */
+	unsigned int tswg_next; /* the next of them to recruit */
+	unsigned long tswg_width_jiffy; /* when tswg_width was last set */
 };
 
 struct prev_queue {

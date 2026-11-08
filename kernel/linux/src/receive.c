@@ -932,7 +932,7 @@ void wg_packet_decrypt_worker(struct work_struct *work)
 	struct crypt_queue *queue = w->ptr;
 	struct sk_buff *skb;
 
-	WRITE_ONCE(w->tswg_busy, true); /* TSWG */
+	tswg_crypt_worker_start(w, queue); /* TSWG */
 again:
 	while ((skb = ptr_ring_consume_bh(&queue->ring)) != NULL) {
 		enum packet_state state =
@@ -963,8 +963,11 @@ again:
  * But that's one CPU per peer, which a single fast peer outruns: one TCP
  * stream through a tunnel fell from 12.2 to 6.6 Gbps in the lab. So a peer
  * goes the parallel way while it's receiving more than rx_inline_mbps
- * (module parameter; 0 for never inline), over TSWG_RX_WINDOW (a jiffy was
- * too short: GRO's bursts put peers of a router averaging 2 Gbps over 4),
+ * (module parameter, default 1000; 0 for never inline), over TSWG_RX_WINDOW
+ * (a jiffy was too short: GRO's bursts put peers of a router averaging 2
+ * Gbps over 4). At 4000, one HTTP-like stream between big hosts got 2.5
+ * Gbps to wireguard-go's 3.3, and a crawler of 37 peers 76 Gbps; at 1000,
+ * 2.9 and 89, with routers and servers unchanged.
  * and for TSWG_RX_PARALLEL_FOR after (switching back and forth often cost
  * more than either way), and back only once that way has delivered all it
  * had, so that switching doesn't reorder the peer's packets; see
@@ -974,7 +977,7 @@ again:
 #define TSWG_RX_WINDOW max(HZ / 100, 1)
 #define TSWG_RX_PARALLEL_FOR (HZ / 10)
 
-static unsigned int tswg_rx_inline_mbps = 4000;
+static unsigned int tswg_rx_inline_mbps = 1000;
 module_param_named(rx_inline_mbps, tswg_rx_inline_mbps, uint, 0644);
 MODULE_PARM_DESC(rx_inline_mbps, "receive a peer's packets where they arrive while it's below this rate (0: never)");
 

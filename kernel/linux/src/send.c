@@ -870,7 +870,7 @@ void wg_packet_encrypt_worker(struct work_struct *work)
 	struct crypt_queue *queue = w->ptr;
 	struct sk_buff *first;
 
-	WRITE_ONCE(w->tswg_busy, true); /* TSWG */
+	tswg_crypt_worker_start(w, queue); /* TSWG */
 again:
 	while ((first = ptr_ring_consume_bh(&queue->ring)) != NULL) {
 		enum packet_state state = PACKET_STATE_CRYPTED;
@@ -972,6 +972,39 @@ static int tswg_tx_inline = 1;
 module_param_named(tx_inline, tswg_tx_inline, int, 0644);
 MODULE_PARM_DESC(tx_inline, "encrypt and send where packets arrive: 0 never, 1 forwarded ones, 2 always");
 
+/*
+ * TSWG: a local socket's bulk (GSO) sends to a peer sending under
+ * tx_inline_mbps go inline too. Handing them to a crypt worker costs each
+ * burst a wakeup and a handoff, which for request and response traffic is
+ * on every response's critical path: one HTTP-like stream between two big
+ * hosts got 2.5 Gbps to wireguard-go's 3.3 that way, 3.0 inline. But one
+ * CPU can't keep up with a fast stream (7.2 -> 6.2 Gbps), so above the
+ * rate, over TSWG_TX_WINDOW, the workers share it. 0 turns it off.
+ */
+static unsigned int tswg_tx_inline_mbps = 2000;
+module_param_named(tx_inline_mbps, tswg_tx_inline_mbps, uint, 0644);
+MODULE_PARM_DESC(tx_inline_mbps, "encrypt local bulk sends inline to a peer sending below this rate (0: never)");
+
+#define TSWG_TX_WINDOW max(HZ / 100, 1)
+
+/*
+ * tswg_tx_slow counts len bytes sent to peer and reports whether it's
+ * sending below tx_inline_mbps.
+ */
+static bool tswg_tx_slow(struct wg_peer *peer, unsigned int len)
+{
+	unsigned int mbps = READ_ONCE(tswg_tx_inline_mbps);
+	unsigned long now = jiffies;
+
+	if (now - READ_ONCE(peer->tswg_tx_jiffy) >= TSWG_TX_WINDOW) {
+		WRITE_ONCE(peer->tswg_tx_jiffy, now);
+		WRITE_ONCE(peer->tswg_tx_bytes, 0);
+	}
+	WRITE_ONCE(peer->tswg_tx_bytes, READ_ONCE(peer->tswg_tx_bytes) + len);
+	return mbps && (u64)READ_ONCE(peer->tswg_tx_bytes) * 8 * HZ <=
+			       (u64)mbps * 1000000 * TSWG_TX_WINDOW;
+}
+
 bool tswg_xmit_now(struct wg_peer *peer, struct sk_buff_head *packets)
 {
 	int mode = READ_ONCE(tswg_tx_inline);
@@ -982,11 +1015,19 @@ bool tswg_xmit_now(struct wg_peer *peer, struct sk_buff_head *packets)
 
 	if (!mode)
 		return false;
-	if (mode == 1 && packets->next->sk &&
-	    (!skb_queue_is_last(packets, packets->next) ||
-	     skb_is_gso(packets->next) ||
-	     atomic_read(&peer->tx_queue.count)))
-		return false;
+	if (mode == 1 && packets->next->sk) {
+		unsigned int len = 0;
+		bool lone;
+
+		skb_queue_walk(packets, skb)
+			len += skb->len;
+		lone = skb_queue_is_last(packets, packets->next) &&
+		       !skb_is_gso(packets->next);
+		/* Either way, not past what's on its way through the workers. */
+		if ((!tswg_tx_slow(peer, len) && !lone) ||
+		    atomic_read(&peer->tx_queue.count))
+			return false;
+	}
 	/* Not past packets waiting for a handshake, nor without a key. */
 	if (!skb_queue_empty_lockless(&peer->staged_packet_queue))
 		return false;

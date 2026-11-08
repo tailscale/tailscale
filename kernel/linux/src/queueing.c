@@ -6,6 +6,11 @@
 #include "queueing.h"
 #include <linux/skb_array.h>
 
+/* TSWG: recruit_factor scales the backlog that recruits a crypt worker. */
+unsigned int tswg_recruit_factor = 16;
+module_param_named(recruit_factor, tswg_recruit_factor, uint, 0644);
+MODULE_PARM_DESC(recruit_factor, "entries waiting per draining crypt worker, times the queue's backlog, to recruit another");
+
 struct multicore_worker __percpu *
 wg_packet_percpu_multicore_worker_alloc(work_func_t function, void *ptr)
 {

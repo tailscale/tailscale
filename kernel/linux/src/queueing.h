@@ -159,6 +159,7 @@ static inline int wg_cpumask_next_online(int *last_cpu)
  * are lists of packets, and decrypt entries can be packets merged by GRO).
  */
 #define TSWG_PACKET_BACKLOG 16
+extern unsigned int tswg_recruit_factor; /* see tswg_crypt_kick */
 #define TSWG_BATCH_BACKLOG 1
 
 /*
@@ -176,6 +177,39 @@ static inline unsigned int tswg_crypt_backlog(struct ptr_ring *r)
 static inline bool tswg_worker_active(struct multicore_worker *w)
 {
 	return READ_ONCE(w->tswg_busy) || work_pending(&w->work);
+}
+
+/*
+ * TSWG: tswg_crypt_recruit_cpu returns the CPU of the next worker to
+ * recruit: one of the tswg_width CPUs after the caller's, in turn. Upstream
+ * recruits the next CPU's worker every time, round robin, so on a 128-CPU
+ * host, one 7 Gbps tunnel's work spread over all 128, each a few percent
+ * busy and paying the wakeups, IPIs and cold caches of that, for up to 2x
+ * wireguard-go's CPU per GB. tswg_width is twice the most workers that
+ * were draining at once in the last TSWG_WIDTH_WINDOW, plus one (and at
+ * least 2), so it grows as fast as demand does, and shrinks after.
+ */
+#define TSWG_WIDTH_WINDOW max(HZ / 100, 1)
+
+static inline int tswg_crypt_recruit_cpu(struct crypt_queue *queue)
+{
+	unsigned int n = num_online_cpus(), self = raw_smp_processor_id();
+	unsigned int width, k, idx;
+	unsigned long now = jiffies;
+
+	if (n <= 1)
+		return self;
+	if (time_after_eq(now, READ_ONCE(queue->tswg_width_jiffy) + TSWG_WIDTH_WINDOW)) {
+		WRITE_ONCE(queue->tswg_width, 2 * READ_ONCE(queue->tswg_peak) + 1);
+		WRITE_ONCE(queue->tswg_peak, atomic_read(&queue->tswg_active));
+		WRITE_ONCE(queue->tswg_width_jiffy, now);
+	}
+	width = clamp(READ_ONCE(queue->tswg_width), 2U, n - 1);
+	k = READ_ONCE(queue->tswg_next) + 1;
+	WRITE_ONCE(queue->tswg_next, k);
+	/* The caller's index among the online CPUs. */
+	idx = bitmap_weight(cpumask_bits(cpu_online_mask), self);
+	return cpumask_nth((idx + 1 + k % width) % n, cpu_online_mask);
 }
 
 /*
@@ -201,12 +235,21 @@ static inline void tswg_crypt_kick(struct crypt_queue *queue,
 			queue_work_on(cpu, wq, &w->work);
 			return;
 		}
-		if (tswg_crypt_backlog(&queue->ring) <= backlog)
+		/*
+		 * TSWG: recruit only when more than recruit_factor times
+		 * backlog is waiting for each worker draining. GRO hands us
+		 * its packets in bursts, and recruiting a worker for each one
+		 * spread one 7 Gbps tunnel over 33 CPUs of a 128-CPU host,
+		 * each 15% busy, mostly waking and going back to sleep.
+		 */
+		if (tswg_crypt_backlog(&queue->ring) <=
+		    min_t(unsigned int, backlog * READ_ONCE(tswg_recruit_factor) *
+			  max_t(int, atomic_read(&queue->tswg_active), 1),
+			  queue->ring.size / 4))
 			return;
 	}
-	cpu = wg_cpumask_next_online(&queue->last_cpu);
-	if (cpu == raw_smp_processor_id() && num_online_cpus() > 1)
-		cpu = wg_cpumask_next_online(&queue->last_cpu);
+	cpu = tswg_crypt_recruit_cpu(queue);
+	WRITE_ONCE(queue->last_cpu, cpu);
 	w = per_cpu_ptr(queue->worker, cpu);
 	if (!tswg_worker_active(w))
 		queue_work_on(cpu, wq, &w->work);
@@ -222,10 +265,27 @@ static inline bool tswg_crypt_worker_idle(struct multicore_worker *w,
 {
 	WRITE_ONCE(w->tswg_busy, false);
 	smp_mb(); /* clear tswg_busy before checking the ring; see above */
-	if (likely(__ptr_ring_empty(&queue->ring)))
+	if (likely(__ptr_ring_empty(&queue->ring))) {
+		atomic_dec(&queue->tswg_active);
 		return true;
+	}
 	WRITE_ONCE(w->tswg_busy, true);
 	return false;
+}
+
+/*
+ * tswg_crypt_worker_start is called by a crypt worker as it starts to
+ * drain queue's ring; tswg_crypt_worker_idle undoes it.
+ */
+static inline void tswg_crypt_worker_start(struct multicore_worker *w,
+					   struct crypt_queue *queue)
+{
+	unsigned int n;
+
+	WRITE_ONCE(w->tswg_busy, true);
+	n = atomic_inc_return(&queue->tswg_active);
+	if (n > READ_ONCE(queue->tswg_peak))
+		WRITE_ONCE(queue->tswg_peak, n);
 }
 
 /*

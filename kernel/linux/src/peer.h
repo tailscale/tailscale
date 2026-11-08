@@ -74,6 +74,9 @@ struct wg_peer {
 	spinlock_t tswg_tx_lock;
 	bool tswg_tx_more; /* tx_queue may have more to send */
 	/* TSWG: bytes received since jiffy tswg_rx_jiffy; see tswg_rx_inline_ok */
+	/* TSWG: local bytes sent since jiffy tswg_tx_jiffy; see tswg_tx_slow */
+	unsigned long tswg_tx_jiffy;
+	unsigned int tswg_tx_bytes;
 	unsigned long tswg_rx_jiffy;
 	unsigned int tswg_rx_bytes;
 	unsigned long tswg_rx_parallel_until; /* jiffies; see tswg_rx_path */

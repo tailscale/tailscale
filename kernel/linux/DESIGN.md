@@ -242,7 +242,17 @@ the host's CPU-s/GB:
   (4.1). And one fetch stream gets 2.7 Gbps to wireguard-go's 3.5. On a
   128-CPU host, tswg's parallel paths (crypt workers, a fast peer's
   receive) spread one tunnel's work over far more CPUs than 7 Gbps
-  needs; see the TODO list.
+  needs. **Fixed by changes 17-18** (same day, same pair, interleaved
+  runs, Gbps and CPU-s/GB, sender / receiver):
+
+  | load | tswg | wireguard-go | tswg/wggo CPU |
+  |---|---|---|---|
+  | bulk, 1 stream | 7.2; 2.1 / 2.6 | 7.1; 4.1 / 4.9 | 0.52x / 0.52x |
+  | bulk, 16 | 7.3; 3.1 / 4.2 | 7.1; 4.2 / 5.3 | 0.74x / 0.79x |
+  | bulk, 128 | 7.4; 4.1 / 5.9 | 7.4; 4.4 / 5.8 | 0.94x / 1.02x |
+  | fetch, 1 stream | 3.0; 3.4 | 3.3; 5.5 | 0.63x (0.91x the throughput) |
+  | fetch, 16 | 7.3; 3.0 | 7.2; 3.7 | 0.80x |
+  | fetch, 128 | 7.2; 3.9 | 6.9; 4.3 | 0.91x |
 
 tswg in the same sweep (after a reboot, before change 16 below, so on
 the unlucky NIC queue spread described there) reached 7.3, 29, 71 and
@@ -256,7 +266,15 @@ each boot, and with only 37 peers' UDP flows, one boot spread them over
 results more than any of the work after change 12 (uploads 68 -> 28
 Gbps, serving 133 -> 99, crawling 81 -> 42), and doesn't affect
 wireguard-go's, which don't reach the NIC's limits. Benchmarks with few
-peers should check the spread (`ethtool -S`'s `queue_N_rx_cnt`).
+peers should check the spread (`ethtool -S`'s `queue_N_rx_cnt`); change
+19 rebalances it.
+
+After changes 17-19 (another boot; `TSWG_SUBNET_RSS_BALANCE` had
+rebalanced the router's NIC): upload 74, fetch 70, serve 131 and crawl
+97 Gbps, at 4.8, 4.3, 3.3 and 6.7 CPU-s/GB. Squeezing the router's RSS
+table onto 11 queues (`ethtool -X equal 11`, like the unlucky boot),
+upload fell to 64 and crawl to 72; balancing brought them back to 72
+and 78.
 
 ### What we inherit from upstream WireGuard
 
@@ -457,6 +475,47 @@ this order. Each step's throughput is bulk TCP, 1 stream, IPv4, 4 vCPUs.
    and a peer's home is the least loaded of 8 spread from its hash,
    kept while under `rx_steer_busy`. On the unlucky boot's 11 queues:
    uploads 28 -> 44 Gbps, crawling 42 -> 51, serving 99 -> 101.
+17. Fewer crypt workers for a tunnel (2026-11-08). One 7 Gbps tunnel on
+   a 128-CPU host had its crypt work on 33 CPUs, each about 15% busy,
+   mostly waking up and going back to sleep, with twice wireguard-go's
+   context switches: up to 1.6x its CPU per GB. A worker was recruited
+   whenever more than a batch's worth (one GRO packet) waited, which
+   GRO's bursts always did. Now another is recruited only when more
+   than `recruit_factor` (default 16) times that waits for each worker
+   draining (but never more than a quarter of the ring), and from a
+   compact set of CPUs after the caller's, twice as many as were
+   draining at once in the last 10ms (`tswg_crypt_recruit_cpu`), rather
+   than round robin over all CPUs. Bulk, 16 streams: sender 4.4 -> 2.9
+   CPU-s/GB, receiver 7.1 -> 4.2, at the same throughput. Tried and not
+   kept: crypt workers polling for 20-100us before sleeping (more CPU);
+   sorting a peer's decrypted packets by flow before GRO (GRO already
+   merged better than wireguard-go's: 38 TCP segments per MB to its
+   50); running the peer's NAPI straight from the decrypt worker.
+18. Inline sends and receives for slow peers. A local socket's bulk
+   (GSO) sends to a peer sending under `tx_inline_mbps` (default 2000)
+   over 10ms are encrypted and sent inline, as forwarded packets are
+   (change 12), rather than handed to a worker: for request/response
+   traffic, that handoff is on every response's critical path. And
+   `rx_inline_mbps` is now 1000 (from 4000), so a peer receiving over
+   that goes the parallel way sooner. One HTTP-like stream between big
+   hosts: 2.5 -> 3.0 Gbps (wireguard-go 3.3); crawling 37 peers, 76 ->
+   89 (at 5.9 -> 7.1 CPU-s/GB); routers and servers unchanged. Not
+   TCP small queues: without `tswg_move_owner`, the stream was no
+   faster.
+19. Balancing the NIC's RSS table (tailscale.com
+   `wgengine/tswg/rss`). With few peers, the RSS hash key decides how
+   many queues their flows get (change 16's boots: 11 or 23 of 32), and
+   the busiest queues, at ENA's per-queue packet rate limit (about
+   700k/s), cap the host. ENA's hash couldn't be reproduced from the key
+   and table it reports (no variant of Toeplitz on the 2- or 4-tuple
+   matched), so `rss.Balance` measures: per-queue packet rates from the
+   driver's counters, then each busy queue's table entries' loads by
+   pointing them at idle queues for 300ms, then a bin-packing of the
+   entries onto the queues. Entries carry several flows (37 flows used
+   19 of 128 entries), so first it tries 8 random hash keys with an even
+   table, keeping the one whose busiest queue is lightest. Each move can
+   reorder a few of a flow's packets. The bench agent's
+   `/rss-balance` runs it; tailscaled doesn't yet (see the TODO list).
 
 The lean harness's VMs have guest USO off (decided 2026-11-07): with it,
 the host hands VM-to-VM UDP GSO packets to the receiving guest still
@@ -1505,16 +1564,15 @@ Performance (the primary motivation; see "Performance"):
 - [ ] Forwarded packets' transmit could steer like received ones
       (change 15) when the NIC's CPUs are busy, instead of RPS: fetches
       through a 128-CPU router with 32 NIC queues gained 13% from RPS.
-- [ ] One tunnel on a big host: tswg uses up to 2x wireguard-go's CPU per
-      GB at EC2's per-flow limit, more with more streams, and one fetch
-      stream gets 0.77x its throughput (see "wireguard-go at its best").
-      The crypt workers and a fast peer's parallel receive spread over
-      many more CPUs than the rate needs; recruit fewer, and look at
-      request/response latency.
-- [ ] Few peers on a NIC with RSS: the random hash key decides how many
-      queues they get (11 or 23 of 32, on two boots with 37 peers), and
-      so tswg's throughput; steering helps past the NIC, but not the
-      queues themselves.
+- [x] One tunnel on a big host: tswg used up to 2x wireguard-go's CPU
+      per GB, and one fetch stream got 0.77x its throughput; now
+      0.52-1.02x, and 0.91x (changes 17-18).
+- [x] Few peers on a NIC with RSS: the random hash key decided how many
+      queues they got; `rss.Balance` (change 19) rebalances.
+- [ ] tailscaled: run `rss.Balance` when the kernel data plane is busy
+      and its NIC's queues are uneven (needs CAP_NET_ADMIN, which it
+      has), at most every minute or so, since each pass moves flows.
+- [ ] One request/response stream is still 0.91x wireguard-go's.
 - [ ] Page zeroing (`init_on_alloc`, on in Ubuntu's kernels) is 5-13% of
       a big host's CPU, for pages we fill entirely: a page pool for the
       encrypted and decrypted packets' pages would recycle them unzeroed.
