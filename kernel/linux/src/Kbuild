@@ -17,5 +17,6 @@ tswg-y += peerlookup.o
 tswg-y += allowedips.o
 tswg-y += ratelimiter.o
 tswg-y += cookie.o
+tswg-y += mlkem.o
 tswg-y += netlink.o generated/netlink.o
 obj-m := tswg.o

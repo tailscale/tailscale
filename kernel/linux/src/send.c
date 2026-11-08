@@ -19,9 +19,51 @@
 #include <net/udp.h>
 #include <net/sock.h>
 
+/*
+ * TSWG: tswg_hybrid_initiation and tswg_hybrid_response lay out a hybrid
+ * handshake message, of which noise.c filled in the encrypted_kem field
+ * and the classic message src, from src; see wg_noise_handshake_*. If
+ * retry, they set TSWG_MESSAGE_RETRY, as wireguard-go does.
+ */
+static void tswg_hybrid_initiation(struct message_handshake_initiation_hybrid *dst,
+				   const struct message_handshake_initiation *src,
+				   bool retry)
+{
+	dst->header.type = src->header.type;
+	if (retry)
+		dst->header.type |= cpu_to_le32(TSWG_MESSAGE_RETRY);
+	dst->sender_index = src->sender_index;
+	memcpy(dst->unencrypted_ephemeral, src->unencrypted_ephemeral,
+	       sizeof(dst->unencrypted_ephemeral));
+	memcpy(dst->encrypted_static, src->encrypted_static,
+	       sizeof(dst->encrypted_static));
+	memcpy(dst->encrypted_timestamp, src->encrypted_timestamp,
+	       sizeof(dst->encrypted_timestamp));
+}
+
+static void tswg_hybrid_response(struct message_handshake_response_hybrid *dst,
+				 const struct message_handshake_response *src,
+				 bool retry)
+{
+	dst->header.type = src->header.type;
+	if (retry)
+		dst->header.type |= cpu_to_le32(TSWG_MESSAGE_RETRY);
+	dst->sender_index = src->sender_index;
+	dst->receiver_index = src->receiver_index;
+	memcpy(dst->unencrypted_ephemeral, src->unencrypted_ephemeral,
+	       sizeof(dst->unencrypted_ephemeral));
+	memcpy(dst->encrypted_nothing, src->encrypted_nothing,
+	       sizeof(dst->encrypted_nothing));
+}
+
 static void wg_packet_send_handshake_initiation(struct wg_peer *peer)
 {
 	struct message_handshake_initiation packet;
+	/* TSWG: the message sent, which for hybrid handshakes is in hyb. */
+	struct message_handshake_initiation_hybrid *hyb;
+	void *msg = &packet;
+	size_t len = sizeof(packet);
+	bool hybrid;
 
 	if (!wg_birthdate_has_expired(atomic64_read(&peer->last_sent_handshake),
 				      REKEY_TIMEOUT))
@@ -32,16 +74,27 @@ static void wg_packet_send_handshake_initiation(struct wg_peer *peer)
 			    peer->device->dev->name, peer->internal_id,
 			    &peer->endpoint.addr);
 
-	if (wg_noise_handshake_create_initiation(&packet, &peer->handshake)) {
-		wg_cookie_add_mac_to_packet(&packet, sizeof(packet), peer);
+	hyb = kmalloc(sizeof(*hyb), GFP_KERNEL);
+	if (!hyb)
+		return;
+	if (wg_noise_handshake_create_initiation(&packet, hyb->encrypted_kem,
+						 &hybrid, &peer->handshake)) {
+		if (hybrid) {
+			/* timer_handshake_attempts counts retries. */
+			tswg_hybrid_initiation(hyb, &packet,
+					       peer->timer_handshake_attempts);
+			msg = hyb;
+			len = sizeof(*hyb);
+		}
+		wg_cookie_add_mac_to_packet(msg, len, peer);
 		wg_timers_any_authenticated_packet_traversal(peer);
 		wg_timers_any_authenticated_packet_sent(peer);
 		atomic64_set(&peer->last_sent_handshake,
 			     ktime_get_coarse_boottime_ns());
-		wg_socket_send_buffer_to_peer(peer, &packet, sizeof(packet),
-					      HANDSHAKE_DSCP);
+		wg_socket_send_buffer_to_peer(peer, msg, len, HANDSHAKE_DSCP);
 		wg_timers_handshake_initiated(peer);
 	}
+	kfree(hyb);
 }
 
 void wg_packet_handshake_send_worker(struct work_struct *work)
@@ -83,17 +136,31 @@ out:
 	rcu_read_unlock_bh();
 }
 
-void wg_packet_send_handshake_response(struct wg_peer *peer)
+void wg_packet_send_handshake_response(struct wg_peer *peer, bool retry)
 {
 	struct message_handshake_response packet;
+	/* TSWG: as in wg_packet_send_handshake_initiation. */
+	struct message_handshake_response_hybrid *hyb;
+	void *msg = &packet;
+	size_t len = sizeof(packet);
+	bool hybrid;
 
 	atomic64_set(&peer->last_sent_handshake, ktime_get_coarse_boottime_ns());
 	net_dbg_ratelimited("%s: Sending handshake response to peer %llu (%pISpfsc)\n",
 			    peer->device->dev->name, peer->internal_id,
 			    &peer->endpoint.addr);
 
-	if (wg_noise_handshake_create_response(&packet, &peer->handshake)) {
-		wg_cookie_add_mac_to_packet(&packet, sizeof(packet), peer);
+	hyb = kmalloc(sizeof(*hyb), GFP_KERNEL);
+	if (!hyb)
+		return;
+	if (wg_noise_handshake_create_response(&packet, hyb->encrypted_kem,
+					       &hybrid, &peer->handshake)) {
+		if (hybrid) {
+			tswg_hybrid_response(hyb, &packet, retry);
+			msg = hyb;
+			len = sizeof(*hyb);
+		}
+		wg_cookie_add_mac_to_packet(msg, len, peer);
 		if (wg_noise_handshake_begin_session(&peer->handshake,
 						     &peer->keypairs)) {
 			wg_timers_session_derived(peer);
@@ -101,11 +168,11 @@ void wg_packet_send_handshake_response(struct wg_peer *peer)
 			wg_timers_any_authenticated_packet_sent(peer);
 			atomic64_set(&peer->last_sent_handshake,
 				     ktime_get_coarse_boottime_ns());
-			wg_socket_send_buffer_to_peer(peer, &packet,
-						      sizeof(packet),
+			wg_socket_send_buffer_to_peer(peer, msg, len,
 						      HANDSHAKE_DSCP);
 		}
 	}
+	kfree(hyb);
 }
 
 void wg_packet_send_handshake_cookie(struct wg_device *wg,

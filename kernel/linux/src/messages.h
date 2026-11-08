@@ -10,6 +10,8 @@
 #include <crypto/chacha20poly1305.h>
 #include <crypto/blake2s.h>
 
+#include "mlkem.h" /* TSWG */
+
 #include <linux/kernel.h>
 #include <linux/param.h>
 #include <linux/skbuff.h>
@@ -94,6 +96,41 @@ struct message_handshake_response {
 	u8 encrypted_nothing[noise_encrypted_len(0)];
 	struct message_macs macs;
 };
+
+/*
+ * TSWG: hybrid post-quantum handshakes (Noise_IKhfs+psk2_25519+MLKEM768),
+ * as in Tailscale's wireguard-go. The initiation carries an ephemeral
+ * ML-KEM-768 encapsulation key, and the response a ciphertext for it,
+ * each encrypted, after the ephemeral key. Both peers must agree to use
+ * them; there is no fallback. See noise.c.
+ */
+struct message_handshake_initiation_hybrid {
+	struct message_header header;
+	__le32 sender_index;
+	u8 unencrypted_ephemeral[NOISE_PUBLIC_KEY_LEN];
+	u8 encrypted_kem[noise_encrypted_len(TSWG_MLKEM768_EK_LEN)];
+	u8 encrypted_static[noise_encrypted_len(NOISE_PUBLIC_KEY_LEN)];
+	u8 encrypted_timestamp[noise_encrypted_len(NOISE_TIMESTAMP_LEN)];
+	struct message_macs macs;
+};
+
+struct message_handshake_response_hybrid {
+	struct message_header header;
+	__le32 sender_index;
+	__le32 receiver_index;
+	u8 unencrypted_ephemeral[NOISE_PUBLIC_KEY_LEN];
+	u8 encrypted_kem[noise_encrypted_len(TSWG_MLKEM768_CT_LEN)];
+	u8 encrypted_nothing[noise_encrypted_len(0)];
+	struct message_macs macs;
+};
+
+/*
+ * TSWG: wireguard-go sets TSWG_MESSAGE_RETRY in the type of hybrid
+ * handshake messages that are retries (a response is a retry if its
+ * initiation was), as a hint to send them over more reliable paths. The
+ * MACs cover it; otherwise it's ignored.
+ */
+#define TSWG_MESSAGE_RETRY (1U << 31)
 
 struct message_handshake_cookie {
 	struct message_header header;

@@ -38,7 +38,7 @@ void wg_packet_decrypt_worker(struct work_struct *work);
 /* send.c APIs: */
 void wg_packet_send_queued_handshake_initiation(struct wg_peer *peer,
 						bool is_retry);
-void wg_packet_send_handshake_response(struct wg_peer *peer);
+void wg_packet_send_handshake_response(struct wg_peer *peer, bool retry);
 void wg_packet_send_handshake_cookie(struct wg_device *wg,
 				     struct sk_buff *initiating_skb,
 				     __le32 sender_index);

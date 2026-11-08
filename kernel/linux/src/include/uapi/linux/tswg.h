@@ -102,6 +102,12 @@ enum tswgpeer_flag {
 	 * yet, the first authenticated packet still sets one.
 	 */
 	TSWGPEER_F_NO_ROAM = 1,
+	/*
+	 * Do hybrid post-quantum handshakes with the peer
+	 * (Noise_IKhfs+psk2_25519+MLKEM768, as Tailscale's wireguard-go
+	 * does), and only those. Both peers must agree.
+	 */
+	TSWGPEER_F_HYBRID = 2,
 };
 
 enum tswgpeer_attribute {

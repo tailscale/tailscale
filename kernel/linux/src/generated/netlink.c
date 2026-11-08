@@ -26,7 +26,7 @@ const struct nla_policy wireguard_wgallowedip_nl_policy[WGALLOWEDIP_A_FLAGS + 1]
  * attribute; see the TODO in DESIGN.md about forking the YNL spec.
  */
 const struct nla_policy tswg_peer_nl_policy[TSWGPEER_A_MAX + 1] = {
-	[TSWGPEER_A_FLAGS] = NLA_POLICY_MASK(NLA_U32, TSWGPEER_F_NO_ROAM),
+	[TSWGPEER_A_FLAGS] = NLA_POLICY_MASK(NLA_U32, TSWGPEER_F_NO_ROAM | TSWGPEER_F_HYBRID),
 	[TSWGPEER_A_CLEAR_SESSION] = { .type = NLA_FLAG, },
 };
 

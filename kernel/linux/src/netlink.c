@@ -657,6 +657,7 @@ int tswg_set_peer(struct wg_peer *peer, struct nlattr *attr)
 		u32 flags = nla_get_u32(tb[TSWGPEER_A_FLAGS]);
 
 		WRITE_ONCE(peer->tswg_no_roam, !!(flags & TSWGPEER_F_NO_ROAM));
+		tswg_noise_set_hybrid(&peer->handshake, flags & TSWGPEER_F_HYBRID);
 	}
 	if (tb[TSWGPEER_A_CLEAR_SESSION]) {
 		/* As wg_pm_notification does for every peer before suspend. */
@@ -677,6 +678,8 @@ int tswg_get_peer(struct sk_buff *skb, struct wg_peer *peer)
 
 	if (READ_ONCE(peer->tswg_no_roam))
 		flags |= TSWGPEER_F_NO_ROAM;
+	if (READ_ONCE(peer->handshake.hybrid))
+		flags |= TSWGPEER_F_HYBRID;
 	nest = nla_nest_start(skb, WGPEER_A_TSWG);
 	if (!nest)
 		return -EMSGSIZE;

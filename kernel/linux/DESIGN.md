@@ -560,9 +560,8 @@ Tools in the lean harness, for this kind of work:
   out-of-tree Rust modules need a kernel built with CONFIG_RUST and a
   matching rustc, which most distro kernels can't provide. Revisit later.
 * Changing the WireGuard wire protocol. tswg must interoperate with every
-  existing Tailscale peer running wireguard-go. (But see "Hybrid
-  post-quantum handshakes": wireguard-go is about to grow a handshake
-  tswg doesn't have.)
+  existing Tailscale peer running wireguard-go, including its hybrid
+  post-quantum handshakes (see "Hybrid post-quantum handshakes").
 * Multipath or "spray" sending in the kernel. When disco hasn't yet
   trusted a direct path, tailscaled sprays from userspace (see "DERP and
   spray").
@@ -934,22 +933,41 @@ Other TODOs:
 
 ### Hybrid post-quantum handshakes
 
-Found 2026-11-07: Tailscale's wireguard-go fork has a hybrid
-post-quantum handshake (`wgcfg.PeerConfig.Hybrid`, different message
-sizes), wired up in tailscale.com on 2026-10-29, with a control
-"disable hybrid" capability for the initial rollout (2026-11-03). Nothing
-sets `Hybrid` yet, but once it's in use between two nodes, a kernel-mode
-node can't talk to a hybrid-only peer, since tswg only does classic
-WireGuard. So the "wire-compatible with every Tailscale peer" assumption
-no longer holds. Options:
+Tailscale's wireguard-go has a hybrid post-quantum handshake,
+`Noise_IKhfs+psk2_25519+MLKEM768_ChaChaPoly_BLAKE2s`
+(`wgcfg.PeerConfig.Hybrid`, wired up in tailscale.com 2026-10-29, with
+a control "disable hybrid" capability for the rollout). Both peers must
+agree to use it, with no fallback to the classic handshake, so a
+kernel-mode node that couldn't do it would be cut off from any peer that
+asked for it. tswg does it (2026-11-08):
 
-* a kernel-mode node advertises (to control) that it doesn't do hybrid
-  handshakes, so peers use classic handshakes with it; or
-* implement the hybrid handshake in tswg (needs a kernel ML-KEM, or a
-  vendored one).
-
-For now the kernel data plane logs any peer that asks for a hybrid
-handshake and uses a classic handshake.
+* Wire format, as wireguard-go: the initiation carries an ephemeral
+  ML-KEM-768 encapsulation key, sealed with the key from `es`, before
+  the static key (which then uses nonce 1); the response carries a KEM
+  ciphertext, sealed with a key from `ee`, and the KEM's shared secret
+  is mixed into the chaining key before `se`. Messages grow from 148 and
+  92 bytes to 1348 and 1196. Hybrid messages that are retries have bit
+  31 of the type set (`TSWG_MESSAGE_RETRY`, a hint for routing them
+  over more reliable paths); tswg accepts it, sets it on its own
+  retries, and echoes it in responses, as wireguard-go does.
+* ML-KEM-768 is ours (`src/mlkem.c`, FIPS 203, with its own Keccak):
+  Linux has none, and its SHA-3 is too new for the kernels we build for.
+  `tests/mlkem` checks it against Go's `crypto/mlkem`, which wireguard-go
+  uses: the same keys from the same seeds, decapsulation of each other's
+  ciphertexts, and the same implicit rejection of corrupted ones.
+* `noise.c` keeps the classic message structs, with the sealed KEM field
+  passed separately; send.c and receive.c convert to and from the hybrid
+  layouts. The handshake's KEM key (our decapsulation key as initiator,
+  the peer's encapsulation key as responder) is on the heap, only while
+  a handshake is in progress.
+* Per peer, set by `TSWGPEER_F_HYBRID`, which tailscaled sets from
+  `wgcfg.PeerConfig.Hybrid`. Like wireguard-go, a peer's handshakes are
+  all hybrid or all classic, and a change applies from the next one.
+* Tested in natlab, with `TS_DEBUG_FORCE_HYBRID_HANDSHAKES=1` (nothing
+  else turns hybrid handshakes on yet): `TestTSWGTailscaledHybridTUN`
+  (kernel mode against wireguard-go, each initiating, with
+  wireguard-go's hybrid handshake metrics as proof) and
+  `TestTSWGTailscaledHybridKernel` (kernel mode on both sides).
 
 ### What doesn't need kernel work
 
@@ -1049,6 +1067,8 @@ install the module.
 * `DESIGN.md`: this file.
 * `upstream/`: pristine upstream sources (see "Fork, not patches").
 * `src/`: the tswg module sources, Kbuild and compat headers.
+* `tests/mlkem/`: checks `src/mlkem.c` against Go's `crypto/mlkem`
+  (`go test` there).
 * `scripts/`: `probe.sh` (compat probes), `build.sh` (build tswg.ko
   against a KDIR in a private copy of `src/`), `ubuntu-headers.sh` and
   `build-for-ubuntu.sh` (Ubuntu kernels), `gokrazy-kdir.sh` and
@@ -1166,8 +1186,8 @@ Everything else:
       (`TestTSWGTailscaledDirect`).
 - [ ] Kernel mode: packet filter (security; required before real use;
       deferred).
-- [ ] Kernel mode: hybrid PQ handshakes (advertise no support, or
-      implement them in tswg).
+- [x] Kernel mode: hybrid PQ handshakes (2026-11-08; implemented in
+      tswg, `TestTSWGTailscaledHybridTUN`).
 - [x] Kernel mode: TSMP (`TestTSWGTailscaledTSMP`).
 - [ ] Kernel mode: MagicDNS and the other netstack-provided services
       (deferred).

@@ -193,6 +193,7 @@ static void rcu_release(struct rcu_head *rcu)
 	/* The final zeroing takes care of clearing any remaining handshake key
 	 * material and other potentially sensitive information.
 	 */
+	kfree_sensitive(peer->handshake.kem); /* TSWG */
 	memzero_explicit(peer, sizeof(*peer));
 	kmem_cache_free(peer_cache, peer);
 }

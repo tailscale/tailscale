@@ -83,6 +83,17 @@ struct noise_handshake {
 	u8 latest_timestamp[NOISE_TIMESTAMP_LEN];
 	__le32 remote_index;
 
+	/* TSWG: whether to do hybrid handshakes with this peer; see noise.c. */
+	bool hybrid;
+	/*
+	 * TSWG: in a hybrid handshake, our ML-KEM decapsulation key while
+	 * we're the initiator (HANDSHAKE_CREATED_INITIATION), or the peer's
+	 * encapsulation key while we're the responder
+	 * (HANDSHAKE_CONSUMED_INITIATION); otherwise NULL. Allocated with
+	 * TSWG_MLKEM768_DK_LEN bytes.
+	 */
+	u8 *kem;
+
 	/* Protects all members except the immutable (after noise_handshake_
 	 * init): remote_static, precomputed_static_static, static_identity.
 	 */
@@ -116,18 +127,28 @@ void wg_noise_set_static_identity_private_key(
 	const u8 private_key[NOISE_PUBLIC_KEY_LEN]);
 void wg_noise_precompute_static_static(struct wg_peer *peer);
 
+/*
+ * TSWG: the handshake functions take the classic messages, and for hybrid
+ * handshakes, separately, the encrypted_kem field of the hybrid message
+ * (NULL when consuming a classic one). The create functions decide which
+ * kind of handshake it is, reporting it in *hybrid; send.c and receive.c
+ * convert between the classic messages and the hybrid ones.
+ */
 bool
 wg_noise_handshake_create_initiation(struct message_handshake_initiation *dst,
+				     u8 *dst_kem, bool *hybrid,
 				     struct noise_handshake *handshake);
 struct wg_peer *
 wg_noise_handshake_consume_initiation(struct message_handshake_initiation *src,
-				      struct wg_device *wg);
+				      const u8 *src_kem, struct wg_device *wg);
 
 bool wg_noise_handshake_create_response(struct message_handshake_response *dst,
+					u8 *dst_kem, bool *hybrid,
 					struct noise_handshake *handshake);
 struct wg_peer *
 wg_noise_handshake_consume_response(struct message_handshake_response *src,
-				    struct wg_device *wg);
+				    const u8 *src_kem, struct wg_device *wg);
+void tswg_noise_set_hybrid(struct noise_handshake *handshake, bool hybrid);
 
 bool wg_noise_handshake_begin_session(struct noise_handshake *handshake,
 				      struct noise_keypairs *keypairs);

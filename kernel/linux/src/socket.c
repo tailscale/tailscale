@@ -342,7 +342,7 @@ void wg_socket_clear_peer_endpoint_src(struct wg_peer *peer)
  * a WireGuard message: a little-endian 32-bit type of 1 through 4. Nothing
  * else Tailscale sends on the socket matches: disco starts with "TS", STUN
  * with 0x00 or 0x01 followed by a nonzero byte, and Geneve-encapsulated peer
- * relay traffic with 0x00.
+ * relay traffic with 0x00. Handshake messages may have TSWG_MESSAGE_RETRY.
  */
 static bool tswg_is_wg_message(struct sk_buff *skb)
 {
@@ -354,7 +354,9 @@ static bool tswg_is_wg_message(struct sk_buff *skb)
 	if (!h)
 		return false;
 	return h[0] >= MESSAGE_HANDSHAKE_INITIATION && h[0] <= MESSAGE_DATA &&
-	       !h[1] && !h[2] && !h[3];
+	       !h[1] && !h[2] &&
+	       (!h[3] || (h[3] == TSWG_MESSAGE_RETRY >> 24 &&
+			  h[0] <= MESSAGE_HANDSHAKE_RESPONSE));
 }
 
 /*

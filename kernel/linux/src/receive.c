@@ -28,6 +28,19 @@ static void update_rx_stats(struct wg_peer *peer, size_t len)
 
 #define SKB_TYPE_LE32(skb) (((struct message_header *)(skb)->data)->type)
 
+/*
+ * TSWG: tswg_skb_type is SKB_TYPE_LE32 without TSWG_MESSAGE_RETRY, for
+ * handshake messages, which may have it; see validate_header_len.
+ */
+static __le32 tswg_skb_type(struct sk_buff *skb)
+{
+	__le32 type = SKB_TYPE_LE32(skb);
+
+	if (type == cpu_to_le32(MESSAGE_DATA))
+		return type;
+	return type & ~cpu_to_le32(TSWG_MESSAGE_RETRY);
+}
+
 static size_t validate_header_len(struct sk_buff *skb)
 {
 	if (unlikely(skb->len < sizeof(struct message_header)))
@@ -41,6 +54,13 @@ static size_t validate_header_len(struct sk_buff *skb)
 	if (SKB_TYPE_LE32(skb) == cpu_to_le32(MESSAGE_HANDSHAKE_RESPONSE) &&
 	    skb->len == sizeof(struct message_handshake_response))
 		return sizeof(struct message_handshake_response);
+	/* TSWG: hybrid handshake messages, perhaps with the retry bit. */
+	if (tswg_skb_type(skb) == cpu_to_le32(MESSAGE_HANDSHAKE_INITIATION) &&
+	    skb->len == sizeof(struct message_handshake_initiation_hybrid))
+		return sizeof(struct message_handshake_initiation_hybrid);
+	if (tswg_skb_type(skb) == cpu_to_le32(MESSAGE_HANDSHAKE_RESPONSE) &&
+	    skb->len == sizeof(struct message_handshake_response_hybrid))
+		return sizeof(struct message_handshake_response_hybrid);
 	if (SKB_TYPE_LE32(skb) == cpu_to_le32(MESSAGE_HANDSHAKE_COOKIE) &&
 	    skb->len == sizeof(struct message_handshake_cookie))
 		return sizeof(struct message_handshake_cookie);
@@ -92,9 +112,46 @@ static int prepare_skb_header(struct sk_buff *skb, struct wg_device *wg)
 	return 0;
 }
 
+/*
+ * TSWG: tswg_classic_initiation and tswg_classic_response copy a hybrid
+ * handshake message's fields but encrypted_kem into the classic message
+ * dst, for noise.c; see wg_noise_handshake_*.
+ */
+static void tswg_classic_initiation(struct message_handshake_initiation *dst,
+				    const struct message_handshake_initiation_hybrid *src)
+{
+	dst->header.type = cpu_to_le32(MESSAGE_HANDSHAKE_INITIATION);
+	dst->sender_index = src->sender_index;
+	memcpy(dst->unencrypted_ephemeral, src->unencrypted_ephemeral,
+	       sizeof(dst->unencrypted_ephemeral));
+	memcpy(dst->encrypted_static, src->encrypted_static,
+	       sizeof(dst->encrypted_static));
+	memcpy(dst->encrypted_timestamp, src->encrypted_timestamp,
+	       sizeof(dst->encrypted_timestamp));
+	dst->macs = src->macs;
+}
+
+static void tswg_classic_response(struct message_handshake_response *dst,
+				  const struct message_handshake_response_hybrid *src)
+{
+	dst->header.type = cpu_to_le32(MESSAGE_HANDSHAKE_RESPONSE);
+	dst->sender_index = src->sender_index;
+	dst->receiver_index = src->receiver_index;
+	memcpy(dst->unencrypted_ephemeral, src->unencrypted_ephemeral,
+	       sizeof(dst->unencrypted_ephemeral));
+	memcpy(dst->encrypted_nothing, src->encrypted_nothing,
+	       sizeof(dst->encrypted_nothing));
+	dst->macs = src->macs;
+}
+
 static void wg_receive_handshake_packet(struct wg_device *wg,
 					struct sk_buff *skb)
 {
+	/* TSWG: hybrid handshake messages, converted; see above. */
+	struct message_handshake_initiation classic_initiation;
+	struct message_handshake_response classic_response;
+	const u8 *kem = NULL;
+	bool retry;
 	enum cookie_mac_state mac_state;
 	struct wg_peer *peer = NULL;
 	/* This is global, so that our load calculation applies to the whole
@@ -134,17 +191,26 @@ static void wg_receive_handshake_packet(struct wg_device *wg,
 		return;
 	}
 
-	switch (SKB_TYPE_LE32(skb)) {
+	retry = SKB_TYPE_LE32(skb) & cpu_to_le32(TSWG_MESSAGE_RETRY);
+	switch (tswg_skb_type(skb)) {
 	case cpu_to_le32(MESSAGE_HANDSHAKE_INITIATION): {
 		struct message_handshake_initiation *message =
 			(struct message_handshake_initiation *)skb->data;
 
+		if (skb->len == sizeof(struct message_handshake_initiation_hybrid)) {
+			struct message_handshake_initiation_hybrid *hyb =
+				(void *)skb->data;
+
+			tswg_classic_initiation(&classic_initiation, hyb);
+			message = &classic_initiation;
+			kem = hyb->encrypted_kem;
+		}
 		if (packet_needs_cookie) {
 			wg_packet_send_handshake_cookie(wg, skb,
 							message->sender_index);
 			return;
 		}
-		peer = wg_noise_handshake_consume_initiation(message, wg);
+		peer = wg_noise_handshake_consume_initiation(message, kem, wg);
 		if (unlikely(!peer)) {
 			net_dbg_skb_ratelimited("%s: Invalid handshake initiation from %pISpfsc\n",
 						wg->dev->name, skb);
@@ -154,19 +220,27 @@ static void wg_receive_handshake_packet(struct wg_device *wg,
 		net_dbg_ratelimited("%s: Receiving handshake initiation from peer %llu (%pISpfsc)\n",
 				    wg->dev->name, peer->internal_id,
 				    &peer->endpoint.addr);
-		wg_packet_send_handshake_response(peer);
+		wg_packet_send_handshake_response(peer, retry);
 		break;
 	}
 	case cpu_to_le32(MESSAGE_HANDSHAKE_RESPONSE): {
 		struct message_handshake_response *message =
 			(struct message_handshake_response *)skb->data;
 
+		if (skb->len == sizeof(struct message_handshake_response_hybrid)) {
+			struct message_handshake_response_hybrid *hyb =
+				(void *)skb->data;
+
+			tswg_classic_response(&classic_response, hyb);
+			message = &classic_response;
+			kem = hyb->encrypted_kem;
+		}
 		if (packet_needs_cookie) {
 			wg_packet_send_handshake_cookie(wg, skb,
 							message->sender_index);
 			return;
 		}
-		peer = wg_noise_handshake_consume_response(message, wg);
+		peer = wg_noise_handshake_consume_response(message, kem, wg);
 		if (unlikely(!peer)) {
 			net_dbg_skb_ratelimited("%s: Invalid handshake response from %pISpfsc\n",
 						wg->dev->name, skb);
@@ -918,7 +992,7 @@ void wg_packet_receive(struct wg_device *wg, struct sk_buff *skb)
 {
 	if (unlikely(prepare_skb_header(skb, wg) < 0))
 		goto err;
-	switch (SKB_TYPE_LE32(skb)) {
+	switch (tswg_skb_type(skb)) { /* TSWG */
 	case cpu_to_le32(MESSAGE_HANDSHAKE_INITIATION):
 	case cpu_to_le32(MESSAGE_HANDSHAKE_RESPONSE):
 	case cpu_to_le32(MESSAGE_HANDSHAKE_COOKIE): {

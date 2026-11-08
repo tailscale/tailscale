@@ -23,6 +23,19 @@
  * ******
  * -> e, es, s, ss, {t}
  * <- e, ee, se, psk, {}
+ *
+ * TSWG: and the hybrid post-quantum handshake of Tailscale's wireguard-go,
+ * Noise_IKhfs+psk2_25519+MLKEM768, which adds an ephemeral ML-KEM-768
+ * key pair (ekem) to the initiation and a ciphertext for it to the
+ * response, encrypted with the keys of es and ee, and mixes the KEM's
+ * shared secret into the chaining key before se:
+ *
+ * -> e, es, {ekem}, s, ss, {t}
+ * <- e, ee, {ekem ciphertext}, kem, se, psk, {}
+ *
+ * The static key's encryption uses nonce 1, since ekem's used 0 with the
+ * same key. A peer's handshakes are all hybrid or all classic (see
+ * struct noise_handshake's hybrid), as both sides must agree.
  */
 
 static const u8 handshake_name[37] __nonstring = "Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s";
@@ -31,16 +44,32 @@ static u8 handshake_init_hash[NOISE_HASH_LEN] __ro_after_init;
 static u8 handshake_init_chaining_key[NOISE_HASH_LEN] __ro_after_init;
 static atomic64_t keypair_counter = ATOMIC64_INIT(0);
 
-void __init wg_noise_init(void)
+/* TSWG: as above, for hybrid handshakes. */
+static const u8 hybrid_handshake_name[50] __nonstring =
+	"Noise_IKhfs+psk2_25519+MLKEM768_ChaChaPoly_BLAKE2s";
+static u8 hybrid_init_hash[NOISE_HASH_LEN] __ro_after_init;
+static u8 hybrid_init_chaining_key[NOISE_HASH_LEN] __ro_after_init;
+
+static void __init noise_init_hash(u8 hash[NOISE_HASH_LEN],
+				   u8 chaining_key[NOISE_HASH_LEN],
+				   const u8 *name, size_t name_len)
 {
 	struct blake2s_ctx blake;
 
-	blake2s(NULL, 0, handshake_name, sizeof(handshake_name),
-		handshake_init_chaining_key, NOISE_HASH_LEN);
+	blake2s(NULL, 0, name, name_len, chaining_key, NOISE_HASH_LEN);
 	blake2s_init(&blake, NOISE_HASH_LEN);
-	blake2s_update(&blake, handshake_init_chaining_key, NOISE_HASH_LEN);
+	blake2s_update(&blake, chaining_key, NOISE_HASH_LEN);
 	blake2s_update(&blake, identifier_name, sizeof(identifier_name));
-	blake2s_final(&blake, handshake_init_hash);
+	blake2s_final(&blake, hash);
+}
+
+void __init wg_noise_init(void)
+{
+	noise_init_hash(handshake_init_hash, handshake_init_chaining_key,
+			handshake_name, sizeof(handshake_name));
+	noise_init_hash(hybrid_init_hash, hybrid_init_chaining_key,
+			hybrid_handshake_name, sizeof(hybrid_handshake_name));
+	tswg_mlkem_init();
 }
 
 /* Must hold peer->handshake.static_identity->lock */
@@ -83,6 +112,8 @@ static void handshake_zero(struct noise_handshake *handshake)
 	memset(&handshake->chaining_key, 0, NOISE_HASH_LEN);
 	handshake->remote_index = 0;
 	handshake->state = HANDSHAKE_ZEROED;
+	kfree_sensitive(handshake->kem); /* TSWG */
+	handshake->kem = NULL;
 }
 
 void wg_noise_handshake_clear(struct noise_handshake *handshake)
@@ -451,35 +482,67 @@ static void mix_psk(u8 chaining_key[NOISE_HASH_LEN], u8 hash[NOISE_HASH_LEN],
 	memzero_explicit(temp_hash, NOISE_HASH_LEN);
 }
 
+/* TSWG: mix_kem mixes a KEM shared secret into the chaining key. */
+static void mix_kem(u8 chaining_key[NOISE_HASH_LEN],
+		    const u8 ss[TSWG_MLKEM768_SS_LEN])
+{
+	kdf(chaining_key, NULL, NULL, ss, NOISE_HASH_LEN, 0, 0,
+	    TSWG_MLKEM768_SS_LEN, chaining_key);
+}
+
 static void handshake_init(u8 chaining_key[NOISE_HASH_LEN],
 			   u8 hash[NOISE_HASH_LEN],
-			   const u8 remote_static[NOISE_PUBLIC_KEY_LEN])
+			   const u8 remote_static[NOISE_PUBLIC_KEY_LEN],
+			   bool hybrid)
 {
-	memcpy(hash, handshake_init_hash, NOISE_HASH_LEN);
-	memcpy(chaining_key, handshake_init_chaining_key, NOISE_HASH_LEN);
+	memcpy(hash, hybrid ? hybrid_init_hash : handshake_init_hash,
+	       NOISE_HASH_LEN);
+	memcpy(chaining_key, hybrid ? hybrid_init_chaining_key :
+				      handshake_init_chaining_key,
+	       NOISE_HASH_LEN);
 	mix_hash(hash, remote_static, NOISE_PUBLIC_KEY_LEN);
+}
+
+/*
+ * TSWG: the nonce is zero but for a hybrid initiation's static key; see
+ * the top of the file. dst and src may be the same.
+ */
+static void message_encrypt_nonce(u8 *dst_ciphertext, const u8 *src_plaintext,
+				  size_t src_len, u64 nonce,
+				  u8 key[NOISE_SYMMETRIC_KEY_LEN],
+				  u8 hash[NOISE_HASH_LEN])
+{
+	chacha20poly1305_encrypt(dst_ciphertext, src_plaintext, src_len, hash,
+				 NOISE_HASH_LEN, nonce, key);
+	mix_hash(hash, dst_ciphertext, noise_encrypted_len(src_len));
 }
 
 static void message_encrypt(u8 *dst_ciphertext, const u8 *src_plaintext,
 			    size_t src_len, u8 key[NOISE_SYMMETRIC_KEY_LEN],
 			    u8 hash[NOISE_HASH_LEN])
 {
-	chacha20poly1305_encrypt(dst_ciphertext, src_plaintext, src_len, hash,
-				 NOISE_HASH_LEN,
-				 0 /* Always zero for Noise_IK */, key);
-	mix_hash(hash, dst_ciphertext, noise_encrypted_len(src_len));
+	message_encrypt_nonce(dst_ciphertext, src_plaintext, src_len, 0, key,
+			      hash);
+}
+
+static bool message_decrypt_nonce(u8 *dst_plaintext, const u8 *src_ciphertext,
+				  size_t src_len, u64 nonce,
+				  u8 key[NOISE_SYMMETRIC_KEY_LEN],
+				  u8 hash[NOISE_HASH_LEN])
+{
+	if (!chacha20poly1305_decrypt(dst_plaintext, src_ciphertext, src_len,
+				      hash, NOISE_HASH_LEN, nonce, key))
+		return false;
+	mix_hash(hash, src_ciphertext, src_len);
+	return true;
 }
 
 static bool message_decrypt(u8 *dst_plaintext, const u8 *src_ciphertext,
 			    size_t src_len, u8 key[NOISE_SYMMETRIC_KEY_LEN],
 			    u8 hash[NOISE_HASH_LEN])
 {
-	if (!chacha20poly1305_decrypt(dst_plaintext, src_ciphertext, src_len,
-				      hash, NOISE_HASH_LEN,
-				      0 /* Always zero for Noise_IK */, key))
-		return false;
-	mix_hash(hash, src_ciphertext, src_len);
-	return true;
+	return message_decrypt_nonce(dst_plaintext, src_ciphertext, src_len, 0,
+				     key, hash);
 }
 
 static void message_ephemeral(u8 ephemeral_dst[NOISE_PUBLIC_KEY_LEN],
@@ -515,16 +578,30 @@ static void tai64n_now(u8 output[NOISE_TIMESTAMP_LEN])
 
 bool
 wg_noise_handshake_create_initiation(struct message_handshake_initiation *dst,
+				     u8 *dst_kem, bool *hybrid,
 				     struct noise_handshake *handshake)
 {
 	u8 timestamp[NOISE_TIMESTAMP_LEN];
 	u8 key[NOISE_SYMMETRIC_KEY_LEN];
+	u8 *dk = NULL; /* TSWG */
 	bool ret = false;
 
 	/* We need to wait for crng _before_ taking any locks, since
 	 * curve25519_generate_secret uses get_random_bytes_wait.
 	 */
 	wait_for_random_bytes();
+
+	/*
+	 * TSWG: a hybrid initiation's ML-KEM key pair, made before taking
+	 * the locks. The encapsulation key goes straight into dst_kem, to
+	 * be encrypted in place.
+	 */
+	*hybrid = READ_ONCE(handshake->hybrid);
+	if (*hybrid) {
+		dk = kmalloc(TSWG_MLKEM768_DK_LEN, GFP_KERNEL);
+		if (!dk || tswg_mlkem768_keygen(dst_kem, dk))
+			goto out_free;
+	}
 
 	down_read(&handshake->static_identity->lock);
 	down_write(&handshake->lock);
@@ -535,7 +612,7 @@ wg_noise_handshake_create_initiation(struct message_handshake_initiation *dst,
 	dst->header.type = cpu_to_le32(MESSAGE_HANDSHAKE_INITIATION);
 
 	handshake_init(handshake->chaining_key, handshake->hash,
-		       handshake->remote_static);
+		       handshake->remote_static, *hybrid);
 
 	/* e */
 	curve25519_generate_secret(handshake->ephemeral_private);
@@ -551,10 +628,16 @@ wg_noise_handshake_create_initiation(struct message_handshake_initiation *dst,
 		    handshake->remote_static))
 		goto out;
 
+	/* TSWG: {ekem} */
+	if (*hybrid)
+		message_encrypt(dst_kem, dst_kem, TSWG_MLKEM768_EK_LEN, key,
+				handshake->hash);
+
 	/* s */
-	message_encrypt(dst->encrypted_static,
-			handshake->static_identity->static_public,
-			NOISE_PUBLIC_KEY_LEN, key, handshake->hash);
+	message_encrypt_nonce(dst->encrypted_static,
+			      handshake->static_identity->static_public,
+			      NOISE_PUBLIC_KEY_LEN, *hybrid ? 1 : 0, key,
+			      handshake->hash);
 
 	/* ss */
 	if (!mix_precomputed_dh(handshake->chaining_key, key,
@@ -571,18 +654,21 @@ wg_noise_handshake_create_initiation(struct message_handshake_initiation *dst,
 		&handshake->entry);
 
 	handshake->state = HANDSHAKE_CREATED_INITIATION;
+	swap(handshake->kem, dk); /* TSWG: any old one is freed below */
 	ret = true;
 
 out:
 	up_write(&handshake->lock);
 	up_read(&handshake->static_identity->lock);
 	memzero_explicit(key, NOISE_SYMMETRIC_KEY_LEN);
+out_free:
+	kfree_sensitive(dk);
 	return ret;
 }
 
 struct wg_peer *
 wg_noise_handshake_consume_initiation(struct message_handshake_initiation *src,
-				      struct wg_device *wg)
+				      const u8 *src_kem, struct wg_device *wg)
 {
 	struct wg_peer *peer = NULL, *ret_peer = NULL;
 	struct noise_handshake *handshake;
@@ -594,12 +680,20 @@ wg_noise_handshake_consume_initiation(struct message_handshake_initiation *src,
 	u8 e[NOISE_PUBLIC_KEY_LEN];
 	u8 t[NOISE_TIMESTAMP_LEN];
 	u64 initiation_consumption;
+	u8 *ek = NULL; /* TSWG: the peer's ekem */
+
+	if (src_kem) {
+		ek = kmalloc(TSWG_MLKEM768_DK_LEN, GFP_KERNEL);
+		if (!ek)
+			return NULL;
+	}
 
 	down_read(&wg->static_identity.lock);
 	if (unlikely(!wg->static_identity.has_identity))
 		goto out;
 
-	handshake_init(chaining_key, hash, wg->static_identity.static_public);
+	handshake_init(chaining_key, hash, wg->static_identity.static_public,
+		       src_kem);
 
 	/* e */
 	message_ephemeral(e, src->unencrypted_ephemeral, chaining_key, hash);
@@ -608,9 +702,16 @@ wg_noise_handshake_consume_initiation(struct message_handshake_initiation *src,
 	if (!mix_dh(chaining_key, key, wg->static_identity.static_private, e))
 		goto out;
 
+	/* TSWG: {ekem} */
+	if (src_kem && !message_decrypt(ek, src_kem,
+					noise_encrypted_len(TSWG_MLKEM768_EK_LEN),
+					key, hash))
+		goto out;
+
 	/* s */
-	if (!message_decrypt(s, src->encrypted_static,
-			     sizeof(src->encrypted_static), key, hash))
+	if (!message_decrypt_nonce(s, src->encrypted_static,
+				   sizeof(src->encrypted_static),
+				   src_kem ? 1 : 0, key, hash))
 		goto out;
 
 	/* Lookup which peer we're actually talking to */
@@ -618,6 +719,10 @@ wg_noise_handshake_consume_initiation(struct message_handshake_initiation *src,
 	if (!peer)
 		goto out;
 	handshake = &peer->handshake;
+
+	/* TSWG: the peer must use the kind of handshake we expect. */
+	if (!!src_kem != READ_ONCE(handshake->hybrid))
+		goto out;
 
 	/* ss */
 	if (!mix_precomputed_dh(chaining_key, key,
@@ -651,6 +756,7 @@ wg_noise_handshake_consume_initiation(struct message_handshake_initiation *src,
 	if ((s64)(handshake->last_initiation_consumption - initiation_consumption) < 0)
 		handshake->last_initiation_consumption = initiation_consumption;
 	handshake->state = HANDSHAKE_CONSUMED_INITIATION;
+	swap(handshake->kem, ek); /* TSWG: any old one is freed below */
 	up_write(&handshake->lock);
 	ret_peer = peer;
 
@@ -661,13 +767,16 @@ out:
 	up_read(&wg->static_identity.lock);
 	if (!ret_peer)
 		wg_peer_put(peer);
+	kfree_sensitive(ek);
 	return ret_peer;
 }
 
 bool wg_noise_handshake_create_response(struct message_handshake_response *dst,
+					u8 *dst_kem, bool *hybrid,
 					struct noise_handshake *handshake)
 {
 	u8 key[NOISE_SYMMETRIC_KEY_LEN];
+	u8 kem_ss[TSWG_MLKEM768_SS_LEN]; /* TSWG */
 	bool ret = false;
 
 	/* We need to wait for crng _before_ taking any locks, since
@@ -680,6 +789,8 @@ bool wg_noise_handshake_create_response(struct message_handshake_response *dst,
 
 	if (handshake->state != HANDSHAKE_CONSUMED_INITIATION)
 		goto out;
+	/* TSWG: hybrid if the initiation we consumed was. */
+	*hybrid = !!handshake->kem;
 
 	dst->header.type = cpu_to_le32(MESSAGE_HANDSHAKE_RESPONSE);
 	dst->receiver_index = handshake->remote_index;
@@ -693,10 +804,23 @@ bool wg_noise_handshake_create_response(struct message_handshake_response *dst,
 			  dst->unencrypted_ephemeral, handshake->chaining_key,
 			  handshake->hash);
 
-	/* ee */
-	if (!mix_dh(handshake->chaining_key, NULL, handshake->ephemeral_private,
-		    handshake->remote_ephemeral))
+	/* ee (TSWG: hybrid handshakes keep its key, for the ciphertext) */
+	if (!mix_dh(handshake->chaining_key, *hybrid ? key : NULL,
+		    handshake->ephemeral_private, handshake->remote_ephemeral))
 		goto out;
+
+	/*
+	 * TSWG: {ekem ciphertext}, kem. Encapsulate to the initiator's
+	 * ekem, with the ciphertext going straight into dst_kem, to be
+	 * encrypted in place.
+	 */
+	if (*hybrid) {
+		if (tswg_mlkem768_encaps(dst_kem, kem_ss, handshake->kem))
+			goto out;
+		message_encrypt(dst_kem, dst_kem, TSWG_MLKEM768_CT_LEN, key,
+				handshake->hash);
+		mix_kem(handshake->chaining_key, kem_ss);
+	}
 
 	/* se */
 	if (!mix_dh(handshake->chaining_key, NULL, handshake->ephemeral_private,
@@ -721,12 +845,13 @@ out:
 	up_write(&handshake->lock);
 	up_read(&handshake->static_identity->lock);
 	memzero_explicit(key, NOISE_SYMMETRIC_KEY_LEN);
+	memzero_explicit(kem_ss, TSWG_MLKEM768_SS_LEN);
 	return ret;
 }
 
 struct wg_peer *
 wg_noise_handshake_consume_response(struct message_handshake_response *src,
-				    struct wg_device *wg)
+				    const u8 *src_kem, struct wg_device *wg)
 {
 	enum noise_handshake_state state = HANDSHAKE_ZEROED;
 	struct wg_peer *peer = NULL, *ret_peer = NULL;
@@ -737,6 +862,20 @@ wg_noise_handshake_consume_response(struct message_handshake_response *src,
 	u8 e[NOISE_PUBLIC_KEY_LEN];
 	u8 ephemeral_private[NOISE_PUBLIC_KEY_LEN];
 	u8 preshared_key[NOISE_SYMMETRIC_KEY_LEN];
+	/*
+	 * TSWG: for a hybrid response, a copy of our ekem decapsulation key,
+	 * followed by the ciphertext, and the KEM's shared secret.
+	 */
+	u8 kem_ss[TSWG_MLKEM768_SS_LEN];
+	bool kem_ok = !src_kem;
+	u8 *kem = NULL;
+
+	if (src_kem) {
+		kem = kmalloc(TSWG_MLKEM768_DK_LEN + TSWG_MLKEM768_CT_LEN,
+			      GFP_KERNEL);
+		if (!kem)
+			return NULL;
+	}
 
 	down_read(&wg->static_identity.lock);
 
@@ -757,17 +896,41 @@ wg_noise_handshake_consume_response(struct message_handshake_response *src,
 	       NOISE_PUBLIC_KEY_LEN);
 	memcpy(preshared_key, handshake->preshared_key,
 	       NOISE_SYMMETRIC_KEY_LEN);
+	/*
+	 * TSWG: the response must be hybrid if and only if our initiation
+	 * was, and we still want hybrid handshakes.
+	 */
+	if (src_kem && handshake->kem) {
+		memcpy(kem, handshake->kem, TSWG_MLKEM768_DK_LEN);
+		kem_ok = true;
+	} else if (handshake->kem) {
+		kem_ok = false;
+	}
+	if (!!src_kem != READ_ONCE(handshake->hybrid))
+		kem_ok = false;
 	up_read(&handshake->lock);
 
-	if (state != HANDSHAKE_CREATED_INITIATION)
+	if (state != HANDSHAKE_CREATED_INITIATION || !kem_ok)
 		goto fail;
 
 	/* e */
 	message_ephemeral(e, src->unencrypted_ephemeral, chaining_key, hash);
 
 	/* ee */
-	if (!mix_dh(chaining_key, NULL, ephemeral_private, e))
+	if (!mix_dh(chaining_key, src_kem ? key : NULL, ephemeral_private, e))
 		goto fail;
+
+	/* TSWG: {ekem ciphertext}, kem */
+	if (src_kem) {
+		u8 *ct = kem + TSWG_MLKEM768_DK_LEN;
+
+		if (!message_decrypt(ct, src_kem,
+				     noise_encrypted_len(TSWG_MLKEM768_CT_LEN),
+				     key, hash) ||
+		    tswg_mlkem768_decaps(kem_ss, ct, kem))
+			goto fail;
+		mix_kem(chaining_key, kem_ss);
+	}
 
 	/* se */
 	if (!mix_dh(chaining_key, NULL, wg->static_identity.static_private, e))
@@ -796,6 +959,8 @@ wg_noise_handshake_consume_response(struct message_handshake_response *src,
 	memcpy(handshake->chaining_key, chaining_key, NOISE_HASH_LEN);
 	handshake->remote_index = src->sender_index;
 	handshake->state = HANDSHAKE_CONSUMED_RESPONSE;
+	kfree_sensitive(handshake->kem); /* TSWG: done with ekem */
+	handshake->kem = NULL;
 	up_write(&handshake->lock);
 	ret_peer = peer;
 	goto out;
@@ -808,8 +973,20 @@ out:
 	memzero_explicit(chaining_key, NOISE_HASH_LEN);
 	memzero_explicit(ephemeral_private, NOISE_PUBLIC_KEY_LEN);
 	memzero_explicit(preshared_key, NOISE_SYMMETRIC_KEY_LEN);
+	memzero_explicit(kem_ss, TSWG_MLKEM768_SS_LEN);
 	up_read(&wg->static_identity.lock);
+	kfree_sensitive(kem);
 	return ret_peer;
+}
+
+/*
+ * TSWG: tswg_noise_set_hybrid sets whether handshakes with the peer are
+ * hybrid. As in wireguard-go, it applies from the next handshake; one in
+ * progress fails.
+ */
+void tswg_noise_set_hybrid(struct noise_handshake *handshake, bool hybrid)
+{
+	WRITE_ONCE(handshake->hybrid, hybrid);
 }
 
 bool wg_noise_handshake_begin_session(struct noise_handshake *handshake,
