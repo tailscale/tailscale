@@ -48,6 +48,7 @@ import (
 	"tailscale.com/tstest/tswgbench/netbench"
 	"tailscale.com/types/key"
 	"tailscale.com/wgengine/tswg"
+	"tailscale.com/wgengine/tswg/rss"
 )
 
 const tunnelDev = "wg0"
@@ -94,6 +95,22 @@ func main() {
 		w.Write(b)
 	})
 	mux.HandleFunc("POST /lan-netns", handleLANNetns)
+	// Rebalance the underlay NIC's RSS table (POST /rss-balance); see
+	// package rss.
+	mux.HandleFunc("POST /rss-balance", func(w http.ResponseWriter, r *http.Request) {
+		dev, err := underlayDev()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		res, err := rss.Balance(r.Context(), dev, rss.Options{Keys: 8})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(res)
+	})
 	// Tests: set a tswg module parameter (POST
 	// /param?name=N&value=V).
 	mux.HandleFunc("POST /param", func(w http.ResponseWriter, r *http.Request) {
@@ -375,6 +392,19 @@ func setup(q map[string][]string) error {
 		}
 	}
 	return addRoutes(q["route"])
+}
+
+// underlayDev returns the name of the device with the default IPv4 route.
+func underlayDev() (string, error) {
+	rs, err := netlink.RouteGet(net.IPv4(8, 8, 8, 8))
+	if err != nil || len(rs) == 0 {
+		return "", fmt.Errorf("no default route: %v", err)
+	}
+	link, err := netlink.LinkByIndex(rs[0].LinkIndex)
+	if err != nil {
+		return "", err
+	}
+	return link.Attrs().Name, nil
 }
 
 // loadModuleDeps loads the modules that the kernel module image ko depends

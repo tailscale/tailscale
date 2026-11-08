@@ -67,6 +67,11 @@ func TestLeanProfile(t *testing.T) {
 		load = "tcp"
 	}
 	focus := os.Getenv("TSWG_PROFILE_FOCUS")
+	// TSWG_PROFILE_TOP is how many symbols to report (default 30).
+	topN := os.Getenv("TSWG_PROFILE_TOP")
+	if topN == "" {
+		topN = "30"
+	}
 	l := newLab(t, cpus)
 	const profDur = 5 * time.Second
 	for _, mode := range strings.Split(modes, ",") {
@@ -86,8 +91,25 @@ func TestLeanProfile(t *testing.T) {
 				if load == "tcp4" {
 					streams = 4
 				}
+				if n, err := strconv.Atoi(os.Getenv("TSWG_PROFILE_STREAMS")); err == nil {
+					streams = n
+				}
 				var r netbench.TCPResult
 				r, err = netbench.RunTCP(sender, receiver, addr, streams, loadDur)
+				loadDesc = fmt.Sprintf("%.0f Mbps", r.Mbps)
+			case "fetch":
+				// VM 1 fetches 1 MiB responses from VM 0, so VM 0
+				// sends the data, as in the other loads.
+				streams := 1
+				if n, err := strconv.Atoi(os.Getenv("TSWG_PROFILE_STREAMS")); err == nil {
+					streams = n
+				}
+				if err = sender.Do("POST", fmt.Sprintf("serve?port=%d", benchPort), nil); err != nil {
+					break
+				}
+				var r netbench.FanInResult
+				r, err = netbench.RunTCPFetch([]netbench.Node{receiver}, sender, nil,
+					netip.AddrPortFrom(tunnel4(0), benchPort), streams, 1<<20, 500, loadDur)
 				loadDesc = fmt.Sprintf("%.0f Mbps", r.Mbps)
 			case "udp":
 				var r netbench.UDPResult
@@ -103,7 +125,7 @@ func TestLeanProfile(t *testing.T) {
 		var pwg sync.WaitGroup
 		for i, v := range l.vms {
 			pwg.Go(func() {
-				if err := v.do("GET", "/profile?"+url.Values{"dur": {profDur.String()}, "top": {"30"}, "focus": {focus}}.Encode(), &profs[i]); err != nil {
+				if err := v.do("GET", "/profile?"+url.Values{"dur": {profDur.String()}, "top": {topN}, "focus": {focus}}.Encode(), &profs[i]); err != nil {
 					t.Errorf("profiling VM %d: %v", i, err)
 				}
 			})

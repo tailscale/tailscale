@@ -497,6 +497,18 @@ func (l *lab) setup(mode string, v6 bool) netip.Addr {
 		}
 	}
 	if mode == modePlain {
+		// TSWG_LAB_PLAIN_MTU clamps the VMs' paths to each other to that
+		// MTU, to compare with tunnels of that MTU at the same packet
+		// sizes.
+		if mtu := os.Getenv("TSWG_LAB_PLAIN_MTU"); mtu != "" {
+			for i, v := range l.vms[:2] {
+				q := url.Values{"mode": {modePlain}, "route": {
+					netip.PrefixFrom(under(1-i), under(1-i).BitLen()).String() + " dev underlay mtu " + mtu}}
+				if err := v.do("POST", "/setup?"+q.Encode(), nil); err != nil {
+					l.t.Fatalf("setting up plain: %v", err)
+				}
+			}
+		}
 		return under(1)
 	}
 	keys := [2]key.NodePrivate{key.NewNode(), key.NewNode()}

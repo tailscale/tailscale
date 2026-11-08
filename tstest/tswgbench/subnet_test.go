@@ -19,6 +19,7 @@ import (
 
 	"tailscale.com/tstest/tswgbench/netbench"
 	"tailscale.com/types/key"
+	"tailscale.com/wgengine/tswg/rss"
 )
 
 // TestLeanSubnetRouter benchmarks a Tailscale subnet router: many clients,
@@ -60,6 +61,9 @@ import (
 //	TSWG_SUBNET_ROUTER_CMD   a shell command to run on the router after
 //	                         each setup, for experiments ($MODE is the mode)
 //	TSWG_SUBNET_CLIENT_CMD   likewise, on each client
+//	TSWG_SUBNET_RSS_BALANCE  if set, before each measured run, run the load
+//	                         for a few seconds and rebalance the router's
+//	                         NIC's RSS table during it (see package rss)
 //	TSWG_SUBNET_ROUTER_STATS if set, log the router's wg0, UDP and TCP
 //	                         counters after each run, to see drops
 //	TSWG_SUBNET_PAUSE        a duration to pause after each setup, to debug
@@ -156,6 +160,9 @@ func TestLeanSubnetRouter(t *testing.T) {
 					}.Encode(), &prof)
 				}()
 			}
+			if os.Getenv("TSWG_SUBNET_RSS_BALANCE") != "" {
+				s.rssBalance(mode, load, streams, fetchSize, fetchReq)
+			}
 			watch := []netbench.Node{benchNode{router}, senders[0]}
 			var r netbench.FanInResult
 			var err error
@@ -237,6 +244,54 @@ type subnetLab struct {
 	clients    []*vm
 	clientMode string
 	ts         tsState // for the tailscaled modes; see subnet_tailscaled_test.go
+}
+
+// rssBalance runs the load briefly and, during it, rebalances the router's
+// NIC's RSS table; see TSWG_SUBNET_RSS_BALANCE.
+func (s *subnetLab) rssBalance(mode, load string, streams, fetchSize, fetchReq int) {
+	t := s.l.t
+	senders := make([]netbench.Node, len(s.clients))
+	var addrs []netip.AddrPort
+	for i, c := range s.clients {
+		senders[i] = benchNode{c}
+		if mode == modePlain {
+			addrs = append(addrs, netip.AddrPortFrom(c.under4, benchPort))
+		} else {
+			addrs = append(addrs, netip.AddrPortFrom(tunnel4(c.i), benchPort))
+		}
+	}
+	routerAddr := netip.AddrPortFrom(tunnel4(s.router.i), benchPort)
+	if mode == modePlain {
+		routerAddr = netip.AddrPortFrom(s.router.under4, benchPort)
+	}
+	dst := netip.AddrPortFrom(s.backend.under4, benchPort)
+	const dur = 15 * time.Second // longer than balancing takes
+	done := make(chan error, 1)
+	go func() {
+		var err error
+		switch load {
+		case "serve":
+			_, err = netbench.RunTCPFetch(senders, benchNode{s.router}, nil, routerAddr, streams, fetchSize, fetchReq, dur)
+		case "crawl":
+			_, err = netbench.RunTCPCrawl(benchNode{s.router}, addrs, nil, streams, fetchSize, fetchReq, dur)
+		case "fetch":
+			_, err = netbench.RunTCPFetch(senders, benchNode{s.backend}, nil, dst, streams, fetchSize, fetchReq, dur)
+		default:
+			_, err = netbench.RunTCPFanIn(senders, benchNode{s.backend}, nil, dst, streams, dur)
+		}
+		done <- err
+	}()
+	time.Sleep(2 * time.Second)
+	var res rss.Result
+	if err := s.router.do("POST", "/rss-balance", &res); err != nil {
+		t.Errorf("rebalancing the router's RSS table: %v", err)
+	} else {
+		t.Logf("router RSS: %d queues, busiest/mean %.2f -> %.2f; %d entries probed, %d moved, new key %v",
+			res.Queues, rss.MaxOverMean(res.Before), rss.MaxOverMean(res.After), res.Probed, res.Changed, res.NewKey)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("RSS balancing load: %v", err)
+	}
 }
 
 // logRouterStats logs the router's wg0 interface counters, UDP and TCP
