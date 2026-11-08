@@ -204,6 +204,60 @@ runs), idle and under one TCP stream; updated 2026-11-08 with inline
 crypto (item 9 below) and softirq NAPI. The kernel WG column is from
 before.
 
+#### wireguard-go at its best (2026-11-08)
+
+So as not to misrepresent wireguard-go, its scaling with flow count, on
+EC2, unmodified (Tailscale's fork as the harness runs it: `tun.CreateTUN`
+with TUN offloads, `conn.NewStdNetBind` with UDP GSO and GRO), on the
+c6in.32xlarge big host or router, against the 37 clients (which run
+tswg, so as not to be the limit), 16 flows each unless noted. Gbps, with
+the host's CPU-s/GB:
+
+| scenario | 1 client | 4 | 16 | 37 | 37, 1 flow each | 37, 4 | 37, 64 |
+|---|---|---|---|---|---|---|---|
+| subnet router, upload | 6.3 (5.2) | 5.9 | 5.8 | 5.7 (7.6) | **7.5** (5.9) | 6.4 | 6.6 (8.3) |
+| subnet router, fetch | 7.2 (4.8) | **8.0** | 7.2 | 7.7 (6.1) | 7.6 (5.4) | 7.4 | 6.6 (8.0) |
+| big host, serve | 7.2 (3.6) | 8.2 | 7.9 | 7.1 (5.5) | **8.9** (4.2) | 7.4 | 6.1 (7.2) |
+| big host, crawl | 7.2 (6.2) | 11.1 | 9.5 | 9.9 (7.2) | **11.2** (4.7) | 9.8 | 8.8 (8.1) |
+
+* It's flat from one client: 6-11 Gbps whatever the number of peers or
+  flows, best with fewer flows (more cost it CPU per GB and a little
+  throughput), using 3-6% of the host's 128 CPUs, so it isn't CPU-bound
+  but serialized: its TUN device's one queue, read and written by one
+  goroutine each, and its UDP socket's one receive loop. Best seen:
+  11.2 Gbps (crawling, one flow per client).
+* Go runtime settings don't change it (`TSWG_AGENT_ENV`, checked to
+  reach the agent): GOGC 400 or off, GOMAXPROCS 8, 16 or 32 are all
+  within 5% of the defaults, in throughput and CPU per GB.
+* Serving and crawling run the load generator in the same Go process as
+  wireguard-go (the agent), which could cost it; but as a router, where
+  the load runs elsewhere, it does the same 6-8 Gbps.
+* Point to point (hosts 0 and 1, both c6in.32xlarge, 1-128 TCP streams,
+  bulk and fetches), both data planes are held at 7.2-7.6 Gbps by EC2's
+  limit for one flow (the tunnel is one UDP flow), wireguard-go a little
+  ahead at 64-128 streams (7.6 against 7.4). But there **tswg uses more
+  CPU per GB than wireguard-go**, more so with more streams: bulk,
+  sender 4.4 -> 7.7 CPU-s/GB from 1 to 128 streams (wireguard-go
+  3.7-4.4), receiver 4.2 -> 10.7 (4.9-5.6); fetches, sender 7.1 at 128
+  (4.1). And one fetch stream gets 2.7 Gbps to wireguard-go's 3.5. On a
+  128-CPU host, tswg's parallel paths (crypt workers, a fast peer's
+  receive) spread one tunnel's work over far more CPUs than 7 Gbps
+  needs; see the TODO list.
+
+tswg in the same sweep (after a reboot, before change 16 below, so on
+the unlucky NIC queue spread described there) reached 7.3, 29, 71 and
+95 Gbps where wireguard-go did 6-8: at 16 clients and up, 4-14x
+wireguard-go's throughput at 0.6-0.95x its CPU per GB, but with one
+client, the same throughput (EC2's flow limit) at up to 1.4x its CPU.
+
+The NIC's queue spread is luck: Linux picks the RSS hash key at random
+each boot, and with only 37 peers' UDP flows, one boot spread them over
+23 of the router's 32 queues, the next over 11. That changed tswg's
+results more than any of the work after change 12 (uploads 68 -> 28
+Gbps, serving 133 -> 99, crawling 81 -> 42), and doesn't affect
+wireguard-go's, which don't reach the NIC's limits. Benchmarks with few
+peers should check the spread (`ethtool -S`'s `queue_N_rx_cnt`).
+
 ### What we inherit from upstream WireGuard
 
 * Inner GSO on send: the device advertises GSO (`WG_NETDEV_FEATURES` in
@@ -394,6 +448,15 @@ this order. Each step's throughput is bulk TCP, 1 stream, IPv4, 4 vCPUs.
    Gbps. Homes hashed over all CPUs, without avoiding the NIC's, did
    nothing; RPS (all packets, all the time) got 91 before steering, at
    7.0 CPU-s/GB to steering's 5.8.
+16. Picking steering homes by load (2026-11-08). Homes were the first
+   CPU from a hashed point that wasn't receiving from the NIC or known
+   to be overloaded, but a CPU knew its own load only when it received
+   from the NIC itself, which homes don't, so busy homes looked idle and
+   peers piled onto a few. Now any CPU's load comes from its idle time
+   (`tswg_cpu_busy`, which reads `get_cpu_idle_time_us` for any CPU),
+   and a peer's home is the least loaded of 8 spread from its hash,
+   kept while under `rx_steer_busy`. On the unlucky boot's 11 queues:
+   uploads 28 -> 44 Gbps, crawling 42 -> 51, serving 99 -> 101.
 
 The lean harness's VMs have guest USO off (decided 2026-11-07): with it,
 the host hands VM-to-VM UDP GSO packets to the receiving guest still
@@ -1325,6 +1388,16 @@ Performance (the primary motivation; see "Performance"):
 - [ ] Forwarded packets' transmit could steer like received ones
       (change 15) when the NIC's CPUs are busy, instead of RPS: fetches
       through a 128-CPU router with 32 NIC queues gained 13% from RPS.
+- [ ] One tunnel on a big host: tswg uses up to 2x wireguard-go's CPU per
+      GB at EC2's per-flow limit, more with more streams, and one fetch
+      stream gets 0.77x its throughput (see "wireguard-go at its best").
+      The crypt workers and a fast peer's parallel receive spread over
+      many more CPUs than the rate needs; recruit fewer, and look at
+      request/response latency.
+- [ ] Few peers on a NIC with RSS: the random hash key decides how many
+      queues they get (11 or 23 of 32, on two boots with 37 peers), and
+      so tswg's throughput; steering helps past the NIC, but not the
+      queues themselves.
 - [ ] Page zeroing (`init_on_alloc`, on in Ubuntu's kernels) is 5-13% of
       a big host's CPU, for pages we fill entirely: a page pool for the
       encrypted and decrypted packets' pages would recycle them unzeroed.

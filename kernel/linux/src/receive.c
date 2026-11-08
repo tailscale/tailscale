@@ -1028,13 +1028,39 @@ MODULE_PARM_DESC(rx_steer_busy, "percent busy a CPU must be to hand its peers' r
 #define TSWG_LOAD_WINDOW_US 10000
 #define TSWG_STEER_FOR HZ
 
-/* tswg_cpu_load is what tswg_cpu_overloaded knows of a CPU. */
+/*
+ * tswg_cpu_load is what tswg_cpu_busy knows of a CPU. Any CPU may update
+ * it; racing updates just lose a window.
+ */
 struct tswg_cpu_load {
 	u64 idle_us, wall_us; /* at the start of the current window */
-	bool overloaded; /* as of the last window */
+	unsigned int busy; /* percent busy in the last window */
 	unsigned long rx_jiffy; /* when it last received for us from a NIC */
 };
 static DEFINE_PER_CPU(struct tswg_cpu_load, tswg_cpu_load);
+
+/*
+ * tswg_cpu_busy returns how busy (percent) cpu was in its last whole
+ * TSWG_LOAD_WINDOW_US, from its idle time, or -1 if that isn't known (no
+ * NO_HZ accounting).
+ */
+static int tswg_cpu_busy(int cpu)
+{
+	struct tswg_cpu_load *l = per_cpu_ptr(&tswg_cpu_load, cpu);
+	u64 wall, idle = get_cpu_idle_time_us(cpu, &wall);
+	u64 start = READ_ONCE(l->wall_us);
+
+	if (idle == (u64)-1)
+		return -1;
+	if (wall - start >= TSWG_LOAD_WINDOW_US) {
+		u64 dw = wall - start, di = idle - READ_ONCE(l->idle_us);
+
+		WRITE_ONCE(l->busy, start && di <= dw ? 100 - div64_u64(di * 100, dw) : 0);
+		WRITE_ONCE(l->idle_us, idle);
+		WRITE_ONCE(l->wall_us, wall);
+	}
+	return READ_ONCE(l->busy);
+}
 
 /*
  * tswg_cpu_overloaded reports whether this CPU was more than rx_steer_busy
@@ -1043,55 +1069,58 @@ static DEFINE_PER_CPU(struct tswg_cpu_load, tswg_cpu_load);
  */
 static bool tswg_cpu_overloaded(void)
 {
-	struct tswg_cpu_load *l = this_cpu_ptr(&tswg_cpu_load);
-	unsigned int busy = READ_ONCE(tswg_rx_steer_busy);
-	u64 wall, idle;
+	unsigned int max = READ_ONCE(tswg_rx_steer_busy);
+	int busy;
 
-	if (!busy)
+	if (!max)
 		return false;
-	idle = get_cpu_idle_time_us(smp_processor_id(), &wall);
-	if (idle == (u64)-1) /* no NO_HZ accounting */
-		return tswg_cpu_squeezed();
-	if (wall - l->wall_us >= TSWG_LOAD_WINDOW_US) {
-		u64 dw = wall - l->wall_us, di = idle - l->idle_us;
-
-		l->overloaded = l->wall_us && di <= dw &&
-				di * 100 < dw * (100 - min(busy, 100U));
-		l->idle_us = idle;
-		l->wall_us = wall;
-	}
-	return l->overloaded || tswg_cpu_squeezed();
+	busy = tswg_cpu_busy(smp_processor_id());
+	return busy > (int)max || tswg_cpu_squeezed();
 }
 
 /*
- * tswg_cpu_good_home reports whether cpu is a good one to steer to: online,
- * not overloaded, and not itself receiving from a NIC (whose CPUs are what
- * steering is to relieve).
+ * tswg_home_load returns how loaded cpu is as a home for steered packets:
+ * its busy percent, or more than any CPU can be if it's offline or itself
+ * receiving from a NIC (whose CPUs are what steering is to relieve).
  */
-static bool tswg_cpu_good_home(int cpu)
+static int tswg_home_load(int cpu)
 {
 	struct tswg_cpu_load *l = per_cpu_ptr(&tswg_cpu_load, cpu);
 
-	return cpu_online(cpu) && !READ_ONCE(l->overloaded) &&
-	       jiffies - READ_ONCE(l->rx_jiffy) > HZ / 10;
+	if (!cpu_online(cpu) || jiffies - READ_ONCE(l->rx_jiffy) <= HZ / 10)
+		return 1000;
+	return max(tswg_cpu_busy(cpu), 0);
 }
 
 /*
+ * TSWG_HOME_CHOICES is how many CPUs, spread from a point peer's ID hashes
+ * to, tswg_peer_home compares to pick a home. Taking the first that would
+ * do, rather than the least loaded, piled peers onto a few.
+ */
+#define TSWG_HOME_CHOICES 8
+
+/*
  * tswg_peer_home returns the CPU that peer's steered packets go to: the
- * one it went to last, while that's still a good home, or else the first
- * good one from a point that peer's ID hashes to.
+ * one it went to last, while that isn't overloaded, or else the least
+ * loaded of TSWG_HOME_CHOICES.
  */
 static int tswg_peer_home(struct wg_peer *peer)
 {
-	int home = READ_ONCE(peer->tswg_home), n = num_online_cpus(), i, cpu;
+	int home = READ_ONCE(peer->tswg_home), k, cpu, load, best = INT_MAX;
+	unsigned int n = num_online_cpus(), i;
 
-	if (home >= 0 && home < nr_cpu_ids && tswg_cpu_good_home(home))
+	if (home >= 0 && home < nr_cpu_ids &&
+	    tswg_home_load(home) <= (int)READ_ONCE(tswg_rx_steer_busy))
 		return home;
-	i = hash_64(peer->internal_id, 32) % n;
-	for (cpu = 0; cpu < n; cpu++) {
-		home = cpumask_nth((i + cpu) % n, cpu_online_mask);
-		if (tswg_cpu_good_home(home))
-			break;
+	i = hash_64(peer->internal_id, 32);
+	for (k = 0; k < TSWG_HOME_CHOICES; k++) {
+		cpu = cpumask_nth((i + k * (n / TSWG_HOME_CHOICES + 1)) % n,
+				  cpu_online_mask);
+		load = tswg_home_load(cpu);
+		if (load < best) {
+			best = load;
+			home = cpu;
+		}
 	}
 	WRITE_ONCE(peer->tswg_home, home);
 	return home;
