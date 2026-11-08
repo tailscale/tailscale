@@ -67,6 +67,12 @@ const settle = 500 * time.Millisecond
 // RunTCP runs a TCP throughput test from sender to receiver, whose sink
 // is at addr.
 func RunTCP(sender, receiver Node, addr netip.AddrPort, streams int, dur time.Duration) (TCPResult, error) {
+	return RunTCPFrom(sender, "", receiver, addr, streams, dur)
+}
+
+// RunTCPFrom is like RunTCP, but the sender connects from its network
+// namespace netns, if not empty.
+func RunTCPFrom(sender Node, netns string, receiver Node, addr netip.AddrPort, streams int, dur time.Duration) (TCPResult, error) {
 	var c1, c2, c1b, c2b CPU
 	var s2, s2b Stats
 	var res Result
@@ -79,6 +85,7 @@ func RunTCP(sender, receiver Node, addr netip.AddrPort, streams int, dur time.Du
 				"addr":    {addr.String()},
 				"dur":     {dur.String()},
 				"streams": {strconv.Itoa(streams)},
+				"netns":   {netns},
 			}.Encode(), &res)
 		},
 		func() error { time.Sleep(settle); return nil },
@@ -104,6 +111,12 @@ func RunTCP(sender, receiver Node, addr netip.AddrPort, streams int, dur time.Du
 // RunUDP runs a small-packet UDP test from sender to receiver, whose sink
 // is at addr.
 func RunUDP(sender, receiver Node, addr netip.AddrPort, size int, dur time.Duration) (UDPResult, error) {
+	return RunUDPGSO(sender, receiver, addr, size, 0, dur)
+}
+
+// RunUDPGSO is like RunUDP, but if gso > 0, the sender writes size bytes
+// at a time as UDP GSO batches of gso-byte datagrams.
+func RunUDPGSO(sender, receiver Node, addr netip.AddrPort, size, gso int, dur time.Duration) (UDPResult, error) {
 	var c2, c2b CPU
 	var s2, s2b Stats
 	var res Result
@@ -115,6 +128,7 @@ func RunUDP(sender, receiver Node, addr netip.AddrPort, size int, dur time.Durat
 				"addr": {addr.String()},
 				"dur":  {dur.String()},
 				"size": {strconv.Itoa(size)},
+				"gso":  {strconv.Itoa(gso)},
 			}.Encode(), &res)
 		},
 		func() error { time.Sleep(settle); return nil },

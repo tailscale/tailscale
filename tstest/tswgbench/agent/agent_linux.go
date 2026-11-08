@@ -93,6 +93,21 @@ func main() {
 		}
 		w.Write(b)
 	})
+	mux.HandleFunc("POST /lan-netns", handleLANNetns)
+	// Tests: set a tswg module parameter (POST
+	// /param?name=N&value=V).
+	mux.HandleFunc("POST /param", func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Query().Get("name")
+		if name == "" || strings.ContainsAny(name, "/.") {
+			http.Error(w, "bad name", http.StatusBadRequest)
+			return
+		}
+		if err := os.WriteFile("/sys/module/tswg/parameters/"+name, []byte(r.URL.Query().Get("value")), 0); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		io.WriteString(w, "OK\n")
+	})
 	mux.HandleFunc("GET /dmesg", handleDmesg)
 	mux.HandleFunc("POST /shutdown", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "OK\n")

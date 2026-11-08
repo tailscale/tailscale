@@ -290,6 +290,10 @@ type vm struct {
 type lab struct {
 	t   testing.TB
 	vms []*vm
+
+	// setupExtra, if non-nil, adjusts the agent setup query for VM i in
+	// setup, for tests that need more routes or allowed IPs.
+	setupExtra func(i int, q url.Values)
 }
 
 // kernelSplats are console messages that mean a kernel found a bug.
@@ -512,6 +516,9 @@ func (l *lab) setup(mode string, v6 bool) netip.Addr {
 		// NAPI runs in kthreads or softirq.
 		if v := os.Getenv("TSWG_NAPI_THREADED"); v != "" && mode != modeWGGo {
 			q.Set("napi-threaded", v)
+		}
+		if l.setupExtra != nil {
+			l.setupExtra(i, q)
 		}
 		if err := v.do("POST", "/setup?"+q.Encode(), nil); err != nil {
 			l.t.Fatalf("setting up %s: %v", mode, err)

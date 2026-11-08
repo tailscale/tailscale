@@ -32,9 +32,11 @@ import (
 //   - GET stats returns the server's counters ([Stats]).
 //   - GET cpu returns the node's CPU time ([CPU]).
 //   - GET tcp?addr=IP:PORT&dur=D&streams=N sends to a TCP sink for D over
-//     N streams ([Result]).
+//     N streams ([Result]). With netns=NAME, it connects from the network
+//     namespace /run/netns/NAME.
 //   - GET udp?addr=IP:PORT&dur=D&size=N floods a UDP sink with N-byte
-//     datagrams for D ([Result]).
+//     datagrams for D ([Result]). With gso=M, each write of N bytes is
+//     a UDP GSO (UDP_SEGMENT) batch of M-byte datagrams.
 //   - GET rtt?addr=IP:PORT&n=N&interval=D measures N UDP round trips to an
 //     echo server, D apart ([RTT]).
 func Register(mux *http.ServeMux, prefix string) {
@@ -189,9 +191,10 @@ func benchTCP(w http.ResponseWriter, r *http.Request) {
 	}
 	streams, _ := strconv.Atoi(r.URL.Query().Get("streams"))
 	streams = max(streams, 1)
+	netns := r.URL.Query().Get("netns")
 	var conns []net.Conn
 	for range streams {
-		c, err := net.DialTimeout("tcp", addr, 10*time.Second)
+		c, err := dialTCPIn(netns, addr)
 		if err != nil {
 			for _, c := range conns {
 				c.Close()
@@ -223,6 +226,39 @@ func benchTCP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, Result{Bytes: total.Load(), Seconds: time.Since(start).Seconds()})
 }
 
+// dialTCPIn connects to addr over TCP from the network namespace
+// /run/netns/netns, or the current one if netns is empty.
+func dialTCPIn(netns, addr string) (net.Conn, error) {
+	if netns == "" {
+		return net.DialTimeout("tcp", addr, 10*time.Second)
+	}
+	type result struct {
+		c   net.Conn
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		// Sockets belong to the namespace of the thread that makes them.
+		// This thread never unlocks, so it exits with the goroutine
+		// rather than going back to the scheduler in the other namespace.
+		runtime.LockOSThread()
+		f, err := os.Open("/run/netns/" + netns)
+		if err != nil {
+			ch <- result{err: err}
+			return
+		}
+		defer f.Close()
+		if err := unix.Setns(int(f.Fd()), unix.CLONE_NEWNET); err != nil {
+			ch <- result{err: fmt.Errorf("setns %s: %w", netns, err)}
+			return
+		}
+		c, err := net.DialTimeout("tcp", addr, 10*time.Second)
+		ch <- result{c, err}
+	}()
+	r := <-ch
+	return r.c, r.err
+}
+
 // benchUDP sends size-byte datagrams as fast as it can to the UDP sink at
 // addr for dur.
 func benchUDP(w http.ResponseWriter, r *http.Request) {
@@ -233,6 +269,7 @@ func benchUDP(w http.ResponseWriter, r *http.Request) {
 	}
 	size, _ := strconv.Atoi(r.URL.Query().Get("size"))
 	size = min(max(size, 1), 65000)
+	gso, _ := strconv.Atoi(r.URL.Query().Get("gso"))
 	c, err := net.Dial("udp", addr)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -241,6 +278,24 @@ func benchUDP(w http.ResponseWriter, r *http.Request) {
 	defer c.Close()
 	buf := make([]byte, size)
 	buf[0] = benchUDPSink
+	perWrite := 1 // datagrams per write
+	if gso > 0 {
+		rc, err := c.(*net.UDPConn).SyscallConn()
+		if err == nil {
+			rc.Control(func(fd uintptr) {
+				err = unix.SetsockoptInt(int(fd), unix.SOL_UDP, unix.UDP_SEGMENT, gso)
+			})
+		}
+		if err != nil {
+			http.Error(w, "UDP_SEGMENT: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// Each datagram the sink receives must start with benchUDPSink.
+		for i := 0; i < size; i += gso {
+			buf[i] = benchUDPSink
+		}
+		perWrite = (size + gso - 1) / gso
+	}
 	var res Result
 	start := time.Now()
 	deadline := start.Add(dur)
@@ -253,7 +308,7 @@ func benchUDP(w http.ResponseWriter, r *http.Request) {
 			time.Sleep(100 * time.Microsecond)
 			continue
 		}
-		res.Packets++
+		res.Packets += int64(perWrite)
 		res.Bytes += int64(size)
 	}
 	res.Seconds = time.Since(start).Seconds()

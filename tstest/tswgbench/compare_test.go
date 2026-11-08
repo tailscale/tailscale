@@ -78,8 +78,11 @@ func TestLeanCompare(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%s run %d: %v", mode, run, err)
 				}
-				t.Logf("run %d: %s: %.0f Mbps", run, mode, r.Mbps)
+				t.Logf("run %d: %s: %.0f Mbps, sender %.2f, receiver %.2f CPU-s/GB",
+					run, mode, r.Mbps, r.SenderCPUSecPerGB, r.ReceiverCPUSecPerGB)
 				record(mode, "Mbps", r.Mbps)
+				record(mode, "send CPU-s/GB", r.SenderCPUSecPerGB)
+				record(mode, "recv CPU-s/GB", r.ReceiverCPUSecPerGB)
 				continue
 			}
 			idle, err := netbench.RunRTT(sender, addr, 400)
