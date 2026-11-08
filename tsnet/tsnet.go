@@ -1114,7 +1114,7 @@ func (s *Server) resolveAuthKey() (string, error) {
 }
 
 func (s *Server) startLogger(closePool *closeOnErrorPool, health *health.Tracker, tsLogf logger.Logf) error {
-	if testenv.InTest() {
+	if !buildfeatures.HasLogTail || testenv.InTest() {
 		return nil
 	}
 	cfgPath := filepath.Join(s.rootPath, "tailscaled.log.conf")
