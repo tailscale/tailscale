@@ -257,6 +257,15 @@ func TestFlattenExtraClaims(t *testing.T) {
 				"env": "prod", // not converted to slice
 			},
 		},
+		{
+			name: "json-number-without-exponent",
+			input: []capRule{
+				{ExtraClaims: map[string]any{"quota": float64(1000000)}},
+			},
+			expected: map[string]any{
+				"quota": "1000000",
+			},
+		},
 	}
 
 	for _, tt := range tests {
