@@ -23,6 +23,11 @@
 #include <linux/skbuff_ref.h> /* skb_frag_ref, which was in skbuff.h */
 #endif
 
+#ifndef HAVE_SKB_GSO_TCP_ACCECN
+/* Before AccECN, no GSO packet had it, and CWR was always first-only. */
+#define SKB_GSO_TCP_ACCECN 0
+#endif
+
 #ifndef HAVE_SKB_FRAGS_READABLE
 #include <linux/skbuff.h>
 /* Before devmem TCP, every skb's frags were readable. */

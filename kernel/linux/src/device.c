@@ -192,10 +192,18 @@ static netdev_tx_t wg_xmit(struct sk_buff *skb, struct net_device *dev)
 	sk_pacing_shift_update(skb->sk, TSWG_PACING_SHIFT);
 
 	__skb_queue_head_init(&packets);
-	if (!skb_is_gso(skb)) {
+	/*
+	 * TSWG: most GSO packets stay whole, to be encrypted a segment at a
+	 * time straight from them (see tswg_gso_whole_ok). The rest get
+	 * segments that share their pages and leave their checksums to be
+	 * done, which tswg_copy_plaintext does while copying them anyway:
+	 * with no features, as upstream asks for, skb_gso_segment copies
+	 * and checksums each segment's payload too.
+	 */
+	if (!skb_is_gso(skb) || tswg_gso_whole_ok(skb)) {
 		skb_mark_not_on_list(skb);
 	} else {
-		struct sk_buff *segs = skb_gso_segment(skb, 0);
+		struct sk_buff *segs = skb_gso_segment(skb, NETIF_F_SG | NETIF_F_HW_CSUM);
 
 		if (IS_ERR(segs)) {
 			ret = PTR_ERR(segs);

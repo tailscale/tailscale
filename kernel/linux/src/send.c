@@ -18,6 +18,7 @@
 #include <net/ip_tunnels.h>
 #include <net/udp.h>
 #include <net/sock.h>
+#include <net/ip6_checksum.h> /* TSWG */
 
 /*
  * TSWG: tswg_hybrid_initiation and tswg_hybrid_response lay out a hybrid
@@ -206,9 +207,13 @@ static void keep_key_fresh(struct wg_peer *peer)
 		wg_packet_send_queued_handshake_initiation(peer, false);
 }
 
-static unsigned int calculate_skb_padding(struct sk_buff *skb)
+/*
+ * TSWG: calculate_padding is upstream's calculate_skb_padding, for a packet
+ * (or a segment of one; see tswg_seg_len) of len bytes, of skb.
+ */
+static unsigned int calculate_padding(struct sk_buff *skb, unsigned int len)
 {
-	unsigned int padded_size, last_unit = skb->len;
+	unsigned int padded_size, last_unit = len;
 
 	if (unlikely(!PACKET_CB(skb)->mtu))
 		return ALIGN(last_unit, MESSAGE_PADDING_MULTIPLE) - last_unit;
@@ -225,6 +230,158 @@ static unsigned int calculate_skb_padding(struct sk_buff *skb)
 	padded_size = min(PACKET_CB(skb)->mtu,
 			  ALIGN(last_unit, MESSAGE_PADDING_MULTIPLE));
 	return padded_size - last_unit;
+}
+
+/*
+ * TSWG: encryption straight from GSO packets.
+ *
+ * A GSO packet (a TCP or UDP super-packet from a local socket, or one GRO
+ * made, being forwarded) used to be segmented in wg_xmit
+ * (skb_gso_segment), allocating a packet for each segment, copying the
+ * headers into it, and (with no device features) copying and checksumming
+ * its payload too, after which we copied it all again to encrypt it. Now
+ * wg_xmit keeps such a packet whole when tswg_gso_whole_ok, and
+ * tswg_encrypt_list encrypts each segment straight from it: the segment's
+ * headers, fixed up as TCP's and UDP's segmentation would
+ * (tswg_copy_segment), and its slice of the payload, checksummed as it's
+ * copied. Each segment has its own nonce, assigned in a block
+ * (wg_packet_send_staged_packets). Others are still segmented.
+ */
+
+/*
+ * tswg_gso_hdr_len returns the length of the headers that each segment of
+ * the GSO packet skb repeats: everything up to and including its TCP or
+ * UDP header.
+ */
+static unsigned int tswg_gso_hdr_len(const struct sk_buff *skb)
+{
+	return skb_transport_offset(skb) +
+	       (skb_is_gso_tcp(skb) ? tcp_hdrlen(skb) : sizeof(struct udphdr));
+}
+
+/* gso_whole turns encryption straight from GSO packets on (the default). */
+static bool tswg_gso_whole = true;
+module_param_named(gso_whole, tswg_gso_whole, bool, 0644);
+MODULE_PARM_DESC(gso_whole, "encrypt GSO packets a segment at a time, rather than segmenting them first");
+
+/*
+ * tswg_gso_whole_ok reports whether wg_xmit may keep the GSO packet skb
+ * whole, for tswg_encrypt_list to encrypt straight from.
+ */
+bool tswg_gso_whole_ok(struct sk_buff *skb)
+{
+	const struct skb_shared_info *si = skb_shinfo(skb);
+	unsigned int hlen, mss = si->gso_size;
+	u8 proto;
+
+	if (!READ_ONCE(tswg_gso_whole))
+		return false;
+	/* Not, for example, DODGY (untrusted), tunnels or frag lists. */
+	if (si->gso_type & ~(SKB_GSO_TCPV4 | SKB_GSO_TCPV6 | SKB_GSO_TCP_ECN |
+			     SKB_GSO_TCP_FIXEDID | SKB_GSO_TCP_ACCECN |
+			     SKB_GSO_UDP_L4))
+		return false;
+	if (skb->encapsulation || skb->ip_summed != CHECKSUM_PARTIAL ||
+	    !skb_transport_header_was_set(skb) ||
+	    (si->tx_flags & SKBTX_ANY_TSTAMP))
+		return false;
+	if (skb->protocol == htons(ETH_P_IP))
+		proto = ip_hdr(skb)->protocol;
+	else
+		proto = ipv6_hdr(skb)->nexthdr;
+	if (proto != (skb_is_gso_tcp(skb) ? IPPROTO_TCP : IPPROTO_UDP) ||
+	    skb_checksum_start(skb) != skb_transport_header(skb))
+		return false;
+	if (skb_is_gso_tcp(skb) &&
+	    (skb_headlen(skb) < skb_transport_offset(skb) + sizeof(struct tcphdr) ||
+	     tcp_hdrlen(skb) < sizeof(struct tcphdr)))
+		return false;
+	hlen = tswg_gso_hdr_len(skb);
+	return skb_headlen(skb) >= hlen && mss && skb->len > hlen + mss &&
+	       si->gso_segs == DIV_ROUND_UP(skb->len - hlen, mss);
+}
+
+/* tswg_skb_segs returns how many packets skb is, as a whole GSO packet. */
+static unsigned int tswg_skb_segs(const struct sk_buff *skb)
+{
+	return skb_is_gso(skb) ? skb_shinfo(skb)->gso_segs : 1;
+}
+
+/* tswg_seg_len returns the length of skb's segment i; see tswg_skb_segs. */
+static unsigned int tswg_seg_len(const struct sk_buff *skb, unsigned int i)
+{
+	unsigned int hlen, mss;
+
+	if (!skb_is_gso(skb))
+		return skb->len;
+	hlen = tswg_gso_hdr_len(skb);
+	mss = skb_shinfo(skb)->gso_size;
+	return hlen + min(mss, skb->len - hlen - i * mss);
+}
+
+/*
+ * tswg_copy_segment writes segment i, of len bytes, of the GSO packet skb
+ * to the linear buffer to: its headers, adjusted as tcp_gso_segment (or
+ * __udp_gso_segment) and inet_gso_segment (or ipv6_gso_segment) would, and
+ * its payload, with its checksum computed while copying it.
+ */
+static bool tswg_copy_segment(struct sk_buff *skb, unsigned int i, u8 *to,
+			      unsigned int len)
+{
+	const struct skb_shared_info *si = skb_shinfo(skb);
+	unsigned int nhoff = skb_network_offset(skb);
+	unsigned int thoff = skb_transport_offset(skb);
+	unsigned int hlen = tswg_gso_hdr_len(skb);
+	unsigned int l4len = len - thoff;
+	bool tcp = skb_is_gso_tcp(skb);
+	u8 *l4 = to + thoff;
+	__sum16 check;
+	__wsum csum;
+
+	if (unlikely(skb_copy_bits(skb, 0, to, hlen)))
+		return false;
+	csum = skb_copy_and_csum_bits(skb, hlen + i * si->gso_size, to + hlen,
+				      len - hlen);
+
+	if (tcp) {
+		struct tcphdr *th = (struct tcphdr *)l4;
+
+		th->seq = htonl(ntohl(th->seq) + i * si->gso_size);
+		if (i != si->gso_segs - 1)
+			th->fin = th->psh = 0;
+		if (i && !(si->gso_type & SKB_GSO_TCP_ACCECN))
+			th->cwr = 0;
+		th->check = 0;
+	} else {
+		struct udphdr *uh = (struct udphdr *)l4;
+
+		uh->len = htons(l4len);
+		uh->check = 0;
+	}
+	/* The L4 header's length is even, so its sum just adds on. */
+	csum = csum_partial(l4, hlen - thoff, csum);
+
+	if (skb->protocol == htons(ETH_P_IP)) {
+		struct iphdr *iph = (struct iphdr *)(to + nhoff);
+
+		iph->tot_len = htons(len - nhoff);
+		if (!(si->gso_type & SKB_GSO_TCP_FIXEDID))
+			iph->id = htons(ntohs(iph->id) + i);
+		ip_send_check(iph);
+		check = csum_tcpudp_magic(iph->saddr, iph->daddr, l4len,
+					  tcp ? IPPROTO_TCP : IPPROTO_UDP, csum);
+	} else {
+		struct ipv6hdr *ip6h = (struct ipv6hdr *)(to + nhoff);
+
+		ip6h->payload_len = htons(len - nhoff - sizeof(*ip6h));
+		check = csum_ipv6_magic(&ip6h->saddr, &ip6h->daddr, l4len,
+					tcp ? IPPROTO_TCP : IPPROTO_UDP, csum);
+	}
+	if (tcp)
+		((struct tcphdr *)l4)->check = check;
+	else
+		((struct udphdr *)l4)->check = check ?: CSUM_MANGLED_0;
+	return true;
 }
 
 /*
@@ -274,31 +431,100 @@ static bool tswg_copy_plaintext(struct sk_buff *skb, u8 *to)
 }
 
 /*
- * tswg_encrypt_into encrypts skb as a data message of msg_len bytes,
- * appended to out's page frags. out must have a free frag slot.
+ * TSWG: verify_gso, for tests, checks every segment that
+ * tswg_copy_segment writes against the kernel's own segmentation of the GSO
+ * packet (skb_gso_segment, computing checksums in software), counting the
+ * segments checked in gso_verified and those that differ in
+ * gso_verify_errors. It's slow.
+ */
+static bool tswg_verify_gso;
+module_param_named(verify_gso, tswg_verify_gso, bool, 0644);
+MODULE_PARM_DESC(verify_gso, "check segments encrypted straight from GSO packets against skb_gso_segment (slow; for tests)");
+static atomic_t tswg_gso_verified = ATOMIC_INIT(0);
+static atomic_t tswg_gso_verify_errors = ATOMIC_INIT(0);
+module_param_named(gso_verified, tswg_gso_verified.counter, int, 0444);
+module_param_named(gso_verify_errors, tswg_gso_verify_errors.counter, int, 0444);
+
+/*
+ * tswg_verify_segments checks skb's segments as tswg_copy_segment writes
+ * them against skb_gso_segment's; see verify_gso.
+ */
+static void tswg_verify_segments(struct sk_buff *skb)
+{
+	struct sk_buff *copy, *segs, *seg, *next;
+	unsigned int i = 0, len;
+	u8 *ours, *theirs;
+	bool bad = false;
+
+	copy = skb_copy(skb, GFP_ATOMIC);
+	ours = kmalloc(2 * 65536, GFP_ATOMIC);
+	if (!copy || !ours)
+		goto out;
+	theirs = ours + 65536;
+	segs = skb_gso_segment(copy, 0);
+	if (IS_ERR_OR_NULL(segs)) {
+		bad = true;
+		goto out;
+	}
+	skb_list_walk_safe(segs, seg, next) {
+		len = tswg_seg_len(skb, i);
+		if (i >= tswg_skb_segs(skb) || seg->len != len ||
+		    !tswg_copy_segment(skb, i, ours, len) ||
+		    skb_copy_bits(seg, 0, theirs, len) ||
+		    memcmp(ours, theirs, len)) {
+			if (!bad)
+				pr_err_ratelimited("verify_gso: segment %u of %u (len %u, theirs %u, gso_type %#x) differs\n",
+						   i, tswg_skb_segs(skb), len, seg->len,
+						   skb_shinfo(skb)->gso_type);
+			bad = true;
+		}
+		atomic_inc(&tswg_gso_verified);
+		i++;
+		kfree_skb(seg);
+	}
+	if (i != tswg_skb_segs(skb))
+		bad = true;
+out:
+	if (bad)
+		atomic_inc(&tswg_gso_verify_errors);
+	kfree(ours);
+	kfree_skb(copy);
+}
+
+/*
+ * tswg_encrypt_into encrypts segment seg (see tswg_skb_segs), of len bytes,
+ * of skb as a data message of msg_len bytes, appended to out's page frags.
+ * out must have a free frag slot.
  */
 static bool tswg_encrypt_into(struct sk_buff *out, struct sk_buff *skb,
+			      unsigned int seg, unsigned int len,
 			      unsigned int msg_len,
 			      struct noise_keypair *keypair,
 			      struct page_frag *pfrag)
 {
 	unsigned int plaintext_len = msg_len - message_data_len(0);
+	u64 nonce = PACKET_CB(skb)->nonce + seg;
 	int i = skb_shinfo(out)->nr_frags;
 	struct message_data *header;
 	u8 *plaintext;
+	bool ok;
 
 	if (unlikely(!skb_page_frag_refill(msg_len, pfrag, GFP_ATOMIC)))
 		return false;
 	header = page_address(pfrag->page) + pfrag->offset;
 	plaintext = (u8 *)(header + 1);
-	if (unlikely(!tswg_copy_plaintext(skb, plaintext)))
+	if (skb_is_gso(skb))
+		ok = tswg_copy_segment(skb, seg, plaintext, len);
+	else
+		ok = tswg_copy_plaintext(skb, plaintext);
+	if (unlikely(!ok))
 		return false;
-	memset(plaintext + skb->len, 0, plaintext_len - skb->len);
+	memset(plaintext + len, 0, plaintext_len - len);
 	header->header.type = cpu_to_le32(MESSAGE_DATA);
 	header->key_idx = keypair->remote_index;
-	header->counter = cpu_to_le64(PACKET_CB(skb)->nonce);
-	tswg_aead_encrypt(plaintext, plaintext, plaintext_len,
-			  PACKET_CB(skb)->nonce, keypair->sending.key);
+	header->counter = cpu_to_le64(nonce);
+	tswg_aead_encrypt(plaintext, plaintext, plaintext_len, nonce,
+			  keypair->sending.key);
 
 	if (skb_can_coalesce(out, i, pfrag->page, pfrag->offset)) {
 		skb_frag_size_add(&skb_shinfo(out)->frags[i - 1], msg_len);
@@ -359,6 +585,22 @@ static void tswg_move_owner(struct sk_buff *out, struct sk_buff *skb,
 }
 
 /*
+ * tswg_share_owner makes out, a packet with no owner yet, owned by sk with
+ * destructor, the owner moved from a GSO packet to an earlier packet that
+ * some of its segments were encrypted into, as tcp_gso_segment and
+ * __udp_gso_segment give every segment the GSO packet's owner. Its charge
+ * starts at nothing, and tswg_settle_charge makes it out's size.
+ */
+static void tswg_share_owner(struct sk_buff *out, struct sock *sk,
+			     void (*destructor)(struct sk_buff *))
+{
+	if (!sk || out->destructor)
+		return;
+	out->sk = sk;
+	out->destructor = destructor;
+}
+
+/*
  * tswg_settle_charge adjusts the socket's charge for out from charged, what
  * its packets were charged, to out->truesize, which out's destructor will
  * uncharge. The packets' truesize (for TCP segments, about twice their
@@ -391,10 +633,10 @@ static void tswg_finish_out(struct sk_buff *out, unsigned int mss,
 }
 
 /*
- * tswg_encrypt_list encrypts the list of packets at first into
- * PACKET_CB(first)->tswg_out, a list of packets to send. The tx worker
- * frees the originals once it has sent those (see
- * wg_packet_create_data_done).
+ * tswg_encrypt_list encrypts the list of packets at first (each perhaps a
+ * whole GSO packet; see tswg_gso_whole_ok) into PACKET_CB(first)->tswg_out,
+ * a list of packets to send. The tx worker frees the originals once it has
+ * sent those (see wg_packet_create_data_done).
  */
 static bool tswg_encrypt_list(struct sk_buff *first, struct page_frag *pfrag)
 {
@@ -404,47 +646,66 @@ static bool tswg_encrypt_list(struct sk_buff *first, struct page_frag *pfrag)
 	struct sk_buff *skb, *out = NULL;
 	bool ok = true;
 
-	for (skb = first; skb; skb = skb->next) {
-		unsigned int msg_len = message_data_len(skb->len +
-						       calculate_skb_padding(skb));
+	for (skb = first; skb && ok; skb = skb->next) {
+		unsigned int seg, nsegs = tswg_skb_segs(skb);
+		/* skb's owner, once moved to an out; see tswg_share_owner. */
+		void (*destructor)(struct sk_buff *) = NULL;
+		struct sock *sk = NULL;
 
-		/* Only the last segment of a GSO packet may be shorter. */
-		if (out && (msg_len > mss || out->len != mss * segs ||
-			    msg_len == message_data_len(0) ||
-			    mss == message_data_len(0) ||
-			    segs >= TSWG_GSO_MAX_SEGS ||
-			    out->len + msg_len > TSWG_GSO_MAX_BYTES ||
-			    skb_shinfo(out)->nr_frags >= MAX_SKB_FRAGS ||
-			    PACKET_CB(skb)->ds != PACKET_CB(out)->ds)) {
-			tswg_finish_out(out, mss, segs);
-			tswg_settle_charge(out, charged);
-			out = NULL;
-		}
-		if (!out) {
-			out = alloc_skb(SKB_HEADER_LEN, GFP_ATOMIC);
-			if (unlikely(!out)) {
+		if (unlikely(READ_ONCE(tswg_verify_gso)) && skb_is_gso(skb))
+			tswg_verify_segments(skb);
+
+		for (seg = 0; seg < nsegs; seg++) {
+			unsigned int len = tswg_seg_len(skb, seg);
+			unsigned int msg_len =
+				message_data_len(len + calculate_padding(skb, len));
+
+			/* Only the last segment of a GSO packet may be shorter. */
+			if (out && (msg_len > mss || out->len != mss * segs ||
+				    msg_len == message_data_len(0) ||
+				    mss == message_data_len(0) ||
+				    segs >= TSWG_GSO_MAX_SEGS ||
+				    out->len + msg_len > TSWG_GSO_MAX_BYTES ||
+				    skb_shinfo(out)->nr_frags >= MAX_SKB_FRAGS ||
+				    PACKET_CB(skb)->ds != PACKET_CB(out)->ds)) {
+				tswg_finish_out(out, mss, segs);
+				tswg_settle_charge(out, charged);
+				out = NULL;
+			}
+			if (!out) {
+				out = alloc_skb(SKB_HEADER_LEN, GFP_ATOMIC);
+				if (unlikely(!out)) {
+					ok = false;
+					break;
+				}
+				skb_reserve(out, SKB_HEADER_LEN);
+				/* Keep the inner flow's hash, as upstream does. */
+				out->hash = skb_get_hash(skb);
+				out->l4_hash = skb->l4_hash;
+				out->sw_hash = skb->sw_hash;
+				PACKET_CB(out)->ds = PACKET_CB(skb)->ds;
+				*tail = out;
+				tail = &out->next;
+				mss = msg_len;
+				segs = 0;
+				charged = 0;
+				tswg_share_owner(out, sk, destructor);
+			}
+			if (unlikely(!tswg_encrypt_into(out, skb, seg, len,
+							msg_len, keypair,
+							pfrag))) {
 				ok = false;
 				break;
 			}
-			skb_reserve(out, SKB_HEADER_LEN);
-			/* Keep the inner flow's hash, as upstream does. */
-			out->hash = skb_get_hash(skb);
-			out->l4_hash = skb->l4_hash;
-			out->sw_hash = skb->sw_hash;
-			PACKET_CB(out)->ds = PACKET_CB(skb)->ds;
-			*tail = out;
-			tail = &out->next;
-			mss = msg_len;
-			segs = 0;
-			charged = 0;
+			if (!seg) {
+				tswg_move_owner(out, skb, &charged);
+				if (!skb->sk && out->sk) {
+					sk = out->sk;
+					destructor = out->destructor;
+				}
+			}
+			segs++;
 		}
-		if (unlikely(!tswg_encrypt_into(out, skb, msg_len, keypair,
-						pfrag))) {
-			ok = false;
-			break;
-		}
-		tswg_move_owner(out, skb, &charged);
-		segs++;
 	}
 	if (out) {
 		tswg_finish_out(out, mss, segs);
@@ -583,7 +844,7 @@ static void wg_packet_create_data(struct wg_peer *peer, struct sk_buff *first)
 	 * that's forwarding, on a subnet router's CPUs taking the NIC's
 	 * interrupts, where inlining cost 6% of its throughput.
 	 */
-	if (!first->next && !in_serving_softirq() &&
+	if (!first->next && !skb_is_gso(first) && !in_serving_softirq() &&
 	    tswg_inline_ok(&wg->encrypt_queue)) {
 		ret = tswg_enqueue_per_peer(&peer->tx_queue, first);
 		if (likely(!ret)) {
@@ -623,6 +884,7 @@ void wg_packet_send_staged_packets(struct wg_peer *peer)
 {
 	struct noise_keypair *keypair;
 	struct sk_buff_head packets;
+	unsigned int count = 0; /* TSWG: packets, counting GSO segments */
 	struct sk_buff *skb;
 
 	/* Steal the current queue into our local one. */
@@ -652,21 +914,25 @@ void wg_packet_send_staged_packets(struct wg_peer *peer)
 	 * handshake.
 	 */
 	skb_queue_walk(&packets, skb) {
+		/* TSWG: a whole GSO packet gets a nonce per segment. */
+		unsigned int segs = tswg_skb_segs(skb);
+
 		/* 0 for no outer TOS: no leak. TODO: at some later point, we
 		 * might consider using flowi->tos as outer instead.
 		 */
 		PACKET_CB(skb)->ds = ip_tunnel_ecn_encap(0, ip_hdr(skb), skb);
 		PACKET_CB(skb)->nonce =
-				atomic64_inc_return(&keypair->sending_counter) - 1;
-		if (unlikely(PACKET_CB(skb)->nonce >= REJECT_AFTER_MESSAGES))
+			atomic64_add_return(segs, &keypair->sending_counter) - segs;
+		if (unlikely(PACKET_CB(skb)->nonce + segs - 1 >= REJECT_AFTER_MESSAGES))
 			goto out_invalid;
+		count += segs;
 	}
 
 	packets.prev->next = NULL;
 	wg_peer_get(keypair->entry.peer);
 	PACKET_CB(packets.next)->keypair = keypair;
 	PACKET_CB(packets.next)->tswg_out = NULL; /* TSWG */
-	PACKET_CB(packets.next)->tswg_count = min_t(u32, skb_queue_len(&packets), U16_MAX);
+	PACKET_CB(packets.next)->tswg_count = min_t(u32, count, U16_MAX);
 	wg_packet_create_data(peer, packets.next);
 	return;
 

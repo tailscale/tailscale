@@ -44,6 +44,7 @@ void wg_packet_send_handshake_cookie(struct wg_device *wg,
 				     __le32 sender_index);
 void wg_packet_send_keepalive(struct wg_peer *peer);
 void wg_packet_purge_staged_packets(struct wg_peer *peer);
+bool tswg_gso_whole_ok(struct sk_buff *skb);
 void wg_packet_send_staged_packets(struct wg_peer *peer);
 /* Workqueue workers: */
 void wg_packet_handshake_send_worker(struct work_struct *work);

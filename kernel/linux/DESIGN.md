@@ -103,13 +103,16 @@ which `/proc/stat` counts), wireguard-go least (mostly user time).
   CPU), nor the backend (13%).
 
 Point to point (`TestLeanBenchmark`, `scripts/leanbench.sh`): one tunnel
-between two machines, 4 vCPUs each. Updated 2026-11-07.
+between two machines, 4 vCPUs each. Updated 2026-11-07; the QEMU lab's
+TCP rows 2026-11-08, after change 11 below (`TestLeanCompare`, medians of
+4 runs; kernel WG from before).
 
 | testbed | metric | tswg | wireguard-go | kernel WG | tswg/wggo |
 |---|---|---|---|---|---|
-| QEMU lab (nested) | TCP 1 stream | 10.2 Gbps | 10.2 | 3.6 | 1.0x |
-| QEMU lab (nested) | TCP 4 streams | 11.7 Gbps | 11.1 | 4.2 | 1.05x |
-| QEMU lab (nested) | sender / receiver CPU-s/GB, 1 stream | 1.81 / 2.12 | 1.93 / 2.37 | 2.95 / 5.20 | 0.94x / 0.90x |
+| QEMU lab (nested) | TCP 1 stream | 12.2 Gbps | 9.8 | 3.6 | 1.24x |
+| QEMU lab (nested) | TCP 4 streams | 12.2 Gbps | 11.2 | 4.2 | 1.08x |
+| QEMU lab (nested) | sender / receiver CPU-s/GB, 1 stream | 1.21 / 1.92 | 1.97 / 2.47 | 2.95 / 5.20 | 0.61x / 0.78x |
+| QEMU lab (nested) | sender / receiver CPU-s/GB, 4 streams | 1.39 / 2.06 | 1.83 / 2.29 | | 0.76x / 0.90x |
 | QEMU lab (nested) | UDP 64B received (loss) | 263k pps (0%) | 242k (79%) | 166k (16%) | 1.08x |
 | QEMU lab (nested) | RTT idle / under load p50 | 0.51 / 1.50 ms | 0.60 / 1.79 | 1.07 / 1.07 | 0.85x / 0.84x |
 | QEMU lab (nested) | RTT idle / under load p99 | 1.27 / 12.3 ms | 1.28 / 3.78 | | 0.99x / 3.3x |
@@ -222,6 +225,27 @@ this order. Each step's throughput is bulk TCP, 1 stream, IPv4, 4 vCPUs.
    packet. Threads give a CPU-bound subnet router 4-5% more throughput,
    but cost idle latency, so it's softirq unless module parameter
    `napi_threaded` is set (or per device, `/sys/class/net/*/threaded`).
+11. Encryption straight from GSO packets (2026-11-08; lab, 1 stream:
+   10.5 -> 12.2 Gbps, sender CPU 1.82 -> 1.21 CPU-s/GB). `wg_xmit`
+   segmented GSO packets with `skb_gso_segment(skb, 0)`, as upstream
+   does, which with no features also copies and checksums each segment's
+   payload into a new linear packet, after which we copied it again to
+   encrypt it. Now TCP and UDP GSO packets (from local sockets, or made
+   by GRO and being forwarded) stay whole (`tswg_gso_whole_ok`), get a
+   block of nonces, and `tswg_encrypt_list` writes each segment's
+   plaintext straight into our pages: the headers, fixed up as TCP's,
+   UDP's, IPv4's and IPv6's segmentation would (`tswg_copy_segment`), and
+   its slice of the payload, checksummed while copied. The socket's
+   ownership goes to every packet a GSO packet is encrypted into, as
+   segmentation would. Others (untrusted, tunnels, frag lists, timestamps)
+   are still segmented, but with `NETIF_F_SG | NETIF_F_HW_CSUM`, so that
+   segments share pages and we checksum them while copying (that alone
+   was 10.5 -> 11.7 Gbps). Forwarding (a LAN host behind the sender, whose
+   packets GRO merges): 5.3 -> 5.8 Gbps. Module parameter `gso_whole`
+   turns it off; `verify_gso` (tests) checks every segment against
+   `skb_gso_segment`'s, which `TestLeanGSOVerify` (TCP and UDP GSO, IPv4
+   and IPv6) and `TestLeanGSOVerifyForwarded` do, finding them
+   byte-identical (millions of segments, on the debug kernel too).
 
 The lean harness's VMs have guest USO off (decided 2026-11-07): with it,
 the host hands VM-to-VM UDP GSO packets to the receiving guest still
@@ -1125,9 +1149,9 @@ Performance (the primary motivation; see "Performance"):
 - [x] Zero-copy receive: tried, 7% worse on a CPU-bound subnet router,
       and no better on a 200 Gbps one where page allocation is the limit
       (see "Results at a glance"); kept behind `rx_zerocopy`, off.
-- [ ] TSO from the inner GSO packet: encrypt straight from it, building
+- [x] TSO from the inner GSO packet: encrypt straight from it, building
       each segment's headers, instead of `skb_gso_segment` in `wg_xmit`
-      (per-segment skb allocation).
+      (2026-11-08; change 11 in "What tswg changes").
 - [ ] Device-coalesced input: UDP packets that arrive already GSO from
       the NIC (VM-to-VM with guest USO) skip GRO, so UDP segments them,
       with software checksums, before `encap_rcv`.
