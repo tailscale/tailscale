@@ -137,10 +137,14 @@ func TestLeanGSOVerifyForwarded(t *testing.T) {
 }
 
 // TestLeanForwardCompare compares forwarding through tswg, as in
-// TestLeanGSOVerifyForwarded, with the module's gso_whole parameter (see
-// tswg_gso_whole_ok) on and off: TSWG_COMPARE_RUNS (default 4) runs of
-// each, interleaved, of TSWG_COMPARE_STREAMS (default 4) TCP streams.
-// VM 1's CPU per GB includes the LAN host's sending.
+// TestLeanGSOVerifyForwarded, with a module parameter (TSWG_FORWARD_PARAM,
+// default gso_whole; see tswg_gso_whole_ok) set to each of
+// TSWG_FORWARD_VALUES (comma-separated, default "1,0"):
+// TSWG_COMPARE_RUNS (default 4) runs of each, interleaved, of
+// TSWG_COMPARE_STREAMS (default 4) TCP streams.
+// VM 1's CPU per GB includes the LAN host's sending. TSWG_FORWARD_PROFILE
+// names a value during whose last run to profile VM 1, with
+// TSWG_PROFILE_FOCUS as in TestLeanProfile.
 func TestLeanForwardCompare(t *testing.T) {
 	if os.Getenv("TSWG_LEAN_FORWARD") == "" {
 		t.Skip("set TSWG_LEAN_FORWARD=1 (and TSWG_LEAN=1) to run")
@@ -151,6 +155,14 @@ func TestLeanForwardCompare(t *testing.T) {
 	}
 	if n, err := strconv.Atoi(os.Getenv("TSWG_COMPARE_STREAMS")); err == nil {
 		streams = n
+	}
+	param := os.Getenv("TSWG_FORWARD_PARAM")
+	if param == "" {
+		param = "gso_whole"
+	}
+	values := []string{"1", "0"}
+	if v := os.Getenv("TSWG_FORWARD_VALUES"); v != "" {
+		values = strings.Split(v, ",")
 	}
 	l := newLab(t, 4)
 	l.setupExtra = func(i int, q url.Values) {
@@ -169,23 +181,45 @@ func TestLeanForwardCompare(t *testing.T) {
 		t.Fatal(err)
 	}
 	type res struct{ mbps, cpu []float64 }
-	results := map[string]*res{"1": {}, "0": {}}
+	results := map[string]*res{}
+	for _, v := range values {
+		results[v] = &res{}
+	}
 	for run := range runs {
-		for _, whole := range []string{"1", "0"} {
-			if err := fwd.do("POST", "/param?name=gso_whole&value="+whole, nil); err != nil {
+		for _, whole := range values {
+			if err := fwd.do("POST", "/param?name="+param+"&value="+whole, nil); err != nil {
 				t.Fatal(err)
+			}
+			var prof profileResult
+			profDone := make(chan error, 1)
+			profiling := run == runs-1 && whole == os.Getenv("TSWG_FORWARD_PROFILE")
+			if profiling {
+				go func() {
+					time.Sleep(time.Second)
+					profDone <- fwd.do("GET", "/profile?"+url.Values{
+						"dur":   {"3s"},
+						"top":   {"50"},
+						"focus": {os.Getenv("TSWG_PROFILE_FOCUS")},
+					}.Encode(), &prof)
+				}()
 			}
 			r, err := netbench.RunTCPFrom(sender, "lan", receiver, netip.AddrPortFrom(tunnel4(0), benchPort), streams, 5*time.Second)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Logf("run %d: gso_whole=%s: %.0f Mbps, forwarder %.2f CPU-s/GB", run, whole, r.Mbps, r.SenderCPUSecPerGB)
+			if profiling {
+				if err := <-profDone; err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("VM 1 profile, %s=%s:\n%s", param, whole, formatProfile(prof))
+			}
+			t.Logf("run %d: %s=%s: %.0f Mbps, forwarder %.2f CPU-s/GB", run, param, whole, r.Mbps, r.SenderCPUSecPerGB)
 			results[whole].mbps = append(results[whole].mbps, r.Mbps)
 			results[whole].cpu = append(results[whole].cpu, r.SenderCPUSecPerGB)
 		}
 	}
 	median := func(v []float64) float64 { return slices.Sorted(slices.Values(v))[len(v)/2] }
-	for _, whole := range []string{"1", "0"} {
-		t.Logf("gso_whole=%s: median %.0f Mbps, forwarder %.2f CPU-s/GB", whole, median(results[whole].mbps), median(results[whole].cpu))
+	for _, whole := range values {
+		t.Logf("%s=%s: median %.0f Mbps, forwarder %.2f CPU-s/GB", param, whole, median(results[whole].mbps), median(results[whole].cpu))
 	}
 }

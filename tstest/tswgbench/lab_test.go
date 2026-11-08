@@ -523,6 +523,16 @@ func (l *lab) setup(mode string, v6 bool) netip.Addr {
 		if err := v.do("POST", "/setup?"+q.Encode(), nil); err != nil {
 			l.t.Fatalf("setting up %s: %v", mode, err)
 		}
+		// TSWG_MODULE_PARAMS (name=value,...) sets tswg module
+		// parameters, for experiments.
+		if params := os.Getenv("TSWG_MODULE_PARAMS"); params != "" && mode == modeTSWG {
+			for _, kv := range strings.Split(params, ",") {
+				name, value, _ := strings.Cut(kv, "=")
+				if err := v.do("POST", "/param?"+url.Values{"name": {name}, "value": {value}}.Encode(), nil); err != nil {
+					l.t.Fatalf("TSWG_MODULE_PARAMS %s: %v", kv, err)
+				}
+			}
+		}
 	}
 	return tun(1)
 }
