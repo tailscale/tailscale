@@ -15,3 +15,6 @@ import (
 func newTSWGDevice(logger.Logf, string) (_ tun.Device, ok bool) {
 	return nil, false
 }
+
+// removeStaleTSWGDevice does nothing: there are no tswg devices here.
+func removeStaleTSWGDevice(logger.Logf, string) {}

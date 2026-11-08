@@ -33,3 +33,15 @@ func newTSWGDevice(logf logger.Logf, name string) (_ tun.Device, ok bool) {
 	logf("tswg: using the kernel data plane on %s", name)
 	return dev, true
 }
+
+// removeStaleTSWGDevice deletes a tswg device named name, as a previous
+// tailscaled in kernel mode may have left behind, so that a TUN device can
+// take its name.
+func removeStaleTSWGDevice(logf logger.Logf, name string) {
+	deleted, err := tswg.DeleteStaleLink(name)
+	if err != nil {
+		logf("tswg: %v", err)
+	} else if deleted {
+		logf("tswg: deleted a stale kernel device %s, for TUN to use its name", name)
+	}
+}

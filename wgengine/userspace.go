@@ -1184,6 +1184,13 @@ func (e *userspaceEngine) Close() {
 	e.closing = true
 	e.mu.Unlock()
 
+	// Stop the kernel data plane (and delete its device) before magicsock,
+	// whose hooks it uses.
+	if e.kdp != nil {
+		if err := e.kdp.Close(); err != nil {
+			e.logf("wgengine: closing the kernel data plane: %v", err)
+		}
+	}
 	e.magicConn.Close()
 	if e.netMonOwned {
 		e.netMon.Close()

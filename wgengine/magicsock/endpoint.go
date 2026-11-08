@@ -82,11 +82,11 @@ type endpoint struct {
 	// mu protects all following fields.
 	mu syncs.Mutex // Lock ordering: Conn.mu, then endpoint.mu
 
-	heartBeatTimer            *time.Timer    // nil when idle
+	heartBeatTimer *time.Timer // nil when idle
 
 	// For the tswg kernel data plane; see kernel.go.
-	kernelDirect     netip.AddrPort // last kernel path reported to the kernel path hook
-	kernelTrustTimer *time.Timer    // fires at trustBestAddrUntil while kernelDirect is set
+	kernelDirect              netip.AddrPort // last kernel path reported to the kernel path hook
+	kernelTrustTimer          *time.Timer    // fires at trustBestAddrUntil while kernelDirect is set
 	lastSendExt               mono.Time      // last time there were outgoing packets sent to this peer from an external trigger (e.g. wireguard-go or disco pingCLI)
 	lastSendAny               mono.Time      // last time there were outgoing packets sent this peer from any trigger, internal or external to magicsock
 	lastFullPing              mono.Time      // last time we pinged all disco or wireguard only endpoints

@@ -904,6 +904,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			dev, devName = d, name
 			conf.KernelWG = true
 		} else {
+			removeStaleTSWGDevice(logf, name)
 			var err error
 			dev, devName, err = tstunNew(logf, name)
 			if err != nil {

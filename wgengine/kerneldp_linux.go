@@ -473,9 +473,11 @@ func (k *kernelDataplane) fullSync() error {
 
 	k.mu.Lock()
 	var cfg tswg.Config
-	if !k.privKey.Equal(k.pushedPriv) {
-		pk := k.privKey
-		cfg.PrivateKey = &pk
+	// Remember the key we push, not k.privKey after: setPrivateKey can
+	// change it while we push, and then it would look pushed when it isn't.
+	pushPriv := k.privKey
+	if !pushPriv.Equal(k.pushedPriv) {
+		cfg.PrivateKey = &pushPriv
 	}
 	desired := make(map[key.NodePublic]kernelPeerState, len(wants))
 	var peers []tswg.PeerConfig
@@ -522,7 +524,7 @@ func (k *kernelDataplane) fullSync() error {
 		cfg.PrivateKey = nil
 	}
 	k.mu.Lock()
-	k.pushedPriv = k.privKey
+	k.pushedPriv = pushPriv
 	k.pushed = desired
 	k.mu.Unlock()
 	return k.refreshListenPort()

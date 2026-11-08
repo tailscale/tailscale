@@ -58,6 +58,20 @@ func AddLinkType(name, kind string) error {
 	return nil
 }
 
+// DeleteStaleLink deletes the network device named name if it's a tswg
+// device, as one left behind by a tailscaled that crashed (or that predates
+// deleting it on exit) would be, and reports whether it did.
+func DeleteStaleLink(name string) (bool, error) {
+	link, err := netlink.LinkByName(name)
+	if err != nil || link.Type() != LinkType {
+		return false, nil
+	}
+	if err := netlink.LinkDel(link); err != nil {
+		return false, fmt.Errorf("tswg: deleting stale link %q: %w", name, err)
+	}
+	return true, nil
+}
+
 // DeleteLink deletes the network device named name.
 func DeleteLink(name string) error {
 	link, err := netlink.LinkByName(name)
