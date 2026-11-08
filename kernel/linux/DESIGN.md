@@ -881,6 +881,123 @@ is what will program the module.
 * This work lives on the `bradfitz/tswg` branch, in a worktree at
   `~/src/tailscale.com-tswg`.
 
+### Kernel interface
+
+Everything userspace can see of the module, in one place. The sections
+after this one explain the reasons; this is the reference. The source of
+truth is `src/include/uapi/linux/tswg.h` (and the policies in
+`src/generated/netlink.c`); keep this in step with it.
+
+**Devices.** A tswg device is an rtnetlink link of kind `tswg`
+(`ip link add tailscale0 type tswg`), configured like any netdev
+(addresses, routes, MTU, up and down) over rtnetlink. tailscaled names it
+`tailscale0`. Per device in sysfs, `/sys/class/net/DEV/threaded` sets
+whether its peers' NAPI runs in kthreads (see the `napi_threaded` module
+parameter).
+
+**Genetlink family.** `tswg` (`WG_GENL_NAME`), version 1
+(`WG_GENL_VERSION`). It has upstream WireGuard's two commands and
+attributes unchanged, so wgctrl-go and wg(8) work with only the family
+name changed:
+
+* `WG_CMD_GET_DEVICE` (dump) and `WG_CMD_SET_DEVICE` (do), both needing
+  CAP_NET_ADMIN in the device's user namespace (`GENL_UNS_ADMIN_PERM`).
+  The family is `netnsok`: commands act on devices in the caller's
+  network namespace.
+* Our additions are only ever in one nested attribute per object, numbered
+  64, far above upstream's, so that upstream can keep appending its own:
+  `WGDEVICE_A_TSWG` in a device, `WGPEER_A_TSWG` in a peer. Unknown
+  nested attributes, and unknown flag bits, are rejected by the policies
+  (strict parsing, `NLA_POLICY_MASK`), so a newer tailscaled
+  setting an attribute an older module doesn't know gets an error rather
+  than being silently ignored.
+
+**Device attributes** (in `WGDEVICE_A_TSWG`):
+
+| attribute | type | direction | meaning |
+|---|---|---|---|
+| `TSWGDEVICE_A_SOCK_FD4` | s32 | set | fd, in the caller's process, of a bound IPv4 UDP socket for the device to use instead of its own; -1 detaches it. See "Shared UDP socket". |
+| `TSWGDEVICE_A_SOCK_FD6` | s32 | set | the same for IPv6; the socket must be `IPV6_V6ONLY`. |
+| `TSWGDEVICE_A_FLAGS` | u32 | get | `TSWGDEVICE_F_USER_SOCK4` (1), `TSWGDEVICE_F_USER_SOCK6` (2): which user sockets are attached. |
+
+Rules: setting `WGDEVICE_A_LISTEN_PORT` to another port while a user
+socket is attached fails with EBUSY. A user socket stays attached until
+userspace detaches it or closes its last fd (then the device has no
+socket for that family until it gets a new one).
+
+**Peer attributes** (in `WGPEER_A_TSWG`):
+
+| attribute | type | direction | meaning |
+|---|---|---|---|
+| `TSWGPEER_A_FLAGS` | u32 | set and get | the peer's tswg flags; setting replaces them all. |
+| `TSWGPEER_A_CLEAR_SESSION` | flag | set | forget the peer's keypairs and any handshake in progress, and reset the handshake rate limit, so the next packet starts a handshake at once. See "Peer restarts". |
+
+Peer flags:
+
+| flag | value | meaning |
+|---|---|---|
+| `TSWGPEER_F_NO_ROAM` | 1 | don't learn the peer's endpoint from incoming packets once it has one; only userspace sets it. See "Endpoints and roaming". |
+| `TSWGPEER_F_HYBRID` | 2 | do hybrid post-quantum handshakes with the peer, and only those; both sides must agree, and a change applies from the next handshake. See "Hybrid post-quantum handshakes". |
+
+Within a `WG_CMD_SET_DEVICE` peer, `WGPEER_A_TSWG` is applied before
+`WGPEER_A_ENDPOINT`, so that setting no-roam and the endpoint is one
+step.
+
+**Events.** The device multicasts `TSWG_CMD_PEER_EVENT` (64) messages to
+the family's `events` group (`TSWG_MCGRP_EVENTS`), in its network
+namespace, only built when someone is subscribed. Attributes:
+`TSWGEVENT_A_IFINDEX` (u32), `TSWGEVENT_A_PUBLIC_KEY` (the peer's, 32
+bytes) and `TSWGEVENT_A_FLAGS` (u32):
+
+| flag | value | meaning |
+|---|---|---|
+| `TSWGEVENT_F_SESSION` | 1 | a new session (keypair) was derived with the peer |
+| `TSWGEVENT_F_TX` | 2 | sent to the peer; at most one per peer per 2 seconds |
+| `TSWGEVENT_F_RX` | 4 | received from the peer; likewise rate limited |
+
+Events can be lost if the subscriber's socket overruns; they're hints,
+and activity recurs. See "No polling". Subscribing needs no privilege
+(the group has no `GENL_MCAST_CAP_NET_ADMIN`), so any process in the
+namespace can see peers' public keys and when they're active; a TODO.
+
+**The shared UDP socket.** Once attached, the socket's owner keeps using
+it: WireGuard messages (a first byte of 1-4, then three zero bytes, or
+for hybrid handshake retries, 0x80 as the fourth) are consumed by the
+device, and everything else is left in the socket's receive queue. The
+owner may send its own datagrams on it. See "Shared UDP socket".
+
+**Module parameters** (`/sys/module/tswg/parameters/`, all writable at
+run time but the counters). These are tuning and debugging knobs, not a
+stable interface: tailscaled shouldn't set them, and they may change.
+
+| parameter | default | meaning |
+|---|---|---|
+| `inline_crypto` | 1 | encrypt and decrypt lone packets inline while the crypt workers are idle (change 9) |
+| `napi_threaded` | 0 | run new devices' peer NAPI in kthreads rather than softirq (change 10) |
+| `gso_whole` | 1 | encrypt GSO packets a segment at a time rather than segmenting them first (change 11) |
+| `tx_inline` | 1 | encrypt and send where packets arrive: 0 never, 1 forwarded ones and lone ones, 2 always (changes 12, 14) |
+| `rx_inline_mbps` | 4000 | receive a peer's packets on the CPU they arrive on while it's below this rate; 0 never (change 12) |
+| `rx_steer_busy` | 90 | percent busy a CPU must be for its peers' received packets to be steered to other CPUs; 0 never (changes 15, 16) |
+| `rx_zerocopy` | 0 | decrypt received messages in place rather than copying them out |
+| `verify_gso` | 0 | tests: check every segment built from a GSO packet against `skb_gso_segment` (slow) |
+| `gso_verified`, `gso_verify_errors` | | read-only counters for `verify_gso` |
+
+**Versioning.** The module reports its version at load (`pr_info`) and
+in `modinfo` (`TSWG_VERSION`, now 0.0.1). There's no feature negotiation
+yet. Userspace detects the module by the genetlink family resolving, and
+an attribute it needs that the module lacks fails the request (see
+above). Before release, decide how tailscaled tells which features a
+loaded module has (bumping `WG_GENL_VERSION`, or a features attribute in
+`WG_CMD_GET_DEVICE`), so it can fall back to wireguard-go cleanly; see
+"DKMS and fallback".
+
+**Not part of the interface.** tailscaled also uses ordinary kernel
+interfaces on the device: raw sockets for TSMP (IP protocol 99) on
+`tailscale0`, and in kernel mode a separate ordinary TUN device,
+`tailscale0-svc`, for the routes to the Tailscale service IPs. Neither
+involves the module; see "TSMP and other packets tailscaled sends to
+peers" and "Known gaps in kernel mode".
+
 ### Shared UDP socket
 
 Tailscale needs disco, STUN and WireGuard to share one UDP 4-tuple so NAT
