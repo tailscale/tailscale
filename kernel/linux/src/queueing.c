@@ -45,10 +45,12 @@ void wg_packet_queue_free(struct crypt_queue *queue, bool purge)
 	int cpu;
 
 	for_each_possible_cpu(cpu) { /* TSWG */
-		struct page_frag *pfrag = &per_cpu_ptr(queue->worker, cpu)->tswg_frag;
+		struct multicore_worker *w = per_cpu_ptr(queue->worker, cpu);
 
-		if (pfrag->page)
-			put_page(pfrag->page);
+		if (w->tswg_frag.page)
+			put_page(w->tswg_frag.page);
+		if (w->tswg_inline_frag.page)
+			put_page(w->tswg_inline_frag.page);
 	}
 	free_percpu(queue->worker);
 	WARN_ON(!purge && !__ptr_ring_empty(&queue->ring));

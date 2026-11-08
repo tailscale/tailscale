@@ -226,6 +226,34 @@ static inline bool tswg_crypt_worker_idle(struct multicore_worker *w,
 }
 
 /*
+ * TSWG: inline crypto. Handing a packet to a crypt worker on another CPU
+ * costs an IPI, and, if that CPU is idle, waking it, which in a VM means a
+ * VM exit and the host scheduling the vCPU: idle round trip times were
+ * 1.5-2x wireguard-go's in VMs, though 0.6x with idle=poll. So when the
+ * workers are idle, a lone packet is encrypted or decrypted where it is,
+ * on its way through the stack. It still goes on the peer's in-order
+ * queue first, so ordering doesn't depend on being idle; being idle just
+ * keeps bulk traffic on the workers, in parallel, and off the CPUs taking
+ * the NIC's interrupts.
+ *
+ * tswg_crypt_idle reports whether queue's workers look idle: nothing waits
+ * in the ring, and the worker last kicked isn't busy. It's a hint.
+ * tswg_inline_crypto (module parameter inline_crypto) turns it all off.
+ */
+extern bool tswg_inline_crypto;
+
+static inline bool tswg_crypt_idle(struct crypt_queue *queue)
+{
+	int cpu = READ_ONCE(queue->last_cpu);
+
+	if (!__ptr_ring_empty(&queue->ring))
+		return false;
+	if (cpu < 0 || cpu >= nr_cpu_ids)
+		return true;
+	return !tswg_worker_active(per_cpu_ptr(queue->worker, cpu));
+}
+
+/*
  * TSWG: tswg_queue_work_on is queue_work_on, skipping the call when the work
  * is already pending (queued but not yet started, so it will see whatever
  * was just enqueued). That check is a read; queue_work_on's own check is
@@ -260,6 +288,46 @@ static inline struct sk_buff *wg_prev_queue_peek(struct prev_queue *queue)
 static inline void wg_prev_queue_drop_peeked(struct prev_queue *queue)
 {
 	queue->peeked = NULL;
+}
+
+/*
+ * TSWG: tswg_inline_ok reports whether to do the crypto for a lone packet
+ * inline (see tswg_crypt_idle), counting it in this CPU's rate. An empty
+ * ring isn't enough: under load, workers drain a stream of small packets
+ * (TCP ACKs) fast enough that the ring is often empty, and inlining them
+ * put that work on the CPUs taking the NIC's interrupts, which cost a
+ * subnet router 8% of its throughput. So past TSWG_INLINE_BURST lone
+ * packets in a jiffy, this CPU leaves them to the workers. BHs must be off.
+ */
+#define TSWG_INLINE_BURST 8
+
+static inline bool tswg_inline_ok(struct crypt_queue *queue)
+{
+	struct multicore_worker *w = this_cpu_ptr(queue->worker);
+	unsigned long now = jiffies;
+
+	if (!READ_ONCE(tswg_inline_crypto))
+		return false;
+	if (w->tswg_rate_jiffy != now) {
+		w->tswg_rate_jiffy = now;
+		w->tswg_rate_count = 0;
+	}
+	if (++w->tswg_rate_count > TSWG_INLINE_BURST)
+		return false;
+	return tswg_crypt_idle(queue);
+}
+
+/*
+ * TSWG: tswg_enqueue_per_peer is the peer queue half of
+ * wg_queue_enqueue_per_device_and_peer, for inline crypto.
+ */
+static inline int tswg_enqueue_per_peer(struct prev_queue *peer_queue,
+					struct sk_buff *skb)
+{
+	atomic_set_release(&PACKET_CB(skb)->state, PACKET_STATE_UNCRYPTED);
+	if (unlikely(!wg_prev_queue_enqueue(peer_queue, skb)))
+		return -ENOSPC;
+	return 0;
 }
 
 static inline int wg_queue_enqueue_per_device_and_peer(

@@ -878,6 +878,18 @@ static void wg_packet_consume_data(struct wg_device *wg, struct sk_buff *skb)
 
 	PACKET_CB(skb)->tswg_out = NULL; /* TSWG */
 	PACKET_CB(skb)->tswg_count = skb_is_gso(skb) ? skb_shinfo(skb)->gso_segs : 1;
+	/* TSWG: decrypt a lone packet here when the workers are idle. */
+	if (!skb_is_gso(skb) && tswg_inline_ok(&wg->decrypt_queue)) {
+		ret = tswg_enqueue_per_peer(&peer->rx_queue, skb);
+		if (likely(!ret)) {
+			wg_queue_enqueue_per_peer_rx(skb,
+				likely(decrypt_packet(skb, PACKET_CB(skb)->keypair)) ?
+					PACKET_STATE_CRYPTED : PACKET_STATE_DEAD);
+			rcu_read_unlock_bh();
+			return;
+		}
+		goto dropped;
+	}
 	ret = wg_queue_enqueue_per_device_and_peer(&wg->decrypt_queue, &peer->rx_queue, skb,
 						   wg->packet_crypt_wq,
 						   skb_is_gso(skb) ?
@@ -892,6 +904,7 @@ static void wg_packet_consume_data(struct wg_device *wg, struct sk_buff *skb)
 		rcu_read_unlock_bh();
 		return;
 	}
+dropped:
 	DEV_STATS_INC(wg->dev, rx_dropped); /* TSWG: peer's queue is full */
 err:
 	wg_noise_keypair_put(PACKET_CB(skb)->keypair, false);

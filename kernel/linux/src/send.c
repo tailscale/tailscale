@@ -386,6 +386,11 @@ static bool tswg_encrypt_list(struct sk_buff *first, struct page_frag *pfrag)
 	return ok;
 }
 
+/* TSWG: inline_crypto turns inline crypto on; see tswg_crypt_idle. */
+bool tswg_inline_crypto = true;
+module_param_named(inline_crypto, tswg_inline_crypto, bool, 0644);
+MODULE_PARM_DESC(inline_crypto, "encrypt and decrypt lone packets inline when the crypt workers are idle");
+
 void wg_packet_send_keepalive(struct wg_peer *peer)
 {
 	struct sk_buff *skb;
@@ -504,6 +509,26 @@ static void wg_packet_create_data(struct wg_peer *peer, struct sk_buff *first)
 	if (unlikely(READ_ONCE(peer->is_dead)))
 		goto err;
 
+	/*
+	 * TSWG: encrypt a lone packet here when the workers are idle; see
+	 * tswg_crypt_idle. BHs are off (rcu_read_lock_bh), which makes this
+	 * CPU's inline page frag ours. Not when serving a softirq, though:
+	 * that's forwarding, on a subnet router's CPUs taking the NIC's
+	 * interrupts, where inlining cost 6% of its throughput.
+	 */
+	if (!first->next && !in_serving_softirq() &&
+	    tswg_inline_ok(&wg->encrypt_queue)) {
+		ret = tswg_enqueue_per_peer(&peer->tx_queue, first);
+		if (likely(!ret)) {
+			struct page_frag *pfrag =
+				&this_cpu_ptr(wg->encrypt_queue.worker)->tswg_inline_frag;
+
+			wg_queue_enqueue_per_peer_tx(first,
+				likely(tswg_encrypt_list(first, pfrag)) ?
+					PACKET_STATE_CRYPTED : PACKET_STATE_DEAD);
+		}
+		goto err;
+	}
 	ret = wg_queue_enqueue_per_device_and_peer(&wg->encrypt_queue, &peer->tx_queue, first,
 						   wg->packet_crypt_wq,
 						   TSWG_BATCH_BACKLOG);

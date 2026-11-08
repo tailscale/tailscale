@@ -29,6 +29,11 @@
 
 static LIST_HEAD(device_list);
 
+/* TSWG: napi_threaded runs new devices' NAPI in kthreads; see wg_newlink. */
+static bool tswg_napi_threaded;
+module_param_named(napi_threaded, tswg_napi_threaded, bool, 0644);
+MODULE_PARM_DESC(napi_threaded, "run new devices' peer NAPI in kthreads rather than softirq");
+
 /* TSWG: TCP's sk_pacing_shift for local sockets sending over tswg; see wg_xmit. */
 #define TSWG_PACING_SHIFT 9
 
@@ -389,7 +394,16 @@ static int wg_newlink(struct net_device *dev,
 	if (ret < 0)
 		goto err_free_handshake_queue;
 
-	netif_threaded_enable(dev);
+	/*
+	 * TSWG: upstream runs peers' NAPI in kthreads. Waking a kthread costs
+	 * a handoff (in a VM, often a vCPU wakeup), which with inline crypto
+	 * was most of what was left of tswg's idle round trip time: 0.78ms
+	 * against wireguard-go's 0.60, and 0.50 with softirq NAPI (the
+	 * default, as in older WireGuard). napi_threaded turns it back
+	 * on; it's per device in sysfs too (/sys/class/net/DEV/threaded).
+	 */
+	if (tswg_napi_threaded)
+		netif_threaded_enable(dev);
 	ret = register_netdevice(dev);
 	if (ret < 0)
 		goto err_uninit_ratelimiter;

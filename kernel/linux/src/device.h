@@ -25,6 +25,11 @@ struct multicore_worker {
 	struct work_struct work;
 	bool tswg_busy; /* TSWG: worker is draining the ring; see tswg_crypt_kick */
 	struct page_frag tswg_frag; /* TSWG: encrypt worker's output pages */
+	/* TSWG: output pages for inline encryption on this CPU, with BHs off */
+	struct page_frag tswg_inline_frag;
+	/* TSWG: lone packets this CPU saw in jiffy tswg_rate_jiffy; see tswg_inline_ok */
+	unsigned long tswg_rate_jiffy;
+	unsigned int tswg_rate_count;
 };
 
 struct crypt_queue {

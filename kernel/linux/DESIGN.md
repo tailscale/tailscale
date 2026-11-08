@@ -111,11 +111,19 @@ between two machines, 4 vCPUs each. Updated 2026-11-07.
 | QEMU lab (nested) | TCP 4 streams | 11.7 Gbps | 11.1 | 4.2 | 1.05x |
 | QEMU lab (nested) | sender / receiver CPU-s/GB, 1 stream | 1.81 / 2.12 | 1.93 / 2.37 | 2.95 / 5.20 | 0.94x / 0.90x |
 | QEMU lab (nested) | UDP 64B received (loss) | 263k pps (0%) | 242k (79%) | 166k (16%) | 1.08x |
-| QEMU lab (nested) | RTT idle / under load p50 | 0.92 / 1.49 ms | 0.61 / 1.57 | 1.07 / 1.07 | 1.5x / 0.95x |
+| QEMU lab (nested) | RTT idle / under load p50 | 0.51 / 1.50 ms | 0.60 / 1.79 | 1.07 / 1.07 | 0.85x / 0.84x |
+| QEMU lab (nested) | RTT idle / under load p99 | 1.27 / 12.3 ms | 1.28 / 3.78 | | 0.99x / 3.3x |
 | EC2 c7i.xlarge | TCP 1 or 4 streams | 7.25 Gbps | 7.25 | 5.3 | 1.0x (EC2's per-flow limit) |
 | EC2 c7i.xlarge | sender / receiver CPU-s/GB, 1 stream | 2.48 / 2.47 | 2.59 / 2.97 | 2.68 / 3.80 | 0.96x / 0.83x |
 | EC2 c7i.xlarge | UDP 64B received (loss) | 536k pps (0.06%) | 328k (58%) | 430k (1.7%) | 1.6x |
-| EC2 c7i.xlarge | RTT idle / under load p50 | 0.92 / 0.82 ms | 0.47 / 3.57 | 0.85 / 1.28 | 1.96x / 0.23x |
+| EC2 c7i.xlarge | RTT idle / under load p50, before inline crypto | 0.92 / 0.82 ms | 0.47 / 3.57 | 0.85 / 1.28 | 1.96x / 0.23x |
+| EC2 c6in.32xlarge | RTT idle / under load p50 | 0.75 / 1.61 ms | 0.97 / 3.92 | | 0.77x / 0.41x |
+| EC2 c6in.32xlarge | RTT idle / under load p99 | 0.96 / 6.04 ms | 1.24 / 6.42 | | 0.77x / 0.94x |
+
+RTT rows are UDP ping-pong (`TSWG_COMPARE_LOAD=rtt`, medians of 4
+runs), idle and under one TCP stream; updated 2026-11-08 with inline
+crypto (item 9 below) and softirq NAPI. The kernel WG column is from
+before.
 
 ### What we inherit from upstream WireGuard
 
@@ -195,6 +203,25 @@ this order. Each step's throughput is bulk TCP, 1 stream, IPv4, 4 vCPUs.
    by peer ID. When that's the CPU taking the NIC's interrupts, softirq
    work starved it, and encrypted packets waited up to 20ms to be sent.
    It's now queued on the CPU that finished encrypting.
+9. Inline crypto for lone packets (idle RTT p50 in the lab 0.92 ->
+   0.51ms, wireguard-go 0.60; on EC2 0.75ms against 0.97). Every
+   handoff to a worker on another CPU can wake a halted vCPU, a VM exit
+   and a trip through the host's scheduler. So a packet that isn't part
+   of a batch (not GSO) is encrypted or decrypted where it is when the
+   workers look idle (`tswg_crypt_idle`: empty ring, last-kicked worker
+   not busy), after going on the peer's in-order queue as usual. Under
+   load, workers drain TCP ACKs fast enough that the ring often looks
+   empty, and inlining them moved that work onto the CPUs taking the
+   NIC's interrupts: 8% off a subnet router. Two limits fixed that: at
+   most 8 inline packets per CPU per jiffy (`tswg_inline_ok`), and no
+   inline encryption from softirq (forwarding, and replies sent from
+   softirq), which alone left 6% behind. Module parameter
+   `inline_crypto` turns it off.
+10. NAPI in softirq, not threads. Upstream has each peer's NAPI run in
+   a kthread (`netif_threaded_enable`), one more wakeup per received
+   packet. Threads give a CPU-bound subnet router 4-5% more throughput,
+   but cost idle latency, so it's softirq unless module parameter
+   `napi_threaded` is set (or per device, `/sys/class/net/*/threaded`).
 
 The lean harness's VMs have guest USO off (decided 2026-11-07): with it,
 the host hands VM-to-VM UDP GSO packets to the receiving guest still
@@ -337,7 +364,8 @@ Takeaways:
 * Small packets: tswg delivers everything it's sent, at 0.6-0.7x
   wireguard-go's CPU per packet. (It sends fewer because the sender's
   socket now waits for the NIC, as it should.)
-* Idle latency is worse, and it's the VM: with the guests booted with
+* Idle latency was worse (since fixed by inline crypto; see "Results at
+  a glance"), and it's the VM: with the guests booted with
   `idle=poll` (`TSWG_LAB_CMDLINE=idle=poll`), so that waking a vCPU
   costs nothing, tswg's idle RTT p50 is 0.08ms, against 0.14 for
   wireguard-go and 0.06 without a tunnel, and under load 0.71 / 1.70ms
@@ -378,9 +406,10 @@ virtualization instead of the lab's two:
 * Small packets: 1.6x wireguard-go's packets delivered, at 0.7x the CPU.
 * Latency under load: p50 is a quarter of wireguard-go's (TCP
   backpressure keeps tswg's queues short), p99 the same (IPv6: 2.3x).
-* Idle latency is about twice wireguard-go's, as in the lab, so the
+* Idle latency was about twice wireguard-go's, as in the lab, so the
   vCPU-wakeup cost of tswg's handoffs (see above) is real on Nitro
-  too, and is the main latency item.
+  too. Inline crypto fixed it (2026-11-08): on a c6in.32xlarge pair,
+  idle p50 / p99 is 0.75 / 0.96ms against wireguard-go's 0.97 / 1.24.
 
 #### Subnet router (2026-11-07)
 
@@ -1058,10 +1087,11 @@ Performance (the primary motivation; see "Performance"):
       workers sometimes don't run for 10-40ms on a loaded receiver; try
       bare metal, fewer NIC queues, and the scheduler's view
       (`/proc/schedstat`, steal time).
-- [ ] Idle latency in VMs: cut cross-CPU handoffs for lone small packets
-      when nothing is busy (encrypt or decrypt inline, send from the
-      encrypt worker), without bringing back softirq starvation of
-      workers on the NIC's CPU under load.
+- [x] Idle latency in VMs (2026-11-08): inline crypto for lone packets
+      when the workers are idle, and softirq NAPI; 0.77-0.85x
+      wireguard-go's idle RTT p50, with subnet router throughput
+      unchanged. Sending from the encrypt worker (skipping the tx
+      worker) wasn't needed.
 - [x] Zero-copy receive: tried, 7% worse on a CPU-bound subnet router,
       and no better on a 200 Gbps one where page allocation is the limit
       (see "Results at a glance"); kept behind `rx_zerocopy`, off.
