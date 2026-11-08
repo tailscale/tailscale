@@ -68,6 +68,36 @@ the tunnels): 88.9 Gbps at 1.27 CPU-s/GB, so tswg gets 0.80x of plain
 routing. Unclamped (jumbo frames), plain routing reaches 165 Gbps; at
 normal MTUs, the platform's per-packet costs limit it too.
 
+The other direction, as HTTP (2026-11-08; `TSWG_SUBNET_LOAD=fetch`):
+the 37 clients each make requests of 500 bytes over 16 keep-alive
+connections to the backend, one at a time on each, which it answers with
+1 MiB, so the router encrypts the big responses (forwarding what GRO
+merged from the backend) rather than decrypting uploads. c6in.32xlarge
+router, MTU 1280, runs interleaved:
+
+| router's data plane | Gbps (runs) | router CPU | CPU-s/GB |
+|---|---|---|---|
+| tswg before change 11 (encryption straight from GSO packets) | 14.7-17.4 (5 runs) | 60-75% | 37-55 |
+| tswg with change 11 | 35.6-37.9 (8 of 14 runs), 17.7-19.2 (6) | 94% / 64-73% | 27-28 / 39-44 |
+| wireguard-go | 6.1-6.2 (2 runs) | 4% | 7.4-7.6 |
+
+So change 11 more than doubles it in 8 of 14 runs, and adds 10-20% in
+the rest: 2.9x wireguard-go at worst, 6.1x at best. But the router is bound by one lock, and the
+bimodality is unexplained: in both modes, 75-83% of the router's CPU is
+spinning on the encrypt ring's consumer lock (`ptr_ring_consume_bh` in
+`wg_packet_encrypt_worker`), with encryption itself 7%. Each entry is
+one forwarded GRO packet, of a few segments (hundreds of interleaved
+flows merge poorly), about a million a second, which one ring shared by
+all CPUs' workers, as upstream has, can't take on two sockets. Uploads
+don't have it (the decrypt ring gets fewer, bigger entries): 64 Gbps
+before and after. Tried, and not kept (patches in the TODO list's
+item): a ring per worker, as RPS does (no contention, but 3x slower:
+entries for a newly recruited worker wait for its CPU to wake, and
+uniformly so; also locally, 10.3 -> 7.2 Gbps); recruiting workers only
+when the backlog exceeds one per active worker (no change: contention
+slows consumption, which grows the backlog, which recruits more);
+consuming up to 8 entries per lock (no change).
+
 CPU accounting: rows before the last measured CPU from `/proc/stat`,
 which on Ubuntu's AWS kernels (no `CONFIG_IRQ_TIME_ACCOUNTING`) counts
 interrupt and softirq work done on otherwise idle CPUs as idle: it showed
@@ -1167,6 +1197,11 @@ Performance (the primary motivation; see "Performance"):
 - [x] Benchmarks on cloud VMs (EC2, harness remote mode, `scripts/ec2.sh`).
 - [x] Subnet router beyond 40 Gbps at MTU 1280: c6in.32xlarge, 74 Gbps
       with 60 clients (12x wireguard-go).
+- [ ] The encrypt ring's consumer lock: on a 128-CPU subnet router
+      sending big responses (see "Results at a glance"), 75-83% of the
+      router's CPU contends for it. Needs fewer, bigger entries (batching
+      a peer's forwarded packets per NAPI poll?), or rings per group of
+      CPUs with work stealing; a ring per worker alone cost latency.
 - [ ] Subnet router past 75 Gbps at MTU 1280: the ENA interrupt CPUs'
       page allocator contention, from ENA allocating a page per received
       packet (zero-copy receive, taking tswg's own allocations out, didn't
