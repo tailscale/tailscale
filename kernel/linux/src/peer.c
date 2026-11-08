@@ -47,6 +47,8 @@ struct wg_peer *wg_peer_create(struct wg_device *wg,
 	spin_lock_init(&peer->keypairs.keypair_update_lock);
 	INIT_WORK(&peer->transmit_handshake_work, wg_packet_handshake_send_worker);
 	INIT_WORK(&peer->transmit_packet_work, wg_packet_tx_worker);
+	spin_lock_init(&peer->tswg_tx_lock); /* TSWG */
+	peer->tswg_home = -1; /* TSWG: none yet; see tswg_peer_home */
 	wg_prev_queue_init(&peer->tx_queue);
 	wg_prev_queue_init(&peer->rx_queue);
 	rwlock_init(&peer->endpoint_lock);

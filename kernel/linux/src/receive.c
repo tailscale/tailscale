@@ -17,6 +17,10 @@
 #include <linux/ipv6.h>
 #include <linux/udp.h>
 #include <net/ip_tunnels.h>
+#include <linux/hash.h> /* TSWG */
+#include <linux/kernel_stat.h> /* TSWG */
+#include <linux/llist.h> /* TSWG */
+#include <linux/tick.h> /* TSWG */
 
 /* Must be called with bh disabled. */
 static void update_rx_stats(struct wg_peer *peer, size_t len)
@@ -964,7 +968,8 @@ again:
  * and for TSWG_RX_PARALLEL_FOR after (switching back and forth often cost
  * more than either way), and back only once that way has delivered all it
  * had, so that switching doesn't reorder the peer's packets; see
- * tswg_rx_inline_ok.
+ * tswg_rx_path. Peers arriving on a CPU that's too busy go to other CPUs;
+ * see tswg_steer.
  */
 #define TSWG_RX_WINDOW max(HZ / 100, 1)
 #define TSWG_RX_PARALLEL_FOR (HZ / 10)
@@ -973,13 +978,237 @@ static unsigned int tswg_rx_inline_mbps = 4000;
 module_param_named(rx_inline_mbps, tswg_rx_inline_mbps, uint, 0644);
 MODULE_PARM_DESC(rx_inline_mbps, "receive a peer's packets where they arrive while it's below this rate (0: never)");
 
+/* tswg_squeeze is what tswg_cpu_squeezed knows of a CPU. */
+struct tswg_squeeze {
+	unsigned int seen; /* the CPU's softnet_data.time_squeeze, as last seen */
+	unsigned long jiffy; /* when it last changed */
+	bool ever; /* whether it has */
+};
+static DEFINE_PER_CPU(struct tswg_squeeze, tswg_squeeze);
+
 /*
- * tswg_rx_inline_ok reports whether to receive skb, from peer, with
- * tswg_receive_now, counting it in peer's rate.
+ * tswg_cpu_squeezed reports whether this CPU's softirq network work has
+ * recently run out of budget or time (as softnet_data.time_squeeze, the
+ * third column of /proc/net/softnet_stat, counts), and so is more than the
+ * CPU can do. BHs must be off.
  */
-static bool tswg_rx_inline_ok(struct wg_peer *peer, struct sk_buff *skb)
+static bool tswg_cpu_squeezed(void)
+{
+	unsigned int n = READ_ONCE(this_cpu_ptr(&softnet_data)->time_squeeze);
+	struct tswg_squeeze *q = this_cpu_ptr(&tswg_squeeze);
+
+	if (n != q->seen) {
+		q->seen = n;
+		q->jiffy = jiffies;
+		q->ever = true;
+	}
+	return q->ever && time_before(jiffies, q->jiffy + TSWG_RX_PARALLEL_FOR);
+}
+
+static void tswg_receive_now(struct wg_peer *peer, struct sk_buff *skb);
+
+/*
+ * TSWG: steering. When the CPU a peer's packets arrive on is busy (as the
+ * CPUs taking a NIC's interrupts are, when the NIC has fewer queues than
+ * the host has CPUs, and the peers hash unevenly onto them), receiving
+ * them all there holds them up: a big host downloading from 37 peers over
+ * 32 queues reached 63 Gbps with its NIC's CPUs at 100% and the rest idle,
+ * 91 with RPS. So then each of the CPU's peers' packets goes to the peer's
+ * home CPU (by hash, as RPS does, but per peer and for our packets only),
+ * through a lockless list, and that CPU's NAPI receives them. A peer's
+ * packets all go to one CPU, in order.
+ *
+ * rx_steer_busy (module parameter) is how busy a CPU must be (percent, over
+ * TSWG_LOAD_WINDOW_US) to steer its peers' packets; 0 turns steering off.
+ */
+static unsigned int tswg_rx_steer_busy = 90;
+module_param_named(rx_steer_busy, tswg_rx_steer_busy, uint, 0644);
+MODULE_PARM_DESC(rx_steer_busy, "percent busy a CPU must be to hand its peers' received packets to other CPUs (0: never)");
+
+#define TSWG_LOAD_WINDOW_US 10000
+#define TSWG_STEER_FOR HZ
+
+/* tswg_cpu_load is what tswg_cpu_overloaded knows of a CPU. */
+struct tswg_cpu_load {
+	u64 idle_us, wall_us; /* at the start of the current window */
+	bool overloaded; /* as of the last window */
+	unsigned long rx_jiffy; /* when it last received for us from a NIC */
+};
+static DEFINE_PER_CPU(struct tswg_cpu_load, tswg_cpu_load);
+
+/*
+ * tswg_cpu_overloaded reports whether this CPU was more than rx_steer_busy
+ * percent busy in its last TSWG_LOAD_WINDOW_US, or its softirq work ran out
+ * of budget or time (tswg_cpu_squeezed). BHs must be off.
+ */
+static bool tswg_cpu_overloaded(void)
+{
+	struct tswg_cpu_load *l = this_cpu_ptr(&tswg_cpu_load);
+	unsigned int busy = READ_ONCE(tswg_rx_steer_busy);
+	u64 wall, idle;
+
+	if (!busy)
+		return false;
+	idle = get_cpu_idle_time_us(smp_processor_id(), &wall);
+	if (idle == (u64)-1) /* no NO_HZ accounting */
+		return tswg_cpu_squeezed();
+	if (wall - l->wall_us >= TSWG_LOAD_WINDOW_US) {
+		u64 dw = wall - l->wall_us, di = idle - l->idle_us;
+
+		l->overloaded = l->wall_us && di <= dw &&
+				di * 100 < dw * (100 - min(busy, 100U));
+		l->idle_us = idle;
+		l->wall_us = wall;
+	}
+	return l->overloaded || tswg_cpu_squeezed();
+}
+
+/*
+ * tswg_cpu_good_home reports whether cpu is a good one to steer to: online,
+ * not overloaded, and not itself receiving from a NIC (whose CPUs are what
+ * steering is to relieve).
+ */
+static bool tswg_cpu_good_home(int cpu)
+{
+	struct tswg_cpu_load *l = per_cpu_ptr(&tswg_cpu_load, cpu);
+
+	return cpu_online(cpu) && !READ_ONCE(l->overloaded) &&
+	       jiffies - READ_ONCE(l->rx_jiffy) > HZ / 10;
+}
+
+/*
+ * tswg_peer_home returns the CPU that peer's steered packets go to: the
+ * one it went to last, while that's still a good home, or else the first
+ * good one from a point that peer's ID hashes to.
+ */
+static int tswg_peer_home(struct wg_peer *peer)
+{
+	int home = READ_ONCE(peer->tswg_home), n = num_online_cpus(), i, cpu;
+
+	if (home >= 0 && home < nr_cpu_ids && tswg_cpu_good_home(home))
+		return home;
+	i = hash_64(peer->internal_id, 32) % n;
+	for (cpu = 0; cpu < n; cpu++) {
+		home = cpumask_nth((i + cpu) % n, cpu_online_mask);
+		if (tswg_cpu_good_home(home))
+			break;
+	}
+	WRITE_ONCE(peer->tswg_home, home);
+	return home;
+}
+
+static void tswg_steer_ipi(void *info)
+{
+	napi_schedule(&((struct tswg_steer *)info)->napi);
+}
+
+/*
+ * tswg_steer hands skb, from peer, with the references
+ * wg_packet_consume_data took, to cpu's tswg_steer_poll.
+ */
+static void tswg_steer(struct wg_device *wg, struct wg_peer *peer,
+		       struct sk_buff *skb, int cpu)
+{
+	struct tswg_steer *s = per_cpu_ptr(wg->tswg_steer, cpu);
+
+	atomic_inc(&peer->tswg_steered);
+	/* The first to an empty list wakes its NAPI; see tswg_steer_poll. */
+	if (llist_add(&skb->ll_node, &s->in))
+		smp_call_function_single_async(cpu, &s->csd);
+}
+
+static int tswg_steer_poll(struct napi_struct *napi, int budget)
+{
+	struct tswg_steer *s = container_of(napi, struct tswg_steer, napi);
+	struct sk_buff *skb, *tmp;
+	struct llist_node *n;
+	struct wg_peer *peer;
+	int done = 0;
+
+	if (skb_queue_empty(&s->todo)) {
+		n = llist_reverse_order(llist_del_all(&s->in));
+		llist_for_each_entry_safe(skb, tmp, n, ll_node)
+			__skb_queue_tail(&s->todo, skb);
+	}
+	while (done < budget && (skb = __skb_dequeue(&s->todo)) != NULL) {
+		peer = PACKET_PEER(skb);
+		atomic_dec(&peer->tswg_steered);
+		rcu_read_lock_bh();
+		tswg_receive_now(peer, skb);
+		rcu_read_unlock_bh();
+		done++;
+	}
+	if (done < budget && napi_complete_done(napi, done) &&
+	    !llist_empty(&s->in))
+		napi_schedule(napi); /* added since we took them */
+	return done;
+}
+
+int tswg_steer_init(struct wg_device *wg)
+{
+	int cpu;
+
+	wg->tswg_steer = alloc_percpu(struct tswg_steer);
+	if (!wg->tswg_steer)
+		return -ENOMEM;
+	for_each_possible_cpu(cpu) {
+		struct tswg_steer *s = per_cpu_ptr(wg->tswg_steer, cpu);
+
+		init_llist_head(&s->in);
+		__skb_queue_head_init(&s->todo);
+		INIT_CSD(&s->csd, tswg_steer_ipi, s);
+		set_bit(NAPI_STATE_NO_BUSY_POLL, &s->napi.state);
+		netif_napi_add(wg->dev, &s->napi, tswg_steer_poll);
+		napi_enable(&s->napi);
+	}
+	return 0;
+}
+
+/* tswg_steer_drop drops skb, which was being steered. */
+static void tswg_steer_drop(struct sk_buff *skb)
+{
+	struct wg_peer *peer = PACKET_PEER(skb);
+
+	atomic_dec(&peer->tswg_steered);
+	wg_noise_keypair_put(PACKET_CB(skb)->keypair, false);
+	wg_peer_put(peer);
+	kfree_skb(skb);
+}
+
+void tswg_steer_uninit(struct wg_device *wg)
+{
+	struct sk_buff *skb, *tmp;
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		struct tswg_steer *s = per_cpu_ptr(wg->tswg_steer, cpu);
+
+		napi_disable(&s->napi);
+		netif_napi_del(&s->napi);
+		llist_for_each_entry_safe(skb, tmp, llist_del_all(&s->in), ll_node)
+			tswg_steer_drop(skb);
+		while ((skb = __skb_dequeue(&s->todo)) != NULL)
+			tswg_steer_drop(skb);
+	}
+	free_percpu(wg->tswg_steer);
+}
+
+/* TSWG: the ways a peer's packets can be received; see tswg_rx_path. */
+enum tswg_rx_mode {
+	TSWG_RX_INLINE, /* tswg_receive_now, here */
+	TSWG_RX_STEER, /* tswg_receive_now, on the peer's home CPU */
+	TSWG_RX_PARALLEL /* the crypt workers and the peer's NAPI */
+};
+
+/*
+ * tswg_rx_path returns how to receive skb, from peer, counting it in peer's
+ * rate. A peer's packets change from steering or the parallel way only
+ * once nothing is on its way that way, so that they don't reorder.
+ */
+static enum tswg_rx_mode tswg_rx_path(struct wg_peer *peer, struct sk_buff *skb)
 {
 	unsigned int mbps = READ_ONCE(tswg_rx_inline_mbps);
+	enum tswg_rx_mode want = TSWG_RX_INLINE, was;
 	unsigned long now = jiffies;
 
 	if (now - READ_ONCE(peer->tswg_rx_jiffy) >= TSWG_RX_WINDOW) {
@@ -987,17 +1216,24 @@ static bool tswg_rx_inline_ok(struct wg_peer *peer, struct sk_buff *skb)
 		WRITE_ONCE(peer->tswg_rx_bytes, 0);
 	}
 	WRITE_ONCE(peer->tswg_rx_bytes, READ_ONCE(peer->tswg_rx_bytes) + skb->len);
-	if (!mbps)
-		return false;
-	if ((u64)READ_ONCE(peer->tswg_rx_bytes) * 8 * HZ >
-	    (u64)mbps * 1000000 * TSWG_RX_WINDOW) {
+	if (!mbps || (u64)READ_ONCE(peer->tswg_rx_bytes) * 8 * HZ >
+		     (u64)mbps * 1000000 * TSWG_RX_WINDOW)
 		WRITE_ONCE(peer->tswg_rx_parallel_until, now + TSWG_RX_PARALLEL_FOR);
-		return false;
-	}
-	if (time_before(now, READ_ONCE(peer->tswg_rx_parallel_until)))
-		return false;
-	/* Not past packets still on their way the parallel way. */
-	return !atomic_read(&peer->rx_queue.count);
+	if (tswg_cpu_overloaded())
+		WRITE_ONCE(peer->tswg_rx_steer_until, now + TSWG_STEER_FOR);
+
+	if (!mbps || time_before(now, READ_ONCE(peer->tswg_rx_parallel_until)))
+		want = TSWG_RX_PARALLEL;
+	else if (time_before(now, READ_ONCE(peer->tswg_rx_steer_until)))
+		want = TSWG_RX_STEER;
+
+	was = READ_ONCE(peer->tswg_rx_mode);
+	if (want != was &&
+	    ((was == TSWG_RX_PARALLEL && atomic_read(&peer->rx_queue.count)) ||
+	     (was == TSWG_RX_STEER && atomic_read(&peer->tswg_steered))))
+		want = was;
+	WRITE_ONCE(peer->tswg_rx_mode, want);
+	return want;
 }
 
 static void tswg_receive_now(struct wg_peer *peer, struct sk_buff *skb)
@@ -1046,10 +1282,34 @@ static void wg_packet_consume_data(struct wg_device *wg, struct sk_buff *skb)
 
 	PACKET_CB(skb)->tswg_out = NULL; /* TSWG */
 	PACKET_CB(skb)->tswg_count = skb_is_gso(skb) ? skb_shinfo(skb)->gso_segs : 1;
-	if (tswg_rx_inline_ok(peer, skb)) { /* TSWG */
+	{ /* TSWG: see tswg_cpu_good_home */
+		struct tswg_cpu_load *l = this_cpu_ptr(&tswg_cpu_load);
+
+		if (l->rx_jiffy != jiffies)
+			l->rx_jiffy = jiffies;
+	}
+	switch (tswg_rx_path(peer, skb)) { /* TSWG */
+	case TSWG_RX_STEER: {
+		/*
+		 * Not to a new home while some are on their way to the old,
+		 * which would reorder them.
+		 */
+		int cpu = atomic_read(&peer->tswg_steered) ?
+				  READ_ONCE(peer->tswg_home) : tswg_peer_home(peer);
+
+		if (cpu != smp_processor_id()) {
+			tswg_steer(wg, peer, skb, cpu);
+			rcu_read_unlock_bh();
+			return;
+		}
+		fallthrough;
+	}
+	case TSWG_RX_INLINE:
 		tswg_receive_now(peer, skb);
 		rcu_read_unlock_bh();
 		return;
+	case TSWG_RX_PARALLEL:
+		break;
 	}
 	/* TSWG: decrypt a lone packet here when the workers are idle. */
 	if (!skb_is_gso(skb) && tswg_inline_ok(&wg->decrypt_queue)) {

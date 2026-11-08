@@ -113,7 +113,36 @@ directions, which caps it near 68 Gbps. RPS
 work past the NIC's CPUs, by flow hash, so without reordering: fetches
 gain 13%, uploads nothing (their limit is elsewhere), at more CPU per GB
 for the extra handoff. tailscaled could set it on subnet routers; see
-the TODO list.
+the TODO list. (Those numbers predate change 15, steering, which does
+the same for received packets when a CPU is too busy; with it, RPS on a
+host receiving tunneled traffic hurts: 81 -> 69 Gbps crawling.)
+
+A big host on the tailnet (2026-11-08; `TSWG_SUBNET_LOAD=serve` and
+`crawl`): the same c6in.32xlarge (128 CPUs, 32 NIC queues) as an
+endpoint, with the 37 clients as its peers, 16 connections each, MTU
+1280. Serving, the clients make HTTP-like requests of it (500 bytes, 1
+MiB responses); crawling, it makes them of all the clients at once.
+"Plain" is the same without a tunnel, its paths clamped to MTU 1280
+(`TSWG_SUBNET_PLAIN_MTU`), so the network's limit with the same packet
+sizes:
+
+| big host | serve Gbps | CPU-s/GB | crawl Gbps | CPU-s/GB |
+|---|---|---|---|---|
+| plain (no tunnel) | 152 | 1.95 | 128 | 4.28 |
+| tswg at change 12 | 84-98 | 4.2-4.5 | 41-51 | 6.3-6.5 |
+| tswg with changes 13-15 | **133-137** | **3.9** | **80-83** | **5.8** |
+| wireguard-go | 5.5-6.7 | 6.5-8.9 | 8.5 | 10.5 |
+
+Serving reaches 0.88x plain, 0.93x counting WireGuard's 60 bytes of
+overhead per packet, with no lock contention, the host's CPU 48% busy,
+and none of EC2's allowances (`ethtool -S`'s `*_allowance_exceeded`)
+exceeded: the network's limit, near enough. Crawling is limited by the
+NIC's queues: the 37 peers' UDP flows hash onto 23 of its 32 queues,
+two or three to some, and those run at 660-680k packets per second each,
+ENA's limit per queue, while 9 queues carry nothing; plain TCP spreads
+592 flows evenly. More peers would even it out; fewer, faster ones, the
+same NIC would cap. The NIC's CPUs do only the driver's work, with each
+peer's crypto and TCP steered to its own CPU (change 15).
 
 CPU accounting: rows before the last measured CPU from `/proc/stat`,
 which on Ubuntu's AWS kernels (no `CONFIG_IRQ_TIME_ACCOUNTING`) counts
@@ -332,6 +361,39 @@ this order. Each step's throughput is bulk TCP, 1 stream, IPv4, 4 vCPUs.
    handing off the rest (it reorders flows at every switch); in the lab,
    inline transmit's per-send virtio notifications (each a VM exit)
    make forwarding from one veth slower, which EC2's ENA doesn't.
+13. Sending by combining (2026-11-08). A peer's encrypted packets were
+   sent in order by its tx worker, one work item, which ran on one CPU at
+   a time; on a device without UDP segmentation offload (ENA), the
+   sending CPU also segments what we send, so serving 37 peers, the CPUs
+   their tx workers landed on ran at 90% and more. Now the encrypt
+   worker that makes an entry ready sends what's ready in order itself,
+   if no other CPU is sending the peer's (`tswg_tx_lock`, a trylock),
+   and otherwise leaves it to the one that is (`tswg_tx_more`): still one
+   CPU at a time per peer, so in order, but moving among the CPUs
+   encrypting for it, with no workqueue hop (`tswg_tx_kick`).
+14. Local sockets' lone packets (TCP's ACKs, small requests) are
+   encrypted and sent inline too (`tswg_xmit_now`), when nothing of the
+   peer's is on its way through the workers, so as not to overtake it: a
+   crawling host spent 7% of its CPU on the encrypt ring's lock for its
+   ACKs. Bulk (GSO) sends still go to the workers.
+15. Steering (`tswg_steer`). With more peers than NIC queues, RSS puts
+   several peers' UDP flows on some CPUs and none on others, and
+   receiving inline (change 12) left a crawling host's NIC CPUs at 100%
+   and the rest idle. So when a CPU is too busy (over `rx_steer_busy`,
+   default 90%, of its last 10ms, from `get_cpu_idle_time_us`, or its
+   softirq work out of budget or time, `softnet_data.time_squeeze`, which
+   alone triggered too rarely), the packets of the peers arriving on it
+   go, for at least a second, to each peer's home CPU: one not itself
+   receiving from a NIC or overloaded, from a point the peer's ID hashes
+   to (`tswg_peer_home`), through a lockless per-CPU list, an IPI per
+   batch, and that CPU's NAPI, which receives them as
+   `tswg_receive_now` does. It's RPS, per peer and for our packets only,
+   and only when needed. A peer changes between inline, steered and the
+   parallel way only when nothing is on its way the way it was going,
+   so its packets don't reorder (`tswg_rx_path`). Crawling: 63 -> 81
+   Gbps. Homes hashed over all CPUs, without avoiding the NIC's, did
+   nothing; RPS (all packets, all the time) got 91 before steering, at
+   7.0 CPU-s/GB to steering's 5.8.
 
 The lean harness's VMs have guest USO off (decided 2026-11-07): with it,
 the host hands VM-to-VM UDP GSO packets to the receiving guest still
@@ -1260,9 +1322,12 @@ Performance (the primary motivation; see "Performance"):
       would contend the same way on a big host with many busy local
       flows (a server, rather than a router): rings per group of CPUs
       with work stealing, or per-flow steering, as RPS does.
-- [ ] Subnet routers whose NIC has fewer queues than CPUs: set up RPS
-      (tailscaled, or document it): fetches through a 128-CPU router
-      with 32 NIC queues gain 13%.
+- [ ] Forwarded packets' transmit could steer like received ones
+      (change 15) when the NIC's CPUs are busy, instead of RPS: fetches
+      through a 128-CPU router with 32 NIC queues gained 13% from RPS.
+- [ ] Page zeroing (`init_on_alloc`, on in Ubuntu's kernels) is 5-13% of
+      a big host's CPU, for pages we fill entirely: a page pool for the
+      encrypted and decrypted packets' pages would recycle them unzeroed.
 - [ ] Subnet router past 75 Gbps at MTU 1280: the ENA interrupt CPUs'
       page allocator contention, from ENA allocating a page per received
       packet (zero-copy receive, taking tswg's own allocations out, didn't

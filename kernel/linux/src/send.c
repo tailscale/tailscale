@@ -778,16 +778,41 @@ static void wg_packet_create_data_done(struct wg_peer *peer, struct sk_buff *fir
 	keep_key_fresh(peer);
 }
 
-void wg_packet_tx_worker(struct work_struct *work)
+/*
+ * TSWG: sending a peer's encrypted packets by combining.
+ *
+ * Upstream sends a peer's tx_queue in order from its tx worker, one work
+ * item, queued on the CPU that finished encrypting: a workqueue hop for
+ * each entry, and all of a peer's sending on one CPU at a time. A device
+ * without UDP segmentation offload (EC2's ENA) segments what we send in
+ * software, on the sending CPU, so a big host serving 37 peers had the few
+ * CPUs their tx workers landed on at 90% and more. Now the encrypt worker
+ * that makes an entry ready sends it, and whatever else is ready in order,
+ * itself, if no other CPU is sending the peer's (tswg_tx_lock); if another
+ * is, that one sends it before it's done (tswg_tx_more). The peer's
+ * sending is still one CPU at a time, which keeps it in order, but moves
+ * among the CPUs encrypting for it, with no hop. Past TSWG_TX_BUDGET
+ * entries at a time, the tx worker takes over.
+ */
+#define TSWG_TX_BUDGET 64
+
+/*
+ * tswg_tx_drain sends up to TSWG_TX_BUDGET ready entries from the head of
+ * peer's tx_queue, returning whether it stopped with more ready. The
+ * caller holds tswg_tx_lock.
+ */
+static bool tswg_tx_drain(struct wg_peer *peer)
 {
-	struct wg_peer *peer = container_of(work, struct wg_peer, transmit_packet_work);
 	struct noise_keypair *keypair;
 	enum packet_state state;
 	struct sk_buff *first;
+	int n = 0;
 
 	while ((first = wg_prev_queue_peek(&peer->tx_queue)) != NULL &&
 	       (state = atomic_read_acquire(&PACKET_CB(first)->state)) !=
 		       PACKET_STATE_UNCRYPTED) {
+		if (n++ == TSWG_TX_BUDGET)
+			return true;
 		wg_prev_queue_drop_peeked(&peer->tx_queue);
 		keypair = PACKET_CB(first)->keypair;
 
@@ -800,9 +825,42 @@ void wg_packet_tx_worker(struct work_struct *work)
 
 		wg_noise_keypair_put(keypair, false);
 		wg_peer_put(peer);
-		if (need_resched())
-			cond_resched();
 	}
+	return false;
+}
+
+/*
+ * tswg_tx_kick sends what's ready in peer's tx_queue, unless another CPU is
+ * sending it, in which case that one will. The caller holds a reference to
+ * peer.
+ */
+void tswg_tx_kick(struct wg_peer *peer)
+{
+	bool more = false;
+
+	WRITE_ONCE(peer->tswg_tx_more, true);
+	smp_mb(); /* tswg_tx_more before trying the lock; pairs with below */
+	while (READ_ONCE(peer->tswg_tx_more) &&
+	       spin_trylock_bh(&peer->tswg_tx_lock)) {
+		WRITE_ONCE(peer->tswg_tx_more, false);
+		smp_mb(); /* clear tswg_tx_more before looking at the queue */
+		more = tswg_tx_drain(peer);
+		spin_unlock_bh(&peer->tswg_tx_lock);
+		if (more)
+			break;
+		smp_mb(); /* unlock before rechecking tswg_tx_more */
+	}
+	if (more)
+		tswg_queue_work_on(raw_smp_processor_id(),
+				   peer->device->packet_crypt_wq,
+				   &peer->transmit_packet_work);
+}
+
+void wg_packet_tx_worker(struct work_struct *work)
+{
+	struct wg_peer *peer = container_of(work, struct wg_peer, transmit_packet_work);
+
+	tswg_tx_kick(peer); /* TSWG: requeues itself if there's more */
 }
 
 void wg_packet_encrypt_worker(struct work_struct *work)
@@ -899,11 +957,16 @@ err:
  * each a VM exit there). Handing off just the overflow, a share of each
  * jiffy, was worse still, as it reorders flows each time it switches.
  *
+ * Local sockets' lone packets (TCP's ACKs, small requests) go too, when
+ * nothing of the peer's is on its way the other way, so that they don't
+ * overtake it: a big host downloading from 37 peers spent 7% of its CPU
+ * contending for the encrypt ring's lock, for its ACKs.
+ *
  * tx_inline (module parameter): 0 never, 1 (the default) for packets with
- * no socket (forwarded), 2 for all, including local sockets' (which costs
- * a single flow its encryption on other CPUs: much of a TCP sender's
- * sending happens in softirq too, as ACKs arrive, so being in softirq
- * doesn't mean forwarding).
+ * no socket (forwarded) and lone ones, 2 for all, including local sockets'
+ * bulk (which costs a single flow its encryption on other CPUs: much of a
+ * TCP sender's sending happens in softirq too, as ACKs arrive, so being in
+ * softirq doesn't mean forwarding).
  */
 static int tswg_tx_inline = 1;
 module_param_named(tx_inline, tswg_tx_inline, int, 0644);
@@ -917,7 +980,12 @@ bool tswg_xmit_now(struct wg_peer *peer, struct sk_buff_head *packets)
 	unsigned int count = 0;
 	u64 nonce;
 
-	if (!mode || (mode == 1 && packets->next->sk))
+	if (!mode)
+		return false;
+	if (mode == 1 && packets->next->sk &&
+	    (!skb_queue_is_last(packets, packets->next) ||
+	     skb_is_gso(packets->next) ||
+	     atomic_read(&peer->tx_queue.count)))
 		return false;
 	/* Not past packets waiting for a handshake, nor without a key. */
 	if (!skb_queue_empty_lockless(&peer->staged_packet_queue))

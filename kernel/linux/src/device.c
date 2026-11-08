@@ -266,15 +266,27 @@ err:
 	return ret;
 }
 
-/* TSWG: the device's per-CPU GRO cells; see tswg_receive_now. */
+/* TSWG: the device's per-CPU GRO cells and steering; see tswg_receive_now. */
 static int wg_init(struct net_device *dev)
 {
-	return gro_cells_init(&((struct wg_device *)netdev_priv(dev))->tswg_gro_cells, dev);
+	struct wg_device *wg = netdev_priv(dev);
+	int ret;
+
+	ret = gro_cells_init(&wg->tswg_gro_cells, dev);
+	if (ret)
+		return ret;
+	ret = tswg_steer_init(wg);
+	if (ret)
+		gro_cells_destroy(&wg->tswg_gro_cells);
+	return ret;
 }
 
 static void wg_uninit(struct net_device *dev)
 {
-	gro_cells_destroy(&((struct wg_device *)netdev_priv(dev))->tswg_gro_cells);
+	struct wg_device *wg = netdev_priv(dev);
+
+	tswg_steer_uninit(wg);
+	gro_cells_destroy(&wg->tswg_gro_cells);
 }
 
 static const struct net_device_ops netdev_ops = {

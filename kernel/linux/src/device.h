@@ -18,6 +18,8 @@
 #include <linux/net.h>
 #include <linux/ptr_ring.h>
 #include <net/gro_cells.h> /* TSWG */
+#include <linux/llist.h> /* TSWG */
+#include <linux/smp.h> /* TSWG */
 
 struct wg_device;
 
@@ -32,6 +34,20 @@ struct multicore_worker {
 	unsigned long tswg_rate_jiffy;
 	unsigned int tswg_rate_count;
 };
+
+/*
+ * TSWG: tswg_steer is a CPU's queue of received packets that other CPUs
+ * handed it (see tswg_steer in receive.c), and the NAPI that takes them.
+ */
+struct tswg_steer {
+	struct llist_head in; /* added by other CPUs, newest first */
+	struct sk_buff_head todo; /* taken from in, oldest first; this CPU's */
+	struct napi_struct napi;
+	call_single_data_t csd; /* schedules napi on this CPU */
+};
+
+int tswg_steer_init(struct wg_device *wg);
+void tswg_steer_uninit(struct wg_device *wg);
 
 struct crypt_queue {
 	struct ptr_ring ring;
@@ -49,6 +65,7 @@ struct wg_device {
 	struct net_device *dev;
 	struct crypt_queue encrypt_queue, decrypt_queue, handshake_queue;
 	struct gro_cells tswg_gro_cells; /* TSWG: see tswg_receive_now */
+	struct tswg_steer __percpu *tswg_steer; /* TSWG: see tswg_steer */
 	struct sock __rcu *sock4, *sock6;
 	struct net __rcu *creating_net;
 	struct noise_static_identity static_identity;

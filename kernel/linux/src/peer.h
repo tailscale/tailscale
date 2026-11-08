@@ -70,10 +70,17 @@ struct wg_peer {
 	 * one is set; userspace (disco) picks the path. Read locklessly.
 	 */
 	bool tswg_no_roam;
+	/* TSWG: whoever holds it sends the peer's tx_queue; see tswg_tx_kick */
+	spinlock_t tswg_tx_lock;
+	bool tswg_tx_more; /* tx_queue may have more to send */
 	/* TSWG: bytes received since jiffy tswg_rx_jiffy; see tswg_rx_inline_ok */
 	unsigned long tswg_rx_jiffy;
 	unsigned int tswg_rx_bytes;
-	unsigned long tswg_rx_parallel_until; /* jiffies; see tswg_rx_inline_ok */
+	unsigned long tswg_rx_parallel_until; /* jiffies; see tswg_rx_path */
+	unsigned long tswg_rx_steer_until; /* jiffies; see tswg_rx_path */
+	atomic_t tswg_steered; /* packets on their way through tswg_steer */
+	int tswg_rx_mode; /* enum tswg_rx_mode of the last packet received */
+	int tswg_home; /* CPU its steered packets go to; see tswg_peer_home */
 
 	/* TSWG: jiffies of the last TX and RX activity events; see tswg.h. */
 	unsigned long tswg_tx_event, tswg_rx_event;
