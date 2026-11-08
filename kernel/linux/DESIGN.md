@@ -53,6 +53,14 @@ which the router forwards to, masquerading. Updated 2026-11-07.
 | **c6in.32xlarge, 128 CPUs** | **60 x 4** | **74.3 Gbps** | 6.2 | 8.1 | **12.0x** | 6.25 / 5.57 / 130 | 1.12x |
 | c7i.48xlarge, MTU 8920 (data point only) | 8 x 16 | 49.6 Gbps (line rate) | 17.5 | 49.2 | 2.8x | 2.18 / 1.86 / 15.0 | 1.17x |
 | **c6in.32xlarge, 128 CPUs, idle-residency CPU accounting** | **37 x 4** | **70.9 Gbps** | 6.2 | 8.5 | **11.5x** | **6.50 / 8.57 / 124.6** | **0.76x** |
+| **real tailscaled, kernel vs. TUN mode** (c6in.32xlarge) | **37 x 4** | **69.2 Gbps** | 6.9 (TUN) | | **10.0x** | **6.47 / 8.80 / -** | **0.74x** |
+
+The last row runs real tailscaled (2026-11-08; `tskernel` and `tstun`
+in `TestLeanSubnetRouter`): the router advertises the backend's address
+with SNAT, the clients (kernel mode) accept it, and a self-contained
+control plane (`tstest/tswgbench/benchcontrol`) runs on the backend.
+Kernel mode matches the bare tswg tunnel (70.9 Gbps), so tailscaled adds
+no cost on the data path; plain routing on the same clients: 89.5 Gbps.
 
 The same 37 clients through the same router with no tunnel, the
 clients' routes clamped to MTU 1280 (so the same size packets as through
@@ -1138,8 +1146,15 @@ Everything else:
 - [x] Kernel mode: event-driven everything, no polling
       (`TestTSWGTailscaledPathFallback`, `TestTSWGTailscaledIdleTrustExpiry`).
 - [x] IPv6 underlay tests for tswg (`TestLeanSmoke`).
-- [ ] Kernel mode (tailscaled) over IPv6: needs control and DERP outside
-      natlab, or IPv6 in natlab.
+- [x] Kernel mode (tailscaled) over IPv6: exercised on EC2 (some of the
+      subnet router benchmark's clients took direct IPv6 paths).
+- [x] Kernel mode bugs found by the EC2 tailscaled benchmark: a reconcile
+      race that left a node's kernel device without its private key (more
+      likely with many peers), and the engine never closing the kernel
+      data plane, leaving tailscale0 behind for a later TUN-mode
+      tailscaled to trip over.
+- [ ] A natlab test with many peers (the key race only showed with
+      dozens), and one for switching between kernel and TUN mode.
 - [ ] Flake: in 1 of 4 natlab benchmark runs, after both nodes restarted
       tailscaled into kernel mode at nearly the same time, the tunnel
       didn't carry traffic for over 10 seconds (n1 had cleared its
