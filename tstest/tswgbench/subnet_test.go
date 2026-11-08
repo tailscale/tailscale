@@ -30,7 +30,8 @@ import (
 //
 // TSWG_LEAN_SUBNET lists the router's data planes to compare (such as
 // "tswg,wggo,kernelwg,plain"; plain routes the clients' traffic through the
-// router without a tunnel, for the ceiling). The clients use
+// router without a tunnel, for the ceiling; tskernel and tstun run real
+// tailscaled, in kernel and TUN mode, as in subnet_tailscaled_test.go). The clients use
 // TSWG_SUBNET_CLIENT_MODE (default tswg), so as not to be the bottleneck.
 // Other settings:
 //
@@ -49,6 +50,7 @@ import (
 //	                         each setup, for experiments ($MODE is the mode)
 //	TSWG_SUBNET_ROUTER_STATS if set, log the router's wg0, UDP and TCP
 //	                         counters after each run, to see drops
+//	TSWG_SUBNET_PAUSE        a duration to pause after each setup, to debug
 //	TSWG_COMPARE_RUNS        runs of each mode, interleaved (default 3)
 //	TSWG_BENCH_DUR           length of each run (default 10s)
 func TestLeanSubnetRouter(t *testing.T) {
@@ -111,6 +113,10 @@ func TestLeanSubnetRouter(t *testing.T) {
 	for run := range runs {
 		for _, mode := range strings.Split(modes, ",") {
 			s.setup(mode)
+			if d, err := time.ParseDuration(os.Getenv("TSWG_SUBNET_PAUSE")); err == nil {
+				t.Logf("pausing %v after setting up %s, for debugging", d, mode)
+				time.Sleep(d)
+			}
 			var prof profileResult
 			var profErr error
 			profDone := make(chan bool)
@@ -178,6 +184,7 @@ type subnetLab struct {
 	backend    *vm
 	clients    []*vm
 	clientMode string
+	ts         tsState // for the tailscaled modes; see subnet_tailscaled_test.go
 }
 
 // logRouterStats logs the router's wg0 interface counters, UDP and TCP
@@ -263,6 +270,11 @@ func (s *subnetLab) setup(mode string) {
 			t.Fatal(err)
 		}
 	}
+	if isTailscaledMode(mode) {
+		s.setupTailscaled(mode == modeTSKernel)
+		return
+	}
+	s.stopTailscaled()
 	backendRoute := netip.PrefixFrom(s.backend.under4, 32).String()
 	if mode == modePlain {
 		for _, c := range s.clients {
