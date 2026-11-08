@@ -64,6 +64,12 @@ type PeerConfig struct {
 	// The flag is applied before Endpoint, so setting both is one step.
 	NoRoam *bool
 
+	// Hybrid, if non-nil, sets whether handshakes with the peer are
+	// hybrid post-quantum ones (wgcfg.PeerConfig.Hybrid), which both
+	// peers must agree on. It's sent to the kernel together with NoRoam:
+	// if either is non-nil, a nil one means false.
+	Hybrid *bool
+
 	// ClearSession, if true, makes the kernel forget the peer's session
 	// keys and any handshake in progress, so that the next packet to the
 	// peer starts a new handshake right away. tailscaled sets it when a
@@ -108,4 +114,5 @@ type Peer struct {
 	AllowedIPs          []netip.Prefix
 	ProtocolVersion     int
 	NoRoam              bool // see PeerConfig.NoRoam
+	Hybrid              bool // see PeerConfig.Hybrid
 }

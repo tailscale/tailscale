@@ -80,14 +80,13 @@ type kernelDataplane struct {
 
 	events *tswg.EventConn // set by start
 
-	mu           sync.Mutex
-	privKey      key.NodePrivate                    // desired private key
-	pushedPriv   key.NodePrivate                    // private key last pushed to the kernel
-	pushed       map[key.NodePublic]kernelPeerState // peer state last pushed to the kernel
-	loopAddr     map[key.NodePublic]netip.Addr      // peer's bridge address
-	loopPeer     map[netip.Addr]key.NodePublic      // inverse of loopAddr
-	nextLoop     uint32                             // next index for loopAddr
-	warnedHybrid map[key.NodePublic]bool
+	mu         sync.Mutex
+	privKey    key.NodePrivate                    // desired private key
+	pushedPriv key.NodePrivate                    // private key last pushed to the kernel
+	pushed     map[key.NodePublic]kernelPeerState // peer state last pushed to the kernel
+	loopAddr   map[key.NodePublic]netip.Addr      // peer's bridge address
+	loopPeer   map[netip.Addr]key.NodePublic      // inverse of loopAddr
+	nextLoop   uint32                             // next index for loopAddr
 
 	// Work for the reconcile loop, which clears these as it takes them.
 	wantFullSync  bool
@@ -101,10 +100,12 @@ type kernelPeerState struct {
 	endpoint   netip.AddrPort
 	allowedIPs []netip.Prefix // sorted
 	psk        [32]byte
+	hybrid     bool // hybrid post-quantum handshakes; see wgcfg.PeerConfig.Hybrid
 }
 
 func (s kernelPeerState) equal(o kernelPeerState) bool {
-	return s.endpoint == o.endpoint && s.psk == o.psk && slices.Equal(s.allowedIPs, o.allowedIPs)
+	return s.endpoint == o.endpoint && s.psk == o.psk && s.hybrid == o.hybrid &&
+		slices.Equal(s.allowedIPs, o.allowedIPs)
 }
 
 // kernelMaxPeersPerMessage bounds the size of each netlink message.
@@ -120,7 +121,6 @@ func newKernelDataplane(logf logger.Logf, ifname string, peerConfigFn *atomic.Po
 		pushed:       map[key.NodePublic]kernelPeerState{},
 		loopAddr:     map[key.NodePublic]netip.Addr{},
 		loopPeer:     map[netip.Addr]key.NodePublic{},
-		warnedHybrid: map[key.NodePublic]bool{},
 		wantFullSync: true,
 	}
 }
@@ -468,6 +468,7 @@ func (k *kernelDataplane) fullSync() error {
 			endpoint:   p.Direct,
 			allowedIPs: ips,
 			psk:        conf.PresharedKey,
+			hybrid:     conf.Hybrid,
 		}})
 	}
 
@@ -484,16 +485,13 @@ func (k *kernelDataplane) fullSync() error {
 	noRoam := true
 	for _, w := range wants {
 		w.st.endpoint = k.endpointLocked(w.pk, w.st.endpoint)
-		if w.conf.Hybrid && !k.warnedHybrid[w.pk] {
-			k.warnedHybrid[w.pk] = true
-			k.logf("[unexpected] peer %v wants a hybrid handshake, which tswg doesn't support; using a classic handshake", w.pk.ShortString())
-		}
 		desired[w.pk] = w.st
 		old, ok := k.pushed[w.pk]
 		if ok && old.equal(w.st) {
 			continue
 		}
 		psk := w.st.psk
+		hybrid := w.st.hybrid
 		peers = append(peers, tswg.PeerConfig{
 			PublicKey:         w.pk,
 			Endpoint:          w.st.endpoint,
@@ -501,6 +499,7 @@ func (k *kernelDataplane) fullSync() error {
 			AllowedIPs:        w.st.allowedIPs,
 			PresharedKey:      &psk,
 			NoRoam:            &noRoam,
+			Hybrid:            &hybrid,
 		})
 	}
 	for pk := range k.pushed {

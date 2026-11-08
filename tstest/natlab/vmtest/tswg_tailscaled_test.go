@@ -35,25 +35,45 @@ type tswgTailscaled struct {
 // from TUN (its fallback while the module wasn't loaded) to the kernel
 // data plane, and waits for the kernel device to be set up.
 func newTSWGTailscaled(t *testing.T, nat vnet.NAT) *tswgTailscaled {
+	return newTSWGTailscaledOpts(t, nat, tswgTailscaledOpts{})
+}
+
+// tswgTailscaledOpts are options for newTSWGTailscaledOpts.
+type tswgTailscaledOpts struct {
+	env      []vnet.TailscaledEnv // more environment for both tailscaleds
+	tunNode2 bool                 // leave the second node in TUN mode (wireguard-go)
+}
+
+// newTSWGTailscaledOpts is newTSWGTailscaled with options.
+func newTSWGTailscaledOpts(t *testing.T, nat vnet.NAT, opts tswgTailscaledOpts) *tswgTailscaled {
 	dir := tswgDir(t)
 	ko := buildTSWGForGokrazy(t, dir)
 
 	f := &tswgTailscaled{t: t, env: vmtest.New(t)}
 	for i := range 2 {
-		f.nodes = append(f.nodes, f.env.AddNode(fmt.Sprintf("tswg%d", i+1),
+		nodeOpts := []any{
 			f.env.AddNetwork(
 				fmt.Sprintf("2.%d.%d.%d", i+1, i+1, i+1),
 				fmt.Sprintf("192.168.%d.1/24", i+1), nat),
 			vmtest.OS(vmtest.Gokrazy),
-			vnet.TailscaledEnv{Key: "TS_DEBUG_TSWG", Value: "1"}))
+			vnet.TailscaledEnv{Key: "TS_DEBUG_TSWG", Value: "1"},
+		}
+		for _, e := range opts.env {
+			nodeOpts = append(nodeOpts, e)
+		}
+		f.nodes = append(f.nodes, f.env.AddNode(fmt.Sprintf("tswg%d", i+1), nodeOpts...))
 	}
 	f.env.Start()
 
-	for _, n := range f.nodes {
+	kernelNodes := f.nodes
+	if opts.tunNode2 {
+		kernelNodes = f.nodes[:1]
+	}
+	for _, n := range kernelNodes {
 		tta(t, n, "POST", "/tswg/load", ko)
 		f.env.RestartTailscaled(n)
 	}
-	for _, n := range f.nodes {
+	for _, n := range kernelNodes {
 		f.waitKernelReady(n)
 	}
 	return f
@@ -304,6 +324,87 @@ func TestTSWGTailscaledPeerRestart(t *testing.T) {
 	}
 	if logs := f.env.NodeLogs(n1); !strings.Contains(logs, "tswg: clearing session with") {
 		t.Errorf("%s's logs don't mention clearing the session", n1.Name())
+	}
+}
+
+// hybridEnv makes tailscaled use hybrid post-quantum handshakes with all
+// peers.
+var hybridEnv = vnet.TailscaledEnv{Key: "TS_DEBUG_FORCE_HYBRID_HANDSHAKES", Value: "1"}
+
+// TestTSWGTailscaledHybridTUN checks hybrid post-quantum handshakes between
+// tswg and wireguard-go: node 1 runs the kernel data plane and node 2
+// stays in TUN mode, both with all peers set to hybrid handshakes, which
+// have no fallback to classic ones. First the kernel initiates; then node
+// 2 restarts (losing its session) and wireguard-go initiates. wireguard-go's
+// metrics say each handshake was hybrid.
+func TestTSWGTailscaledHybridTUN(t *testing.T) {
+	f := newTSWGTailscaledOpts(t, vnet.EasyNAT, tswgTailscaledOpts{
+		env:      []vnet.TailscaledEnv{hybridEnv},
+		tunNode2: true,
+	})
+	n1, n2 := f.nodes[0], f.nodes[1]
+	ip1, ip2 := f.ip(n1), f.ip(n2)
+
+	// The kernel initiates, and wireguard-go responds.
+	f.env.LANPing(n1, ip2)
+	f.checkKernelHybrid(n1)
+	f.waitMetric(n2, "wireguard_handshake_hybrid_responder_completed")
+	f.env.LANPing(n2, ip1)
+
+	// Restarting node 2's tailscaled loses its session (and its metrics),
+	// so its next packet makes wireguard-go initiate.
+	f.env.RestartTailscaled(n2)
+	f.env.LANPing(n2, ip1)
+	f.waitMetric(n2, "wireguard_handshake_hybrid_initiator_completed")
+	f.env.LANPing(n1, ip2)
+}
+
+// TestTSWGTailscaledHybridKernel is like TestTSWGTailscaledHybridTUN, but
+// with both nodes in kernel mode.
+func TestTSWGTailscaledHybridKernel(t *testing.T) {
+	f := newTSWGTailscaledOpts(t, vnet.EasyNAT, tswgTailscaledOpts{
+		env: []vnet.TailscaledEnv{hybridEnv},
+	})
+	n1, n2 := f.nodes[0], f.nodes[1]
+	f.env.LANPing(n1, f.ip(n2))
+	f.env.LANPing(n2, f.ip(n1))
+	for _, n := range f.nodes {
+		f.checkKernelHybrid(n)
+	}
+}
+
+// checkKernelHybrid checks that n's kernel device has its only peer set to
+// hybrid handshakes, and has handshaken with it.
+func (f *tswgTailscaled) checkKernelHybrid(n *vmtest.Node) {
+	f.t.Helper()
+	d, err := f.show(n)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if len(d.Peers) != 1 {
+		f.t.Fatalf("[%s] %d kernel peers, want 1", n.Name(), len(d.Peers))
+	}
+	p := d.Peers[0]
+	f.t.Logf("[%s] kernel peer %v: hybrid=%v handshake=%v rx=%d tx=%d",
+		n.Name(), p.PublicKey.ShortString(), p.Hybrid, p.LastHandshake, p.RxBytes, p.TxBytes)
+	if !p.Hybrid {
+		f.t.Errorf("[%s] kernel peer has Hybrid = false, want true", n.Name())
+	}
+	if p.LastHandshake.IsZero() {
+		f.t.Errorf("[%s] kernel peer hasn't handshaken", n.Name())
+	}
+}
+
+// waitMetric waits for n's client metric name to be nonzero.
+func (f *tswgTailscaled) waitMetric(n *vmtest.Node, name string) {
+	f.t.Helper()
+	if err := tstest.WaitFor(15*time.Second, func() error {
+		if v := f.metric(n, name); v == 0 {
+			return fmt.Errorf("%s = 0", name)
+		}
+		return nil
+	}); err != nil {
+		f.t.Errorf("[%s] %v", n.Name(), err)
 	}
 }
 

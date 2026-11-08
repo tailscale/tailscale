@@ -75,6 +75,7 @@ const (
 	tswgPeerAClearSession = 2
 
 	tswgPeerFlagNoRoam = 1
+	tswgPeerFlagHybrid = 2
 )
 
 // Client is a connection to the tswg generic netlink family.
@@ -185,12 +186,15 @@ func encodePeer(ae *netlink.AttributeEncoder, p PeerConfig) error {
 	if p.PresharedKey != nil {
 		ae.Bytes(peerAPresharedKey, p.PresharedKey[:])
 	}
-	if p.NoRoam != nil || p.ClearSession {
+	if p.NoRoam != nil || p.Hybrid != nil || p.ClearSession {
 		ae.Nested(peerATSWG, func(nae *netlink.AttributeEncoder) error {
-			if p.NoRoam != nil {
+			if p.NoRoam != nil || p.Hybrid != nil {
 				var flags uint32
-				if *p.NoRoam {
+				if p.NoRoam != nil && *p.NoRoam {
 					flags |= tswgPeerFlagNoRoam
+				}
+				if p.Hybrid != nil && *p.Hybrid {
+					flags |= tswgPeerFlagHybrid
 				}
 				nae.Uint32(tswgPeerAFlags, flags)
 			}
@@ -385,7 +389,9 @@ func (p *Peer) decode(ad *netlink.AttributeDecoder) error {
 			ad.Nested(func(nad *netlink.AttributeDecoder) error {
 				for nad.Next() {
 					if nad.Type() == tswgPeerAFlags {
-						p.NoRoam = nad.Uint32()&tswgPeerFlagNoRoam != 0
+						flags := nad.Uint32()
+						p.NoRoam = flags&tswgPeerFlagNoRoam != 0
+						p.Hybrid = flags&tswgPeerFlagHybrid != 0
 					}
 				}
 				return nil

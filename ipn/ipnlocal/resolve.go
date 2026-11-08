@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"strings"
 
+	"tailscale.com/envknob"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/tsaddr"
@@ -48,8 +49,14 @@ func (b *LocalBackend) lookupPeerByIP(ip netip.Addr) (key.NodePublic, bool) {
 // lazy peer creation and per-delta peer sync.
 func (b *LocalBackend) peerConfig(k key.NodePublic) (_ wgcfg.PeerConfig, ok bool) {
 	ips, ok := b.currentNode().PeerAllowedIPs(k)
-	return wgcfg.PeerConfig{AllowedIPs: ips}, ok
+	return wgcfg.PeerConfig{AllowedIPs: ips, Hybrid: forceHybridHandshakes()}, ok
 }
+
+// forceHybridHandshakes, for tests, makes every peer use hybrid
+// post-quantum WireGuard handshakes (see [wgcfg.PeerConfig.Hybrid]), for
+// which nothing else yet opts peers in. Both sides of a connection must
+// set it.
+var forceHybridHandshakes = envknob.RegisterBool("TS_DEBUG_FORCE_HYBRID_HANDSHAKES")
 
 // resolveMagicDNS resolves a MagicDNS hostname to the owning node's IP
 // address, respecting the requested network address family ("tcp4",
