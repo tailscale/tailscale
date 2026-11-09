@@ -692,6 +692,7 @@ type network struct {
 	blackholeControl bool                 // blackhole control connectivity
 	latency          time.Duration        // latency applied to interface writes
 	lossRate         float64              // probability of dropping a packet (0.0 to 1.0)
+	portMapLifetime  time.Duration        // max NAT-PMP/PCP mapping lifetime, if non-zero
 	nodesByIP4       map[netip.Addr]*node // by LAN IPv4
 	nodesByMAC       map[MAC]*node
 	logf             func(format string, args ...any)
@@ -2708,7 +2709,7 @@ func (n *network) doNATIn(src, dst netip.AddrPort) (newDst netip.AddrPort) {
 
 	// First see if there's a port mapping, before doing NAT.
 	if lanAP, ok := n.portMap[dst]; ok {
-		if now.Before(lanAP.expiry) {
+		if now.Before(lanAP.ExpiresAt) {
 			mak.Set(&n.portMapFlow, portmapFlowKey{
 				peerWAN: src,
 				lanAP:   lanAP.dst,
