@@ -58,6 +58,12 @@ build386: ## Build tailscale CLI for linux/386
 buildlinuxarm: ## Build tailscale CLI for linux/arm
 	GOOS=linux GOARCH=arm ./tool/go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
 
+buildmacosarm64: ## Build tailscale CLI for darwin/arm64
+	GOOS=darwin GOARCH=arm64 ./tool/go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
+
+buildmacosamd64: ## Build tailscale CLI for darwin/amd64
+	GOOS=darwin GOARCH=amd64 ./tool/go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
+
 buildwasm: ## Build tailscale CLI for js/wasm
 	GOOS=js GOARCH=wasm ./tool/go install ./cmd/tsconnect/wasm ./cmd/tailscale/cli
 
