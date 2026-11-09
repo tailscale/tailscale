@@ -149,16 +149,28 @@ func (v ConfigView) OnlyIPv6() bool { return v.ж.OnlyIPv6 }
 // hasHostsWithoutSplitDNSRoutes reports true, keeping quad-100
 // in the OS resolver path so the names still resolve.
 func (v ConfigView) MagicDNSHostsUnrouted() bool { return v.ж.MagicDNSHostsUnrouted }
-func (v ConfigView) Equal(v2 ConfigView) bool    { return v.ж.Equal(v2.ж) }
+
+// DefaultResolversLocalOnly, if true, means DefaultResolvers are for
+// quad-100's own forwarding only. The OS keeps its own default
+// resolver: instead of installing the resolvers, or quad-100 as
+// their proxy, as the OS's primary resolver, any resolver the OS
+// gets is scoped to the tailnet's match domains. It comes from the
+// "tailscale set --override-dns=false" preference. It does not
+// apply to exit node DNS or fallback resolvers, and quad-100 still
+// becomes the OS's primary resolver when names would otherwise
+// stop resolving.
+func (v ConfigView) DefaultResolversLocalOnly() bool { return v.ж.DefaultResolversLocalOnly }
+func (v ConfigView) Equal(v2 ConfigView) bool        { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ConfigViewNeedsRegeneration = Config(struct {
-	AcceptDNS             bool
-	DefaultResolvers      []*dnstype.Resolver
-	Routes                map[dnsname.FQDN][]*dnstype.Resolver
-	SearchDomains         []dnsname.FQDN
-	Hosts                 map[dnsname.FQDN][]netip.Addr
-	SubdomainHosts        set.Set[dnsname.FQDN]
-	OnlyIPv6              bool
-	MagicDNSHostsUnrouted bool
+	AcceptDNS                 bool
+	DefaultResolvers          []*dnstype.Resolver
+	Routes                    map[dnsname.FQDN][]*dnstype.Resolver
+	SearchDomains             []dnsname.FQDN
+	Hosts                     map[dnsname.FQDN][]netip.Addr
+	SubdomainHosts            set.Set[dnsname.FQDN]
+	OnlyIPv6                  bool
+	MagicDNSHostsUnrouted     bool
+	DefaultResolversLocalOnly bool
 }{})

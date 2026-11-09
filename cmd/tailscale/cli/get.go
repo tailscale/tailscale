@@ -134,6 +134,8 @@ func prefValue(flagName string, prefs *ipn.Prefs, st *ipnstate.Status) any {
 		return prefs.RouteAll
 	case "accept-dns":
 		return prefs.CorpDNS
+	case "override-dns":
+		return prefs.OverrideDNS.EqualBool(true)
 	case "exit-node":
 		if prefs.AutoExitNode.IsSet() {
 			return ipn.AutoExitNodePrefix + string(prefs.AutoExitNode)
