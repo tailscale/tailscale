@@ -28,6 +28,7 @@ const struct nla_policy wireguard_wgallowedip_nl_policy[WGALLOWEDIP_A_FLAGS + 1]
 const struct nla_policy tswg_peer_nl_policy[TSWGPEER_A_MAX + 1] = {
 	[TSWGPEER_A_FLAGS] = NLA_POLICY_MASK(NLA_U32, TSWGPEER_F_NO_ROAM | TSWGPEER_F_HYBRID),
 	[TSWGPEER_A_CLEAR_SESSION] = { .type = NLA_FLAG, },
+	[TSWGPEER_A_NEW_PUBLIC_KEY] = NLA_POLICY_EXACT_LEN(WG_KEY_LEN),
 };
 
 const struct nla_policy wireguard_wgpeer_nl_policy[WGPEER_A_TSWG + 1] = { /* TSWG */

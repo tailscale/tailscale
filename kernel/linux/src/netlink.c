@@ -9,6 +9,7 @@
 #include "socket.h"
 #include "queueing.h"
 #include "messages.h"
+#include "cookie.h" /* TSWG */
 #include "generated/netlink.h"
 #include "tswg.h"
 
@@ -643,6 +644,9 @@ int tswg_set_device(struct wg_device *wg, struct nlattr *attr,
 	return 0;
 }
 
+static void tswg_peer_clear_session(struct wg_peer *peer);
+static int tswg_peer_rename(struct wg_peer *peer, const u8 key[NOISE_PUBLIC_KEY_LEN]);
+
 /* TSWG: tswg_set_peer applies the nested WGPEER_A_TSWG attribute to peer. */
 int tswg_set_peer(struct wg_peer *peer, struct nlattr *attr)
 {
@@ -653,21 +657,73 @@ int tswg_set_peer(struct wg_peer *peer, struct nlattr *attr)
 			       NULL);
 	if (ret < 0)
 		return ret;
+	if (tb[TSWGPEER_A_NEW_PUBLIC_KEY]) {
+		ret = tswg_peer_rename(peer, nla_data(tb[TSWGPEER_A_NEW_PUBLIC_KEY]));
+		if (ret < 0)
+			return ret;
+	}
 	if (tb[TSWGPEER_A_FLAGS]) {
 		u32 flags = nla_get_u32(tb[TSWGPEER_A_FLAGS]);
 
 		WRITE_ONCE(peer->tswg_no_roam, !!(flags & TSWGPEER_F_NO_ROAM));
 		tswg_noise_set_hybrid(&peer->handshake, flags & TSWGPEER_F_HYBRID);
 	}
-	if (tb[TSWGPEER_A_CLEAR_SESSION]) {
-		/* As wg_pm_notification does for every peer before suspend. */
-		timer_delete(&peer->timer_zero_key_material);
-		wg_noise_handshake_clear(&peer->handshake);
-		wg_noise_keypairs_clear(&peer->keypairs);
-		/* Don't make the next handshake wait for REKEY_TIMEOUT. */
-		wg_noise_reset_last_sent_handshake(&peer->last_sent_handshake);
-	}
+	if (tb[TSWGPEER_A_CLEAR_SESSION])
+		tswg_peer_clear_session(peer);
 	return 0;
+}
+
+/* TSWG: tswg_peer_clear_session forgets peer's sessions; see tswg_set_peer. */
+static void tswg_peer_clear_session(struct wg_peer *peer)
+{
+	/* As wg_pm_notification does for every peer before suspend. */
+	timer_delete(&peer->timer_zero_key_material);
+	wg_noise_handshake_clear(&peer->handshake);
+	wg_noise_keypairs_clear(&peer->keypairs);
+	/* Don't make the next handshake wait for REKEY_TIMEOUT. */
+	wg_noise_reset_last_sent_handshake(&peer->last_sent_handshake);
+}
+
+/*
+ * TSWG: tswg_peer_rename changes peer's public key to key, atomically: the
+ * peer stays in allowedips, with its endpoint, settings and queues, so
+ * traffic to it isn't dropped, but its sessions, made with the old key,
+ * are cleared. All of it is O(1). The caller holds device_update_lock.
+ */
+static int tswg_peer_rename(struct wg_peer *peer, const u8 key[NOISE_PUBLIC_KEY_LEN])
+{
+	struct wg_device *wg = peer->device;
+	struct wg_peer *other;
+	int ret = 0;
+
+	lockdep_assert_held(&wg->device_update_lock);
+	if (!crypto_memneq(key, peer->handshake.remote_static, NOISE_PUBLIC_KEY_LEN))
+		return 0;
+	other = wg_pubkey_hashtable_lookup(wg->peer_hashtable, key);
+	if (other) {
+		wg_peer_put(other);
+		return -EEXIST;
+	}
+	down_read(&wg->static_identity.lock);
+	if (wg->static_identity.has_identity &&
+	    !memcmp(key, wg->static_identity.static_public, NOISE_PUBLIC_KEY_LEN)) {
+		ret = -EINVAL; /* our own key */
+		goto out;
+	}
+	tswg_peer_clear_session(peer);
+	wg_pubkey_hashtable_remove(wg->peer_hashtable, peer);
+	down_write(&peer->handshake.lock);
+	memcpy(peer->handshake.remote_static, key, NOISE_PUBLIC_KEY_LEN);
+	up_write(&peer->handshake.lock);
+	wg_noise_precompute_static_static(peer);
+	wg_cookie_init(&peer->latest_cookie);
+	wg_cookie_checker_precompute_peer_keys(peer);
+	wg_pubkey_hashtable_add(wg->peer_hashtable, peer);
+	/* An in-flight handshake may have raced the clearing above. */
+	tswg_peer_clear_session(peer);
+out:
+	up_read(&wg->static_identity.lock);
+	return ret;
 }
 
 /* TSWG: tswg_get_peer adds peer's WGPEER_A_TSWG attribute to skb. */

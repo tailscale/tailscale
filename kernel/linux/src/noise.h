@@ -96,6 +96,9 @@ struct noise_handshake {
 
 	/* Protects all members except the immutable (after noise_handshake_
 	 * init): remote_static, precomputed_static_static, static_identity.
+ * TSWG: but tswg_peer_rename changes remote_static (and so
+ * precomputed_static_static), under this lock and the device's
+ * device_update_lock, having first cleared the handshake and keypairs.
 	 */
 	struct rw_semaphore lock;
 };

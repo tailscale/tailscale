@@ -121,6 +121,15 @@ enum tswgpeer_attribute {
 	 * disco key.
 	 */
 	TSWGPEER_A_CLEAR_SESSION,
+	/*
+	 * NLA_BINARY (32 bytes), set only: change the peer's public key to
+	 * this one, atomically, keeping its allowed IPs, endpoint and other
+	 * settings and dropping its sessions (as TSWGPEER_A_CLEAR_SESSION),
+	 * for when a peer rotates its key. The rest of the peer's attributes
+	 * in the same message apply after. Fails with EEXIST if another peer
+	 * has the key.
+	 */
+	TSWGPEER_A_NEW_PUBLIC_KEY,
 
 	__TSWGPEER_A_LAST
 };

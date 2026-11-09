@@ -185,11 +185,30 @@ out:
 #endif
 }
 
+/*
+ * TSWG: tswg_endpoint_cache_init allocates peer's endpoint_cache, on its
+ * first send. Upstream allocates it with the peer, but it's per CPU, 40
+ * bytes on each: 5KB a peer on a 128-CPU host, 250MB for a 50,000-node
+ * tailnet, most of whose peers never send. If it fails, sends go uncached
+ * (the dst_cache functions allow for that) until it doesn't.
+ */
+static void tswg_endpoint_cache_init(struct wg_peer *peer)
+{
+	struct dst_cache tmp;
+
+	if (dst_cache_init(&tmp, GFP_ATOMIC))
+		return;
+	if (cmpxchg(&peer->endpoint_cache.cache, NULL, tmp.cache))
+		dst_cache_destroy(&tmp); /* another CPU won */
+}
+
 int wg_socket_send_skb_to_peer(struct wg_peer *peer, struct sk_buff *skb, u8 ds)
 {
 	size_t skb_len = skb->len;
 	int ret = -EAFNOSUPPORT;
 
+	if (unlikely(!READ_ONCE(peer->endpoint_cache.cache))) /* TSWG */
+		tswg_endpoint_cache_init(peer);
 	read_lock_bh(&peer->endpoint_lock);
 	if (peer->endpoint.addr.sa_family == AF_INET)
 		ret = send4(peer->device, skb, &peer->endpoint, ds,

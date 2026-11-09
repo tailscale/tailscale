@@ -1348,8 +1348,9 @@ Other TODOs:
 
 * Only magicsock's first socket per family is shared; `UDPSockets` > 1
   isn't supported.
-* A full sync (on any config change) still walks every peer; fine for
-  now, but worth making incremental for huge tailnets.
+* Full syncs walk every peer, but now happen only at startup, on a new
+  private key, and when the config source is (re)installed; each peer
+  change is synced alone (see "Lazy peer configuration").
 
 ### Hybrid post-quantum handshakes
 
@@ -1403,10 +1404,66 @@ asked for it. tswg does it (2026-11-08):
 
 tailscaled only programs recently active peers into wireguard-go, mostly
 because of per-peer cost in wireguard-go. Kernel peers are cheap and
-hashed, so first try programming every peer. If that doesn't scale, add an
-unknown-peer upcall from `wg_noise_handshake_consume_initiation` with a
-short stash of the initiation for replay (to avoid a 5s `REKEY_TIMEOUT`
-stall).
+hashed, so the kernel data plane programs every peer, which holds up to
+50,000 (2026-11-09; `TestLeanScale`, in a lab VM, adding 50,000 peers
+with an endpoint and two allowed IPs each, 5,000 at a time):
+
+| | 500 peers | 5,000 | 50,000 |
+|---|---|---|---|
+| kernel memory per peer | | 2.2 KB slab | 2.1 KB slab, no per-CPU (106 MB total) |
+| add, per peer in bulk | 48 us | 35 us | 37 us |
+| add one / remove one | 48 / 58 us | 59 / 54 us | 39 / 65 us |
+| update one's endpoint / replace its allowed IPs | 10 / 13 us | 6 / 15 us | 26 / 80 us |
+| rename one (key rotation) | 73 us | | 83 us |
+| dump the device | 4 ms | 17 ms | 0.5-0.7 s |
+| delete the device | 38 ms | 32 ms | 0.1-0.2 s |
+
+The single-peer operations' growth from 5,000 to 50,000 is cache misses
+in bigger tables and tries, not O(N) work: at 20,000 and 50,000, at 16
+vCPUs, they're the same (22 and 23 us to update an endpoint, 64 and 79
+to replace allowed IPs). Fixed for it: deleting a device
+removed its peers one at a time, each waiting for an RCU grace period
+(`netif_napi_del`) and three workqueue flushes, 6ms a peer, so 5 minutes
+for 50,000; now all of them wait together (`peer_remove_dead_batch`),
+1000x faster. Each peer's route cache (`dst_cache`) was per CPU, 40
+bytes on each, so 5KB a peer on a 128-CPU host, 250MB for 50,000; it's
+now allocated on the peer's first send. And the pubkey and index hash
+tables have 2^16 and 2^17 buckets (1.5MB a device), where upstream's
+2^11 and 2^13 had chains of 25 at 50,000 peers.
+
+In tailscaled (tailscale.com `wgengine/kerneldp_linux.go`), each changed
+peer (`Engine.SyncDevicePeer`, called for each peer a netmap delta
+changes) used to trigger a full sync, walking every peer through
+magicsock and the config source: O(N) per change, so O(N^2) for a
+netmap of N changes. Now `syncPeer` syncs just that peer, O(1): its
+magicsock path and config decide whether to add, update or remove it.
+magicsock's kernel path hook now also fires when it adds or removes a
+peer, so a peer magicsock learns of after its `SyncDevicePeer` is still
+synced.
+
+Key rotation is atomic: a peer that rotates its node key comes to
+tailscaled as the removal of the old key and the addition of the new,
+in either order, perhaps in different syncs, or as a full netmap. Done
+as such, the peer's allowed IPs and traffic would be gone in between.
+So tailscaled matches the two by the peer's Tailscale IP (`peerAddr`;
+by its own map of pushed peers' addresses, and LocalBackend's peer by IP
+lookup for the other order) and tells the kernel to rename the peer
+(`TSWGPEER_A_NEW_PUBLIC_KEY`, `tswg_peer_rename`): in one step, under
+`device_update_lock`, the peer moves in the pubkey table to its new key,
+with its precomputed static-static and cookie keys recomputed and its
+sessions cleared, keeping its allowed IPs, endpoint and queues; O(1).
+`TestTSWGTailscaledKeyRotation` rotates a peer's key (`tailscale up
+--force-reauth`) and checks that the other node's kernel always had
+exactly one peer, that it renamed it, and that the tunnel works.
+
+Not done: the device dump is O(N) by nature (0.5-0.7s at 50,000), and
+tailscaled does one after each full sync (`refreshListenPort`); the
+kernel's peer events, rate limited to one per peer per 2 seconds each
+way, could be 50,000 a second with every peer busy; magicsock and
+LocalBackend at 50,000 peers are as in TUN mode. If programming every
+peer stops scaling, the fallback is an unknown-peer upcall from
+`wg_noise_handshake_consume_initiation`, with a short stash of the
+initiation for replay (to avoid a 5s `REKEY_TIMEOUT` stall).
 
 ### DKMS and fallback
 
@@ -1658,9 +1715,12 @@ Everything else:
       (2026-11-08; it left a new kernel device without its key until a
       later reconcile), in 29 rounds of the tests above, each with the
       tunnel working on the first ping both ways.
-- [ ] Scale to a 50,000-node tailnet: memory per peer, in the module and
-      in tailscaled's kernel data plane, and no O(N) work per peer change
-      (netlink pushes, reconcile, allowedips).
+- [x] Scale to a 50,000-node tailnet (2026-11-09; see "Lazy peer
+      configuration"): 2.1 KB of kernel memory per peer, whatever the CPU
+      count; O(1) adds, removals, edits and atomic key rotations, in the
+      module and in tailscaled.
+- [ ] tailscaled: skip the full device dump after each full sync, and
+      measure the kernel data plane's own memory per peer at 50,000.
 - [x] Fallback to wireguard-go when tswg is unavailable (module not
       loaded).
 - [ ] Fallback on version or feature mismatch between tailscaled and

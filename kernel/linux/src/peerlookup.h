@@ -15,8 +15,11 @@
 struct wg_peer;
 
 struct pubkey_hashtable {
-	/* TODO: move to rhashtable */
-	DECLARE_HASHTABLE(hashtable, 11);
+	/*
+	 * TSWG: 2^16 buckets (512KB), for a 50,000-node tailnet, rather than
+	 * upstream's 2^11, at which lookups walked chains of 25.
+	 */
+	DECLARE_HASHTABLE(hashtable, 16);
 	siphash_key_t key;
 	struct mutex lock;
 };
@@ -31,8 +34,11 @@ wg_pubkey_hashtable_lookup(struct pubkey_hashtable *table,
 			   const u8 pubkey[NOISE_PUBLIC_KEY_LEN]);
 
 struct index_hashtable {
-	/* TODO: move to rhashtable */
-	DECLARE_HASHTABLE(hashtable, 13);
+	/*
+	 * TSWG: 2^17 buckets (1MB), for a handshake and up to three keypairs
+	 * each of 50,000 peers, rather than upstream's 2^13.
+	 */
+	DECLARE_HASHTABLE(hashtable, 17);
 	spinlock_t lock;
 };
 
