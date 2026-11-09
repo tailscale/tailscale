@@ -21,7 +21,7 @@ import (
 )
 
 // Remote mode runs the lean tests on machines elsewhere, such as EC2
-// instances from tslinux's scripts/ec2.sh, rather than local QEMU VMs:
+// instances from kernel/linux/scripts/ec2.sh, rather than local QEMU VMs:
 // TSWG_REMOTE names a JSON file of remoteHosts. Two-machine tests use the
 // first two; TestLeanSubnetRouter uses them all.
 // Each machine must be a Linux box we can ssh to that has sudo, the build
@@ -33,8 +33,8 @@ import (
 // and runs the agent as root (systemd unit tswgbench-agent).
 //
 // While a test uses the machines, it touches the file last-used next to
-// the hosts file every minute, which keeps tslinux's ec2-idle-stop.sh from
-// stopping them as idle.
+// the hosts file every minute, which keeps
+// kernel/linux/scripts/ec2-idle-stop.sh from stopping them as idle.
 
 // remoteHost is a machine for remote mode, as ec2.sh writes them.
 type remoteHost struct {

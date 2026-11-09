@@ -10,14 +10,14 @@
 # Environment:
 #   TSWG_COMPARE_MODES  data planes to compare (default tswg,wggo)
 #   TSWG_COMPARE_RUNS   runs of each (default 4)
-#   TAILSCALE_DIR       the tailscale.com checkout (default ~/src/tailscale.com-tswg)
+#   TAILSCALE_DIR       the tailscale.com checkout (default: the one this is in)
 #
 # usage: leancompare.sh [go test flags...]
 
 set -eu
 
 top=$(cd "$(dirname "$0")/.." && pwd)
-ts=${TAILSCALE_DIR:-$HOME/src/tailscale.com-tswg}
+ts=${TAILSCALE_DIR:-$top/../..}
 logs=${TSWG_COMPARE_LOGS:-/tmp/leancompare}
 mkdir -p "$logs"
 export TSWG_LEAN=1 TSWG_DIR="$top"

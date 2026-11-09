@@ -881,11 +881,10 @@ Tools in the lean harness, for this kind of work:
 tswg is a fork of the in-tree WireGuard driver, kept as close to upstream as
 possible so upstream security fixes merge cleanly.
 
-* `upstream/` holds a pristine copy of the upstream files. It is only ever
-  replaced wholesale by an import of a newer upstream; see
-  `upstream/UPSTREAM_COMMIT`.
-* `src/` holds the fork. `diff -r upstream/drivers/net/wireguard src` is
-  the fork's delta (plus build files and compat headers).
+* The fork's base is Linux 7.4-rc1's `drivers/net/wireguard` (commit
+  6628e7d4c6b2). `diff -r $LINUX/drivers/net/wireguard src`, against a
+  Linux tree at that commit, is the fork's delta (plus build files and
+  compat headers); upstream changes since then are merged by hand.
 * Internal symbols keep their `wg_` names. Unexported symbols in two
   modules don't conflict, so tswg.ko and the in-tree wireguard.ko (built-in
   or modular) can be loaded at the same time. Renaming them would make every
@@ -937,8 +936,7 @@ is what will program the module.
 * `tailscale.com/wgengine/tswg`: netlink client for the `tswg` genetlink
   family (configure and dump devices).
 * `tailscale.com/cmd/tswgctl`: a wg(8)-like debugging tool built on it.
-* This work lives on the `bradfitz/tswg` branch, in a worktree at
-  `~/src/tailscale.com-tswg`.
+* The module itself is in the same repository, under `kernel/linux`.
 
 ### Kernel interface
 
@@ -1542,8 +1540,11 @@ install the module.
 
 ## Repo layout
 
+Under `kernel/linux` in tailscale.com:
+
 * `DESIGN.md`: this file.
-* `upstream/`: pristine upstream sources (see "Fork, not patches").
+* `LICENSE`: GPL-2.0, as for Linux's WireGuard, which tswg is derived
+  from (the rest of the repository is BSD-3-Clause).
 * `src/`: the tswg module sources, Kbuild and compat headers.
 * `tests/mlkem/`: checks `src/mlkem.c` against Go's `crypto/mlkem`
   (`go test` there).

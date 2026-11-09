@@ -70,13 +70,12 @@ func tunnel6(i int) netip.Addr {
 }
 
 // tswgDir returns the directory of the tswg kernel module tree, from
-// $TSWG_DIR or ~/src/tslinux.
+// $TSWG_DIR, or else this repo's kernel/linux.
 func tswgDir(t testing.TB) string {
 	t.Helper()
 	dir := os.Getenv("TSWG_DIR")
 	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, "src", "tslinux")
+		dir, _ = filepath.Abs(filepath.Join("..", "..", "kernel", "linux"))
 	}
 	if _, err := os.Stat(filepath.Join(dir, "scripts", "build-for-gokrazy.sh")); err != nil {
 		t.Skipf("tswg module tree not found at %s (set TSWG_DIR): %v", dir, err)
@@ -130,7 +129,7 @@ func buildArtifacts(t testing.TB) (kernel, initrd string) {
 			var koEnv []string
 			if os.Getenv("TSWG_DEBUG_KERNEL") != "" {
 				// The same kernel with KASAN, lockdep and other
-				// checks; see tslinux's scripts/gokrazy-debug-kernel.sh.
+				// checks; see kernel/linux/scripts/gokrazy-debug-kernel.sh.
 				out, err := exec.Command(filepath.Join(tswgDir(t), "scripts", "gokrazy-debug-kernel.sh"), pkg).Output()
 				if err != nil {
 					return fmt.Errorf("building debug kernel: %w", err)

@@ -28,14 +28,13 @@ import (
 )
 
 // tswgDir returns the directory of the tswg kernel module tree (see
-// https://github.com/tailscale/tailscale/issues/426), from $TSWG_DIR or
-// ~/src/tslinux. It skips the test if the tree isn't there.
+// https://github.com/tailscale/tailscale/issues/426), from $TSWG_DIR, or
+// else this repo's kernel/linux. It skips the test if the tree isn't there.
 func tswgDir(t *testing.T) string {
 	t.Helper()
 	dir := os.Getenv("TSWG_DIR")
 	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, "src", "tslinux")
+		dir, _ = filepath.Abs(filepath.Join("..", "..", "..", "kernel", "linux"))
 	}
 	if _, err := os.Stat(filepath.Join(dir, "scripts", "build-for-ubuntu.sh")); err != nil {
 		t.Skipf("tswg module tree not found at %s (set TSWG_DIR): %v", dir, err)

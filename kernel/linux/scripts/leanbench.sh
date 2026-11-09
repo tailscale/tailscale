@@ -12,7 +12,7 @@
 #   TSWG_BENCH_CPUS  virtual CPUs (and NIC queues) per VM (default 4)
 #   TSWG_BENCH_DUR   length of each throughput run (default 10s)
 #   TSWG_BENCH_OUT   where to write the JSON results
-#   TAILSCALE_DIR    the tailscale.com checkout (default ~/src/tailscale.com-tswg)
+#   TAILSCALE_DIR    the tailscale.com checkout (default: the one this is in)
 #
 # With -smoke, it runs the quick correctness test (TestLeanSmoke) instead.
 #
@@ -21,7 +21,7 @@
 set -eu
 
 top=$(cd "$(dirname "$0")/.." && pwd)
-ts=${TAILSCALE_DIR:-$HOME/src/tailscale.com-tswg}
+ts=${TAILSCALE_DIR:-$top/../..}
 run='TestLeanBenchmark$'
 if [ "${1:-}" = "-smoke" ]; then
 	run='TestLeanSmoke$'

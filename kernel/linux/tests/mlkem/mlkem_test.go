@@ -1,9 +1,12 @@
+// Copyright (c) Tailscale Inc & contributors
+// SPDX-License-Identifier: BSD-3-Clause
+
 // Package mlkem checks tswg's ML-KEM-768 (src/mlkem.c) against Go's
 // crypto/mlkem, which Tailscale's wireguard-go uses for its hybrid
 // handshakes. It builds src/mlkem.c for userspace (with the stand-in
 // kernel headers in testdata/shim) into a driver it talks to over a pipe.
 //
-// Run it with "go test" in this directory; it needs a C compiler.
+// It needs a C compiler, and skips without one.
 package mlkem
 
 import (
@@ -29,6 +32,9 @@ type driver struct {
 }
 
 func startDriver(t *testing.T) *driver {
+	if _, err := exec.LookPath("cc"); err != nil {
+		t.Skip("no C compiler")
+	}
 	bin := filepath.Join(t.TempDir(), "driver")
 	cc := exec.Command("cc", "-O2", "-std=gnu11", "-Wall", "-Wno-unused-function",
 		"-Itestdata/shim", "-o", bin, "testdata/driver.c")

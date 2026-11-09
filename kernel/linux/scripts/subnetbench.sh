@@ -9,14 +9,14 @@
 # Environment (see subnet_test.go for more):
 #   TSWG_LEAN_SUBNET   router data planes (default plain,tswg,wggo,kernelwg)
 #   TSWG_COMPARE_RUNS  runs of each (default 3)
-#   TAILSCALE_DIR      the tailscale.com checkout (default ~/src/tailscale.com-tswg)
+#   TAILSCALE_DIR      the tailscale.com checkout (default: the one this is in)
 #
 # usage: subnetbench.sh [ROUTER_CPUS...]   (default: all of the router's CPUs)
 
 set -eu
 
 top=$(cd "$(dirname "$0")/.." && pwd)
-ts=${TAILSCALE_DIR:-$HOME/src/tailscale.com-tswg}
+ts=${TAILSCALE_DIR:-$top/../..}
 logs=${TSWG_SUBNET_LOGS:-/tmp/subnetbench}
 mkdir -p "$logs"
 export TSWG_LEAN=1 TSWG_DIR="$top"
