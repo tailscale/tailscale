@@ -37,8 +37,9 @@ func (tc *testConn25) ConnectorRealIPForTransitIPConnection(srcIP netip.Addr, tr
 	return tc.connectorRealIPForTransitIPConnectionFn(srcIP, transitIP)
 }
 
-func (tc *testConn25) ClientFlowCreated(transitIP netip.Addr) {}
-func (tc *testConn25) ClientFlowRemoved(transitIP netip.Addr) {}
+func (tc *testConn25) ClientFlowCreated(transitIP netip.Addr) func() {
+	return func() {}
+}
 
 // testNet is the cast of addresses the datapath tests run against: a client,
 // the Magic and Transit IPs it talks through, and the real server behind them,

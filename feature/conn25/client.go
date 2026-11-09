@@ -280,26 +280,25 @@ func (c *client) enqueueAddressAssignment(addrs *addrs) error {
 	}
 }
 
-func (c *client) flowCreated(transit netip.Addr) {
+func (c *client) flowCreated(transit netip.Addr) func() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.assignments.byTransitIP[transit]
 	if !ok {
-		return
+		return func() {}
 	}
 	entry.activeFlowCount++
-}
-
-func (c *client) flowRemoved(transit netip.Addr) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	entry, ok := c.assignments.byTransitIP[transit]
-	if !ok {
-		return
-	}
-	entry.activeFlowCount--
-	if entry.activeFlowCount == 0 {
-		entry.zeroFlowTime = c.assignments.clock.Now()
+	return func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if entry.activeFlowCount <= 0 {
+			c.logf("flow removed for transit %v with no active flows", transit)
+			return
+		}
+		entry.activeFlowCount--
+		if entry.activeFlowCount == 0 {
+			entry.zeroFlowTime = c.assignments.clock.Now()
+		}
 	}
 }
 
