@@ -2079,8 +2079,12 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 			b.logf("[v1] TKA sync error: %v", err)
 		}
 		b.mu.Lock()
-		// As we stepped outside of the lock, it's possible for b.cc
-		// to now be nil.
+		if b.cc != c {
+			// The client was replaced (e.g. by Logout) while b.mu was released.
+			b.logf("Ignoring SetControlClientStatus from old client")
+			return
+		}
+		// b.cc is nil for a cached netmap applied by startLocked.
 		if b.cc != nil {
 			if b.tka != nil {
 				head, err := b.tka.authority.Head().MarshalText()
