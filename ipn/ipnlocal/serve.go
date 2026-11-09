@@ -428,14 +428,6 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 	return nil
 }
 
-// ServeConfig provides a view of the current serve mappings.
-// If serving is not configured, the returned view is not Valid.
-func (b *LocalBackend) ServeConfig() ipn.ServeConfigView {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.serveConfig
-}
-
 // ServeConfigETag provides a view of the current serve mappings and an ETag,
 // which can later be provided to [LocalBackend.SetServeConfig] to implement
 // Optimistic Concurrency Control.
