@@ -1,0 +1,10 @@
+*.o
+*.ko
+*.mod
+*.mod.c
+*.cmd
+*.o.d
+modules.order
+Module.symvers
+/out/
+/src/compat/generated/
