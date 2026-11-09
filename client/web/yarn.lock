@@ -5769,10 +5769,10 @@ vite@^5.0.0:
   optionalDependencies:
     fsevents "~2.3.3"
 
-vite@^6.4.5:
-  version "6.4.5"
-  resolved "https://registry.yarnpkg.com/vite/-/vite-6.4.5.tgz#8da9987120422f92e432b6d25535b82cee867dad"
-  integrity sha512-4enwjFfi4IwtEh0w+jPzpLVOFQiPHmmzPxcHXQOyEur47o6u0jE573DmGpjA+7irXoMLYRZD5ZaFUEneS3abPg==
+vite@^6.4.6:
+  version "6.4.6"
+  resolved "https://registry.yarnpkg.com/vite/-/vite-6.4.6.tgz#52fc46a50b53ed4775ac4b2c685d3cd0dfe38f8f"
+  integrity sha512-RtsraAwEG68idOA6iUOoIpOlcSKROnf815aIq9qHTSrDNpLoBrBa12suyfcEd8qn0xwOVQI1Yhm1GbmTjF600A==
   dependencies:
     esbuild "^0.25.0"
     fdir "^6.4.4"
