@@ -143,8 +143,15 @@ func (n *network) handleUPnPControl(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out = fmt.Sprintf("<NewReservedPort>%d</NewReservedPort>", gotPort)
+	case "DeletePortMapping":
+		pm, ok := n.portMappings()[netip.AddrPortFrom(n.wanIP4, action.ExternalPort)]
+		if !ok {
+			n.logf("UPnP delete request for port %d: no such mapping", action.ExternalPort)
+			http.Error(w, "no such mapping", http.StatusInternalServerError)
+			return
+		}
+		n.doPortMap(pm.dst.Addr(), pm.dst.Port(), action.ExternalPort, 0, UPnP)
 	default:
-		// TODO(fmarier): handle portmap releases (DeletePortMapping)
 		n.logf("TODO: handle UPnP action %q", name)
 		http.Error(w, "unsupported action", http.StatusInternalServerError)
 		return
@@ -263,7 +270,6 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 		lifetimeSec := n.grantedPortMapLifetime(binary.BigEndian.Uint32(req.Payload[8:12]))
 		gotPort, ok := n.doPortMap(req.Src.Addr(), internalPort, wantExtPort, int(lifetimeSec), NATPMP)
 		if !ok {
-			// TODO(fmarier): handle portmap releases properly
 			n.logf("NAT-PMP map request for %v:%d failed", req.Src.Addr(), internalPort)
 			return
 		}
@@ -359,7 +365,6 @@ func (n *network) handlePCPRequest(req UDPPacket) {
 		// TODO(fmarier): pass the nonce into doPortmap so that it can be checked on renewals/deletions
 		gotPort, ok := n.doPortMap(req.Src.Addr(), internalPort, wantExtPort, int(lifetimeSec), PCP)
 		if !ok {
-			// TODO(fmarier): handle portmap releases
 			n.logf("PCP map request for %v:%d failed", req.Src.Addr(), internalPort)
 			return
 		}
@@ -380,9 +385,13 @@ func (n *network) handlePCPRequest(req UDPPacket) {
 			0, 0, 0, // reserved
 		)
 		res = binary.BigEndian.AppendUint16(res, internalPort)
-		res = binary.BigEndian.AppendUint16(res, gotPort)
-		wan4 := n.wanIP4.As16()
-		res = append(res, wan4[:]...) // TODO(fmarier): handle non-zero requested external addresses
+		if lifetimeSec == 0 {
+			res = append(res, req.Payload[42:60]...)
+		} else {
+			res = binary.BigEndian.AppendUint16(res, gotPort)
+			wan4 := n.wanIP4.As16()
+			res = append(res, wan4[:]...) // TODO(fmarier): handle non-zero requested external addresses
+		}
 
 		// "02 81 00 00 00 00 1c 20 6a c9 62 fb 00 00 00 00 00 00 00 00 00 00 00 00 95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f 11 00 00 00 9f 40 e6 59 00 00 00 00 00 00 00 00 00 00 ff ff 02 01 01 01" =>
 		//   02 vers
@@ -445,12 +454,13 @@ func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec 
 	dst := netip.AddrPortFrom(src, dstLANPort)
 
 	if sec == 0 {
-		lanAP, ok := n.portMap[wanAP]
-		if ok && lanAP.dst.Addr() == src {
-			n.logf("vnet: released %v mapping from %v to %v", service, wanAP, dst)
-			delete(n.portMap, wanAP)
+		for k, v := range n.portMap {
+			if v.dst == dst {
+				n.logf("vnet: released %v mapping from %v to %v", service, k, dst)
+				delete(n.portMap, k)
+			}
 		}
-		return 0, false
+		return 0, true
 	}
 
 	// See if they already have a mapping and extend expiry if so.
