@@ -726,8 +726,8 @@ func (e *userspaceEngine) SetPeerConfigFunc(fn func(key.NodePublic) (config wgcf
 // SyncDevicePeer implements [Engine.SyncDevicePeer].
 func (e *userspaceEngine) SyncDevicePeer(k key.NodePublic) {
 	if e.kdp != nil {
-		// The kernel data plane reconciles all peers from the live config.
-		e.kdp.syncPeers()
+		// The kernel data plane syncs the peer from the live config.
+		e.kdp.syncPeer(k)
 	}
 	fn := e.peerConfigFn.Load()
 	if fn == nil {
@@ -776,7 +776,9 @@ func (e *userspaceEngine) MarkDevicePeerForHandshake(k key.NodePublic) {
 func (e *userspaceEngine) SetPeerByIPPacketFunc(fn func(netip.Addr) (_ key.NodePublic, ok bool)) {
 	if e.kdp != nil {
 		// The kernel routes by its own allowed IPs, and wireguard-go
-		// must not create peers; see SetPeerConfigFunc.
+		// must not create peers; see SetPeerConfigFunc. But the kernel
+		// data plane uses fn to recognize key rotations.
+		e.kdp.setPeerByIPFunc(fn)
 		return
 	}
 	if fn == nil {

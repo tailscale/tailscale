@@ -56,8 +56,9 @@ type kernelDataplane struct {
 	logf         logger.Logf
 	ifname       string
 	peerConfigFn *atomic.Pointer[func(key.NodePublic) (wgcfg.PeerConfig, bool)]
-	kick         chan struct{} // buffered(1); wakes the reconcile loop
-	ifindex      int           // the device's interface index; set by start
+	peerByIPFn   atomic.Pointer[func(netip.Addr) (key.NodePublic, bool)] // see setPeerByIPFunc
+	kick         chan struct{}                                           // buffered(1); wakes the reconcile loop
+	ifindex      int                                                     // the device's interface index; set by start
 
 	ms      *magicsock.Conn // set by start
 	bridge  *net.UDPConn    // set by start
@@ -84,6 +85,7 @@ type kernelDataplane struct {
 	privKey    key.NodePrivate                    // desired private key
 	pushedPriv key.NodePrivate                    // private key last pushed to the kernel
 	pushed     map[key.NodePublic]kernelPeerState // peer state last pushed to the kernel
+	ipOwner    map[netip.Addr]key.NodePublic      // the pushed peer with each pushed peer's addr; see peerAddr
 	loopAddr   map[key.NodePublic]netip.Addr      // peer's bridge address
 	loopPeer   map[netip.Addr]key.NodePublic      // inverse of loopAddr
 	nextLoop   uint32                             // next index for loopAddr
@@ -91,6 +93,7 @@ type kernelDataplane struct {
 	// Work for the reconcile loop, which clears these as it takes them.
 	wantFullSync  bool
 	dirtyPaths    set.Set[key.NodePublic] // peers whose kernel path may have changed
+	dirtyConfigs  set.Set[key.NodePublic] // peers whose config may have changed; see syncPeer
 	pendingClears set.Set[key.NodePublic] // peers whose sessions to clear
 }
 
@@ -119,6 +122,7 @@ func newKernelDataplane(logf logger.Logf, ifname string, peerConfigFn *atomic.Po
 		kick:         make(chan struct{}, 1),
 		done:         make(chan struct{}),
 		pushed:       map[key.NodePublic]kernelPeerState{},
+		ipOwner:      map[netip.Addr]key.NodePublic{},
 		loopAddr:     map[key.NodePublic]netip.Addr{},
 		loopPeer:     map[netip.Addr]key.NodePublic{},
 		wantFullSync: true,
@@ -282,6 +286,59 @@ func (k *kernelDataplane) syncPeers() {
 	k.kickReconcile()
 }
 
+// setPeerByIPFunc sets the function that returns the peer that owns an IP
+// address now, which syncPeerSet uses to turn a key rotation's removal of
+// the old key into a rename.
+func (k *kernelDataplane) setPeerByIPFunc(fn func(netip.Addr) (key.NodePublic, bool)) {
+	if fn == nil {
+		k.peerByIPFn.Store(nil)
+		return
+	}
+	k.peerByIPFn.Store(&fn)
+}
+
+// peerAddr returns the first single address of st's allowed IPs, which for
+// a Tailscale peer is its Tailscale IP: what stays the same when it rotates
+// its key. ok is false if it has none.
+func (st kernelPeerState) peerAddr() (_ netip.Addr, ok bool) {
+	for _, p := range st.allowedIPs {
+		if p.IsSingleIP() {
+			return p.Addr(), true
+		}
+	}
+	return netip.Addr{}, false
+}
+
+// setPushedLocked records st as pushed for pk, or with ok false, pk as
+// removed, keeping k.ipOwner in step. k.mu must be held.
+func (k *kernelDataplane) setPushedLocked(pk key.NodePublic, st kernelPeerState, ok bool) {
+	if old, had := k.pushed[pk]; had {
+		if a, ok := old.peerAddr(); ok && k.ipOwner[a] == pk {
+			delete(k.ipOwner, a)
+		}
+	}
+	if !ok {
+		delete(k.pushed, pk)
+		return
+	}
+	k.pushed[pk] = st
+	if a, ok := st.peerAddr(); ok {
+		k.ipOwner[a] = pk
+	}
+}
+
+// syncPeer makes the reconcile loop sync just the peer with key pk: add,
+// update or remove it in the kernel, as its live config and magicsock say.
+// Netmap changes come as calls for each changed peer, so a full sync for
+// each, walking every peer, was O(N^2) for a netmap of N changes.
+func (k *kernelDataplane) syncPeer(pk key.NodePublic) {
+	k.mu.Lock()
+	k.dirtyConfigs.Make()
+	k.dirtyConfigs.Add(pk)
+	k.mu.Unlock()
+	k.kickReconcile()
+}
+
 // notePathChange is magicsock's kernel path hook: the kernel path of the
 // peer with key pk may have changed.
 func (k *kernelDataplane) notePathChange(pk key.NodePublic) {
@@ -418,15 +475,20 @@ func (k *kernelDataplane) reconcileLoop() {
 		}
 		k.mu.Lock()
 		full := k.wantFullSync
-		dirty, clears := k.dirtyPaths, k.pendingClears
-		k.wantFullSync, k.dirtyPaths, k.pendingClears = false, nil, nil
+		dirty, clears, configs := k.dirtyPaths, k.pendingClears, k.dirtyConfigs
+		k.wantFullSync, k.dirtyPaths, k.pendingClears, k.dirtyConfigs = false, nil, nil, nil
 		k.mu.Unlock()
 
 		if full {
 			if err := k.fullSync(); err != nil {
 				k.logf("syncing peers: %v", err)
 			}
-			dirty = nil // a full sync also updates every peer's path
+			dirty, configs = nil, nil // a full sync also updates every peer
+		}
+		if len(configs) > 0 {
+			if err := k.syncPeerSet(configs); err != nil {
+				k.logf("syncing peers: %v", err)
+			}
 		}
 		if len(dirty) > 0 || len(clears) > 0 {
 			if err := k.updatePeers(dirty, clears); err != nil {
@@ -457,19 +519,7 @@ func (k *kernelDataplane) fullSync() error {
 		if !ok {
 			continue
 		}
-		ips := slices.Clone(conf.AllowedIPs)
-		slices.SortFunc(ips, func(a, b netip.Prefix) int {
-			if c := a.Addr().Compare(b.Addr()); c != 0 {
-				return c
-			}
-			return a.Bits() - b.Bits()
-		})
-		wants = append(wants, want{pk: p.Key, conf: conf, st: kernelPeerState{
-			endpoint:   p.Direct,
-			allowedIPs: ips,
-			psk:        conf.PresharedKey,
-			hybrid:     conf.Hybrid,
-		}})
+		wants = append(wants, want{pk: p.Key, conf: conf, st: wantKernelPeerState(p, conf)})
 	}
 
 	k.mu.Lock()
@@ -481,8 +531,8 @@ func (k *kernelDataplane) fullSync() error {
 		cfg.PrivateKey = &pushPriv
 	}
 	desired := make(map[key.NodePublic]kernelPeerState, len(wants))
+	added := map[netip.Addr]key.NodePublic{} // new peers, by peerAddr
 	var peers []tswg.PeerConfig
-	noRoam := true
 	for _, w := range wants {
 		w.st.endpoint = k.endpointLocked(w.pk, w.st.endpoint)
 		desired[w.pk] = w.st
@@ -490,22 +540,37 @@ func (k *kernelDataplane) fullSync() error {
 		if ok && old.equal(w.st) {
 			continue
 		}
-		psk := w.st.psk
-		hybrid := w.st.hybrid
-		peers = append(peers, tswg.PeerConfig{
-			PublicKey:         w.pk,
-			Endpoint:          w.st.endpoint,
-			ReplaceAllowedIPs: true,
-			AllowedIPs:        w.st.allowedIPs,
-			PresharedKey:      &psk,
-			NoRoam:            &noRoam,
-			Hybrid:            &hybrid,
-		})
-	}
-	for pk := range k.pushed {
-		if _, ok := desired[pk]; !ok {
-			peers = append(peers, tswg.PeerConfig{PublicKey: pk, Remove: true})
+		if a, hasAddr := w.st.peerAddr(); !ok && hasAddr {
+			added[a] = w.pk
 		}
+		peers = append(peers, w.st.peerConfig(w.pk))
+	}
+	// A removed peer whose Tailscale IP a new one has rotated its key:
+	// rename it in the kernel rather than removing it and adding the new
+	// one; see syncPeerSet.
+	renamed := set.Set[key.NodePublic]{}
+	var renames []tswg.PeerConfig
+	for pk, st := range k.pushed {
+		if _, ok := desired[pk]; ok {
+			continue
+		}
+		if a, ok := st.peerAddr(); ok {
+			if npk, ok := added[a]; ok {
+				k.logf("peer %v rotated its key to %v", pk.ShortString(), npk.ShortString())
+				pc := desired[npk].peerConfig(npk)
+				pc.PublicKey, pc.UpdateOnly, pc.NewPublicKey = pk, true, &npk
+				renames = append(renames, pc)
+				renamed.Add(npk)
+				continue
+			}
+		}
+		peers = append(peers, tswg.PeerConfig{PublicKey: pk, Remove: true})
+	}
+	if len(renames) > 0 {
+		peers = slices.DeleteFunc(peers, func(p tswg.PeerConfig) bool {
+			return !p.Remove && renamed.Contains(p.PublicKey)
+		})
+		peers = append(renames, peers...)
 	}
 	k.mu.Unlock()
 
@@ -524,9 +589,158 @@ func (k *kernelDataplane) fullSync() error {
 	}
 	k.mu.Lock()
 	k.pushedPriv = pushPriv
-	k.pushed = desired
+	k.pushed = map[key.NodePublic]kernelPeerState{}
+	k.ipOwner = map[netip.Addr]key.NodePublic{}
+	for pk, st := range desired {
+		k.setPushedLocked(pk, st, true)
+	}
 	k.mu.Unlock()
 	return k.refreshListenPort()
+}
+
+// wantKernelPeerState returns the kernel state wanted for the peer with
+// magicsock path p and config conf. Its endpoint is p's direct one, which
+// the caller must still map with endpointLocked.
+func wantKernelPeerState(p magicsock.KernelPeerPath, conf wgcfg.PeerConfig) kernelPeerState {
+	ips := slices.Clone(conf.AllowedIPs)
+	slices.SortFunc(ips, func(a, b netip.Prefix) int {
+		if c := a.Addr().Compare(b.Addr()); c != 0 {
+			return c
+		}
+		return a.Bits() - b.Bits()
+	})
+	return kernelPeerState{
+		endpoint:   p.Direct,
+		allowedIPs: ips,
+		psk:        conf.PresharedKey,
+		hybrid:     conf.Hybrid,
+	}
+}
+
+// peerConfig returns the tswg config that sets peer pk to st.
+func (st kernelPeerState) peerConfig(pk key.NodePublic) tswg.PeerConfig {
+	psk, hybrid, noRoam := st.psk, st.hybrid, true
+	return tswg.PeerConfig{
+		PublicKey:         pk,
+		Endpoint:          st.endpoint,
+		ReplaceAllowedIPs: true,
+		AllowedIPs:        st.allowedIPs,
+		PresharedKey:      &psk,
+		NoRoam:            &noRoam,
+		Hybrid:            &hybrid,
+	}
+}
+
+// syncPeerSet syncs just the peers in pks with the kernel, as fullSync does
+// all of them: each is wanted in the kernel if magicsock has it and the
+// config source has a config for it. Its work is O(1) per peer.
+//
+// A peer that rotated its key comes as the removal of the old key and the
+// addition of the new, in either order, perhaps in different calls. Doing
+// them as such would drop the peer's traffic in between, so they're one
+// atomic rename in the kernel (tswg.PeerConfig.NewPublicKey) instead,
+// matched by the peer's Tailscale IP (see peerAddr): an addition whose IP
+// a no-longer-wanted peer has renames that one, and a removal whose IP a
+// new peer has now (by peerByIPFn) renames it to that one.
+func (k *kernelDataplane) syncPeerSet(pks set.Set[key.NodePublic]) error {
+	fn := k.peerConfigFn.Load()
+	if fn == nil {
+		return nil
+	}
+	// wanted returns pk's wanted state, if it's wanted.
+	wanted := func(pk key.NodePublic) (kernelPeerState, bool) {
+		path, inMagicsock := k.ms.KernelPeerPath(pk)
+		conf, ok := (*fn)(pk)
+		if !inMagicsock || !ok {
+			return kernelPeerState{}, false
+		}
+		return wantKernelPeerState(path, conf), true
+	}
+	byIP := k.peerByIPFn.Load()
+	var peers []tswg.PeerConfig
+	for pk := range pks {
+		st, want := wanted(pk)
+		// For a rename, the other key and its wanted state; found
+		// without k.mu, since the config source takes other locks.
+		var from, to key.NodePublic
+		var toState kernelPeerState
+		k.mu.Lock()
+		_, pushed := k.pushed[pk]
+		if a, ok := st.peerAddr(); want && !pushed && ok {
+			if owner, ok := k.ipOwner[a]; ok && owner != pk {
+				from = owner
+			}
+		}
+		old := k.pushed[pk]
+		k.mu.Unlock()
+		if !from.IsZero() {
+			if _, ok := wanted(from); ok {
+				from = key.NodePublic{} // both wanted: not a rotation
+			}
+		}
+		if !want && pushed && byIP != nil {
+			if a, ok := old.peerAddr(); ok {
+				if np, ok := (*byIP)(a); ok && np != pk {
+					if s, ok := wanted(np); ok {
+						to, toState = np, s
+					}
+				}
+			}
+		}
+
+		k.mu.Lock()
+		switch {
+		case !from.IsZero(): // pk is the new key of pushed peer from
+			if _, still := k.pushed[from]; !still {
+				from = key.NodePublic{}
+			}
+		case !to.IsZero(): // pk is the old key of to, not yet pushed
+			if _, already := k.pushed[to]; already {
+				to = key.NodePublic{}
+			}
+		}
+		switch {
+		case !from.IsZero():
+			st.endpoint = k.endpointLocked(pk, st.endpoint)
+			k.logf("peer %v rotated its key to %v", from.ShortString(), pk.ShortString())
+			pc := st.peerConfig(pk)
+			pc.PublicKey, pc.UpdateOnly, pc.NewPublicKey = from, true, &pk
+			peers = append(peers, pc)
+			k.setPushedLocked(from, kernelPeerState{}, false)
+			k.setPushedLocked(pk, st, true)
+		case !to.IsZero():
+			toState.endpoint = k.endpointLocked(to, toState.endpoint)
+			k.logf("peer %v rotated its key to %v", pk.ShortString(), to.ShortString())
+			pc := toState.peerConfig(to)
+			pc.PublicKey, pc.UpdateOnly, pc.NewPublicKey = pk, true, &to
+			peers = append(peers, pc)
+			k.setPushedLocked(pk, kernelPeerState{}, false)
+			k.setPushedLocked(to, toState, true)
+		case want:
+			st.endpoint = k.endpointLocked(pk, st.endpoint)
+			if !pushed || !old.equal(st) {
+				peers = append(peers, st.peerConfig(pk))
+				k.setPushedLocked(pk, st, true)
+			}
+		case pushed:
+			peers = append(peers, tswg.PeerConfig{PublicKey: pk, Remove: true})
+			k.setPushedLocked(pk, kernelPeerState{}, false)
+		}
+		k.mu.Unlock()
+	}
+	for len(peers) > 0 {
+		n := min(len(peers), kernelMaxPeersPerMessage)
+		if err := k.configure(tswg.Config{Peers: peers[:n]}); err != nil {
+			// The kernel may now differ from k.pushed; the next full
+			// sync puts it right.
+			k.mu.Lock()
+			k.wantFullSync = true
+			k.mu.Unlock()
+			return err
+		}
+		peers = peers[n:]
+	}
+	return nil
 }
 
 // updatePeers updates the kernel endpoints of the peers in dirty and clears
@@ -535,13 +749,17 @@ func (k *kernelDataplane) fullSync() error {
 // should go out on its new path).
 func (k *kernelDataplane) updatePeers(dirty, clears set.Set[key.NodePublic]) error {
 	var peers []tswg.PeerConfig
+	var missing []key.NodePublic
 	for pk := range set.Of(slices.Concat(dirty.Slice(), clears.Slice())...) {
 		path, _ := k.ms.KernelPeerPath(pk)
 		k.mu.Lock()
 		st, ok := k.pushed[pk]
 		if !ok {
 			k.mu.Unlock()
-			continue // not in the kernel (yet); a full sync will add it
+			// Not in the kernel (yet): perhaps magicsock just added
+			// it, after its SyncDevicePeer; sync its config.
+			missing = append(missing, pk)
+			continue
 		}
 		ep := k.endpointLocked(pk, path.Direct)
 		changed := ep != st.endpoint
@@ -575,6 +793,9 @@ func (k *kernelDataplane) updatePeers(dirty, clears set.Set[key.NodePublic]) err
 			return err
 		}
 		peers = peers[n:]
+	}
+	if len(missing) > 0 {
+		return k.syncPeerSet(set.Of(missing...))
 	}
 	return nil
 }

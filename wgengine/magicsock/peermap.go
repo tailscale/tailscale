@@ -157,6 +157,7 @@ func (m *peerMap) upsertEndpoint(ep *endpoint, oldDiscoKey key.DiscoPublic,
 	if !ok {
 		pi = newPeerInfo(ep)
 		m.byNodeKey[ep.publicKey] = pi
+		ep.noteKernelPeerSetChange()
 	}
 	m.byNodeID[ep.nodeID] = pi
 
@@ -250,6 +251,9 @@ func (m *peerMap) deleteEndpoint(ep *endpoint) {
 		}
 	}
 
+	if _, ok := m.byNodeKey[ep.publicKey]; ok {
+		ep.noteKernelPeerSetChange()
+	}
 	delete(m.byNodeKey, ep.publicKey)
 	if was, ok := m.byNodeID[ep.nodeID]; ok && was.ep == ep {
 		delete(m.byNodeID, ep.nodeID)

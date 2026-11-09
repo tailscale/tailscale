@@ -147,10 +147,22 @@ func (de *endpoint) kernelDirectLocked(now mono.Time) netip.AddrPort {
 // SetKernelPathHook registers fn to be called, from its own goroutine, with
 // a peer's key whenever the result of KernelPeerPath for that peer may have
 // changed: its best path changed, or became trusted, or stopped being
-// trusted. It lets the kernel data plane switch the kernel's endpoint for
-// the peer right away, without polling.
+// trusted, or the peer was added or removed. It lets the kernel data plane
+// switch the kernel's endpoint for the peer right away, without polling,
+// and sync just that peer.
 func (c *Conn) SetKernelPathHook(fn func(key.NodePublic)) {
 	c.kernelPathHook.Store(&fn)
+}
+
+// noteKernelPeerSetChange calls the kernel path hook, if any, for de, which
+// was just added to or removed from the peer map.
+func (de *endpoint) noteKernelPeerSetChange() {
+	if de.c == nil {
+		return // in tests
+	}
+	if fn := de.c.kernelPathHook.Load(); fn != nil {
+		go (*fn)(de.publicKey)
+	}
 }
 
 // noteKernelPathLocked calls the kernel path hook, if any, if de's kernel

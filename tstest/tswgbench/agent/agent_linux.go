@@ -95,6 +95,7 @@ func main() {
 		w.Write(b)
 	})
 	mux.HandleFunc("POST /lan-netns", handleLANNetns)
+	mux.HandleFunc("POST /scale", handleScale)
 	// Rebalance the underlay NIC's RSS table (POST /rss-balance); see
 	// package rss.
 	mux.HandleFunc("POST /rss-balance", func(w http.ResponseWriter, r *http.Request) {

@@ -76,6 +76,13 @@ type PeerConfig struct {
 	// peer's disco key changes in a way that means it restarted (and so
 	// lost its keys).
 	ClearSession bool
+
+	// NewPublicKey, if non-nil, changes the peer's public key, atomically:
+	// it keeps its allowed IPs, endpoint and settings, and so its traffic,
+	// but drops its sessions. It's for a peer that rotated its key. The
+	// rest of the PeerConfig applies after. Set UpdateOnly too, or a peer
+	// with PublicKey is created first if there isn't one.
+	NewPublicKey *key.NodePublic
 }
 
 // Event is a peer event from the kernel; see EventConn.

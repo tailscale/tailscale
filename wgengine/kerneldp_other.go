@@ -7,6 +7,7 @@ package wgengine
 
 import (
 	"errors"
+	"net/netip"
 	"sync/atomic"
 
 	"tailscale.com/ipn/ipnstate"
@@ -29,10 +30,12 @@ func (*kernelDataplane) start(*magicsock.Conn, *tstun.Wrapper) error {
 	return errors.New("tswg kernel data plane not supported on this platform or build")
 }
 
-func (*kernelDataplane) Close() error                                       { return nil }
-func (*kernelDataplane) setPrivateKey(key.NodePrivate)                      {}
-func (*kernelDataplane) syncPeers()                                         {}
-func (*kernelDataplane) clearSession(key.NodePublic)                        {}
-func (*kernelDataplane) injectFromMagicsock(key.NodePublic, []byte)         {}
-func (*kernelDataplane) peerStatuses() []ipnstate.PeerStatusLite            { return nil }
-func (*kernelDataplane) setPriorityMessageFunc(func(key.NodePublic) []byte) {}
+func (*kernelDataplane) Close() error                                            { return nil }
+func (*kernelDataplane) setPrivateKey(key.NodePrivate)                           {}
+func (*kernelDataplane) syncPeers()                                              {}
+func (*kernelDataplane) syncPeer(key.NodePublic)                                 {}
+func (*kernelDataplane) setPeerByIPFunc(func(netip.Addr) (key.NodePublic, bool)) {}
+func (*kernelDataplane) clearSession(key.NodePublic)                             {}
+func (*kernelDataplane) injectFromMagicsock(key.NodePublic, []byte)              {}
+func (*kernelDataplane) peerStatuses() []ipnstate.PeerStatusLite                 { return nil }
+func (*kernelDataplane) setPriorityMessageFunc(func(key.NodePublic) []byte)      {}

@@ -23,6 +23,7 @@ package tswgbench
 
 import (
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -353,7 +354,7 @@ func newLab(t testing.TB, cpus int) *lab {
 			"-machine", "q35,accel=kvm",
 			"-cpu", "host",
 			"-smp", fmt.Sprint(cpus),
-			"-m", "1024",
+			"-m", cmp.Or(os.Getenv("TSWG_LAB_MEM"), "1024"), // MiB
 			"-nodefaults", "-no-user-config", "-nographic", "-no-reboot",
 			"-kernel", kernel,
 			"-initrd", initrd,
