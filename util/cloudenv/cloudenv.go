@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"tailscale.com/envknob"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/syncs"
 	"tailscale.com/types/lazy"
@@ -53,7 +54,7 @@ const (
 // ResolverIP returns the cloud host's recursive DNS server or the
 // empty string if not available.
 func (c Cloud) ResolverIP() string {
-	if !buildfeatures.HasCloud {
+	if !buildfeatures.HasCloud || disableCloudDetection() {
 		return ""
 	}
 	switch c {
@@ -112,9 +113,11 @@ func (c Cloud) HasInternalTLD() bool {
 
 var cloudAtomic syncs.AtomicValue[Cloud]
 
+var disableCloudDetection = envknob.RegisterBool("TS_DISABLE_CLOUD_DETECTION")
+
 // Get returns the current cloud, or the empty string if unknown.
 func Get() Cloud {
-	if !buildfeatures.HasCloud {
+	if !buildfeatures.HasCloud || disableCloudDetection() {
 		return ""
 	}
 	if c, ok := cloudAtomic.LoadOk(); ok {
