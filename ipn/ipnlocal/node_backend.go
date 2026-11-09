@@ -146,8 +146,9 @@ type nodeBackend struct {
 
 	// extraDNS stores DNS.ExtraRecords A/AAAA entries from the netmap
 	// (typically service VIPs pushed by control), keyed by canonicalized
-	// hostname (lowercase, no trailing dot).
-	extraDNS map[string]netip.Addr
+	// hostname (lowercase, no trailing dot). A name can have one address
+	// per family, such as a service's IPv4 and IPv6 VIPs.
+	extraDNS map[string][]netip.Addr
 
 	// userProfiles is the live set of user profiles, updated incrementally
 	// by mergeUserProfiles as deltas arrive. It parallels the peers map:
@@ -836,7 +837,8 @@ func (nb *nodeBackend) updateNodeByNameLocked() {
 		if err != nil {
 			continue
 		}
-		mak.Set(&nb.extraDNS, strings.ToLower(strings.TrimSuffix(rec.Name, ".")), ip)
+		name := strings.ToLower(strings.TrimSuffix(rec.Name, "."))
+		mak.Set(&nb.extraDNS, name, append(nb.extraDNS[name], ip))
 	}
 }
 
@@ -850,12 +852,12 @@ func (nb *nodeBackend) NodeByName(hostname string) (_ tailcfg.NodeID, ok bool) {
 	return nid, ok
 }
 
-// ExtraDNSByName returns the IP for a DNS.ExtraRecords entry (e.g. service VIPs).
-func (nb *nodeBackend) ExtraDNSByName(hostname string) (_ netip.Addr, ok bool) {
+// ExtraDNSByName returns the IPs of a DNS.ExtraRecords name (e.g. service
+// VIPs), in netmap order.
+func (nb *nodeBackend) ExtraDNSByName(hostname string) []netip.Addr {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
-	ip, ok := nb.extraDNS[hostname]
-	return ip, ok
+	return nb.extraDNS[hostname]
 }
 
 func (nb *nodeBackend) updatePeersLocked() (discoChanged []key.NodePublic, routeChanged routemanager.PeersWithRouteChanges) {

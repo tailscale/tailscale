@@ -49,6 +49,8 @@ func TestResolveMagicDNS(t *testing.T) {
 		DNS: tailcfg.DNSConfig{
 			ExtraRecords: []tailcfg.DNSRecord{
 				{Name: "svc-foo.tail-scale.ts.net.", Value: "100.11.22.33"},
+				{Name: "svc-dual.tail-scale.ts.net.", Value: "100.11.22.44"},
+				{Name: "svc-dual.tail-scale.ts.net.", Value: "fd7a:115c:a1e0::44"},
 			},
 		},
 	}
@@ -72,6 +74,8 @@ func TestResolveMagicDNS(t *testing.T) {
 		{name: "v6only_tcp4_miss", host: "v6only", network: "tcp4", wantOK: false},
 		{name: "extra_record", host: "svc-foo.tail-scale.ts.net", network: "tcp", wantIP: "100.11.22.33", wantOK: true},
 		{name: "extra_record_tcp6_miss", host: "svc-foo.tail-scale.ts.net", network: "tcp6", wantOK: false},
+		{name: "extra_record_dual_tcp", host: "svc-dual.tail-scale.ts.net", network: "tcp", wantIP: "100.11.22.44", wantOK: true},
+		{name: "extra_record_dual_tcp6", host: "svc-dual.tail-scale.ts.net", network: "tcp6", wantIP: "fd7a:115c:a1e0::44", wantOK: true},
 		{name: "unknown", host: "nope", network: "tcp", wantOK: false},
 	}
 

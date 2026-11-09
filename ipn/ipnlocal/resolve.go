@@ -70,10 +70,27 @@ func (b *LocalBackend) resolveMagicDNS(hostname, network string) (_ netip.Addr, 
 		}
 		return netip.Addr{}, false
 	}
-	if ip, ok := nb.ExtraDNSByName(hostname); ok && addrFamilyMatch(ip, network) {
-		return ip, true
+	return extraAddrForNetwork(nb.ExtraDNSByName(hostname), network)
+}
+
+// extraAddrForNetwork returns the best of a DNS.ExtraRecords name's addrs
+// for network. Like [nodeAddrForNetwork], it prefers IPv4 for unqualified
+// networks: a service's hosts may only serve its IPv4 VIP, for instance when
+// they run in an IPv4-only Kubernetes cluster.
+func extraAddrForNetwork(addrs []netip.Addr, network string) (_ netip.Addr, ok bool) {
+	var v6 netip.Addr
+	for _, ip := range addrs {
+		if !addrFamilyMatch(ip, network) {
+			continue
+		}
+		if ip.Is4() {
+			return ip, true
+		}
+		if !v6.IsValid() {
+			v6 = ip
+		}
 	}
-	return netip.Addr{}, false
+	return v6, v6.IsValid()
 }
 
 // magicDNSHosts implements [resolver.MagicDNSHosts] on top of the
