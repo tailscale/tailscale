@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
@@ -48,7 +49,10 @@ func init() {
 	ipnlocal.HookGetCertPEM.Set(getCertPEMHook)
 	ipnlocal.HookGetACMETLSALPNCert.Set(getACMETLSALPNCertHook)
 	ipnlocal.HookGetACMETLSALPNProto.Set(getACMETLSALPNProtoHook)
-	ipnlocal.HookUpdateCertRefreshLoop.Set(updateCertRefreshLoopHook)
+	if buildfeatures.HasServe {
+		// The refresh loop only renews certs for Serve's hostnames.
+		ipnlocal.HookUpdateCertRefreshLoop.Set(updateCertRefreshLoopHook)
+	}
 	ipnlocal.HookShutdownCertRefreshLoop.Set(shutdownCertRefreshLoopHook)
 	ipnlocal.HookConfigureCertsForTest.Set(configureCertsForTestHook)
 	ipnlocal.HookHandleC2NTLSCertStatus.Set(handleC2NTLSCertStatus)

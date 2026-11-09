@@ -1486,6 +1486,18 @@ func (b *LocalBackend) Prefs() ipn.PrefsView {
 	return b.sanitizedPrefsLocked()
 }
 
+// ServeConfig provides a view of the current serve mappings.
+// If serving is not configured, the returned view is not Valid.
+//
+// It is defined even in ts_omit_serve builds, where it always returns
+// an invalid view, so that features like ACME that consult the serve
+// config, but don't require serve, still compile.
+func (b *LocalBackend) ServeConfig() ipn.ServeConfigView {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.serveConfig
+}
+
 func (b *LocalBackend) sanitizedPrefsLocked() ipn.PrefsView {
 	syncs.RequiresMutex(&b.mu)
 	return stripKeysFromPrefs(b.pm.CurrentPrefs())
