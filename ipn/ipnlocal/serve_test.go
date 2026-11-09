@@ -35,24 +35,17 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
-	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tailcfg/peercap"
-	"tailscale.com/tsd"
-	"tailscale.com/tstest"
 	"tailscale.com/tstest/tlstest"
-	"tailscale.com/types/logger"
-	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
-	"tailscale.com/util/syspolicy/policyclient"
-	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -1331,88 +1324,6 @@ func mustCreateURL(t *testing.T, u string) url.URL {
 		t.Fatalf("failed parsing url: %v", err)
 	}
 	return *uParsed
-}
-
-func newTestBackend(t *testing.T, opts ...any) *LocalBackend {
-	var logf logger.Logf = logger.Discard
-	const debug = false
-	if debug {
-		logf = logger.WithPrefix(tstest.WhileTestRunningLogger(t), "... ")
-	}
-
-	bus := eventbustest.NewBus(t)
-	sys := tsd.NewSystemWithBus(bus)
-
-	for _, o := range opts {
-		switch v := o.(type) {
-		case policyclient.Client:
-			sys.PolicyClient.Set(v)
-		default:
-			panic(fmt.Sprintf("unsupported option type %T", v))
-		}
-	}
-
-	e, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
-		SetSubsystem:  sys.Set,
-		HealthTracker: sys.HealthTracker.Get(),
-		Metrics:       sys.UserMetricsRegistry(),
-		EventBus:      sys.Bus.Get(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sys.Set(e)
-	sys.Set(new(mem.Store))
-
-	b, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(b.Shutdown)
-	dir := t.TempDir()
-	b.SetVarRoot(dir)
-
-	pm := must.Get(newProfileManager(new(mem.Store), logf, health.NewTracker(bus)))
-	pm.currentProfile = (&ipn.LoginProfile{ID: "id0"}).View()
-	b.pm = pm
-
-	b.currentNode().SetNetMap(&netmap.NetworkMap{
-		SelfNode: (&tailcfg.Node{
-			Name: "example.ts.net",
-			Addresses: []netip.Prefix{
-				netip.MustParsePrefix("100.150.151.151/32"),
-			},
-		}).View(),
-		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
-			tailcfg.UserID(1): (&tailcfg.UserProfile{
-				LoginName:     "someone@example.com",
-				DisplayName:   "Some One",
-				ProfilePicURL: "https://example.com/photo.jpg",
-			}).View(),
-		},
-		Peers: []tailcfg.NodeView{
-			(&tailcfg.Node{
-				ID:           152,
-				ComputedName: "some-peer",
-				User:         tailcfg.UserID(1),
-				Key:          makeNodeKeyFromID(152),
-				Addresses: []netip.Prefix{
-					netip.MustParsePrefix("100.150.151.152/32"),
-				},
-			}).View(),
-			(&tailcfg.Node{
-				ID:           153,
-				ComputedName: "some-tagged-peer",
-				Tags:         []string{"tag:server", "tag:test"},
-				User:         tailcfg.UserID(1),
-				Key:          makeNodeKeyFromID(153),
-				Addresses: []netip.Prefix{
-					netip.MustParsePrefix("100.150.151.153/32"),
-				},
-			}).View(),
-		},
-	})
-	return b
 }
 
 func TestServeFileOrDirectory(t *testing.T) {
@@ -2739,5 +2650,463 @@ func TestGetTLSServeCertForPortLowercasesSNI(t *testing.T) {
 	}
 	if _, err := getCert(&tls.ClientHelloInfo{ServerName: "Other.Example.TS.net"}); err == nil {
 		t.Error("unconfigured name: got cert, want error")
+	}
+}
+
+func TestTCPHandlerForDstWithVIPService(t *testing.T) {
+	b := newTestBackend(t)
+	svcIPMap := tailcfg.ServiceIPMappings{
+		"svc:foo": []netip.Addr{
+			netip.MustParseAddr("100.101.101.101"),
+			netip.MustParseAddr("fd7a:115c:a1e0:ab12:4843:cd96:6565:6565"),
+		},
+		"svc:bar": []netip.Addr{
+			netip.MustParseAddr("100.99.99.99"),
+			netip.MustParseAddr("fd7a:115c:a1e0:ab12:4843:cd96:626b:628b"),
+		},
+		"svc:baz": []netip.Addr{
+			netip.MustParseAddr("100.133.133.133"),
+			netip.MustParseAddr("fd7a:115c:a1e0:ab12:4843:cd96:8585:8585"),
+		},
+	}
+	svcIPMapJSON, err := json.Marshal(svcIPMap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.setNetMapLocked(
+		&netmap.NetworkMap{
+			SelfNode: (&tailcfg.Node{
+				Name: "example.ts.net",
+				CapMap: tailcfg.NodeCapMap{
+					nodecap.ServiceHost: []tailcfg.RawMessage{tailcfg.RawMessage(svcIPMapJSON)},
+				},
+			}).View(),
+			UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
+				tailcfg.UserID(1): (&tailcfg.UserProfile{
+					LoginName:     "someone@example.com",
+					DisplayName:   "Some One",
+					ProfilePicURL: "https://example.com/photo.jpg",
+				}).View(),
+			},
+		},
+	)
+
+	err = b.setServeConfigLocked(
+		&ipn.ServeConfig{
+			Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+				"svc:foo": {
+					TCP: map[uint16]*ipn.TCPPortHandler{
+						882: {HTTP: true},
+						883: {HTTPS: true},
+					},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.example.ts.net:882": {
+							Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							},
+						},
+						"foo.example.ts.net:883": {
+							Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Text: "test"},
+							},
+						},
+					},
+				},
+				"svc:bar": {
+					TCP: map[uint16]*ipn.TCPPortHandler{
+						990: {TCPForward: "127.0.0.1:8443"},
+						991: {TCPForward: "127.0.0.1:5432", TerminateTLS: "bar.test.ts.net"},
+					},
+				},
+				"svc:qux": {
+					TCP: map[uint16]*ipn.TCPPortHandler{
+						600: {HTTPS: true},
+					},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"qux.example.ts.net:600": {
+							Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Text: "qux"},
+							},
+						},
+					},
+				},
+			},
+		},
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name      string
+		desc      string
+		dst       string
+		intercept bool
+	}{
+		{
+			name:      "100_100_100_100-port80",
+			desc:      "intercept port 80 (Web UI) on quad100 IPv4",
+			dst:       "100.100.100.100:80",
+			intercept: true,
+		},
+		{
+			name:      "fd7a-115c-a1e0--53-port80",
+			desc:      "intercept port 80 (Web UI) on quad100 IPv6",
+			dst:       "[fd7a:115c:a1e0::53]:80",
+			intercept: true,
+		},
+		{
+			name:      "100_100_103_100-port80",
+			desc:      "don't intercept port 80 on local ip",
+			dst:       "100.100.103.100:80",
+			intercept: false,
+		},
+		{
+			name:      "100_100_100_100-port8080",
+			desc:      "intercept port 8080 (Taildrive) on quad100 IPv4",
+			dst:       "100.100.100.100:8080",
+			intercept: true,
+		},
+		{
+			name:      "fd7a-115c-a1e0--53-port8080",
+			desc:      "intercept port 8080 (Taildrive) on quad100 IPv6",
+			dst:       "[fd7a:115c:a1e0::53]:8080",
+			intercept: true,
+		},
+		{
+			name:      "100_100_103_100-port8080",
+			desc:      "don't intercept port 8080 on local ip",
+			dst:       "100.100.103.100:8080",
+			intercept: false,
+		},
+		{
+			name:      "100_100_100_100-port9080",
+			desc:      "don't intercept port 9080 on quad100 IPv4",
+			dst:       "100.100.100.100:9080",
+			intercept: false,
+		},
+		{
+			name:      "fd7a-115c-a1e0--53-port9080",
+			desc:      "don't intercept port 9080 on quad100 IPv6",
+			dst:       "[fd7a:115c:a1e0::53]:9080",
+			intercept: false,
+		},
+		{
+			name:      "100_100_103_100-port9080",
+			desc:      "don't intercept port 9080 on local ip",
+			dst:       "100.100.103.100:9080",
+			intercept: false,
+		},
+		// VIP service destinations
+		{
+			name:      "100_101_101_101-port882",
+			desc:      "intercept port 882 (HTTP) on service foo IPv4",
+			dst:       "100.101.101.101:882",
+			intercept: true,
+		},
+		{
+			name:      "fd7a-115c-a1e0-ab12-4843-cd96-6565-6565-port882",
+			desc:      "intercept port 882 (HTTP) on service foo IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:6565:6565]:882",
+			intercept: true,
+		},
+		{
+			name:      "100_101_101_101-port883",
+			desc:      "intercept port 883 (HTTPS) on service foo IPv4",
+			dst:       "100.101.101.101:883",
+			intercept: true,
+		},
+		{
+			name:      "fd7a-115c-a1e0-ab12-4843-cd96-6565-6565-port883",
+			desc:      "intercept port 883 (HTTPS) on service foo IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:6565:6565]:883",
+			intercept: true,
+		},
+		{
+			name:      "100_99_99_99-port990",
+			desc:      "intercept port 990 (TCPForward) on service bar IPv4",
+			dst:       "100.99.99.99:990",
+			intercept: true,
+		},
+		{
+			name:      "fd7a-115c-a1e0-ab12-4843-cd96-626b-628b-port990",
+			desc:      "intercept port 990 (TCPForward) on service bar IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:626b:628b]:990",
+			intercept: true,
+		},
+		{
+			name:      "100_99_99_99-port990-terminateTLS",
+			desc:      "intercept port 991 (TCPForward with TerminateTLS) on service bar IPv4",
+			dst:       "100.99.99.99:990",
+			intercept: true,
+		},
+		{
+			name:      "fd7a-115c-a1e0-ab12-4843-cd96-626b-628b-port990-terminateTLS",
+			desc:      "intercept port 991 (TCPForward with TerminateTLS) on service bar IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:626b:628b]:990",
+			intercept: true,
+		},
+		{
+			name:      "100_101_101_101-port4444",
+			desc:      "don't intercept port 4444 on service foo IPv4",
+			dst:       "100.101.101.101:4444",
+			intercept: false,
+		},
+		{
+			name:      "fd7a-115c-a1e0-ab12-4843-cd96-6565-6565-port4444",
+			desc:      "don't intercept port 4444 on service foo IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:6565:6565]:4444",
+			intercept: false,
+		},
+		{
+			name:      "100_22_22_22-port883",
+			desc:      "don't intercept port 600 on unknown service IPv4",
+			dst:       "100.22.22.22:883",
+			intercept: false,
+		},
+		{
+			name:      "fd7a-115c-a1e0-ab12-4843-cd96-626b-628b-port883",
+			desc:      "don't intercept port 600 on unknown service IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:626b:628b]:883",
+			intercept: false,
+		},
+		{
+			name:      "100_133_133_133-port600",
+			desc:      "don't intercept port 600 (HTTPS) on service baz IPv4",
+			dst:       "100.133.133.133:600",
+			intercept: false,
+		},
+		{
+			name:      "fd7a-115c-a1e0-ab12-4843-cd96-8585-8585-port600",
+			desc:      "don't intercept port 600 (HTTPS) on service baz IPv6",
+			dst:       "[fd7a:115c:a1e0:ab12:4843:cd96:8585:8585]:600",
+			intercept: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Log(tt.desc)
+			src := netip.MustParseAddrPort("100.100.102.100:51234")
+			h, _ := b.TCPHandlerForDst(src, netip.MustParseAddrPort(tt.dst))
+			if !tt.intercept && h != nil {
+				t.Error("intercepted traffic we shouldn't have")
+			} else if tt.intercept && h == nil {
+				t.Error("failed to intercept traffic we should have")
+			}
+		})
+	}
+}
+
+func TestUpdateIngressAndServiceHashLocked(t *testing.T) {
+	prefs := ipn.NewPrefs().View()
+	previousSC := &ipn.ServeConfig{
+		Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+			"svc:abc": {Tun: true},
+		},
+	}
+	tests := []struct {
+		name              string
+		hi                *tailcfg.Hostinfo
+		hasPreviousSC     bool // whether to overwrite the ServeConfig hash in the Hostinfo using previousSC
+		sc                *ipn.ServeConfig
+		wantIngress       bool
+		wantWireIngress   bool
+		wantControlUpdate bool
+	}{
+		{
+			name: "no_hostinfo_no_serve_config",
+			hi:   nil,
+		},
+		{
+			name: "empty_hostinfo_no_serve_config",
+			hi:   &tailcfg.Hostinfo{},
+		},
+		{
+			name: "empty_hostinfo_funnel_enabled",
+			hi:   &tailcfg.Hostinfo{},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": true,
+				},
+			},
+			wantIngress:       true,
+			wantWireIngress:   false, // implied by wantIngress
+			wantControlUpdate: true,
+		},
+		{
+			name: "empty_hostinfo_service_configured",
+			hi:   &tailcfg.Hostinfo{},
+			sc: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:abc": {Tun: true},
+				},
+			},
+			wantControlUpdate: true,
+		},
+		{
+			name: "empty_hostinfo_funnel_disabled",
+			hi:   &tailcfg.Hostinfo{},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": false,
+				},
+			},
+			wantWireIngress:   true, // true if there is any AllowFunnel block
+			wantControlUpdate: true,
+		},
+		{
+			name: "empty_hostinfo_no_funnel_no_service",
+			hi:   &tailcfg.Hostinfo{},
+			sc: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {HTTPS: true},
+				},
+			},
+		},
+		{
+			name: "funnel_enabled_no_change",
+			hi: &tailcfg.Hostinfo{
+				IngressEnabled: true,
+			},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": true,
+				},
+			},
+			wantIngress:     true,
+			wantWireIngress: false, // implied by wantIngress
+		},
+		{
+			name:          "service_hash_no_change",
+			hi:            &tailcfg.Hostinfo{},
+			hasPreviousSC: true,
+			sc: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:abc": {Tun: true},
+				},
+			},
+		},
+		{
+			name: "funnel_disabled_no_change",
+			hi: &tailcfg.Hostinfo{
+				WireIngress: true,
+			},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": false,
+				},
+			},
+			wantWireIngress: true, // true if there is any AllowFunnel block
+		},
+		{
+			name:              "service_got_removed",
+			hi:                &tailcfg.Hostinfo{},
+			hasPreviousSC:     true,
+			sc:                &ipn.ServeConfig{},
+			wantControlUpdate: true,
+		},
+		{
+			name: "funnel_changes_to_disabled",
+			hi: &tailcfg.Hostinfo{
+				IngressEnabled: true,
+			},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": false,
+				},
+			},
+			wantWireIngress:   true, // true if there is any AllowFunnel block
+			wantControlUpdate: true,
+		},
+		{
+			name: "funnel_changes_to_enabled",
+			hi: &tailcfg.Hostinfo{
+				WireIngress: true,
+			},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": true,
+				},
+			},
+			wantIngress:       true,
+			wantWireIngress:   false, // implied by wantIngress
+			wantControlUpdate: true,
+		},
+		{
+			name: "both_funnel_and_service_changes",
+			hi: &tailcfg.Hostinfo{
+				IngressEnabled: true,
+			},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": false,
+				},
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:abc": {Tun: true},
+				},
+			},
+			wantWireIngress:   true, // true if there is any AllowFunnel block
+			wantControlUpdate: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			b := newTestLocalBackend(t)
+			b.hostinfo = tt.hi
+			if tt.hasPreviousSC {
+				b.mu.Lock()
+				b.serveConfig = previousSC.View()
+				b.hostinfo.ServicesHash = vipServiceHash(b.logf, b.vipServicesFromPrefsLocked(prefs))
+				b.mu.Unlock()
+			}
+			b.serveConfig = tt.sc.View()
+			allDone := make(chan bool, 1)
+			defer b.goTracker.AddDoneCallback(func() {
+				b.mu.Lock()
+				defer b.mu.Unlock()
+				if b.goTracker.RunningGoroutines() > 0 {
+					return
+				}
+				select {
+				case allDone <- true:
+				default:
+				}
+			})()
+
+			was := b.goTracker.StartedGoroutines()
+			b.maybeSentHostinfoIfChangedLocked(prefs)
+
+			if tt.hi != nil {
+				if tt.hi.IngressEnabled != tt.wantIngress {
+					t.Errorf("IngressEnabled = %v, want %v", tt.hi.IngressEnabled, tt.wantIngress)
+				}
+				if tt.hi.WireIngress != tt.wantWireIngress {
+					t.Errorf("WireIngress = %v, want %v", tt.hi.WireIngress, tt.wantWireIngress)
+				}
+				b.mu.Lock()
+				svcHash := vipServiceHash(b.logf, b.vipServicesFromPrefsLocked(prefs))
+				b.mu.Unlock()
+				if tt.hi.ServicesHash != svcHash {
+					t.Errorf("ServicesHash = %v, want %v", tt.hi.ServicesHash, svcHash)
+				}
+			}
+
+			startedGoroutine := b.goTracker.StartedGoroutines() != was
+			if startedGoroutine != tt.wantControlUpdate {
+				t.Errorf("control update triggered = %v, want %v", startedGoroutine, tt.wantControlUpdate)
+			}
+
+			if startedGoroutine {
+				select {
+				case <-time.After(5 * time.Second):
+					t.Fatal("timed out waiting for goroutine to finish")
+				case <-allDone:
+				}
+			}
+		})
 	}
 }

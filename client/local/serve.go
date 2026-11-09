@@ -1,8 +1,6 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !ts_omit_serve
-
 package local
 
 import (
@@ -11,6 +9,8 @@ import (
 	"fmt"
 	"net/http"
 
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 )
 
@@ -21,6 +21,9 @@ import (
 // API maturity: this method is not considered a stable API and is
 // subject to change between releases.
 func (lc *Client) GetServeConfig(ctx context.Context) (*ipn.ServeConfig, error) {
+	if !buildfeatures.HasServe {
+		return nil, feature.ErrUnavailable
+	}
 	body, h, err := lc.sendWithHeaders(ctx, "GET", "/localapi/v0/serve-config", 200, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("getting serve config: %w", err)
@@ -46,6 +49,9 @@ func getServeConfigFromJSON(body []byte) (sc *ipn.ServeConfig, err error) {
 // SetServeConfig sets or replaces the serving settings.
 // If config is nil, settings are cleared and serving is disabled.
 func (lc *Client) SetServeConfig(ctx context.Context, config *ipn.ServeConfig) error {
+	if !buildfeatures.HasServe {
+		return feature.ErrUnavailable
+	}
 	h := make(http.Header)
 	if config != nil {
 		h.Set("If-Match", config.ETag)

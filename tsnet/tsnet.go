@@ -186,6 +186,7 @@ import (
 	"tailscale.com/client/local"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	_ "tailscale.com/feature/c2n"
 	_ "tailscale.com/feature/condregister/netlog"
@@ -617,8 +618,10 @@ func (s *Server) Up(ctx context.Context) (*ipnstate.Status, error) {
 				var srvCfgErr error
 				var svcAdErr error
 				s.resetServeStateOnce.Do(func() {
-					if err := lc.SetServeConfig(ctx, new(ipn.ServeConfig)); err != nil {
-						srvCfgErr = fmt.Errorf("clearing serve config: %w", err)
+					if buildfeatures.HasServe {
+						if err := lc.SetServeConfig(ctx, new(ipn.ServeConfig)); err != nil {
+							srvCfgErr = fmt.Errorf("clearing serve config: %w", err)
+						}
 					}
 					_, err := s.lb.EditPrefs(&ipn.MaskedPrefs{
 						AdvertiseServicesSet: true,
@@ -1563,6 +1566,9 @@ func FunnelTLSConfig(conf *tls.Config) FunnelOption {
 //
 // It will start the server if it has not been started yet.
 func (s *Server) ListenFunnel(network, addr string, opts ...FunnelOption) (net.Listener, error) {
+	if !buildfeatures.HasServe {
+		return nil, feature.ErrUnavailable
+	}
 	if network != "tcp" {
 		return nil, fmt.Errorf("ListenFunnel(%q, %q): only tcp is supported", network, addr)
 	}
@@ -1924,6 +1930,9 @@ func (s *Server) decrementServiceAdvertisementLocked(name tailcfg.ServiceName) e
 //
 // This function will start the server if it is not already started.
 func (s *Server) ListenService(name string, mode ServiceMode) (*ServiceListener, error) {
+	if !buildfeatures.HasServe {
+		return nil, feature.ErrUnavailable
+	}
 	svcName := tailcfg.ServiceName(name)
 	if err := svcName.Validate(); err != nil {
 		return nil, err
