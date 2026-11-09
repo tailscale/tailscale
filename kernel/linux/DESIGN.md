@@ -1582,10 +1582,11 @@ Performance (the primary motivation; see "Performance"):
 - [x] Beat wireguard-go on bulk TCP and CPU per byte (2026-11-07; at
       parity to 1.05x on throughput, 0.90-0.94x CPU per byte; see
       "Performance").
-- [ ] p99 RTT under load (3.7x wireguard-go's here): find why crypt and tx
-      workers sometimes don't run for 10-40ms on a loaded receiver; try
-      bare metal, fewer NIC queues, and the scheduler's view
-      (`/proc/schedstat`, steal time).
+- [x] p99 RTT under load: at parity with wireguard-go on EC2 (0.94x on
+      c6in.32xlarge, 0.98x on c7i.xlarge; see "Performance"). It's only
+      3.3-3.7x in the nested QEMU lab, where crypt and tx workers on a
+      loaded receiver sometimes don't run for 10-40ms; that wasn't
+      root-caused, and nested virtualization isn't a target.
 - [x] Idle latency in VMs (2026-11-08): inline crypto for lone packets
       when the workers are idle, and softirq NAPI; 0.77-0.85x
       wireguard-go's idle RTT p50, with subnet router throughput
