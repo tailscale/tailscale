@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // This file contains the code related to the Poller type and its methods.
-// The hot loop to keep efficient is Poller.Run.
+// The hot loop to keep efficient is Poller.Poll.
 
 package portlist
 
@@ -30,11 +30,13 @@ func PollInterval() time.Duration {
 }
 
 // Poller scans the systems for listening ports periodically and sends
-// the results to C.
+// the results to its caller via Poll.
+//
+// Poller is safe for concurrent use.
 type Poller struct {
 	// IncludeLocalhost controls whether services bound to localhost are included.
 	//
-	// This field should only be changed before calling Run.
+	// This field should only be changed before calling Poll.
 	IncludeLocalhost bool
 
 	// os, if non-nil, is an OS-specific implementation of the portlist getting
@@ -47,7 +49,9 @@ type Poller struct {
 	initOnce sync.Once // guards init of os
 	initErr  error
 
-	// scatch is memory for Poller.getList to reuse between calls.
+	mu sync.Mutex // guards scratch and prev
+
+	// scratch is memory for Poller.getListLocked to reuse between calls.
 	scratch []Port
 
 	prev List // most recent data, not aliasing scratch
@@ -87,7 +91,9 @@ func (p *Poller) init() {
 }
 
 // Close closes the Poller.
+// It is safe to call Close concurrently with Poll.
 func (p *Poller) Close() error {
+	p.initOnce.Do(p.init)
 	if p.initErr != nil {
 		return p.initErr
 	}
@@ -99,12 +105,19 @@ func (p *Poller) Close() error {
 
 // Poll returns the list of listening ports, if changed from
 // a previous call as indicated by the changed result.
+//
+// The returned ports slice is owned by the caller and will not be
+// modified by subsequent calls to Poll.
 func (p *Poller) Poll() (ports []Port, changed bool, err error) {
 	p.initOnce.Do(p.init)
 	if p.initErr != nil {
 		return nil, false, fmt.Errorf("error initializing poller: %w", p.initErr)
 	}
-	pl, err := p.getList()
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	pl, err := p.getListLocked()
 	if err != nil {
 		return nil, false, err
 	}
@@ -115,7 +128,9 @@ func (p *Poller) Poll() (ports []Port, changed bool, err error) {
 	return p.prev, true, nil
 }
 
-func (p *Poller) getList() (List, error) {
+// getListLocked fetches the current list of ports using p.scratch as
+// a reusable buffer. p.mu must be held.
+func (p *Poller) getListLocked() (List, error) {
 	var err error
 	p.scratch, err = p.os.AppendListeningPorts(p.scratch[:0])
 	return p.scratch, err
