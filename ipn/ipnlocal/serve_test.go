@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -1514,6 +1515,167 @@ func TestServeFileOrDirectory(t *testing.T) {
 		if err := tt.want(rec.Body.Bytes(), rec.Result()); err != nil {
 			t.Errorf("error for req %q (mount %v): %v", tt.req, tt.mount, err)
 		}
+	}
+}
+
+// newSymlinkServeTree creates a directory to serve, webroot, next to a
+// directory, outside, whose file secret.txt must never be served, and
+// returns the path to webroot. Besides a file and a subdirectory, webroot
+// holds symlinks that lead out of it and symlinks that stay inside it.
+func newSymlinkServeTree(t *testing.T) (root string) {
+	t.Helper()
+	base := t.TempDir()
+	root = filepath.Join(base, "webroot")
+	outside := filepath.Join(base, "outside")
+	for _, d := range []string{root, outside, filepath.Join(root, "sub")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite := func(p, s string) {
+		t.Helper()
+		if err := os.WriteFile(p, []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite(filepath.Join(root, "inside.txt"), "INSIDE-OK")
+	mustWrite(filepath.Join(root, "sub", "nested.txt"), "NESTED-OK")
+	mustWrite(filepath.Join(outside, "secret.txt"), "TOP-SECRET")
+
+	mustSymlink := func(target, linkName string) {
+		t.Helper()
+		if err := os.Symlink(target, filepath.Join(root, linkName)); err != nil {
+			if runtime.GOOS == "windows" {
+				t.Skipf("can't create symlinks: %v", err)
+			}
+			t.Fatal(err)
+		}
+	}
+	// os.Root refuses symlinks whose target leaves the root, and absolute
+	// symlinks even when they point inside the root, but follows relative
+	// symlinks that stay inside it.
+	mustSymlink("../outside", "escape-rel-dir")
+	mustSymlink("../outside/secret.txt", "escape-rel-file")
+	mustSymlink(filepath.Join(outside, "secret.txt"), "escape-abs")
+	mustSymlink(filepath.Join(root, "sub", "nested.txt"), "inroot-abs")
+	mustSymlink("sub/nested.txt", "inroot-rel")
+	mustSymlink("sub", "inroot-rel-dir")
+	return root
+}
+
+// TestServeFileOrDirectoryConfinesSymlinks verifies that a served directory
+// doesn't follow symlinks that lead out of it, while files, subdirectories
+// and relative symlinks that stay inside it are still served.
+func TestServeFileOrDirectoryConfinesSymlinks(t *testing.T) {
+	root := newSymlinkServeTree(t)
+	b := &LocalBackend{
+		logf:   t.Logf,
+		health: health.NewTracker(eventbustest.NewBus(t)),
+	}
+
+	mounts := []struct {
+		name  string
+		mount string
+	}{
+		{"root-mount", "/"},
+		{"sub-mount", "/files/"},
+	}
+	tests := []struct {
+		name       string
+		path       string // request path, relative to the mount point
+		wantStatus int
+		wantBody   string
+	}{
+		{"file", "inside.txt", 200, "INSIDE-OK"},
+		{"nested-file", "sub/nested.txt", 200, "NESTED-OK"},
+		{"relative-in-root-symlink", "inroot-rel", 200, "NESTED-OK"},
+		{"relative-in-root-dir-symlink", "inroot-rel-dir/nested.txt", 200, "NESTED-OK"},
+		{"escaping-dir-symlink", "escape-rel-dir/secret.txt", 404, ""},
+		{"escaping-file-symlink", "escape-rel-file", 404, ""},
+		{"absolute-symlink", "escape-abs", 404, ""},
+		{"absolute-in-root-symlink", "inroot-abs", 404, ""},
+	}
+	for _, m := range mounts {
+		t.Run(m.name, func(t *testing.T) {
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					rec := httptest.NewRecorder()
+					req := httptest.NewRequest("GET", m.mount+tt.path, nil)
+					b.serveFileOrDirectory(rec, req, root, m.mount)
+					checkServeResponse(t, rec, req, tt.wantStatus, tt.wantBody)
+				})
+			}
+		})
+	}
+}
+
+// TestServeFileOrDirectoryConfinesTarget verifies that the configured path
+// itself, a single file or a directory, is resolved inside the directory
+// that contains it: a symlink there that leads out of that directory, or an
+// absolute one, is refused, while a relative symlink that stays inside it
+// is still served.
+func TestServeFileOrDirectoryConfinesTarget(t *testing.T) {
+	root := newSymlinkServeTree(t)
+	b := &LocalBackend{
+		logf:   t.Logf,
+		health: health.NewTracker(eventbustest.NewBus(t)),
+	}
+
+	tests := []struct {
+		name       string
+		target     string // configured path, relative to root
+		mount      string
+		req        string
+		wantStatus int
+		wantBody   string
+	}{
+		{"file", "inside.txt", "/f", "/f", 200, "INSIDE-OK"},
+		{"relative-in-parent-file-symlink", "inroot-rel", "/f", "/f", 200, "NESTED-OK"},
+		{"escaping-file-symlink", "escape-rel-file", "/f", "/f", 500, ""},
+		{"absolute-file-symlink", "escape-abs", "/f", "/f", 500, ""},
+		{"absolute-in-parent-file-symlink", "inroot-abs", "/f", "/f", 500, ""},
+		{"dir", "sub", "/files/", "/files/nested.txt", 200, "NESTED-OK"},
+		{"relative-in-parent-dir-symlink", "inroot-rel-dir", "/files/", "/files/nested.txt", 200, "NESTED-OK"},
+		{"escaping-dir-symlink", "escape-rel-dir", "/files/", "/files/secret.txt", 500, ""},
+		// A single file swapped for a symlink to a directory must not turn
+		// its mount point into a listing of that directory.
+		{"file-mount-escaping-dir-symlink", "escape-rel-dir", "/f", "/f/secret.txt", 500, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("GET", tt.req, nil)
+			b.serveFileOrDirectory(rec, req, filepath.Join(root, tt.target), tt.mount)
+			checkServeResponse(t, rec, req, tt.wantStatus, tt.wantBody)
+		})
+	}
+
+	// A filesystem root has no parent directory to resolve it in, so it is
+	// opened as is.
+	t.Run("filesystem-root", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/", nil)
+		b.serveFileOrDirectory(rec, req, string(filepath.Separator), "/")
+		if rec.Code != 200 {
+			t.Errorf("GET %s: status = %d; want 200 (body: %q)", req.URL.Path, rec.Code, rec.Body.String())
+		}
+	})
+}
+
+// checkServeResponse reports an error if rec, the response to req, doesn't
+// have the status wantStatus and a body containing wantBody, or if it served
+// the secret file from outside the tree made by newSymlinkServeTree.
+func checkServeResponse(t *testing.T, rec *httptest.ResponseRecorder, req *http.Request, wantStatus int, wantBody string) {
+	t.Helper()
+	body := rec.Body.String()
+	if rec.Code != wantStatus {
+		t.Errorf("GET %s: status = %d; want %d (body: %q)", req.URL.Path, rec.Code, wantStatus, body)
+	}
+	if !strings.Contains(body, wantBody) {
+		t.Errorf("GET %s: body = %q; want it to contain %q", req.URL.Path, body, wantBody)
+	}
+	if strings.Contains(body, "TOP-SECRET") {
+		t.Errorf("GET %s: served a file from outside the root", req.URL.Path)
 	}
 }
 
