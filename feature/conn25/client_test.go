@@ -941,6 +941,56 @@ func TestFlowRemovedDoesNotReclaimReissuedTransitIPInUse(t *testing.T) {
 	}
 }
 
+// TestFlowCleanupRunsOnce checks that a flow's cleanup releases its hold on the
+// assignment at most once, so a caller that runs the same cleanup more than
+// once cannot undercount the flows still forwarding over that assignment and
+// have its addresses reclaimed back to the pools mid-connection.
+func TestFlowCleanupRunsOnce(t *testing.T) {
+	const appName = "app1"
+	const domain = dnsname.FQDN("example.com.")
+	const ttl = 5 * time.Minute
+	dst := netip.MustParseAddr("1.0.0.1")
+
+	sn := makeSelfNode(t, []appctype.AppConnectorAttr{{
+		Name:       appName,
+		Connectors: []string{"tag:woo"},
+		Domains:    []string{"example.com"},
+		Mode:       appctype.MagicIP,
+	}}, arbitraryPools, nil)
+
+	c := newConn25(logger.Discard)
+	clock := tstest.NewClock(tstest.ClockOpts{Start: time.Now()})
+	c.client.assignments.clock = clock
+	c.reconfig(mustConfig(t, sn))
+
+	as, err := c.client.reserveAddresses(appName, domain, dst, ttl, testConnectorPeer, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transit := as.connectorAddr.transit
+
+	// Two flows over the same transit IP. The first is torn down; the second
+	// stays live.
+	removeFirstFlow := c.ClientFlowCreated(transit)
+	c.ClientFlowCreated(transit)
+	if got := as.activeFlowCount; got != 2 {
+		t.Fatalf("activeFlowCount = %d, want 2", got)
+	}
+
+	removeFirstFlow()
+	removeFirstFlow()
+	removeFirstFlow()
+	if got := as.activeFlowCount; got != 1 {
+		t.Errorf("activeFlowCount after repeated cleanup of one flow = %d, want 1", got)
+	}
+
+	// With a flow still active, the assignment must hold its addresses.
+	clock.Advance(ttl + deadFlowWaitTimeout + time.Minute)
+	if got := c.client.assignments.popExpired(clock.Now()); got != nil {
+		t.Errorf("popExpired = %+v, want nil; the assignment for %v is still in use", got, dst)
+	}
+}
+
 // TestResendTransitIPMappingConcurrent races resendTransitIPMapping, against a writer of client.assignments.
 func TestResendTransitIPMappingConcurrent(t *testing.T) {
 	const appName = "a"

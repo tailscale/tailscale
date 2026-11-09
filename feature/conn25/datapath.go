@@ -49,8 +49,10 @@ type Conn25Datapath interface {
 	ConnectorRealIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, error)
 
 	// ClientFlowCreated is called before a client-side flow for transitIP has
-	// been installed in the client flow table, and returns a cleanup function that
-	// the caller must invoke exactly once when that flow is removed.
+	// been installed in the client flow table, and returns a cleanup function
+	// that the caller must invoke when that flow is removed. The cleanup takes
+	// effect at most once; implementations must ignore repeat calls rather than
+	// release the flow's hold on its address assignment more than once.
 	ClientFlowCreated(transitIP netip.Addr) func()
 }
 

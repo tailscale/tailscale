@@ -326,8 +326,9 @@ func (c *Conn25) ClientTransitIPForMagicIP(m netip.Addr) (netip.Addr, error) {
 // The datapath notifies Conn25 that a flow with transitIP has been created so
 // that Conn25 can prevent that transit IP and associated addresses from being
 // removed from its state and returned to their pools. The returned function
-// must be invoked exactly once when that flow is removed; it releases the hold
-// on the address assignment the flow was counted against.
+// must be invoked when that flow is removed; it releases the hold on the
+// address assignment the flow was counted against. It releases that hold at
+// most once: calling it again is a no-op.
 func (c *Conn25) ClientFlowCreated(transitIP netip.Addr) func() {
 	return c.client.flowCreated(transitIP)
 }
