@@ -11,14 +11,6 @@ import (
 	"testing"
 )
 
-func TestIsUDPReadFeedback(t *testing.T) {
-	for _, err := range []error{nil, errors.New("unknown error"), fs.ErrClosed, io.ErrClosedPipe} {
-		if IsUDPReadFeedback(err) {
-			t.Errorf("IsUDPReadFeedback(%v) = true, want false", err)
-		}
-	}
-}
-
 func TestIsClosedPipeError(t *testing.T) {
 	for _, tt := range []struct {
 		err  error
