@@ -54,9 +54,9 @@ func TestLeanDebug(t *testing.T) {
 	if mode == "" {
 		t.Skip("set TSWG_LEAN_DEBUG=mode (and TSWG_LEAN=1) to run")
 	}
-	l := newLab(t, 4)
-	addr := netip.AddrPortFrom(l.setup(mode, false), benchPort)
-	sender, receiver := benchNode{l.vms[0]}, benchNode{l.vms[1]}
+	lb := newLab(t, 4)
+	addr := netip.AddrPortFrom(lb.setup(mode, false), benchPort)
+	sender, receiver := benchNode{lb.vms[0]}, benchNode{lb.vms[1]}
 	if err := receiver.Do("POST", fmt.Sprintf("serve?port=%d", benchPort), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestLeanDebug(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("%s: %.0f Mbps", mode, r.Mbps)
-	for i, v := range l.vms {
+	for i, v := range lb.vms {
 		snmp := v.getText("/file?" + url.Values{"path": {"/proc/net/snmp"}}.Encode())
 		t.Logf("VM %d:\n%s\n%s\n%s\n--- /proc/net/dev:\n%s\n--- dmesg (tail):\n%s\n--- show:\n%s",
 			i,

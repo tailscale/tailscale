@@ -319,9 +319,9 @@ func newLab(t testing.TB, cpus int) *lab {
 	kernel, initrd := buildArtifacts(t)
 	setupNetwork(t, 2, cpus)
 
-	l := &lab{t: t, vms: make([]*vm, 2)}
+	lb := &lab{t: t, vms: make([]*vm, 2)}
 	logDir := t.TempDir()
-	for i := range l.vms {
+	for i := range lb.vms {
 		v := &vm{
 			i:       i,
 			ctl:     netip.AddrPortFrom(underlay4(i), agentPort),
@@ -374,25 +374,25 @@ func newLab(t testing.TB, cpus int) *lab {
 			v.cmd.Process.Kill()
 			v.cmd.Wait()
 		})
-		l.vms[i] = v
+		lb.vms[i] = v
 	}
-	l.checkConsoles()
-	for _, v := range l.vms {
+	lb.checkConsoles()
+	for _, v := range lb.vms {
 		if err := v.waitHealthy(30 * time.Second); err != nil {
 			t.Fatalf("VM %d didn't come up: %v\nconsole:\n%s", v.i, err, v.console())
 		}
 	}
-	return l
+	return lb
 }
 
 // checkConsoles arranges to fail the test if a VM's kernel reports a bug
 // (an oops, a KASAN or lockdep report, a warning), and on failure, to show
 // the end of each VM's console, where that would be. Cleanups run in
 // reverse order, so this runs before the VMs are killed.
-func (l *lab) checkConsoles() {
-	t := l.t
+func (lb *lab) checkConsoles() {
+	t := lb.t
 	t.Cleanup(func() {
-		for _, v := range l.vms {
+		for _, v := range lb.vms {
 			log := v.console()
 			for _, bad := range kernelSplats {
 				if i := bytes.Index(log, []byte(bad)); i >= 0 {
@@ -404,7 +404,7 @@ func (l *lab) checkConsoles() {
 		if !t.Failed() {
 			return
 		}
-		for _, v := range l.vms {
+		for _, v := range lb.vms {
 			log := v.console()
 			lines := strings.Split(strings.TrimRight(string(log), "\n"), "\n")
 			t.Logf("VM %d console (tail):\n%s", v.i, strings.Join(lines[max(0, len(lines)-150):], "\n"))
@@ -483,17 +483,17 @@ var allModes = []string{modePlain, modeKernelWG, modeTSWG, modeWGGo}
 // the IPv4 or IPv6 (if v6) underlay, and returns the address (on VM 1) to
 // send traffic to: VM 1's tunnel address of the underlay's family, or,
 // for modePlain, its underlay address.
-func (l *lab) setup(mode string, v6 bool) netip.Addr {
-	l.t.Helper()
-	under := func(i int) netip.Addr { return l.vms[i].under4 }
+func (lb *lab) setup(mode string, v6 bool) netip.Addr {
+	lb.t.Helper()
+	under := func(i int) netip.Addr { return lb.vms[i].under4 }
 	tun := tunnel4
 	if v6 {
-		under = func(i int) netip.Addr { return l.vms[i].under6 }
+		under = func(i int) netip.Addr { return lb.vms[i].under6 }
 		tun = tunnel6
 	}
-	for _, v := range l.vms {
+	for _, v := range lb.vms {
 		if err := v.do("POST", "/teardown", nil); err != nil {
-			l.t.Fatal(err)
+			lb.t.Fatal(err)
 		}
 	}
 	if mode == modePlain {
@@ -501,18 +501,18 @@ func (l *lab) setup(mode string, v6 bool) netip.Addr {
 		// MTU, to compare with tunnels of that MTU at the same packet
 		// sizes.
 		if mtu := os.Getenv("TSWG_LAB_PLAIN_MTU"); mtu != "" {
-			for i, v := range l.vms[:2] {
+			for i, v := range lb.vms[:2] {
 				q := url.Values{"mode": {modePlain}, "route": {
 					netip.PrefixFrom(under(1-i), under(1-i).BitLen()).String() + " dev underlay mtu " + mtu}}
 				if err := v.do("POST", "/setup?"+q.Encode(), nil); err != nil {
-					l.t.Fatalf("setting up plain: %v", err)
+					lb.t.Fatalf("setting up plain: %v", err)
 				}
 			}
 		}
 		return under(1)
 	}
 	keys := [2]key.NodePrivate{key.NewNode(), key.NewNode()}
-	for i, v := range l.vms[:2] {
+	for i, v := range lb.vms[:2] {
 		j := 1 - i
 		priv, _ := keys[i].MarshalText()
 		q := url.Values{
@@ -529,11 +529,11 @@ func (l *lab) setup(mode string, v6 bool) netip.Addr {
 		if v := os.Getenv("TSWG_NAPI_THREADED"); v != "" && mode != modeWGGo {
 			q.Set("napi-threaded", v)
 		}
-		if l.setupExtra != nil {
-			l.setupExtra(i, q)
+		if lb.setupExtra != nil {
+			lb.setupExtra(i, q)
 		}
 		if err := v.do("POST", "/setup?"+q.Encode(), nil); err != nil {
-			l.t.Fatalf("setting up %s: %v", mode, err)
+			lb.t.Fatalf("setting up %s: %v", mode, err)
 		}
 		// TSWG_MODULE_PARAMS (name=value,...) sets tswg module
 		// parameters, for experiments.
@@ -541,7 +541,7 @@ func (l *lab) setup(mode string, v6 bool) netip.Addr {
 			for _, kv := range strings.Split(params, ",") {
 				name, value, _ := strings.Cut(kv, "=")
 				if err := v.do("POST", "/param?"+url.Values{"name": {name}, "value": {value}}.Encode(), nil); err != nil {
-					l.t.Fatalf("TSWG_MODULE_PARAMS %s: %v", kv, err)
+					lb.t.Fatalf("TSWG_MODULE_PARAMS %s: %v", kv, err)
 				}
 			}
 		}

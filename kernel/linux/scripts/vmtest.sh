@@ -15,5 +15,5 @@ run=${1:-TestTSWG}
 [ $# -gt 0 ] && shift
 
 cd "$ts"
-TSWG_DIR=$top exec go test ./tstest/natlab/vmtest/ --run-vm-tests \
+TSWG_TEST=1 TSWG_DIR=$top exec go test ./tstest/natlab/vmtest/ --run-vm-tests \
 	-run "$run" -v -timeout=30m "$@"

@@ -98,13 +98,13 @@ func tsCLI(h *remoteHost, args string) (string, error) {
 // installTailscaled copies the binaries to the hosts, starts benchcontrol
 // on the backend, and loads tswg on the router and clients.
 func (s *subnetLab) installTailscaled() {
-	t := s.l.t
+	t := s.lb.t
 	if err := buildTailscaled(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
-	errs := make([]error, len(s.l.vms))
-	for i, v := range s.l.vms {
+	errs := make([]error, len(s.lb.vms))
+	for i, v := range s.lb.vms {
 		wg.Go(func() {
 			errs[i] = func() error {
 				h := v.host
@@ -148,7 +148,7 @@ sudo rm -rf `+tsStateDir, nil)
 		}
 	}
 	t.Cleanup(func() {
-		for _, v := range s.l.vms {
+		for _, v := range s.lb.vms {
 			if v == s.backend {
 				v.host.ssh("sudo systemctl stop tswgbench-control 2>/dev/null || true", nil)
 			} else {
@@ -200,7 +200,7 @@ func tsStatus(h *remoteHost) (*ipnstate.Status, error) {
 // router (with the kernel data plane if kernel) and the clients, all with
 // direct paths, and the clients routing the backend over Tailscale.
 func (s *subnetLab) setupTailscaled(kernel bool) {
-	t := s.l.t
+	t := s.lb.t
 	if !s.ts.installed {
 		s.installTailscaled()
 	}

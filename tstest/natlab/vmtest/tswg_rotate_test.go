@@ -77,9 +77,9 @@ func TestTSWGTailscaledKeyRotation(t *testing.T) {
 		}
 		return nil
 	}); err != nil {
-		for _, l := range strings.Split(f.env.NodeLogs(n1), "\n") {
-			if strings.Contains(l, "tswg:") {
-				t.Logf("n1: %s", l)
+		for _, line := range strings.Split(f.env.NodeLogs(n1), "\n") {
+			if strings.Contains(line, "tswg:") {
+				t.Logf("n1: %s", line)
 			}
 		}
 		t.Fatal(err)
@@ -97,9 +97,9 @@ func TestTSWGTailscaledKeyRotation(t *testing.T) {
 		}
 		return nil
 	}); err != nil {
-		for _, l := range strings.Split(f.env.NodeLogs(n1), "\n") {
-			if strings.Contains(l, "tswg:") {
-				t.Logf("n1: %s", l)
+		for _, line := range strings.Split(f.env.NodeLogs(n1), "\n") {
+			if strings.Contains(line, "tswg:") {
+				t.Logf("n1: %s", line)
 			}
 		}
 		t.Errorf("n1 didn't rename the kernel peer: %v", err)

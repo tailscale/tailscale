@@ -27,20 +27,20 @@ import (
 // segmentation offload) and UDP with UDP_SEGMENT (UDP GSO), over IPv4 and
 // IPv6.
 func TestLeanGSOVerify(t *testing.T) {
-	l := newLab(t, 4)
+	lb := newLab(t, 4)
 	for _, v6 := range []bool{false, true} {
-		ip := l.setup(modeTSWG, v6)
+		ip := lb.setup(modeTSWG, v6)
 		addr := netip.AddrPortFrom(ip, benchPort)
-		sender, receiver := benchNode{l.vms[0]}, benchNode{l.vms[1]}
+		sender, receiver := benchNode{lb.vms[0]}, benchNode{lb.vms[1]}
 		if err := receiver.Do("POST", fmt.Sprintf("serve?port=%d", benchPort), nil); err != nil {
 			t.Fatal(err)
 		}
-		if err := l.vms[0].do("POST", "/param?name=verify_gso&value=1", nil); err != nil {
+		if err := lb.vms[0].do("POST", "/param?name=verify_gso&value=1", nil); err != nil {
 			t.Fatal(err)
 		}
 		param := func(name string) int {
 			t.Helper()
-			s := l.vms[0].getText("/file?path=/sys/module/tswg/parameters/" + name)
+			s := lb.vms[0].getText("/file?path=/sys/module/tswg/parameters/" + name)
 			n, err := strconv.Atoi(strings.TrimSpace(s))
 			if err != nil {
 				t.Fatalf("%s: %q", name, s)
@@ -85,22 +85,22 @@ func TestLeanGSOVerify(t *testing.T) {
 // whose packets VM 1's GRO merges), and forwards its traffic to VM 0
 // through the tunnel.
 func TestLeanGSOVerifyForwarded(t *testing.T) {
-	l := newLab(t, 4)
-	l.setupExtra = func(i int, q url.Values) {
+	lb := newLab(t, 4)
+	lb.setupExtra = func(i int, q url.Values) {
 		if i == 0 {
 			q.Set("allowed-ips", q.Get("allowed-ips")+",192.168.77.0/24,fd78::/64")
 			q.Add("route", "192.168.77.0/24")
 			q.Add("route", "fd78::/64")
 		}
 	}
-	fwd := l.vms[1]
+	fwd := lb.vms[1]
 	for _, v6 := range []bool{false, true} {
-		l.setup(modeTSWG, v6)
+		lb.setup(modeTSWG, v6)
 		if err := fwd.do("POST", "/lan-netns", nil); err != nil {
 			t.Fatal(err)
 		}
 
-		sender, receiver := benchNode{fwd}, benchNode{l.vms[0]}
+		sender, receiver := benchNode{fwd}, benchNode{lb.vms[0]}
 		if err := receiver.Do("POST", fmt.Sprintf("serve?port=%d", benchPort), nil); err != nil {
 			t.Fatal(err)
 		}
@@ -164,19 +164,19 @@ func TestLeanForwardCompare(t *testing.T) {
 	if v := os.Getenv("TSWG_FORWARD_VALUES"); v != "" {
 		values = strings.Split(v, ",")
 	}
-	l := newLab(t, 4)
-	l.setupExtra = func(i int, q url.Values) {
+	lb := newLab(t, 4)
+	lb.setupExtra = func(i int, q url.Values) {
 		if i == 0 {
 			q.Set("allowed-ips", q.Get("allowed-ips")+",192.168.77.0/24")
 			q.Add("route", "192.168.77.0/24")
 		}
 	}
-	fwd := l.vms[1]
-	l.setup(modeTSWG, false)
+	fwd := lb.vms[1]
+	lb.setup(modeTSWG, false)
 	if err := fwd.do("POST", "/lan-netns", nil); err != nil {
 		t.Fatal(err)
 	}
-	sender, receiver := benchNode{fwd}, benchNode{l.vms[0]}
+	sender, receiver := benchNode{fwd}, benchNode{lb.vms[0]}
 	if err := receiver.Do("POST", fmt.Sprintf("serve?port=%d", benchPort), nil); err != nil {
 		t.Fatal(err)
 	}

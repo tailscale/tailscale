@@ -82,6 +82,11 @@ func handleScale(w http.ResponseWriter, r *http.Request) {
 	if batch <= 0 {
 		batch = 1000
 	}
+	const maxPeers = 1 << 20
+	if n > maxPeers || batch > maxPeers {
+		http.Error(w, "too many peers", http.StatusBadRequest)
+		return
+	}
 	res, err := runScale(n, batch)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

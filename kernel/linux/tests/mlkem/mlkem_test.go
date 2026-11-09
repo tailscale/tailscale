@@ -6,7 +6,8 @@
 // handshakes. It builds src/mlkem.c for userspace (with the stand-in
 // kernel headers in testdata/shim) into a driver it talks to over a pipe.
 //
-// It needs a C compiler, and skips without one.
+// It runs only with $TSWG_TEST set, like the other tswg kernel module
+// tests, and needs a C compiler.
 package mlkem
 
 import (
@@ -32,6 +33,9 @@ type driver struct {
 }
 
 func startDriver(t *testing.T) *driver {
+	if os.Getenv("TSWG_TEST") == "" {
+		t.Skip("set TSWG_TEST=1 to run tswg kernel module tests")
+	}
 	if _, err := exec.LookPath("cc"); err != nil {
 		t.Skip("no C compiler")
 	}

@@ -51,8 +51,8 @@ func setupLANNetns() error {
 			return err
 		}
 	}
-	if l, err := netlink.LinkByName(lanHost); err == nil {
-		netlink.LinkDel(l)
+	if link, err := netlink.LinkByName(lanHost); err == nil {
+		netlink.LinkDel(link)
 	}
 	netns.DeleteNamed(lanNetns)
 
@@ -138,11 +138,11 @@ func setupLANNetns() error {
 		return err
 	}
 	for _, name := range []string{"lo", lanPeer} {
-		l, err := h.LinkByName(name)
+		link, err := h.LinkByName(name)
 		if err != nil {
 			return err
 		}
-		if err := h.LinkSetUp(l); err != nil {
+		if err := h.LinkSetUp(link); err != nil {
 			return err
 		}
 	}

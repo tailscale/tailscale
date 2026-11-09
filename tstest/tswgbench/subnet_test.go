@@ -105,15 +105,15 @@ func TestLeanSubnetRouter(t *testing.T) {
 	fetchSize := envInt("TSWG_SUBNET_FETCH_SIZE", 1<<20)
 	fetchReq := envInt("TSWG_SUBNET_FETCH_REQ", 500)
 
-	l := newLab(t, 0)
-	if len(l.vms) < 3 {
-		t.Fatalf("need at least 3 hosts, have %d", len(l.vms))
+	lb := newLab(t, 0)
+	if len(lb.vms) < 3 {
+		t.Fatalf("need at least 3 hosts, have %d", len(lb.vms))
 	}
-	router, backend, clients := l.vms[0], l.vms[1], l.vms[2:]
+	router, backend, clients := lb.vms[0], lb.vms[1], lb.vms[2:]
 	if n := envInt("TSWG_SUBNET_CLIENTS", len(clients)); n < len(clients) {
 		clients = clients[:n]
 	}
-	s := &subnetLab{l: l, router: router, backend: backend, clients: clients, clientMode: clientMode}
+	s := &subnetLab{lb: lb, router: router, backend: backend, clients: clients, clientMode: clientMode}
 	s.setupRouter(envInt("TSWG_SUBNET_ROUTER_CPUS", 0))
 	for _, v := range append([]*vm{backend, router}, clients...) {
 		if err := v.do("POST", fmt.Sprintf("/bench/serve?port=%d", benchPort), nil); err != nil {
@@ -238,7 +238,7 @@ func fmtMbps(ms []float64) string {
 
 // subnetLab is TestLeanSubnetRouter's setup.
 type subnetLab struct {
-	l          *lab
+	lb         *lab
 	router     *vm
 	backend    *vm
 	clients    []*vm
@@ -249,7 +249,7 @@ type subnetLab struct {
 // rssBalance runs the load briefly and, during it, rebalances the router's
 // NIC's RSS table; see TSWG_SUBNET_RSS_BALANCE.
 func (s *subnetLab) rssBalance(mode, load string, streams, fetchSize, fetchReq int) {
-	t := s.l.t
+	t := s.lb.t
 	senders := make([]netbench.Node, len(s.clients))
 	var addrs []netip.AddrPort
 	for i, c := range s.clients {
@@ -307,7 +307,7 @@ func (s *subnetLab) logRouterStats(mode string) {
 		}
 	}
 	snmp := file("/proc/net/snmp")
-	t := s.l.t
+	t := s.lb.t
 	t.Logf("router %s counters:\n%s\n%s\n%s", mode, strings.Join(lines, "\n"), snmpLines(snmp, "Udp:"), snmpLines(snmp, "Ip:"))
 	if out, err := s.router.host.ssh(`dev=$(ip -o route get 172.31.0.1 | sed -n "s/.* dev \([^ ]*\).*/\1/p"); sudo ethtool -S $dev | grep -E "drop|miss|err|allowance_exceeded" | grep -v ": 0$"`, nil); err == nil {
 		t.Logf("router %s NIC counters (nonzero):\n%s", mode, out)
@@ -326,7 +326,7 @@ func (s *subnetLab) mtu() string {
 // backend's network, with only cpus CPUs online (if nonzero), and arranges
 // to undo it all.
 func (s *subnetLab) setupRouter(cpus int) {
-	t := s.l.t
+	t := s.lb.t
 	h := s.router.host
 	script := fmt.Sprintf(`
 set -e
@@ -371,8 +371,8 @@ for c in /sys/devices/system/cpu/cpu[0-9]*/online; do echo 1 | sudo tee $c >/dev
 // setup sets up the router's data plane, mode, and the clients' tunnels
 // (or for modePlain, routes) to it.
 func (s *subnetLab) setup(mode string) {
-	t := s.l.t
-	for _, v := range s.l.vms {
+	t := s.lb.t
+	for _, v := range s.lb.vms {
 		if err := v.do("POST", "/teardown", nil); err != nil {
 			t.Fatal(err)
 		}

@@ -150,10 +150,10 @@ func newRemoteLab(t testing.TB) *lab {
 		t.Fatal(remoteArtifacts.err)
 	}
 
-	l := &lab{t: t, vms: make([]*vm, len(hosts))}
+	lb := &lab{t: t, vms: make([]*vm, len(hosts))}
 	var wg sync.WaitGroup
-	errs := make([]error, len(l.vms))
-	for i := range l.vms {
+	errs := make([]error, len(lb.vms))
+	for i := range lb.vms {
 		h := hosts[i]
 		v := &vm{
 			i:      i,
@@ -170,7 +170,7 @@ func newRemoteLab(t testing.TB) *lab {
 			}
 		}
 		v.console = func() []byte { return []byte(v.getText("/dmesg")) }
-		l.vms[i] = v
+		lb.vms[i] = v
 		wg.Go(func() {
 			errs[i] = func() error {
 				start := time.Now()
@@ -198,18 +198,18 @@ func newRemoteLab(t testing.TB) *lab {
 			t.Fatal(err)
 		}
 	}
-	for _, v := range l.vms {
+	for _, v := range lb.vms {
 		if err := v.waitHealthy(30 * time.Second); err != nil {
 			t.Fatalf("VM %d didn't come up: %v", v.i, err)
 		}
 	}
-	l.checkConsoles()
+	lb.checkConsoles()
 	t.Cleanup(func() {
-		for _, v := range l.vms {
+		for _, v := range lb.vms {
 			v.do("POST", "/teardown", nil)
 		}
 	})
-	return l
+	return lb
 }
 
 // keepInUse touches marker now and every minute until the test ends.

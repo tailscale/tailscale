@@ -72,11 +72,11 @@ func TestLeanProfile(t *testing.T) {
 	if topN == "" {
 		topN = "30"
 	}
-	l := newLab(t, cpus)
+	lb := newLab(t, cpus)
 	const profDur = 5 * time.Second
 	for _, mode := range strings.Split(modes, ",") {
-		addr := netip.AddrPortFrom(l.setup(mode, false), benchPort)
-		sender, receiver := benchNode{l.vms[0]}, benchNode{l.vms[1]}
+		addr := netip.AddrPortFrom(lb.setup(mode, false), benchPort)
+		sender, receiver := benchNode{lb.vms[0]}, benchNode{lb.vms[1]}
 		if err := receiver.Do("POST", fmt.Sprintf("serve?port=%d", benchPort), nil); err != nil {
 			t.Fatal(err)
 		}
@@ -123,7 +123,7 @@ func TestLeanProfile(t *testing.T) {
 		time.Sleep(time.Second) // let the load ramp up
 		var profs [2]profileResult
 		var pwg sync.WaitGroup
-		for i, v := range l.vms {
+		for i, v := range lb.vms {
 			pwg.Go(func() {
 				if err := v.do("GET", "/profile?"+url.Values{"dur": {profDur.String()}, "top": {topN}, "focus": {focus}}.Encode(), &profs[i]); err != nil {
 					t.Errorf("profiling VM %d: %v", i, err)

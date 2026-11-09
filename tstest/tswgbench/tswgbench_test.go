@@ -23,7 +23,7 @@ import (
 // and the kernel's WireGuard handshake with their peer at the right
 // address family.
 func TestLeanSmoke(t *testing.T) {
-	l := newLab(t, 2)
+	lb := newLab(t, 2)
 	for _, v6 := range []bool{false, true} {
 		fam := "v4"
 		if v6 {
@@ -31,8 +31,8 @@ func TestLeanSmoke(t *testing.T) {
 		}
 		for _, mode := range allModes {
 			t.Run(fam+"/"+mode, func(t *testing.T) {
-				addr := netip.AddrPortFrom(l.setup(mode, v6), benchPort)
-				sender, receiver := benchNode{l.vms[0]}, benchNode{l.vms[1]}
+				addr := netip.AddrPortFrom(lb.setup(mode, v6), benchPort)
+				sender, receiver := benchNode{lb.vms[0]}, benchNode{lb.vms[1]}
 				if err := receiver.Do("POST", fmt.Sprintf("serve?port=%d", benchPort), nil); err != nil {
 					t.Fatal(err)
 				}
@@ -54,7 +54,7 @@ func TestLeanSmoke(t *testing.T) {
 
 				if mode == modeTSWG || mode == modeKernelWG {
 					var d tswg.Device
-					if err := l.vms[0].do("GET", "/show", &d); err != nil {
+					if err := lb.vms[0].do("GET", "/show", &d); err != nil {
 						t.Fatal(err)
 					}
 					if len(d.Peers) != 1 {
@@ -104,7 +104,7 @@ func TestLeanBenchmark(t *testing.T) {
 		families = append(families, true)
 	}
 
-	l := newLab(t, cpus)
+	lb := newLab(t, cpus)
 	// wireguard-go first, so the table's ratios are relative to it.
 	modes := []string{modeWGGo, modeTSWG, modeKernelWG, modePlain}
 	all := map[string]map[string]*netbench.SuiteResult{}
@@ -117,8 +117,8 @@ func TestLeanBenchmark(t *testing.T) {
 		all[fam] = map[string]*netbench.SuiteResult{}
 		for _, mode := range modes {
 			t.Logf("benchmarking %s over %s...", mode, fam)
-			addr := netip.AddrPortFrom(l.setup(mode, v6), benchPort)
-			r, err := netbench.RunSuite(benchNode{l.vms[0]}, benchNode{l.vms[1]}, addr, dur)
+			addr := netip.AddrPortFrom(lb.setup(mode, v6), benchPort)
+			r, err := netbench.RunSuite(benchNode{lb.vms[0]}, benchNode{lb.vms[1]}, addr, dur)
 			if err != nil {
 				t.Fatalf("%s over %s: %v", mode, fam, err)
 			}

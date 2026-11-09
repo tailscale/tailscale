@@ -56,7 +56,7 @@ func TestLeanCompare(t *testing.T) {
 	rtt := os.Getenv("TSWG_COMPARE_LOAD") == "rtt"
 	fetch := os.Getenv("TSWG_COMPARE_LOAD") == "fetch"
 
-	l := newLab(t, cpus)
+	lb := newLab(t, cpus)
 	// results maps a mode and metric ("Mbps", "idle p50 ms", ...) to the
 	// runs' values.
 	type key struct{ mode, metric string }
@@ -70,8 +70,8 @@ func TestLeanCompare(t *testing.T) {
 	}
 	for run := range runs {
 		for _, mode := range strings.Split(modes, ",") {
-			addr := netip.AddrPortFrom(l.setup(mode, false), benchPort)
-			sender, receiver := benchNode{l.vms[0]}, benchNode{l.vms[1]}
+			addr := netip.AddrPortFrom(lb.setup(mode, false), benchPort)
+			sender, receiver := benchNode{lb.vms[0]}, benchNode{lb.vms[1]}
 			if err := receiver.Do("POST", fmt.Sprintf("serve?port=%d", benchPort), nil); err != nil {
 				t.Fatal(err)
 			}
@@ -80,7 +80,7 @@ func TestLeanCompare(t *testing.T) {
 				// in the other loads.
 				back := netip.AddrPortFrom(tunnel4(0), benchPort)
 				if mode == modePlain {
-					back = netip.AddrPortFrom(l.vms[0].under4, benchPort)
+					back = netip.AddrPortFrom(lb.vms[0].under4, benchPort)
 				}
 				if err := sender.Do("POST", fmt.Sprintf("serve?port=%d", benchPort), nil); err != nil {
 					t.Fatal(err)

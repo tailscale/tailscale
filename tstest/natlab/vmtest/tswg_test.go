@@ -30,8 +30,15 @@ import (
 // tswgDir returns the directory of the tswg kernel module tree (see
 // https://github.com/tailscale/tailscale/issues/426), from $TSWG_DIR, or
 // else this repo's kernel/linux. It skips the test if the tree isn't there.
+//
+// It also skips the test unless $TSWG_TEST is set: building the module
+// needs Linux and its kernel build dependencies, which CI doesn't have.
+// Every tswg test calls it before doing anything else of note.
 func tswgDir(t *testing.T) string {
 	t.Helper()
+	if os.Getenv("TSWG_TEST") == "" {
+		t.Skip("set TSWG_TEST=1 to run tswg kernel module tests")
+	}
 	dir := os.Getenv("TSWG_DIR")
 	if dir == "" {
 		dir, _ = filepath.Abs(filepath.Join("..", "..", "..", "kernel", "linux"))

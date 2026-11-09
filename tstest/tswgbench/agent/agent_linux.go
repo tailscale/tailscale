@@ -35,6 +35,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -82,7 +83,7 @@ func main() {
 	mux.HandleFunc("GET /profile", handleProfile)
 	// Debugging: read a /proc or /sys file, and the kernel log.
 	mux.HandleFunc("GET /file", func(w http.ResponseWriter, r *http.Request) {
-		p := r.URL.Query().Get("path")
+		p := filepath.Clean(r.URL.Query().Get("path"))
 		if !strings.HasPrefix(p, "/proc/") && !strings.HasPrefix(p, "/sys/") {
 			http.Error(w, "only /proc and /sys", http.StatusBadRequest)
 			return
@@ -120,7 +121,7 @@ func main() {
 			http.Error(w, "bad name", http.StatusBadRequest)
 			return
 		}
-		if err := os.WriteFile("/sys/module/tswg/parameters/"+name, []byte(r.URL.Query().Get("value")), 0); err != nil {
+		if err := os.WriteFile(filepath.Join("/sys/module/tswg/parameters", filepath.Base(name)), []byte(r.URL.Query().Get("value")), 0); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

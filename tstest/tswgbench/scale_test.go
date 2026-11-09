@@ -47,10 +47,10 @@ func TestLeanScale(t *testing.T) {
 	if s := os.Getenv("TSWG_BENCH_CPUS"); s != "" {
 		cpus, _ = strconv.Atoi(s)
 	}
-	l := newLab(t, cpus)
-	l.setup(modeTSWG, false) // loads the module
+	lb := newLab(t, cpus)
+	lb.setup(modeTSWG, false) // loads the module
 	var r scaleResult
-	if err := l.vms[0].do("POST", fmt.Sprintf("/scale?peers=%d&batch=%d", n, max(n/10, 1)), &r); err != nil {
+	if err := lb.vms[0].do("POST", fmt.Sprintf("/scale?peers=%d&batch=%d", n, max(n/10, 1)), &r); err != nil {
 		t.Fatal(err)
 	}
 	for _, st := range r.Steps {
