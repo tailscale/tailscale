@@ -11,6 +11,11 @@ unsigned int tswg_recruit_factor = 16;
 module_param_named(recruit_factor, tswg_recruit_factor, uint, 0644);
 MODULE_PARM_DESC(recruit_factor, "entries waiting per draining crypt worker, times the queue's backlog, to recruit another");
 
+/* TSWG: recruit_free is how many workers recruit_factor spares. */
+unsigned int tswg_recruit_free = 2;
+module_param_named(recruit_free, tswg_recruit_free, uint, 0644);
+MODULE_PARM_DESC(recruit_free, "crypt workers draining before recruit_factor applies");
+
 struct multicore_worker __percpu *
 wg_packet_percpu_multicore_worker_alloc(work_func_t function, void *ptr)
 {

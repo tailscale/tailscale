@@ -180,15 +180,15 @@ which `/proc/stat` counts), wireguard-go least (mostly user time).
 
 Point to point (`TestLeanBenchmark`, `scripts/leanbench.sh`): one tunnel
 between two machines, 4 vCPUs each. Updated 2026-11-07; the QEMU lab's
-TCP rows 2026-11-08, after change 11 below (`TestLeanCompare`, medians of
+TCP rows 2026-11-09, after change 20 below (`TestLeanCompare`, medians of
 4 runs; kernel WG from before).
 
 | testbed | metric | tswg | wireguard-go | kernel WG | tswg/wggo |
 |---|---|---|---|---|---|
-| QEMU lab (nested) | TCP 1 stream | 12.2 Gbps | 9.8 | 3.6 | 1.24x |
-| QEMU lab (nested) | TCP 4 streams | 12.2 Gbps | 11.2 | 4.2 | 1.08x |
-| QEMU lab (nested) | sender / receiver CPU-s/GB, 1 stream | 1.21 / 1.92 | 1.97 / 2.47 | 2.95 / 5.20 | 0.61x / 0.78x |
-| QEMU lab (nested) | sender / receiver CPU-s/GB, 4 streams | 1.39 / 2.06 | 1.83 / 2.29 | | 0.76x / 0.90x |
+| QEMU lab (nested) | TCP 1 stream | 11.3 Gbps | 9.2 | 3.6 | 1.23x |
+| QEMU lab (nested) | TCP 4 streams | 12.2 Gbps | 10.3 | 4.2 | 1.18x |
+| QEMU lab (nested) | sender / receiver CPU-s/GB, 1 stream | 1.33 / 2.02 | 2.03 / 2.53 | 2.95 / 5.20 | 0.66x / 0.80x |
+| QEMU lab (nested) | sender / receiver CPU-s/GB, 4 streams | 1.46 / 1.99 | 1.87 / 2.41 | | 0.78x / 0.83x |
 | QEMU lab (nested) | UDP 64B received (loss) | 263k pps (0%) | 242k (79%) | 166k (16%) | 1.08x |
 | QEMU lab (nested) | RTT idle / under load p50 | 0.51 / 1.50 ms | 0.60 / 1.79 | 1.07 / 1.07 | 0.85x / 0.84x |
 | QEMU lab (nested) | RTT idle / under load p99 | 1.27 / 12.3 ms | 1.28 / 3.78 | | 0.99x / 3.3x |
@@ -516,6 +516,33 @@ this order. Each step's throughput is bulk TCP, 1 stream, IPv4, 4 vCPUs.
    table, keeping the one whose busiest queue is lightest. Each move can
    reorder a few of a flow's packets. The bench agent's
    `/rss-balance` runs it; tailscaled doesn't yet (see the TODO list).
+20. Fixing changes 17 and 18 for small hosts (2026-11-09). They cost one
+   TCP stream in the QEMU lab (4 vCPUs) a third of its throughput, 11.5
+   -> 7-8 Gbps, unseen on EC2, where both data planes were at its
+   per-flow limit. Two causes, each needed for the fix:
+   * The sender, held to a few GSO packets in flight by TCP Small
+     Queues, never had `recruit_factor`'s worth waiting, so its stream
+     got one encrypt worker. Now the first `recruit_free` (default 2)
+     draining workers are recruited at the old backlog; past that,
+     change 17's applies, so a big host still can't spread one tunnel
+     wide.
+   * `tswg_tx_slow` reset its count every 10ms window, so the first
+     `tx_inline_mbps`' worth of every window was encrypted inline,
+     however fast the peer was sending: at 11 Gbps, 18% of the stream
+     on the sending CPU. Now, as on receive, a peer that went over the
+     rate in any window counts as fast for 100ms.
+
+   And the until-jiffies (`tswg_tx_fast_until`, `tswg_rx_parallel_until`,
+   `tswg_rx_steer_until`) start at the peer's creation, not 0, which
+   jiffies, starting 5 minutes short of wrapping, are before until
+   then: so in freshly booted VMs, the lab's included, every peer had
+   received the parallel way and steered for the first 5 minutes. (That
+   didn't change the lab's idle RTT, which is noisy, 0.27-0.60ms either
+   way.) One stream: 7.1 -> 11.3 Gbps (wireguard-go 9.2), at 1.33 / 2.02
+   sender / receiver CPU-s/GB (1.58 / 2.13). Round-robin recruitment
+   instead of change 17's compact set made no difference. Big hosts'
+   CPU per GB with this (the reason for change 17) is to be rechecked
+   on EC2.
 
 The lean harness's VMs have guest USO off (decided 2026-11-07): with it,
 the host hands VM-to-VM UDP GSO packets to the receiving guest still
@@ -1631,6 +1658,8 @@ Performance (the primary motivation; see "Performance"):
 - [ ] tailscaled: run `rss.Balance` when the kernel data plane is busy
       and its NIC's queues are uneven (needs CAP_NET_ADMIN, which it
       has), at most every minute or so, since each pass moves flows.
+- [ ] Recheck one tunnel's CPU per GB between big hosts on EC2 after
+      change 20, which lets two crypt workers come at the old backlog.
 - [ ] One request/response stream is still 0.91x wireguard-go's.
 - [ ] Page zeroing (`init_on_alloc`, on in Ubuntu's kernels) is 5-13% of
       a big host's CPU, for pages we fill entirely: a page pool for the

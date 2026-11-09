@@ -160,6 +160,7 @@ static inline int wg_cpumask_next_online(int *last_cpu)
  */
 #define TSWG_PACKET_BACKLOG 16
 extern unsigned int tswg_recruit_factor; /* see tswg_crypt_kick */
+extern unsigned int tswg_recruit_free; /* see tswg_crypt_kick */
 #define TSWG_BATCH_BACKLOG 1
 
 /*
@@ -225,7 +226,7 @@ static inline void tswg_crypt_kick(struct crypt_queue *queue,
 				   unsigned int backlog)
 {
 	struct multicore_worker *w;
-	int cpu = READ_ONCE(queue->last_cpu);
+	int cpu = READ_ONCE(queue->last_cpu), active;
 
 	smp_mb(); /* ring produce before reading tswg_busy; see above */
 	if (likely(cpu >= 0 && cpu < nr_cpu_ids && cpu_online(cpu) &&
@@ -236,16 +237,24 @@ static inline void tswg_crypt_kick(struct crypt_queue *queue,
 			return;
 		}
 		/*
-		 * TSWG: recruit only when more than recruit_factor times
-		 * backlog is waiting for each worker draining. GRO hands us
-		 * its packets in bursts, and recruiting a worker for each one
-		 * spread one 7 Gbps tunnel over 33 CPUs of a 128-CPU host,
-		 * each 15% busy, mostly waking and going back to sleep.
+		 * TSWG: once recruit_free workers are draining, recruit only
+		 * when more than recruit_factor times backlog is waiting for
+		 * each. GRO hands us its packets in bursts, and recruiting a
+		 * worker for each one spread one 7 Gbps tunnel over 33 CPUs
+		 * of a 128-CPU host, each 15% busy, mostly waking and going
+		 * back to sleep. But the first few come at backlog: one TCP
+		 * stream's sender, held to a few GSO packets in flight by TCP
+		 * Small Queues, never has recruit_factor's worth waiting, and
+		 * with one worker, one stream in the QEMU lab got 7-8 Gbps
+		 * rather than 11.5.
 		 */
-		if (tswg_crypt_backlog(&queue->ring) <=
-		    min_t(unsigned int, backlog * READ_ONCE(tswg_recruit_factor) *
-			  max_t(int, atomic_read(&queue->tswg_active), 1),
-			  queue->ring.size / 4))
+		active = atomic_read(&queue->tswg_active);
+		if (active >= (int)READ_ONCE(tswg_recruit_free))
+			backlog = min_t(unsigned int,
+					backlog * READ_ONCE(tswg_recruit_factor) *
+					max_t(int, active, 1),
+					queue->ring.size / 4);
+		if (tswg_crypt_backlog(&queue->ring) <= backlog)
 			return;
 	}
 	cpu = tswg_crypt_recruit_cpu(queue);

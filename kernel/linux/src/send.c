@@ -986,23 +986,32 @@ module_param_named(tx_inline_mbps, tswg_tx_inline_mbps, uint, 0644);
 MODULE_PARM_DESC(tx_inline_mbps, "encrypt local bulk sends inline to a peer sending below this rate (0: never)");
 
 #define TSWG_TX_WINDOW max(HZ / 100, 1)
+#define TSWG_TX_FAST_FOR (HZ / 10)
 
 /*
  * tswg_tx_slow counts len bytes sent to peer and reports whether it's
- * sending below tx_inline_mbps.
+ * sending below tx_inline_mbps: under it this window, and not over it in
+ * any window for TSWG_TX_FAST_FOR, as for receiving (see tswg_rx_path).
+ * Without that, the first tx_inline_mbps' worth of every window went
+ * inline however fast the peer was sending, which cost one 11 Gbps
+ * stream in the QEMU lab 8% of its throughput.
  */
 static bool tswg_tx_slow(struct wg_peer *peer, unsigned int len)
 {
 	unsigned int mbps = READ_ONCE(tswg_tx_inline_mbps);
 	unsigned long now = jiffies;
 
+	if (!mbps)
+		return false;
 	if (now - READ_ONCE(peer->tswg_tx_jiffy) >= TSWG_TX_WINDOW) {
 		WRITE_ONCE(peer->tswg_tx_jiffy, now);
 		WRITE_ONCE(peer->tswg_tx_bytes, 0);
 	}
 	WRITE_ONCE(peer->tswg_tx_bytes, READ_ONCE(peer->tswg_tx_bytes) + len);
-	return mbps && (u64)READ_ONCE(peer->tswg_tx_bytes) * 8 * HZ <=
-			       (u64)mbps * 1000000 * TSWG_TX_WINDOW;
+	if ((u64)READ_ONCE(peer->tswg_tx_bytes) * 8 * HZ >
+	    (u64)mbps * 1000000 * TSWG_TX_WINDOW)
+		WRITE_ONCE(peer->tswg_tx_fast_until, now + TSWG_TX_FAST_FOR);
+	return !time_before(now, READ_ONCE(peer->tswg_tx_fast_until));
 }
 
 bool tswg_xmit_now(struct wg_peer *peer, struct sk_buff_head *packets)

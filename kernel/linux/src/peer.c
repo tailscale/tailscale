@@ -48,6 +48,13 @@ struct wg_peer *wg_peer_create(struct wg_device *wg,
 	INIT_WORK(&peer->transmit_packet_work, wg_packet_tx_worker);
 	spin_lock_init(&peer->tswg_tx_lock); /* TSWG */
 	peer->tswg_home = -1; /* TSWG: none yet; see tswg_peer_home */
+	/*
+	 * TSWG: not fast, nor steered, yet. These are jiffies, which start 5
+	 * minutes short of wrapping, so 0 would be in the future until then.
+	 */
+	peer->tswg_tx_fast_until = jiffies;
+	peer->tswg_rx_parallel_until = jiffies;
+	peer->tswg_rx_steer_until = jiffies;
 	wg_prev_queue_init(&peer->tx_queue);
 	wg_prev_queue_init(&peer->rx_queue);
 	rwlock_init(&peer->endpoint_lock);
