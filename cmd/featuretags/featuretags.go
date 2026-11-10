@@ -24,6 +24,7 @@ var (
 	list   = flag.Bool("list", false, "if true, list all known features and what they do")
 
 	extraSmall = flag.Bool("extra-small", false, "shorthand for build_dist.sh --extra-small's tags: --min --add="+joinFeatures(featuretags.ExtraSmall))
+	tsnet      = flag.Bool("tsnet", false, "keep the features tsnet requires ("+joinFeatures(featuretags.TSNetMin)+"): with --min, add them; with --remove, refuse to remove them")
 )
 
 func joinFeatures(fts []featuretags.FeatureTag) string {
@@ -55,6 +56,9 @@ func main() {
 	}
 
 	var keep []featuretags.FeatureTag
+	if *tsnet {
+		keep = append(keep, featuretags.TSNetMin...)
+	}
 	for t := range strings.SplitSeq(*add, ",") {
 		if t != "" {
 			keep = append(keep, featuretags.FeatureTag(t))
@@ -80,6 +84,11 @@ func main() {
 		removeSet.Add(f)
 	}
 	for ft := range removeSet {
+		if *tsnet && slices.ContainsFunc(featuretags.TSNetMin, func(need featuretags.FeatureTag) bool {
+			return featuretags.Requires(need).Contains(ft)
+		}) {
+			log.Fatalf("cannot remove %q with --tsnet; tsnet requires it", ft)
+		}
 		set := featuretags.RequiredBy(ft)
 		for dependent := range set {
 			if !removeSet.Contains(dependent) {
