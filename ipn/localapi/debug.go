@@ -123,7 +123,7 @@ func (h *Handler) serveDebugDialTypes(w http.ResponseWriter, r *http.Request) {
 	dialer := h.b.Dialer()
 
 	var peerDialer net.Dialer
-	peerDialer.Control = dialer.PeerDialControlFunc()
+	peerDialer.ControlContext = dialer.PeerDialControlFunc()
 
 	// Kick off a dial with each available dialer in parallel.
 	dialers := []struct {
