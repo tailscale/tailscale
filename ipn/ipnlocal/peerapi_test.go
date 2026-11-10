@@ -4,8 +4,10 @@
 package ipnlocal
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -688,6 +690,101 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 			t.Error(err)
 		}
 	}
+}
+
+// TestPeerAPIDNSResponseHook checks that handleDNSQuery runs the registered
+// [HookPeerAPIDNSResponse] hooks on the real DoH path, giving them the response
+// body and letting them add headers, and that the headers they add reach the
+// caller.
+func TestPeerAPIDNSResponseHook(t *testing.T) {
+	// this test can't be run with t.Parallel because it messes with global hooks.
+	h := peerAPIHandler{
+		remoteAddr: netip.MustParseAddrPort("100.150.151.152:12345"),
+		selfNode:   (&tailcfg.Node{}).View(),
+		peerNode:   (&tailcfg.Node{}).View(),
+	}
+
+	sys := tsd.NewSystemWithBus(eventbustest.NewBus(t))
+	ht := health.NewTracker(sys.Bus.Get())
+	reg := new(usermetric.Registry)
+	eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, sys.Bus.Get(), sys.Set)
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
+	a := appc.NewAppConnector(appc.Config{Logf: t.Logf, EventBus: sys.Bus.Get()})
+	t.Cleanup(a.Close)
+	sys.Set(pm.Store())
+	sys.Set(eng)
+
+	b := newTestLocalBackendWithSys(t, sys)
+	b.pm = pm
+	b.appConnector = a // make it so there's doh peerapi
+
+	h.ps = &peerAPIServer{b: b}
+	h.ps.resolver = &fakeResolver{build: func(b *dnsmessage.Builder) {
+		b.AResource(
+			dnsmessage.ResourceHeader{
+				Name:  dnsmessage.MustNewName("example.com."),
+				Type:  dnsmessage.TypeA,
+				Class: dnsmessage.ClassINET,
+			},
+			dnsmessage.AResource{A: [4]byte{192, 0, 0, 8}},
+		)
+	}}
+	h.ps.b.setFilter(filter.NewAllowAllForTest(logger.Discard))
+
+	originalHooks := slices.Clone(HookPeerAPIDNSResponse)
+	defer func() { HookPeerAPIDNSResponse = originalHooks }()
+
+	var gotBody []byte
+	var gotHandler PeerAPIHandler
+	var gotReq *http.Request
+	HookPeerAPIDNSResponse.Add(func(hh PeerAPIHandler, rr *http.Request, pr *PeerAPIDNSResponse) {
+		gotHandler = hh
+		gotReq = rr
+		gotBody = slices.Clone(pr.Raw)
+		pr.Header.Add("X-Test-Hook", "hello")
+	})
+
+	req := httptest.NewRequest("POST", "/dns-query", nil)
+	req.Header.Set("Content-Type", "application/dns-message")
+	req.Body = io.NopCloser(bytes.NewReader(dohQueryBytes(t, "example.com.", dnsmessage.TypeA)))
+
+	w := httptest.NewRecorder()
+	h.handleDNSQuery(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %v, want %v", w.Code, http.StatusOK)
+	}
+	if gotHandler == nil {
+		t.Fatal("hook was not called")
+	}
+	if gotReq != req {
+		t.Error("hook did not receive the request")
+	}
+	if len(gotBody) == 0 {
+		t.Error("hook received an empty response body")
+	}
+	if got := w.Header().Get("X-Test-Hook"); got != "hello" {
+		t.Errorf("header the hook added = %q, want %q", got, "hello")
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/dns-message" {
+		t.Errorf("content type header = %q, want %q", got, "application/dns-message")
+	}
+}
+
+// dohQueryBytes builds a raw DoH wire-format query for name and typ.
+func dohQueryBytes(t *testing.T, name string, typ dnsmessage.Type) []byte {
+	t.Helper()
+	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{})
+	if err := b.StartQuestions(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Question(dnsmessage.Question{
+		Name:  dnsmessage.MustNewName(name),
+		Type:  typ,
+		Class: dnsmessage.ClassINET,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return must.Get(b.Finish())
 }
 
 func TestPeerAPIReplyToDNSQueriesAreObservedWithCNAMEFlattening(t *testing.T) {
