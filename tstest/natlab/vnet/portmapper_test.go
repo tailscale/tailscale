@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
+	"maps"
 	"mime"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/util/must"
 )
 
@@ -99,6 +102,22 @@ func checkExpiresWithin(t *testing.T, n *network, extPort uint16, d time.Duratio
 	}
 }
 
+func checkPortMap(t *testing.T, n *network, want map[netip.AddrPort]PortMapping) {
+	t.Helper()
+	if diff := cmp.Diff(n.portMappings(), want, cmpopts.EquateComparable(PortMapping{}), cmpopts.EquateEmpty()); diff != "" {
+		t.Errorf("got port mappings (-got, +want):\n%s", diff)
+	}
+}
+
+// checkDeleted checks that the mapping for extPort is gone and that all other
+// mappings in before are the same.
+func checkDeleted(t *testing.T, n *network, extPort uint16, before map[netip.AddrPort]PortMapping) {
+	t.Helper()
+	want := maps.Clone(before)
+	delete(want, netip.AddrPortFrom(n.wanIP4, extPort))
+	checkPortMap(t, n, want)
+}
+
 type soapResponse struct {
 	ExternalIP   netip.Addr `xml:"NewExternalIPAddress"`
 	ReservedPort uint16     `xml:"NewReservedPort"`
@@ -168,6 +187,30 @@ func TestNATPMP(t *testing.T) {
 		checkReply(t, got, "00 81 00 00 ?? ?? ?? ?? ed 41 4e 20 00 00 1c 20")
 		checkRenewed(t, n, extPort, netip.AddrPortFrom(clientIPv4(1), 60737), expiry)
 	})
+	t.Run("delete-udp", func(t *testing.T) {
+		// MAP UDP of int port 60738 (ed 42 in hex) to ext port 20003 for 7200s
+		got := sendUDPToRouter(t, s, pxpPort, mustHex("00 01 00 00 ed 42 4e 23 00 00 1c 20"))
+		// success, MAP UDP of int port 60738 to ext port 20003 for 7200s
+		checkReply(t, got, "00 81 00 00 ?? ?? ?? ?? ed 42 4e 23 00 00 1c 20")
+		extPort := uint16(20003) // 4e 23 in hex
+		checkMapping(t, n, extPort, netip.AddrPortFrom(clientIPv4(1), 60738))
+		before := n.portMappings()
+
+		// MAP UDP of int port 60738 to bogus ext port 22222 (56 ce in hex) for 0s (delete)
+		const deleteReq = "00 01 00 00 ed 42 56 ce 00 00 00 00"
+		// success, int port 60738, ext port 0, lifetime 0
+		const deleteReply = "00 81 00 00 ?? ?? ?? ?? ed 42 00 00 00 00 00 00"
+
+		got = sendUDPToRouter(t, s, pxpPort, mustHex(deleteReq))
+		checkReply(t, got, deleteReply)
+		checkDeleted(t, n, extPort, before)
+		after := n.portMappings()
+
+		// Same delete again, now for a mapping that no longer exists
+		got = sendUDPToRouter(t, s, pxpPort, mustHex(deleteReq))
+		checkReply(t, got, deleteReply)
+		checkPortMap(t, n, after)
+	})
 	t.Run("request-unsupported", func(t *testing.T) {
 		got := sendUDPToRouter(t, s, pxpPort, pcpAnnounceReq)
 		// NAT-PMP unsupported version
@@ -213,6 +256,34 @@ func TestPCP(t *testing.T) {
 		checkReply(t, got, "02 81 00 00 00 00 1c 20 ?? ?? ?? ?? 00 00 00 00 00 00 00 00 00 00 00 00 "+
 			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f 11 00 00 00 9f 41 4e 21 00 00 00 00 00 00 00 00 00 00 ff ff 02 01 01 01")
 		checkRenewed(t, n, extPort, netip.AddrPortFrom(clientIPv4(1), 40769), expiry)
+	})
+	t.Run("delete-udp", func(t *testing.T) {
+		// MAP UDP of int 192.168.0.101:40770 (9f 42 in hex) to any ext IP and port 20005 for 7200s, with nonce 95bcb5d93d07ecbbc8b3bd4f
+		got := sendUDPToRouter(t, s, pxpPort, mustHex("02 01 00 00 00 00 1c 20 00 00 00 00 00 00 00 00 00 00 ff ff c0 a8 00 65 "+
+			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f 11 00 00 00 9f 42 4e 25 00 00 00 00 00 00 00 00 00 00 ff ff 00 00 00 00"))
+		// success, MAP UDP of int port 40770 to ext 2.1.1.1:20005 for 7200s, same nonce
+		checkReply(t, got, "02 81 00 00 00 00 1c 20 ?? ?? ?? ?? 00 00 00 00 00 00 00 00 00 00 00 00 "+
+			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f 11 00 00 00 9f 42 4e 25 00 00 00 00 00 00 00 00 00 00 ff ff 02 01 01 01")
+		extPort := uint16(20005) // 4e 25 in hex
+		checkMapping(t, n, extPort, netip.AddrPortFrom(clientIPv4(1), 40770))
+		before := n.portMappings()
+
+		// MAP UDP of int 192.168.0.101:40770 for 0s (delete), ext IP and port 0 as per https://www.rfc-editor.org/rfc/rfc6887#section-15.1, same nonce
+		const deleteReq = "02 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ff ff c0 a8 00 65 " +
+			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f 11 00 00 00 9f 42 00 00 00 00 00 00 00 00 00 00 00 00 ff ff 00 00 00 00"
+		// success, int port 40770, ext IP and port copied from request, lifetime 0, same nonce
+		const deleteReply = "02 81 00 00 00 00 00 00 ?? ?? ?? ?? 00 00 00 00 00 00 00 00 00 00 00 00 " +
+			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f 11 00 00 00 9f 42 00 00 00 00 00 00 00 00 00 00 00 00 ff ff 00 00 00 00"
+
+		got = sendUDPToRouter(t, s, pxpPort, mustHex(deleteReq))
+		checkReply(t, got, deleteReply)
+		checkDeleted(t, n, extPort, before)
+		after := n.portMappings()
+
+		// Same delete again, now for a mapping that no longer exists
+		got = sendUDPToRouter(t, s, pxpPort, mustHex(deleteReq))
+		checkReply(t, got, deleteReply)
+		checkPortMap(t, n, after)
 	})
 	t.Run("request-unsupported", func(t *testing.T) {
 		got := sendUDPToRouter(t, s, pxpPort, natpmpAddrReq)
@@ -292,5 +363,26 @@ func TestUPnP(t *testing.T) {
 			t.Errorf("renewed NewReservedPort = %d, want %d", res.ReservedPort, extPort)
 		}
 		checkRenewed(t, n, extPort, netip.AddrPortFrom(clientIPv4(1), 40769), expiry)
+	})
+	t.Run("delete-port-mapping", func(t *testing.T) {
+		extPort := uint16(20006)
+		intPort := uint16(40772)
+
+		res := soapRequest(t, n, "AddAnyPortMapping", fmt.Sprintf(`
+      <NewExternalPort>%d</NewExternalPort>
+      <NewInternalPort>%d</NewInternalPort>
+      <NewInternalClient>192.168.0.101</NewInternalClient>
+      <NewLeaseDuration>7200</NewLeaseDuration>`, extPort, intPort))
+		if res.ReservedPort != extPort {
+			t.Errorf("NewReservedPort = %d, want %d", res.ReservedPort, extPort)
+		}
+		checkMapping(t, n, extPort, netip.AddrPortFrom(clientIPv4(1), intPort))
+		before := n.portMappings()
+
+		soapRequest(t, n, "DeletePortMapping", fmt.Sprintf(`
+      <NewRemoteHost></NewRemoteHost>
+      <NewExternalPort>%d</NewExternalPort>
+      <NewProtocol>UDP</NewProtocol>`, extPort))
+		checkDeleted(t, n, extPort, before)
 	})
 }
