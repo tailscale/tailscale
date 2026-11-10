@@ -153,6 +153,13 @@ func TestProxyClassHandlerForSvc(t *testing.T) {
 		otherPCName        = "other-proxyclass"
 		unreferencedPCName = "unreferenced-proxyclass"
 	)
+	// managedLBSvc is a LoadBalancer Service created by the operator for one of
+	// its own resources (such as a PeerRelay); it must never get a proxy.
+	managedLBSvc := func(name string) *corev1.Service {
+		s := lbSvc(name, nil, nil)
+		s.Labels = map[string]string{kubetypes.LabelManaged: "true"}
+		return s
+	}
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
 		WithIndex(&corev1.Service{}, indexServiceProxyClass, indexProxyClass).
@@ -168,6 +175,7 @@ func TestProxyClassHandlerForSvc(t *testing.T) {
 			lbSvc("lb-svc-no-class", nil, nil),
 			lbSvc("lb-svc-other-class", nil, new("other")),
 			lbSvc("lb-svc-other-pc", map[string]string{LabelAnnotationProxyClass: otherPCName}, nil),
+			managedLBSvc("lb-svc-managed"),
 		).
 		Build()
 
