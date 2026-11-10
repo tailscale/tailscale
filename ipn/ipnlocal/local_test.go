@@ -9290,7 +9290,7 @@ func TestOnClientVersionRespectsAutoUpdateCheck(t *testing.T) {
 
 	nw := newNotificationWatcher(t, lb, ipnauth.Self)
 	nw.watch(0, nil, unexpectedClientVersion)
-	lb.onClientVersion(cv)
+	lb.onClientVersion(*cv)
 	nw.check()
 
 	// Verify it was cached despite not being broadcast.
@@ -9309,7 +9309,7 @@ func TestOnClientVersionRespectsAutoUpdateCheck(t *testing.T) {
 	nw.watch(0, []wantedNotification{
 		wantClientVersionNotify("1.96.0"),
 	})
-	lb.onClientVersion(cv)
+	lb.onClientVersion(*cv)
 	nw.check()
 }
 

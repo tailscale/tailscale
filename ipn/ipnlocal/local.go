@@ -4697,14 +4697,14 @@ func (b *LocalBackend) tellRecipientToBrowseToURLLocked(url string, recipient no
 
 // onClientVersion is called on MapResponse updates when a MapResponse contains
 // a non-nil ClientVersion message.
-func (b *LocalBackend) onClientVersion(v *tailcfg.ClientVersion) {
+func (b *LocalBackend) onClientVersion(v tailcfg.ClientVersion) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.lastClientVersion = v
-	b.health.SetLatestVersion(v)
+	b.lastClientVersion = &v
+	b.health.SetLatestVersion(&v)
 	prefs := b.pm.CurrentPrefs()
 	if prefs.Valid() && prefs.AutoUpdate().Check {
-		b.sendLocked(ipn.Notify{ClientVersion: v})
+		b.sendLocked(ipn.Notify{ClientVersion: &v})
 	}
 }
 
