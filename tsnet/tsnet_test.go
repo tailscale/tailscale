@@ -43,8 +43,12 @@ import (
 	"github.com/prometheus/common/model"
 	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/net/proxy"
+	"golang.org/x/tools/go/packages"
 
 	"tailscale.com/cmd/testwrapper/flakytest"
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/feature/featuretags"
 	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
@@ -926,7 +930,26 @@ func TestStartStopStartGetsSameIP(t *testing.T) {
 	}
 }
 
+func TestServeUnavailable(t *testing.T) {
+	if buildfeatures.HasServe {
+		t.Skip("requires ts_omit_serve")
+	}
+
+	// Neither call should try to start the server when Serve is omitted.
+	s := &Server{}
+	s.initOnce.Do(func() { s.initErr = errors.New("unexpected server startup") })
+	if ln, err := s.ListenFunnel("tcp", ":443"); ln != nil || !errors.Is(err, feature.ErrUnavailable) {
+		t.Errorf("ListenFunnel = %v, %v; want nil, %v", ln, err, feature.ErrUnavailable)
+	}
+	if ln, err := s.ListenService("svc:test", ServiceModeTCP{Port: 80}); ln != nil || !errors.Is(err, feature.ErrUnavailable) {
+		t.Errorf("ListenService = %v, %v; want nil, %v", ln, err, feature.ErrUnavailable)
+	}
+}
+
 func TestFunnel(t *testing.T) {
+	if !buildfeatures.HasServe {
+		t.Skip("requires Serve")
+	}
 	ctx, dialCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer dialCancel()
 
@@ -1010,6 +1033,9 @@ func TestFunnel(t *testing.T) {
 // after itself when closed. Specifically, changes made to the serve config
 // should be cleared.
 func TestFunnelClose(t *testing.T) {
+	if !buildfeatures.HasServe {
+		t.Skip("requires Serve")
+	}
 
 	marshalServeConfig := func(t *testing.T, sc ipn.ServeConfigView) string {
 		t.Helper()
@@ -1195,6 +1221,9 @@ func setUpServiceState(t *testing.T, name, ip string, host, client *Server,
 }
 
 func TestListenService(t *testing.T) {
+	if !buildfeatures.HasServe {
+		t.Skip("requires Serve")
+	}
 
 	type dialFn func(context.Context, string, string) (net.Conn, error)
 
@@ -1590,6 +1619,9 @@ func TestListenService(t *testing.T) {
 }
 
 func TestListenServiceClose(t *testing.T) {
+	if !buildfeatures.HasServe {
+		t.Skip("requires Serve")
+	}
 	const serviceName = "svc:foo"
 
 	diffServeConfig := func(a, b ipn.ServeConfigView) string {
@@ -3547,6 +3579,72 @@ func TestDeps(t *testing.T) {
 			}
 		},
 	}.Check(t)
+}
+
+// TestTypeCheckFeatureSets verifies that tsnet type-checks with only
+// [featuretags.TSNetMin] and with a few other plausible feature sets.
+// It type-checks from source rather than compiling, which is many
+// times faster and doesn't depend on a warm build cache.
+func TestTypeCheckFeatureSets(t *testing.T) {
+	// minTags returns the build tags for a tsnet build with only the
+	// features in keep plus [featuretags.TSNetMin].
+	minTags := func(keep ...featuretags.FeatureTag) string {
+		return strings.Join(featuretags.MinTags(append(keep, featuretags.TSNetMin...)...), ",")
+	}
+	// withoutTags returns the build tags for a default build without
+	// the features in remove or anything that depends on them.
+	withoutTags := func(remove ...featuretags.FeatureTag) string {
+		var tags []string
+		for _, ft := range remove {
+			for dep := range featuretags.RequiredBy(ft) {
+				tags = append(tags, dep.OmitTag())
+			}
+		}
+		slices.Sort(tags)
+		return strings.Join(slices.Compact(tags), ",")
+	}
+
+	allPlatforms := []string{"linux/amd64", "darwin/arm64", "windows/amd64", "android/arm64"}
+	linuxOnly := []string{"linux/amd64"}
+	tests := []struct {
+		name      string
+		platforms []string
+		tags      string
+	}{
+		{"min", allPlatforms, minTags()},
+		{"min+acme+serve", linuxOnly, minTags("acme", "serve")},
+		{"min+nattraversal+portmapper", linuxOnly, minTags("nattraversal", "portmapper")},
+		{"no-serve", linuxOnly, withoutTags("serve")},
+	}
+	// Each load type-checks hundreds of packages, std included, using
+	// all CPUs, so running more than a couple at once only adds memory.
+	sem := make(chan bool, 2)
+	for _, tt := range tests {
+		for _, plat := range tt.platforms {
+			goos, goarch, _ := strings.Cut(plat, "/")
+			t.Run(tt.name+"/"+goos, func(t *testing.T) {
+				t.Parallel()
+				sem <- true
+				defer func() { <-sem }()
+				pkgs, err := packages.Load(&packages.Config{
+					Mode:       packages.NeedName | packages.NeedImports | packages.NeedDeps | packages.NeedTypes | packages.NeedSyntax,
+					BuildFlags: []string{"-tags=" + tt.tags},
+					Env:        append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=0"),
+				}, "tailscale.com/tsnet")
+				if err != nil {
+					t.Fatal(err)
+				}
+				packages.Visit(pkgs, nil, func(p *packages.Package) {
+					for _, e := range p.Errors {
+						t.Error(e)
+					}
+				})
+				if t.Failed() {
+					t.Logf("tags: %s", tt.tags)
+				}
+			})
+		}
+	}
 }
 
 func TestResolveAuthKey(t *testing.T) {
