@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -586,6 +587,80 @@ func TestLoggerWriteResult(t *testing.T) {
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestUploadMetrics(t *testing.T) {
+	lg := newLogger(Config{BaseURL: "https://logtail.example", Stderr: io.Discard})
+	var wantCalls, wantErrors, wantBytes, wantUncompressedBytes int64
+	for _, tt := range []struct {
+		name         string
+		body         string
+		origlen      int
+		status       int
+		transportErr bool
+	}{
+		{"uncompressed", `[{"text":"hello"}]`, -1, http.StatusOK, false},
+		{"compressed", "compressed body", 100, http.StatusOK, false},
+		{"failed_status", "compressed body", 100, http.StatusServiceUnavailable, false},
+		{"failed_transport", "compressed body", 100, 0, true},
+		{"retry_success", "compressed body", 100, http.StatusOK, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			lg.httpc = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(body) != tt.body {
+					t.Errorf("request body = %q; want %q", body, tt.body)
+				}
+				wantEncoding, wantOriglen := "", ""
+				if tt.origlen != -1 {
+					wantEncoding, wantOriglen = "zstd", fmt.Sprint(tt.origlen)
+				}
+				if got := r.Header.Get("Content-Encoding"); got != wantEncoding {
+					t.Errorf("Content-Encoding = %q; want %q", got, wantEncoding)
+				}
+				if got := r.Header.Get("Orig-Content-Length"); got != wantOriglen {
+					t.Errorf("Orig-Content-Length = %q; want %q", got, wantOriglen)
+				}
+				if tt.transportErr {
+					return nil, errors.New("transport failed")
+				}
+				return &http.Response{StatusCode: tt.status, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
+			})}
+			_, err := lg.upload(t.Context(), []byte(tt.body), tt.origlen)
+			wantErr := tt.transportErr || tt.status != http.StatusOK
+			if (err != nil) != wantErr {
+				t.Fatalf("upload error = %v; wantErr %v", err, wantErr)
+			}
+			wantCalls++
+			if wantErr {
+				wantErrors++
+			} else {
+				wantBytes += int64(len(tt.body))
+				if tt.origlen == -1 {
+					wantUncompressedBytes += int64(len(tt.body))
+				} else {
+					wantUncompressedBytes += int64(tt.origlen)
+				}
+			}
+			var got map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(lg.ExpVar().String()), &got); err != nil {
+				t.Fatal(err)
+			}
+			for name, want := range map[string]int64{
+				"counter_upload_calls":                wantCalls,
+				"counter_upload_errors":               wantErrors,
+				"counter_uploaded_bytes":              wantBytes,
+				"counter_uploaded_uncompressed_bytes": wantUncompressedBytes,
+			} {
+				if string(got[name]) != fmt.Sprint(want) {
+					t.Errorf("%s = %s; want %d", name, got[name], want)
+				}
+			}
+		})
+	}
+}
 
 func TestNewLoggerDisabled(t *testing.T) { synctest.Test(t, synctestNewLoggerDisabled) }
 
