@@ -380,7 +380,14 @@ var getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBacken
 
 	pair, err := e.issueCertPEMLocked(ctx, b, cs, logf, traceACME, domain, minValidity, previous)
 	if err != nil {
-		e.recordIssuanceFailure(domain, now, err)
+		// Arm the backoff from the clock as of now, after the attempt
+		// fails: an issuance can outlive the first backoff window (a
+		// slow or hung CA, DNS timeouts), and a window computed from the
+		// pre-issuance timestamp would already have expired, letting the
+		// next request immediately open another order (and SetDNS call)
+		// and shortening a CA's requested Retry-After by the duration of
+		// the attempt. See tailscale/tailscale#22021.
+		e.recordIssuanceFailure(domain, b.Clock().Now(), err)
 		return nil, err
 	}
 	e.clearIssuanceFailure(domain)
@@ -514,9 +521,11 @@ func (e *extension) issuanceBackoffErr(domain string, now time.Time) error {
 }
 
 // recordIssuanceFailure remembers err as the latest failed issuance
-// for domain and grows the backoff window. A CA rate-limit error's
-// Retry-After (#20315) is honoured by never backing off for less time
-// than the CA asked for.
+// for domain and grows the backoff window. now must be read from the
+// backend clock after the attempt failed, so that the window always
+// runs from the end of the attempt and cannot expire while it is in
+// flight. A CA rate-limit error's Retry-After (#20315) is honoured by
+// never backing off for less time than the CA asked for.
 func (e *extension) recordIssuanceFailure(domain string, now time.Time, err error) {
 	e.issuanceMu.Lock()
 	defer e.issuanceMu.Unlock()

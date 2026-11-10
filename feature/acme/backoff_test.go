@@ -113,6 +113,65 @@ func TestIssuanceBackoffAfterFailedSetDNS(t *testing.T) {
 	}
 }
 
+// TestIssuanceBackoffStartsAfterSlowFailedIssuance verifies that the
+// backoff window is armed from the backend clock after a failed
+// issuance attempt ends, not from the timestamp taken before the
+// attempt started: an issuance that outlives the first window (here:
+// the CA takes two minutes to fail the challenge) must still leave
+// the full window in place, or the next request would immediately
+// open another ACME order (and SetDNS call). See
+// tailscale/tailscale#22021.
+func TestIssuanceBackoffStartsAfterSlowFailedIssuance(t *testing.T) {
+	tstest.AssertNotParallel(t)
+
+	const (
+		tsNetDomain = "node.ts.net"
+		domain      = "foo.com" // BYO Funnel domain; issued via tls-alpn-01
+	)
+	s := acmetest.Start(t)
+	s.ChallengeType = "tls-alpn-01"
+	t.Setenv("TS_DEBUG_ACME_DIRECTORY_URL", s.DirectoryURL())
+
+	b, clock := issuanceTestBackend(t, tsNetDomain)
+	// Enable Funnel for the BYO domain on :443 so issuance uses
+	// tls-alpn-01 rather than dns-01 (which needs a control connection).
+	funnel := map[ipn.HostPort]bool{ipn.HostPort(domain + ":443"): true}
+	b.ForTest().SetServeConfig((&ipn.ServeConfig{AllowFunnel: funnel}).View())
+	newOrders := func() int { return s.Requests("/new-order") }
+
+	// The CA holds the challenge for longer than the first backoff
+	// window before failing it, so the clock is two minutes past the
+	// start of the attempt by the time it fails.
+	validationErr := errors.New("simulated slow CA validation failure")
+	s.Validate = func(identifier, challengeType string) error {
+		clock.Advance(2 * issuanceBackoffBase)
+		return validationErr
+	}
+	_, err := b.GetCertPEMWithValidity(context.Background(), domain, 0)
+	if err == nil || !strings.Contains(err.Error(), validationErr.Error()) {
+		t.Fatalf("first GetCertPEMWithValidity error = %v, want the CA validation failure", err)
+	}
+	if got := newOrders(); got != 1 {
+		t.Fatalf("new-order requests = %d after first request, want 1", got)
+	}
+
+	// The window must run from the end of the failed attempt, so the
+	// full first window still remains: this request gets a 429 with a
+	// Retry-After of at least the base window instead of starting a new
+	// ACME order.
+	_, err = b.GetCertPEMWithValidity(context.Background(), domain, 0)
+	rl, ok := errors.AsType[certRateLimitedError](err)
+	if !ok {
+		t.Fatalf("GetCertPEMWithValidity error = %v (%T), want certRateLimitedError", err, err)
+	}
+	if rl.retryAfter < issuanceBackoffBase {
+		t.Fatalf("retryAfter = %v after a slow failed issuance, want >= %v (full window must remain)", rl.retryAfter, issuanceBackoffBase)
+	}
+	if got := newOrders(); got != 1 {
+		t.Fatalf("new-order requests = %d after a slow failed issuance, want 1 (window must not have expired)", got)
+	}
+}
+
 // TestIssuanceBackoffHonorsCARateLimitRetryAfter verifies that the
 // existing CA 429 + Retry-After behaviour (#20315) is preserved: the
 // first response surfaces the CA's Retry-After, and the issuance backoff
