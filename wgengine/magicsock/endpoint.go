@@ -59,8 +59,8 @@ func init() {
 // to the peer.
 type endpoint struct {
 	// atomically accessed; declared first for alignment reasons
-	lastRecvWG            mono.Time // last time there were incoming packets from this peer destined for wireguard-go (e.g. not disco)
-	lastRecvUDPAny        mono.Time // last time there were incoming UDP packets from this peer of any kind
+	lastRecvWG            mono.AtomicTime // last time there were incoming packets from this peer destined for wireguard-go (e.g. not disco)
+	lastRecvUDPAny        mono.AtomicTime // last time there were incoming UDP packets from this peer of any kind
 	numStopAndResetAtomic int64
 	debugUpdates          *ringlog.RingLog[EndpointChange]
 
@@ -597,9 +597,9 @@ func (de *endpoint) noteRecvActivity(src epAddr, now mono.Time) bool {
 		de.mu.Unlock()
 	}
 
-	elapsed := now.Sub(de.lastRecvWG.LoadAtomic())
+	elapsed := now.Sub(de.lastRecvWG.Load())
 	if elapsed > 10*time.Second {
-		de.lastRecvWG.StoreAtomic(now)
+		de.lastRecvWG.Store(now)
 		return true
 	}
 	return false
@@ -843,7 +843,7 @@ func (de *endpoint) heartbeatForLifetime() {
 		p.resetCycleEndpointLocked()
 		return
 	}
-	inactiveFor := mono.Now().Sub(max(de.lastRecvUDPAny.LoadAtomic(), de.lastSendAny))
+	inactiveFor := mono.Now().Sub(max(de.lastRecvUDPAny.Load(), de.lastSendAny))
 	delta := afterInactivityFor - inactiveFor
 	if delta.Abs() > udpLifetimeProbeSchedulingTolerance {
 		if delta < 0 {
@@ -917,7 +917,7 @@ func (de *endpoint) heartbeat() {
 			// a WireGuard keepalive may have fallen somewhere within the
 			// sessionActiveTimeout window. heartbeatForLifetime will also
 			// perform a similar check, and reschedule as necessary.
-			inactiveFor := now.Sub(max(de.lastSendAny, de.lastRecvUDPAny.LoadAtomic()))
+			inactiveFor := now.Sub(max(de.lastSendAny, de.lastRecvUDPAny.Load()))
 			after := afterInactivityFor - inactiveFor
 			if after < 0 {
 				// shouldn't happen

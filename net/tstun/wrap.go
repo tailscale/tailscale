@@ -115,10 +115,7 @@ type Wrapper struct {
 
 	closeOnce sync.Once
 
-	// lastActivityAtomic is read/written atomically.
-	// On 32 bit systems, if the fields above change,
-	// you might need to add an align64 field here.
-	lastActivityAtomic mono.Time // time of last send or receive
+	lastActivity mono.AtomicTime // time of last send or receive
 
 	discoKey syncs.AtomicValue[key.DiscoPublic]
 
@@ -836,7 +833,7 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 
 // noteActivity records that there was a read or write at the current time.
 func (t *Wrapper) noteActivity() {
-	t.lastActivityAtomic.StoreAtomic(mono.Now())
+	t.lastActivity.Store(mono.Now())
 }
 
 // IdleDuration reports how long it's been since the last read or write to this device.
@@ -844,7 +841,7 @@ func (t *Wrapper) noteActivity() {
 // Its value should only be presumed accurate to roughly 10ms granularity.
 // If there's never been activity, the duration is since the wrapper was created.
 func (t *Wrapper) IdleDuration() time.Duration {
-	return mono.Since(t.lastActivityAtomic.LoadAtomic())
+	return mono.Since(t.lastActivity.Load())
 }
 
 func (t *Wrapper) awaitStart() {

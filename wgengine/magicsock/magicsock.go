@@ -1178,7 +1178,7 @@ func (c *Conn) LastRecvActivityOfNodeKey(nk key.NodePublic) string {
 	if !ok {
 		return "never"
 	}
-	saw := de.lastRecvWG.LoadAtomic()
+	saw := de.lastRecvWG.Load()
 	if saw == 0 {
 		return "never"
 	}
@@ -1939,7 +1939,7 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		ep = de
 	}
 	now := mono.Now()
-	ep.lastRecvUDPAny.StoreAtomic(now)
+	ep.lastRecvUDPAny.Store(now)
 	connNoted := ep.noteRecvActivity(src, now)
 	if buildfeatures.HasNetLog {
 		if update := c.connCounter.Load(); update != nil {
@@ -2276,7 +2276,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		// Record receive time for UDP transport packets.
 		pi, ok := c.peerMap.byEpAddr[src]
 		if ok {
-			pi.ep.lastRecvUDPAny.StoreAtomic(mono.Now())
+			pi.ep.lastRecvUDPAny.Store(mono.Now())
 		}
 	}
 
@@ -4594,7 +4594,7 @@ func (le *lazyEndpoint) InitiationMessagePublicKey(peerPublicKey [32]byte) {
 		return
 	}
 	now := mono.Now()
-	ep.lastRecvUDPAny.StoreAtomic(now)
+	ep.lastRecvUDPAny.Store(now)
 	ep.noteRecvActivity(le.src, now)
 }
 
