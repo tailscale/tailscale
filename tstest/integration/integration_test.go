@@ -260,7 +260,7 @@ func TestControlTimeLogLine(t *testing.T) {
 	n.AwaitRunning()
 
 	if err := tstest.WaitFor(20*time.Second, func() error {
-		const sub = `"controltime":"2020-08-03T00:00:00.000000001Z"`
+		const sub = `"controltime":"2024-01-01T00:00:00.000000001Z"`
 		if !n.env.LogCatcher.logsContains(mem.S(sub)) {
 			return fmt.Errorf("log catcher didn't see %#q; got %s", sub, n.env.LogCatcher.logsString())
 		}
