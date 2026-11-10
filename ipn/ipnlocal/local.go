@@ -2374,7 +2374,25 @@ func (b *LocalBackend) applyExitNodeSysPolicyLocked(prefs *ipn.Prefs) (anyChange
 	}
 	syncs.RequiresMutex(&b.mu)
 
-	if exitNodeIDStr, _ := b.polc.GetString(pkey.ExitNodeID, ""); exitNodeIDStr != "" {
+	pickerVisibility, _ := b.polc.GetString(pkey.ExitNodeMenuVisibility, "")
+	exitNodeIDStr, _ := b.polc.GetString(pkey.ExitNodeID, "")
+	exitNodeIPStr, _ := b.polc.GetString(pkey.ExitNodeIP, "")
+
+	// A forced ID or IP takes precedence over the picker visibility policy.
+	if pickerVisibility == "hide" && exitNodeIDStr == "" && exitNodeIPStr == "" {
+		if prefs.ExitNodeID != "" ||
+			prefs.ExitNodeIP.IsValid() ||
+			prefs.AutoExitNode != "" ||
+			prefs.InternalExitNodePrior != "" {
+			prefs.ExitNodeID = ""
+			prefs.ExitNodeIP = netip.Addr{}
+			prefs.AutoExitNode = ""
+			prefs.InternalExitNodePrior = ""
+			anyChange = true
+		}
+	}
+
+	if exitNodeIDStr != "" {
 		exitNodeID := tailcfg.StableNodeID(exitNodeIDStr)
 
 		// Try to parse the policy setting value as an "auto:"-prefixed [ipn.ExitNodeExpression],
@@ -2415,7 +2433,7 @@ func (b *LocalBackend) applyExitNodeSysPolicyLocked(prefs *ipn.Prefs) (anyChange
 			prefs.ExitNodeIP = netip.Addr{}
 			anyChange = true
 		}
-	} else if exitNodeIPStr, _ := b.polc.GetString(pkey.ExitNodeIP, ""); exitNodeIPStr != "" {
+	} else if exitNodeIPStr != "" {
 		if prefs.AutoExitNode != "" {
 			prefs.AutoExitNode = "" // mutually exclusive with ExitNodeIP
 			anyChange = true
@@ -5507,6 +5525,15 @@ func (b *LocalBackend) EditPrefsAs(mp *ipn.MaskedPrefs, actor ipnauth.Actor) (ip
 //
 // b.mu must be held.
 func (b *LocalBackend) checkEditPrefsAccessLocked(actor ipnauth.Actor, prefs ipn.PrefsView, mp *ipn.MaskedPrefs) error {
+	pickerVisibility, _ := b.polc.GetString(pkey.ExitNodeMenuVisibility, "")
+	selectingExitNode :=
+		(mp.ExitNodeIDSet && mp.ExitNodeID != "") ||
+			(mp.ExitNodeIPSet && mp.ExitNodeIP.IsValid()) ||
+			(mp.AutoExitNodeSet && mp.AutoExitNode != "")
+	if pickerVisibility == "hide" && selectingExitNode {
+		return fmt.Errorf("exit node selection is disabled by system policy")
+	}
+
 	syncs.RequiresMutex(&b.mu)
 	var errs []error
 

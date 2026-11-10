@@ -5256,6 +5256,69 @@ func TestApplySysPolicy(t *testing.T) {
 				pkey.CheckUpdates: "never",
 			},
 		},
+		{
+			name: "hidden-exit-node-picker-clears-user-exit-node-id",
+			prefs: ipn.Prefs{
+				ExitNodeID: "user-node",
+			},
+			wantAnyChange: true,
+			stringPolicies: map[pkey.Key]string{
+				pkey.ExitNodeMenuVisibility: "hide",
+			},
+		},
+		{
+			name: "hidden-exit-node-picker-clears-user-exit-node-ip",
+			prefs: ipn.Prefs{
+				ExitNodeIP: netip.MustParseAddr("100.100.1.1"),
+			},
+			wantAnyChange: true,
+			stringPolicies: map[pkey.Key]string{
+				pkey.ExitNodeMenuVisibility: "hide",
+			},
+		},
+		{
+			name: "hidden-exit-node-picker-clears-auto-exit-node-and-prior",
+			prefs: ipn.Prefs{
+				AutoExitNode:          "any",
+				InternalExitNodePrior: "prior-node",
+			},
+			wantAnyChange: true,
+			stringPolicies: map[pkey.Key]string{
+				pkey.ExitNodeMenuVisibility: "hide",
+			},
+		},
+		{
+			name: "hidden-exit-node-picker-with-no-selection",
+			stringPolicies: map[pkey.Key]string{
+				pkey.ExitNodeMenuVisibility: "hide",
+			},
+		},
+		{
+			name: "hidden-exit-node-picker-preserves-forced-exit-node-id",
+			prefs: ipn.Prefs{
+				ExitNodeID: "forced-node",
+			},
+			wantPrefs: ipn.Prefs{
+				ExitNodeID: "forced-node",
+			},
+			stringPolicies: map[pkey.Key]string{
+				pkey.ExitNodeMenuVisibility: "hide",
+				pkey.ExitNodeID:             "forced-node",
+			},
+		},
+		{
+			name: "hidden-exit-node-picker-preserves-forced-exit-node-ip",
+			prefs: ipn.Prefs{
+				ExitNodeIP: netip.MustParseAddr("100.100.1.1"),
+			},
+			wantPrefs: ipn.Prefs{
+				ExitNodeIP: netip.MustParseAddr("100.100.1.1"),
+			},
+			stringPolicies: map[pkey.Key]string{
+				pkey.ExitNodeMenuVisibility: "hide",
+				pkey.ExitNodeIP:             "100.100.1.1",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -5314,6 +5377,59 @@ func TestApplySysPolicy(t *testing.T) {
 					t.Errorf("prefs=%v, want %v", b.Prefs().Pretty(), wantPrefs.Pretty())
 				}
 			})
+		})
+	}
+}
+
+func TestCheckEditPrefsAccessHiddenExitNodePicker(t *testing.T) {
+	tests := []struct {
+		name string
+		mp   *ipn.MaskedPrefs
+	}{
+		{
+			name: "exit-node-id",
+			mp: &ipn.MaskedPrefs{
+				ExitNodeIDSet: true,
+				ExitNodeID:    "user-node",
+			},
+		},
+		{
+			name: "exit-node-ip",
+			mp: &ipn.MaskedPrefs{
+				ExitNodeIPSet: true,
+				ExitNodeIP:    netip.MustParseAddr("100.100.1.1"),
+			},
+		},
+		{
+			name: "auto-exit-node",
+			mp: &ipn.MaskedPrefs{
+				AutoExitNodeSet: true,
+				AutoExitNode:    "any",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var polc policytest.Config
+			polc.Set(pkey.ExitNodeMenuVisibility, "hide")
+
+			sys := tsd.NewSystem()
+			sys.PolicyClient.Set(polc)
+			lb := newTestLocalBackendWithSys(t, sys)
+
+			lb.mu.Lock()
+			defer lb.mu.Unlock()
+
+			prefs := ipn.Prefs{}
+			err := lb.checkEditPrefsAccessLocked(
+				nil,
+				prefs.View(),
+				tt.mp,
+			)
+			if err == nil || err.Error() != "exit node selection is disabled by system policy" {
+				t.Fatalf("checkEditPrefsAccessLocked error = %v; want exit-node-picker policy error", err)
+			}
 		})
 	}
 }
@@ -8562,6 +8678,16 @@ func TestUpdatePrefsOnSysPolicyChange(t *testing.T) {
 			name:           "ExitNodeID",
 			stringSettings: []source.TestSetting[string]{source.TestSettingOf(pkey.ExitNodeID, "foo")},
 			want:           wantPrefsChanges(fieldChange{"ExitNodeID", tailcfg.StableNodeID("foo")}),
+		},
+		{
+			name:         "ExitNodesPicker/Hide",
+			initialPrefs: &ipn.Prefs{ExitNodeID: "foo"},
+			stringSettings: []source.TestSetting[string]{
+				source.TestSettingOf(pkey.ExitNodeMenuVisibility, "hide"),
+			},
+			want: wantPrefsChanges(
+				fieldChange{"ExitNodeID", tailcfg.StableNodeID("")},
+			),
 		},
 		{
 			name:           "EnableRunExitNode",
