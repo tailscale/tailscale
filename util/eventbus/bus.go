@@ -5,6 +5,7 @@ package eventbus
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"reflect"
 	"slices"
@@ -36,6 +37,10 @@ type Bus struct {
 
 	topicsMu syncs.Mutex
 	topics   map[reflect.Type][]*subscribeState
+	// pubs records, for each event type, the clients that hold publishers
+	// for it and how many. It is used only to detect publisher/subscriber
+	// type mismatches when a publisher or subscriber is registered.
+	pubs map[reflect.Type]map[*Client]int
 
 	// Used for introspection/debugging only, not in the normal event
 	// publishing path.
@@ -56,6 +61,7 @@ func NewWithOptions(opts BusOptions) *Bus {
 		write:    make(chan PublishedEvent),
 		snapshot: make(chan chan []PublishedEvent),
 		topics:   map[reflect.Type][]*subscribeState{},
+		pubs:     map[reflect.Type]map[*Client]int{},
 		clients:  set.Set[*Client]{},
 		logf:     opts.logger(),
 	}
@@ -245,10 +251,91 @@ func (b *Bus) snapshotPublishQueue() []PublishedEvent {
 
 func (b *Bus) subscribe(t reflect.Type, q *subscribeState) (cancel func()) {
 	b.topicsMu.Lock()
-	defer b.topicsMu.Unlock()
 	b.topics[t] = append(b.topics[t], q)
+	warning := b.mismatchWarningLocked(t, q.client, false)
+	b.topicsMu.Unlock()
+	if warning != "" {
+		b.logf("%s", warning)
+	}
 	return func() {
 		b.unsubscribe(t, q)
+	}
+}
+
+func (b *Bus) addPublisher(t reflect.Type, c *Client) {
+	b.topicsMu.Lock()
+	clients := b.pubs[t]
+	if clients == nil {
+		clients = map[*Client]int{}
+		b.pubs[t] = clients
+	}
+	clients[c]++
+	warning := b.mismatchWarningLocked(t, c, true)
+	b.topicsMu.Unlock()
+	if warning != "" {
+		b.logf("%s", warning)
+	}
+}
+
+func (b *Bus) deletePublisher(t reflect.Type, c *Client) {
+	b.topicsMu.Lock()
+	defer b.topicsMu.Unlock()
+	clients := b.pubs[t]
+	if clients[c]--; clients[c] <= 0 {
+		delete(clients, c)
+	}
+	if len(clients) == 0 {
+		delete(b.pubs, t)
+	}
+}
+
+// mismatchWarningLocked returns a warning to log if client c has just
+// registered a publisher (if pub is true) or subscriber of type t, and
+// the other side has registrations for the pointer or non-pointer
+// counterpart of t. Events are routed by exact type, so such pairs
+// typically indicate a bug.
+//
+// It returns "" if there is no mismatch.
+func (b *Bus) mismatchWarningLocked(t reflect.Type, c *Client, pub bool) string {
+	sib := siblingType(t)
+	if sib == nil {
+		return ""
+	}
+	var pubType, subType reflect.Type
+	var pubNames, subNames []string
+	if pub {
+		pubType, subType = t, sib
+		for _, s := range b.topics[sib] {
+			subNames = append(subNames, s.client.Name())
+		}
+		slices.Sort(subNames)
+		pubNames = []string{c.Name()}
+	} else {
+		pubType, subType = sib, t
+		for pc := range b.pubs[sib] {
+			pubNames = append(pubNames, pc.Name())
+		}
+		slices.Sort(pubNames)
+		subNames = []string{c.Name()}
+	}
+	if len(pubNames) == 0 || len(subNames) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("[unexpected] eventbus: %q publish %v, but %q subscribe to %v",
+		pubNames, pubType, subNames, subType)
+}
+
+// siblingType returns *t if t is not a pointer type,
+// or the type t points to if it is.
+// It returns nil if t is nil.
+func siblingType(t reflect.Type) reflect.Type {
+	switch {
+	case t == nil:
+		return nil
+	case t.Kind() == reflect.Pointer:
+		return t.Elem()
+	default:
+		return reflect.PointerTo(t)
 	}
 }
 

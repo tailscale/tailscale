@@ -406,3 +406,32 @@ func TestExpectExactlyEventsFilter(t *testing.T) {
 		})
 	}
 }
+
+// errorRecorder is a [testing.TB] that records calls to Errorf instead of
+// failing the test.
+type errorRecorder struct {
+	testing.TB
+	errors []string
+}
+
+func (r *errorRecorder) Errorf(format string, args ...any) {
+	r.errors = append(r.errors, fmt.Sprintf(format, args...))
+}
+
+func TestNewBusFailsOnUnexpected(t *testing.T) {
+	rec := &errorRecorder{TB: t}
+	bus := eventbustest.NewBus(rec)
+
+	// A matching publisher and subscriber are fine.
+	eventbus.Publish[EventFoo](bus.Client("pub"))
+	eventbus.Subscribe[EventFoo](bus.Client("sub"))
+	if len(rec.errors) != 0 {
+		t.Fatalf("unexpected errors: %q", rec.errors)
+	}
+
+	// A pointer subscriber for a type published by value fails the test.
+	eventbus.Subscribe[*EventFoo](bus.Client("ptr-sub"))
+	if len(rec.errors) != 1 || !strings.Contains(rec.errors[0], "[unexpected] eventbus:") {
+		t.Fatalf("got errors %q, want one eventbus [unexpected] error", rec.errors)
+	}
+}

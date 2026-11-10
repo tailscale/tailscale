@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,9 +16,19 @@ import (
 )
 
 // NewBus constructs an [eventbus.Bus] that will be shut automatically when
-// its controlling test ends.
+// its controlling test ends. Logs from the bus are written to t, and any
+// log line that contains "[unexpected]" fails the test.
 func NewBus(t testing.TB) *eventbus.Bus {
-	bus := eventbus.New()
+	bus := eventbus.NewWithOptions(eventbus.BusOptions{
+		Logf: func(format string, args ...any) {
+			msg := fmt.Sprintf(format, args...)
+			if strings.Contains(msg, "[unexpected]") {
+				t.Errorf("%s", msg)
+			} else {
+				t.Logf("%s", msg)
+			}
+		},
+	})
 	t.Cleanup(bus.Close)
 	return bus
 }

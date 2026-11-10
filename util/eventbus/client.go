@@ -105,12 +105,14 @@ func (c *Client) addPublisher(pub publisher) {
 		panic("cannot Publish on a closed client")
 	}
 	c.pub.Add(pub)
+	c.bus.addPublisher(pub.publishType(), c)
 }
 
 func (c *Client) deletePublisher(pub publisher) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.pub.Delete(pub)
+	c.bus.deletePublisher(pub.publishType(), c)
 }
 
 func (c *Client) addSubscriber(t reflect.Type, s *subscribeState) {
