@@ -288,9 +288,14 @@ func (c *client) flowCreated(transit netip.Addr) func() {
 		return func() {}
 	}
 	entry.activeFlowCount++
+	var released bool
 	return func() {
 		c.mu.Lock()
 		defer c.mu.Unlock()
+		if released {
+			return
+		}
+		released = true
 		if entry.activeFlowCount <= 0 {
 			c.logf("flow removed for transit %v with no active flows", transit)
 			return
