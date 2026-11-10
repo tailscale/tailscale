@@ -146,8 +146,10 @@ type nodeBackend struct {
 
 	// extraDNS stores DNS.ExtraRecords A/AAAA entries from the netmap
 	// (typically service VIPs pushed by control), keyed by canonicalized
-	// hostname (lowercase, no trailing dot).
-	extraDNS map[string]netip.Addr
+	// hostname (lowercase, no trailing dot). A name can have both an A
+	// and an AAAA record (e.g. a Service's IPv4 and IPv6 VIPs), so the
+	// value keeps all addresses in record order.
+	extraDNS map[string][]netip.Addr
 
 	// userProfiles is the live set of user profiles, updated incrementally
 	// by mergeUserProfiles as deltas arrive. It parallels the peers map:
@@ -826,7 +828,10 @@ func (nb *nodeBackend) updateNodeByNameLocked() {
 		}
 	})
 
-	// Rebuild extraDNS from DNS.ExtraRecords (service VIPs, etc).
+	// Rebuild extraDNS from DNS.ExtraRecords (service VIPs, etc),
+	// keeping every address per name: a Service has both an A and an
+	// AAAA record under the same name, and dropping either would break
+	// dials of the other address family (issue #22261).
 	nb.extraDNS = nil
 	for _, rec := range nm.DNS.ExtraRecords {
 		if rec.Type != "" {
@@ -836,7 +841,8 @@ func (nb *nodeBackend) updateNodeByNameLocked() {
 		if err != nil {
 			continue
 		}
-		mak.Set(&nb.extraDNS, strings.ToLower(strings.TrimSuffix(rec.Name, ".")), ip)
+		name := strings.ToLower(strings.TrimSuffix(rec.Name, "."))
+		mak.Set(&nb.extraDNS, name, append(nb.extraDNS[name], ip))
 	}
 }
 
@@ -850,12 +856,14 @@ func (nb *nodeBackend) NodeByName(hostname string) (_ tailcfg.NodeID, ok bool) {
 	return nid, ok
 }
 
-// ExtraDNSByName returns the IP for a DNS.ExtraRecords entry (e.g. service VIPs).
-func (nb *nodeBackend) ExtraDNSByName(hostname string) (_ netip.Addr, ok bool) {
+// ExtraDNSByName returns the IP addresses for a DNS.ExtraRecords entry
+// (e.g. service VIPs). A name with both A and AAAA records returns
+// both, in record order.
+func (nb *nodeBackend) ExtraDNSByName(hostname string) (_ []netip.Addr, ok bool) {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
-	ip, ok := nb.extraDNS[hostname]
-	return ip, ok
+	addrs, ok := nb.extraDNS[hostname]
+	return addrs, ok
 }
 
 func (nb *nodeBackend) updatePeersLocked() (discoChanged []key.NodePublic, routeChanged routemanager.PeersWithRouteChanges) {

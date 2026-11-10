@@ -70,8 +70,8 @@ func (b *LocalBackend) resolveMagicDNS(hostname, network string) (_ netip.Addr, 
 		}
 		return netip.Addr{}, false
 	}
-	if ip, ok := nb.ExtraDNSByName(hostname); ok && addrFamilyMatch(ip, network) {
-		return ip, true
+	if addrs, ok := nb.ExtraDNSByName(hostname); ok {
+		return addrForNetwork(addrs, network)
 	}
 	return netip.Addr{}, false
 }
@@ -117,11 +117,24 @@ func nodeAddrForNetwork(n tailcfg.NodeView, network string) (_ netip.Addr, ok bo
 	if addrs.Len() == 0 {
 		return netip.Addr{}, false
 	}
+	ips := make([]netip.Addr, 0, addrs.Len())
+	for _, pfx := range addrs.All() {
+		ips = append(ips, pfx.Addr())
+	}
+	return addrForNetwork(ips, network)
+}
+
+// addrForNetwork returns the best address from addrs for the given
+// network ("tcp", "tcp4", "tcp6", "udp", "udp4", "udp6"). For
+// unqualified networks ("tcp", "udp"), it prefers IPv4. It is used for
+// both node addresses (see [nodeAddrForNetwork]) and DNS.ExtraRecords
+// entries, so Service names resolve with the same address-family
+// preferences as device names.
+func addrForNetwork(addrs []netip.Addr, network string) (_ netip.Addr, ok bool) {
 	want4 := strings.HasSuffix(network, "4")
 	want6 := strings.HasSuffix(network, "6")
 	var v6 netip.Addr
-	for _, pfx := range addrs.All() {
-		ip := pfx.Addr()
+	for _, ip := range addrs {
 		if want4 && ip.Is4() {
 			return ip, true
 		}
@@ -141,18 +154,6 @@ func nodeAddrForNetwork(n tailcfg.NodeView, network string) (_ netip.Addr, ok bo
 		return v6, true
 	}
 	return netip.Addr{}, false
-}
-
-// addrFamilyMatch reports whether ip is compatible with the requested
-// network address family.
-func addrFamilyMatch(ip netip.Addr, network string) bool {
-	if strings.HasSuffix(network, "4") {
-		return ip.Is4()
-	}
-	if strings.HasSuffix(network, "6") {
-		return ip.Is6()
-	}
-	return true
 }
 
 // PeerForIP returns which peer is responsible for a given IP address.
