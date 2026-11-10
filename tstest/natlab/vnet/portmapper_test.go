@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/util/must"
 )
 
@@ -102,8 +104,8 @@ func checkExpiresWithin(t *testing.T, n *network, extPort uint16, d time.Duratio
 
 func checkPortMap(t *testing.T, n *network, want map[netip.AddrPort]PortMapping) {
 	t.Helper()
-	if got := n.portMappings(); !maps.Equal(got, want) {
-		t.Errorf("got port mappings %v, want %v", got, want)
+	if diff := cmp.Diff(n.portMappings(), want, cmpopts.EquateComparable(PortMapping{}), cmpopts.EquateEmpty()); diff != "" {
+		t.Errorf("got port mappings (-got, +want):\n%s", diff)
 	}
 }
 
