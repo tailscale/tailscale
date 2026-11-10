@@ -360,7 +360,7 @@ var getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBacken
 		} else if !shouldRenew {
 			return previous, nil
 		}
-	} else if !errors.Is(err, ipn.ErrStateNotExist) && !errors.Is(err, errCertExpired) {
+	} else if !errors.Is(err, ipn.ErrStateNotExist) && !errors.Is(err, errCertExpired) && !errors.Is(err, errCertInvalid) {
 		return nil, err
 	}
 

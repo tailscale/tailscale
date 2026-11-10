@@ -17,6 +17,7 @@ import (
 	"crypto/x509/pkix"
 	"embed"
 	"encoding/pem"
+	"errors"
 	"maps"
 	"math/big"
 	"os"
@@ -551,6 +552,64 @@ func TestCertStoreRoundTrip(t *testing.T) {
 			unexpected, err := test.store.Read(testDomain, testExpired)
 			if err != errCertExpired {
 				t.Fatalf("Read: expected expiry error: %v", string(unexpected.CertPEM))
+			}
+		})
+	}
+}
+
+type atomicCertTestStore struct{ *mem.Store }
+
+func (s atomicCertTestStore) ReadTLSCertAndKey(domain string) ([]byte, []byte, error) {
+	cert, err := s.ReadState(ipn.StateKey(domain + ".crt"))
+	if err != nil {
+		return nil, nil, err
+	}
+	key, err := s.ReadState(ipn.StateKey(domain + ".key"))
+	return cert, key, err
+}
+
+func TestCertStoreInvalidNotExpired(t *testing.T) {
+	cert := must.Get(certTestFS.ReadFile("testdata/example.com.pem"))
+	key := must.Get(certTestFS.ReadFile("testdata/example.com-key.pem"))
+	var otherKey bytes.Buffer
+	if err := encodeECDSAKey(&otherKey, must.Get(ecdsa.GenerateKey(elliptic.P256(), rand.Reader))); err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(must.Get(certTestFS.ReadFile("testdata/rootCA.pem")))
+	now := time.Date(2023, time.February, 10, 0, 0, 0, 0, time.UTC)
+	t.Setenv("TS_DEBUG_ACME_DIRECTORY_URL", "")
+	for _, tc := range []struct {
+		name    string
+		roots   *x509.CertPool
+		domain  string
+		key     []byte
+		now     time.Time
+		expired bool
+	}{
+		{"unknown CA", x509.NewCertPool(), "example.com", key, now, false},
+		{"wrong name", roots, "other.example.com", key, now, false},
+		{"invalid key", roots, "example.com", []byte("invalid"), now, false},
+		{"mismatched key", roots, "example.com", otherKey.Bytes(), now, false},
+		{"not yet valid", roots, "example.com", key, now.AddDate(-10, 0, 0), false},
+		{"expired", roots, "example.com", key, now.AddDate(10, 0, 0), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, cs := range []certStore{
+				certFileStore{dir: t.TempDir(), testRoots: tc.roots},
+				certStateStore{StateStore: new(mem.Store), testRoots: tc.roots},
+				certStateStore{StateStore: atomicCertTestStore{new(mem.Store)}, testRoots: tc.roots},
+			} {
+				if err := cs.WriteTLSCertAndKey(tc.domain, cert, tc.key); err != nil {
+					t.Fatal(err)
+				}
+				pair, err := cs.Read(tc.domain, tc.now)
+				if err == nil || pair != nil {
+					t.Fatalf("Read = %v, %v; want nil pair and error", pair, err)
+				}
+				if got := errors.Is(err, errCertExpired); got != tc.expired {
+					t.Errorf("Read = %v; expired = %v, want %v", err, got, tc.expired)
+				}
 			}
 		})
 	}
