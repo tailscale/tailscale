@@ -6,6 +6,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -17,8 +18,12 @@ import (
 	"testing"
 	"time"
 
+	kubeutils "tailscale.com/k8s-operator"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/views"
+	"tailscale.com/util/linuxfw"
 )
 
 func Test_updatesForSvc(t *testing.T) {
@@ -177,6 +182,102 @@ func Test_updatesForSvc(t *testing.T) {
 			}
 			if !reflect.DeepEqual(gotRulesToDelete, tt.wantRulesToDelete) {
 				t.Errorf("updatesForSvc() got rulesToDelete = \n%v\n want rulesToDelete \n%v", gotRulesToDelete, tt.wantRulesToDelete)
+			}
+		})
+	}
+}
+
+func TestShouldResync(t *testing.T) {
+	const fqdn = "foo.tailnetxyz.ts.net"
+	const viaFQDN = "10-1-0-5-via-7.tailnetxyz.ts.net"
+	// IPv6 is needed to set up SNAT for the 4via6 target.
+	self := &tailcfg.Node{ID: 1, Name: "egress-0.tailnetxyz.ts.net.", Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32"), netip.MustParsePrefix("fd7a:115c:a1e0::1/128")}}
+	vip := netip.MustParsePrefix("100.100.0.5/32")
+
+	// unresolved returns a netmap in which fqdn does not resolve.
+	unresolved := func() netmapState {
+		return netmapState{self: self.View()}
+	}
+	// device returns a netmap in which fqdn is a peer device with addrs.
+	device := func(addrs ...string) netmapState {
+		n := &tailcfg.Node{ID: 2, Name: fqdn + "."}
+		for _, a := range addrs {
+			n.Addresses = append(n.Addresses, netip.MustParsePrefix(a))
+		}
+		return unresolved().upsertPeer(n.View())
+	}
+	// service returns a netmap in which fqdn is a Tailscale Service, with
+	// hosts peers advertising it.
+	service := func(hosts int) netmapState {
+		nm := unresolved()
+		for i := range hosts {
+			hostIP := netip.PrefixFrom(netip.AddrFrom4([4]byte{100, 64, 0, byte(10 + i)}), 32)
+			host := &tailcfg.Node{ID: tailcfg.NodeID(10 + i), Name: fmt.Sprintf("ingress-%d.tailnetxyz.ts.net.", i), Addresses: []netip.Prefix{hostIP}, AllowedIPs: []netip.Prefix{hostIP, vip}}
+			nm = nm.upsertPeer(host.View())
+		}
+		nm.dnsExtraRecords = views.SliceOf([]tailcfg.DNSRecord{{Name: fqdn + ".", Type: "A", Value: vip.Addr().String()}})
+		return nm
+	}
+	// via returns a netmap with a subnet router, advertising the 4via6
+	// route for viaFQDN if advertised is true.
+	via := func(advertised bool) netmapState {
+		routerIP := netip.MustParsePrefix("100.64.0.6/32")
+		router := &tailcfg.Node{ID: 6, Name: "router.tailnetxyz.ts.net.", Addresses: []netip.Prefix{routerIP}, AllowedIPs: []netip.Prefix{routerIP}}
+		if advertised {
+			addr, _ := kubeutils.ResolveViaDomain(viaFQDN)
+			router.AllowedIPs = append(router.AllowedIPs, netip.PrefixFrom(addr, 120).Masked())
+		}
+		return unresolved().upsertPeer(router.View())
+	}
+
+	tests := []struct {
+		name    string
+		target  string      // FQDN, fqdn if empty
+		synced  netmapState // netmap at the last sync
+		current netmapState // netmap in the update
+		removed bool        // target removed from config before the update
+		want    bool
+	}{
+		{name: "device_unchanged", synced: device("100.64.0.2/32"), current: device("100.64.0.2/32")},
+		{name: "device_addresses_changed", synced: device("100.64.0.2/32"), current: device("100.64.0.4/32"), want: true},
+		{name: "device_recovers_after_no_addresses", synced: device(), current: device("100.64.0.2/32"), want: true},
+		{name: "device_appears_after_failed_lookup", synced: unresolved(), current: device("100.64.0.2/32"), want: true},
+		{name: "service_appears_after_failed_lookup", synced: unresolved(), current: service(1), want: true},
+		{name: "device_removed", synced: device("100.64.0.2/32"), current: unresolved(), want: true},
+		{name: "service_unchanged", synced: service(1), current: service(1)},
+		{name: "service_gains_second_host", synced: service(1), current: service(2)},
+		{name: "service_loses_host", synced: service(1), current: service(0), want: true},
+		{name: "service_recovers_after_no_host", synced: service(0), current: service(1), want: true},
+		{name: "device_replaced_by_service", synced: device("100.64.0.2/32"), current: service(1), want: true},
+		{name: "via_route_withdrawn", target: viaFQDN, synced: via(true), current: via(false), want: true},
+		{name: "via_route_advertised", target: viaFQDN, synced: via(false), current: via(true), want: true},
+		{name: "via_route_unchanged", target: viaFQDN, synced: via(true), current: via(true)},
+		{name: "unresolved_target_unchanged", synced: unresolved(), current: unresolved()},
+		{name: "removed_target_ignored", synced: device("100.64.0.2/32"), current: unresolved(), removed: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ep := &egressProxy{
+				nfr:          linuxfw.NewFakeNetfilterRunner(),
+				tailnetAddrs: self.Addresses,
+			}
+			cfgs := egressservices.Configs{
+				"foo": {
+					TailnetTarget: egressservices.TailnetTarget{FQDN: cmp.Or(tt.target, fqdn)},
+					Ports:         egressservices.PortMaps{{Protocol: "tcp", MatchPort: 4003, TargetPort: 80}: {}},
+				},
+			}
+			if _, err := ep.syncEgressConfigs(cfgs, nil, tt.synced); err != nil {
+				t.Fatalf("syncEgressConfigs() error = %v", err)
+			}
+			if tt.removed {
+				if _, err := ep.syncEgressConfigs(nil, nil, tt.synced); err != nil {
+					t.Fatalf("syncEgressConfigs() error = %v", err)
+				}
+			}
+
+			if got := ep.shouldResync(tt.current); got != tt.want {
+				t.Errorf("shouldResync() = %v, want %v", got, tt.want)
 			}
 		})
 	}
