@@ -186,7 +186,7 @@ func TestNATPMP(t *testing.T) {
 		checkRenewed(t, n, extPort, netip.AddrPortFrom(clientIPv4(1), 60737), expiry)
 	})
 	t.Run("delete-udp", func(t *testing.T) {
-		// MAP UDP of int port 60738 to ext port 20003 for 7200s
+		// MAP UDP of int port 60738 (ed 42 in hex) to ext port 20003 for 7200s
 		got := sendUDPToRouter(t, s, pxpPort, mustHex("00 01 00 00 ed 42 4e 23 00 00 1c 20"))
 		// success, MAP UDP of int port 60738 to ext port 20003 for 7200s
 		checkReply(t, got, "00 81 00 00 ?? ?? ?? ?? ed 42 4e 23 00 00 1c 20")
@@ -256,7 +256,7 @@ func TestPCP(t *testing.T) {
 		checkRenewed(t, n, extPort, netip.AddrPortFrom(clientIPv4(1), 40769), expiry)
 	})
 	t.Run("delete-udp", func(t *testing.T) {
-		// MAP UDP of int 192.168.0.101:40770 to any ext IP and port 20005 for 7200s, with nonce 95bcb5d93d07ecbbc8b3bd4f
+		// MAP UDP of int 192.168.0.101:40770 (9f 42 in hex) to any ext IP and port 20005 for 7200s, with nonce 95bcb5d93d07ecbbc8b3bd4f
 		got := sendUDPToRouter(t, s, pxpPort, mustHex("02 01 00 00 00 00 1c 20 00 00 00 00 00 00 00 00 00 00 ff ff c0 a8 00 65 "+
 			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f 11 00 00 00 9f 42 4e 25 00 00 00 00 00 00 00 00 00 00 ff ff 00 00 00 00"))
 		// success, MAP UDP of int port 40770 to ext 2.1.1.1:20005 for 7200s, same nonce

@@ -150,6 +150,7 @@ func (n *network) handleUPnPControl(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "no such mapping", http.StatusInternalServerError)
 			return
 		}
+		// lifetime=0 is a delete here, not a permanent UPnP mapping
 		n.doPortMap(pm.dst.Addr(), pm.dst.Port(), action.ExternalPort, 0, UPnP)
 	default:
 		n.logf("TODO: handle UPnP action %q", name)
@@ -386,7 +387,7 @@ func (n *network) handlePCPRequest(req UDPPacket) {
 		)
 		res = binary.BigEndian.AppendUint16(res, internalPort)
 		if lifetimeSec == 0 {
-			res = append(res, req.Payload[42:60]...)
+			res = append(res, req.Payload[42:60]...) // suggested external port and IP from the request
 		} else {
 			res = binary.BigEndian.AppendUint16(res, gotPort)
 			wan4 := n.wanIP4.As16()
