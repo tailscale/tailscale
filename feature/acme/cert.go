@@ -18,6 +18,7 @@ import (
 	"log"
 	randv2 "math/rand/v2"
 	"net"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -396,7 +397,7 @@ var getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBacken
 	// and exempts it from the per-registered-domain rate limit. Stores
 	// that can tell the current ACME account did not issue the previous
 	// cert opt out via [ARIReplacesAllower]; see #18251.
-	var opts []xacme.OrderOption
+	var replacesCert *x509.Certificate
 	if previous != nil && !envknob.Bool("TS_DEBUG_ACME_FORCE_RENEWAL") {
 		prevCrt, err := parseCertificate(previous)
 		if err == nil {
@@ -411,7 +412,7 @@ var getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBacken
 				}
 			}
 			if useReplaces {
-				opts = append(opts, xacme.WithOrderReplacesCert(prevCrt))
+				replacesCert = prevCrt
 			} else {
 				logf("account key mismatch for previous cert; skipping ARI 'replaces' hint")
 			}
@@ -419,11 +420,11 @@ var getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBacken
 	}
 
 	issueArgs := acmeCertIssueArgs{
-		cs:        cs,
-		logf:      logf,
-		traceACME: traceACME,
-		domain:    domain,
-		opts:      opts,
+		cs:           cs,
+		logf:         logf,
+		traceACME:    traceACME,
+		domain:       domain,
+		replacesCert: replacesCert,
 	}
 	if e.shouldUseACMETLSALPN01(b, domain, previous, logf) {
 		issueArgs.challengeType = acmeChallengeTLSALPN01
@@ -473,16 +474,32 @@ func (e *extension) ensureAccount(ctx context.Context, ac *xacme.Client, logf lo
 }
 
 type acmeCertIssueArgs struct {
-	cs            certStore           // certificate and ACME account storage
-	logf          logger.Logf         // logs ACME progress and failures
-	traceACME     func(any)           // optional hook for logging ACME messages
-	domain        string              // certificate domain being issued
-	opts          []xacme.OrderOption // ACME order options
-	challengeType acmeChallengeType   // challenge type to fulfill
+	cs            certStore         // certificate and ACME account storage
+	logf          logger.Logf       // logs ACME progress and failures
+	traceACME     func(any)         // optional hook for logging ACME messages
+	domain        string            // certificate domain being issued
+	replacesCert  *x509.Certificate // cached cert to claim as replaced via the ARI "replaces" extension, if any
+	challengeType acmeChallengeType // challenge type to fulfill
 }
 
 func (args acmeCertIssueArgs) baseDomain() string { return strings.TrimPrefix(args.domain, "*.") }
 func (args acmeCertIssueArgs) isWildcard() bool   { return isWildcardDomain(args.domain) }
+
+// retryOrderWithoutReplaces reports whether err, from an order carrying the
+// ARI "replaces" extension, is a refusal that ordering again without the
+// extension could get past.
+//
+// The CA does not say which part of the order it objected to, so any client
+// error counts. Rate limiting does not: a second order would be rate limited
+// too, and it would also give up the renewal exemption that "replaces" is
+// there to claim.
+func retryOrderWithoutReplaces(err error) bool {
+	var ae *xacme.Error
+	if !errors.As(err, &ae) {
+		return false
+	}
+	return ae.StatusCode >= 400 && ae.StatusCode < 500 && ae.StatusCode != http.StatusTooManyRequests
+}
 
 func (e *extension) issueACMECert(ctx context.Context, b *ipnlocal.LocalBackend, ac *xacme.Client, args acmeCertIssueArgs) (ret *ipnlocal.TLSCertKeyPair, err error) {
 	if args.traceACME == nil {
@@ -522,7 +539,23 @@ func (e *extension) issueACMECert(ctx context.Context, b *ipnlocal.LocalBackend,
 	} else {
 		authzIDs = []xacme.AuthzID{{Type: "dns", Value: args.domain}}
 	}
-	order, err := ac.AuthorizeOrder(ctx, authzIDs, args.opts...)
+	var opts []xacme.OrderOption
+	if args.replacesCert != nil {
+		opts = append(opts, xacme.WithOrderReplacesCert(args.replacesCert))
+	}
+	order, err := ac.AuthorizeOrder(ctx, authzIDs, opts...)
+	if args.replacesCert != nil && retryOrderWithoutReplaces(err) {
+		// Nothing on disk records which ACME account issued the cached
+		// cert, so we only learn that the "replaces" claim is bad when
+		// the CA refuses it. If the account key was recreated while the
+		// cert stayed, every renewal is refused with 403 "requester
+		// account did not request the certificate being replaced by
+		// this order" until the cert expires. Order again without the
+		// claim: the new cert then belongs to the current account, and
+		// later renewals can claim it. See tailscale/tailscale#22042.
+		args.logf("acme: order replacing the cached cert for %q was rejected (%v); retrying without the ARI 'replaces' extension", args.domain, err)
+		order, err = ac.AuthorizeOrder(ctx, authzIDs)
+	}
 	if err != nil {
 		return nil, err
 	}
