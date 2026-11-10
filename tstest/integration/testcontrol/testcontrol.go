@@ -1682,7 +1682,11 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		mak.Set(&node.CapMap, nodecap.SSH, nil)
 	}
 
-	t := time.Date(2020, 8, 3, 0, 0, 0, 1, time.UTC)
+	// The ControlTime is fixed so that tests can match it exactly in logs.
+	// It must be after the hardcoded epoch that ipnlocal's peer expiry
+	// code uses to reject implausible control times, or every netmap
+	// update logs an [unexpected] warning.
+	t := time.Date(2024, 1, 1, 0, 0, 0, 1, time.UTC)
 	if dns != nil && magicDNSDomain != "" {
 		dns.CertDomains = append(dns.CertDomains, node.Hostinfo.Hostname()+"."+magicDNSDomain)
 	}
