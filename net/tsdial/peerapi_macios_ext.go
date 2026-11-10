@@ -10,6 +10,7 @@
 package tsdial
 
 import (
+	"context"
 	"errors"
 	"net"
 	"syscall"
@@ -21,7 +22,7 @@ func init() {
 	peerDialControlFunc = peerDialControlFuncNetworkExtension
 }
 
-func peerDialControlFuncNetworkExtension(d *Dialer) func(network, address string, c syscall.RawConn) error {
+func peerDialControlFuncNetworkExtension(d *Dialer) func(context.Context, string, string, syscall.RawConn) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -31,7 +32,7 @@ func peerDialControlFuncNetworkExtension(d *Dialer) func(network, address string
 	}
 	var lc net.ListenConfig
 	netns.SetListenConfigInterfaceIndex(&lc, index)
-	return func(network, address string, c syscall.RawConn) error {
+	return func(_ context.Context, network, address string, c syscall.RawConn) error {
 		if index == -1 {
 			return errors.New("failed to find TUN interface to bind to")
 		}
