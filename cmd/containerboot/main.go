@@ -1292,11 +1292,11 @@ func serviceIPsFromNetMap(nm netmapState, fqdn dnsname.FQDN) []netip.Prefix {
 			continue
 		}
 		ipPrefix := netip.PrefixFrom(ip, ip.BitLen())
+		// One prefix per record, however many peers host the Service.
 		for ps := range nm.peers() {
-			for _, allowedIP := range ps.AllowedIPs().All() {
-				if allowedIP == ipPrefix {
-					prefixes = append(prefixes, ipPrefix)
-				}
+			if views.SliceContains(ps.AllowedIPs(), ipPrefix) {
+				prefixes = append(prefixes, ipPrefix)
+				break
 			}
 		}
 	}
