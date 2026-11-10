@@ -112,6 +112,14 @@ type extension struct {
 	pendingCertDomainsMu sync.Mutex
 	pendingCertDomains   set.Set[string]
 
+	// issuanceMu guards failedIssuances.
+	issuanceMu syncs.Mutex
+	// failedIssuances remembers failed issuances per domain so that a
+	// failing issuance isn't retried on every request while there is no
+	// usable cert on disk. Entries are cleared by a successful issuance.
+	// See tailscale/tailscale#22021.
+	failedIssuances map[string]*issuanceBackoff
+
 	// wg tracks all background goroutines spawned by this extension
 	// (async cert renewals, the cert refresh loop and its per-domain
 	// workers). [extension.Shutdown] waits on it.
