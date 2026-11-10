@@ -1630,6 +1630,277 @@ func TestForwarderRefusedCacheKeepsRaceWinner(t *testing.T) {
 	}
 }
 
+// dnsOptionCookie is the EDNS option code for DNS COOKIE (RFC 7873).
+const dnsOptionCookie = 10
+
+// refusedEchoResponse returns a REFUSED response for the query req that
+// echoes the query's transaction ID, flags, question (with its original
+// casing) and EDNS options, like an upstream that refuses the question but
+// still honors DNS COOKIE.
+func refusedEchoResponse(req []byte) ([]byte, error) {
+	var msg dns.Message
+	if err := msg.Unpack(req); err != nil {
+		return nil, err
+	}
+	h := msg.Header
+	h.Response = true
+	h.Authoritative = true
+	h.RCode = dns.RCodeRefused
+	b := dns.NewBuilder(nil, h)
+	b.StartQuestions()
+	for _, q := range msg.Questions {
+		b.Question(q)
+	}
+	for _, rr := range msg.Additionals {
+		if opt, ok := rr.Body.(*dns.OPTResource); ok {
+			b.StartAdditionals()
+			b.OPTResource(rr.Header, *opt)
+		}
+	}
+	return b.Finish()
+}
+
+// runRefusingEchoDNSServer starts a UDP DNS server that answers every query
+// with refusedEchoResponse. onRequest, if non-nil, observes every query that
+// reaches the upstream.
+func runRefusingEchoDNSServer(tb testing.TB, onRequest func(req []byte)) (port uint16) {
+	logf := tstest.WhileTestRunningLogger(tb)
+
+	udpLn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tb.Cleanup(func() { udpLn.Close() })
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for {
+			buf := make([]byte, 65535)
+			n, src, err := udpLn.ReadFromUDPAddrPort(buf)
+			if err != nil {
+				return
+			}
+			go func(req []byte, src netip.AddrPort) {
+				if onRequest != nil {
+					onRequest(req)
+				}
+				res, err := refusedEchoResponse(req)
+				if err != nil {
+					logf("building refused echo: %v", err)
+					return
+				}
+				if _, err := udpLn.WriteToUDPAddrPort(res, src); err != nil {
+					logf("writing refused echo: %v", err)
+				}
+			}(buf[:n], src)
+		}
+	})
+	tb.Cleanup(func() {
+		udpLn.Close()
+		wg.Wait()
+	})
+	return uint16(udpLn.LocalAddr().(*net.UDPAddr).Port)
+}
+
+// refusedCacheTestQuery builds an A query for domain with the given
+// transaction ID and recursion setting. If cookie is non-nil, the query
+// carries an EDNS OPT record with that DNS COOKIE client cookie.
+func refusedCacheTestQuery(tb testing.TB, domain string, txid uint16, rd bool, cookie []byte) []byte {
+	tb.Helper()
+	b := dns.NewBuilder(nil, dns.Header{ID: txid, RecursionDesired: rd})
+	b.StartQuestions()
+	b.Question(dns.Question{
+		Name:  dns.MustNewName(domain),
+		Type:  dns.TypeA,
+		Class: dns.ClassINET,
+	})
+	if cookie != nil {
+		b.StartAdditionals()
+		b.OPTResource(dns.ResourceHeader{
+			Name:  dns.MustNewName("."),
+			Type:  dns.TypeOPT,
+			Class: dns.ClassINET,
+		}, dns.OPTResource{Options: []dns.Option{{Code: dnsOptionCookie, Data: cookie}}})
+	}
+	req, err := b.Finish()
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return req
+}
+
+// forwardRefusedCacheQuery sends req through fwd and returns the parsed
+// response message.
+func forwardRefusedCacheQuery(tb testing.TB, fwd *forwarder, resolvers []resolverAndDelay, req []byte) *dns.Message {
+	tb.Helper()
+	rchan := make(chan *Response, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := fwd.forwardWithDestChan(ctx, packet{
+		bs:     req,
+		family: "udp",
+		addr:   netip.MustParseAddrPort("127.0.0.1:12345"),
+	}, rchan, resolvers...); err != nil {
+		tb.Fatalf("forwardWithDestChan: %v", err)
+	}
+	select {
+	case res := <-rchan:
+		var msg dns.Message
+		if err := msg.Unpack(res.Bs); err != nil {
+			tb.Fatalf("unpacking response: %v", err)
+		}
+		return &msg
+	case <-ctx.Done():
+		tb.Fatalf("timed out waiting for response: %v", ctx.Err())
+		return nil
+	}
+}
+
+// msgCookie returns the DNS COOKIE data carried by msg's EDNS options, or
+// nil if it has none.
+func msgCookie(msg *dns.Message) []byte {
+	for _, rr := range msg.Additionals {
+		if opt, ok := rr.Body.(*dns.OPTResource); ok {
+			for _, o := range opt.Options {
+				if o.Code == dnsOptionCookie {
+					return o.Data
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// TestForwarderRefusedCachePerClientCookie checks that a cached REFUSED
+// doesn't hand one client the DNS COOKIE (or other EDNS options) of another:
+// two clients asking the same question with different cookies within one
+// refusedCacheTTL each get a REFUSED carrying their own cookie, while the
+// upstream is only asked once.
+func TestForwarderRefusedCachePerClientCookie(t *testing.T) {
+	const domain = "refused-cookie.example.com."
+	tstest.Replace(t, &refusedCacheTTL, 10*time.Second)
+
+	var queries atomic.Int64
+	port := runRefusingEchoDNSServer(t, func(req []byte) { queries.Add(1) })
+
+	fwd := newTestForwarder(t, beVerbose)
+	resolvers := []resolverAndDelay{{name: &dnstype.Resolver{Addr: fmt.Sprintf("127.0.0.1:%d", port)}}}
+
+	query := func(txid uint16, cookie []byte) *dns.Message {
+		t.Helper()
+		req := refusedCacheTestQuery(t, domain, txid, true, cookie)
+		msg := forwardRefusedCacheQuery(t, fwd, resolvers, req)
+		if msg.RCode != dns.RCodeRefused {
+			t.Fatalf("transaction %d: rcode = %v, want REFUSED", txid, msg.RCode)
+		}
+		if msg.ID != txid {
+			t.Fatalf("transaction %d: response ID = %d", txid, msg.ID)
+		}
+		return msg
+	}
+
+	// The first client's cookie is refused and the refusal cached.
+	cookieA := []byte("COOKIEAA")
+	if got := msgCookie(query(1, cookieA)); !bytes.Equal(got, cookieA) {
+		t.Fatalf("first client's REFUSED carries cookie %q, want %q", got, cookieA)
+	}
+
+	// A second client asking the same question with its own cookie gets the
+	// cached refusal, but with its own cookie, not the first client's.
+	cookieB := []byte("COOKIEBB")
+	if got := msgCookie(query(2, cookieB)); !bytes.Equal(got, cookieB) {
+		t.Fatalf("second client's REFUSED carries cookie %q, want %q", got, cookieB)
+	}
+
+	if got := queries.Load(); got != 1 {
+		t.Errorf("refusing upstream saw %d queries over 2 client queries; want 1", got)
+	}
+}
+
+// TestForwarderRefusedCacheRDFlag checks that a cached REFUSED for a
+// recursive query (RD=1) doesn't suppress the same question asked without
+// recursion (RD=0), which the upstream may well answer: the RD=0 query is
+// forwarded, not answered from the cache.
+func TestForwarderRefusedCacheRDFlag(t *testing.T) {
+	const domain = "refused-rd.example.com."
+	tstest.Replace(t, &refusedCacheTTL, 10*time.Second)
+
+	var queries atomic.Int64
+	port := runRefusingEchoDNSServer(t, func(req []byte) { queries.Add(1) })
+
+	fwd := newTestForwarder(t, beVerbose)
+	resolvers := []resolverAndDelay{{name: &dnstype.Resolver{Addr: fmt.Sprintf("127.0.0.1:%d", port)}}}
+
+	query := func(txid uint16, rd bool) *dns.Message {
+		t.Helper()
+		msg := forwardRefusedCacheQuery(t, fwd, resolvers, refusedCacheTestQuery(t, domain, txid, rd, nil))
+		if msg.RCode != dns.RCodeRefused {
+			t.Fatalf("transaction %d (rd=%v): rcode = %v, want REFUSED", txid, rd, msg.RCode)
+		}
+		if msg.RecursionDesired != rd {
+			t.Fatalf("transaction %d (rd=%v): response rd = %v, want %v", txid, rd, msg.RecursionDesired, rd)
+		}
+		return msg
+	}
+
+	// A recursive query is refused; the refusal is cached.
+	query(1, true)
+
+	// The same question without recursion is a different question for the
+	// refusing upstream: it must be forwarded, not suppressed by the
+	// RD=1 refusal.
+	query(2, false)
+	if got := queries.Load(); got != 2 {
+		t.Fatalf("refusing upstream saw %d queries; want 2 (the RD=0 query must be forwarded)", got)
+	}
+
+	// Another recursive query within the TTL is still answered from the
+	// refusal cached for RD=1, reiterating the client's own RD flag.
+	query(3, true)
+	if got := queries.Load(); got != 2 {
+		t.Errorf("refusing upstream saw %d queries; want 2", got)
+	}
+}
+
+// TestForwarderRefusedCacheQNAMECase checks that a cached REFUSED doesn't
+// replay the QNAME casing of the query that populated the cache: question
+// names are case-insensitive, and the client must see its own casing.
+func TestForwarderRefusedCacheQNAMECase(t *testing.T) {
+	tstest.Replace(t, &refusedCacheTTL, 10*time.Second)
+
+	var queries atomic.Int64
+	port := runRefusingEchoDNSServer(t, func(req []byte) { queries.Add(1) })
+
+	fwd := newTestForwarder(t, beVerbose)
+	resolvers := []resolverAndDelay{{name: &dnstype.Resolver{Addr: fmt.Sprintf("127.0.0.1:%d", port)}}}
+
+	query := func(txid uint16, domain string) *dns.Message {
+		t.Helper()
+		msg := forwardRefusedCacheQuery(t, fwd, resolvers, refusedCacheTestQuery(t, domain, txid, true, nil))
+		if msg.RCode != dns.RCodeRefused {
+			t.Fatalf("transaction %d (%s): rcode = %v, want REFUSED", txid, domain, msg.RCode)
+		}
+		if len(msg.Questions) != 1 {
+			t.Fatalf("transaction %d: got %d questions, want 1", txid, len(msg.Questions))
+		}
+		if got := msg.Questions[0].Name.String(); got != domain {
+			t.Errorf("transaction %d: response QNAME = %q, want the client's own %q", txid, got, domain)
+		}
+		return msg
+	}
+
+	// The first client's casing is refused and the refusal cached.
+	query(1, "MiXeDcAsE.example.com.")
+
+	// A second client writing the same name with different casing gets the
+	// cached refusal, but with its own casing, not the first client's.
+	query(2, "mIxEdCaSe.example.com.")
+
+	if got := queries.Load(); got != 1 {
+		t.Errorf("refusing upstream saw %d queries over 2 client queries; want 1", got)
+	}
+}
+
 // TestForwarderRaceLoserNoReadError checks that the losing resolver in a race
 // isn't counted in dns_query_fwd_udp_error_read when the query's teardown
 // closes its socket.

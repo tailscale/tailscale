@@ -368,12 +368,14 @@ type forwarder struct {
 	// use schemeCacheLocked() which will regenerate its contents as needed.
 	schemeCache views.Map[string, CustomSchemeHandler]
 
-	// refusedAnswers caches recent upstream REFUSED answers per resolver
-	// and question, so that a client retrying a REFUSED answer doesn't
-	// re-query the refusing upstream at an unthrottled rate. Guarded by mu.
+	// refusedAnswers caches when a recent upstream REFUSED answer per
+	// resolver and question expires, so that a client retrying a REFUSED
+	// answer doesn't re-query the refusing upstream at an unthrottled
+	// rate. Only the expiry is cached: the response served from the cache
+	// is rebuilt from the querying client's own packet. Guarded by mu.
 	//
 	// See tailscale/tailscale#22162.
-	refusedAnswers map[refusedCacheKey]refusedCacheEntry
+	refusedAnswers map[refusedCacheKey]time.Time
 
 	// acceptDNS tracks the CorpDNS pref (--accept-dns)
 	// This lets us skip health warnings if the forwarder receives inbound
@@ -780,6 +782,8 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	// answer cannot hammer the refusing upstream
 	// (tailscale/tailscale#22162). The refusal enters the race like any
 	// other resolver error, so a healthier resolver still answers first.
+	// The response is built from the client's own query, so its QNAME
+	// casing, flags and EDNS options are never another request's.
 	if res, ok := f.cachedRefusal(fq, rr); ok {
 		metricDNSFwdRefusedCached.Add(1)
 		return nil, rcodeResponseError{dns.RCodeRefused, res}
@@ -867,7 +871,7 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		switch rcode := getRCode(resp); rcode {
 		case dns.RCodeServerFailure, dns.RCodeRefused:
 			if rcode == dns.RCodeRefused {
-				f.noteRefusal(fq, rr, resp)
+				f.noteRefusal(fq, rr)
 			}
 			return nil, rcodeResponseError{rcode, resp}
 		}
@@ -882,7 +886,7 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	// failed first, e.g. when the UDP reply was lost and only the TCP retry
 	// got the REFUSED answer.
 	if rcodeErr, ok := errors.AsType[rcodeResponseError](err); ok && rcodeErr.rcode == dns.RCodeRefused {
-		f.noteRefusal(fq, rr, rcodeErr.res)
+		f.noteRefusal(fq, rr)
 	}
 	return nil, err
 }
@@ -923,60 +927,58 @@ var errTxIDMismatch = errors.New("txid doesn't match")
 var errTCPRetryDisabled = errors.New("no TCP retry: disabled by envknob or control knob")
 
 // refusedCacheKey identifies an upstream's REFUSED answer: the resolver that
-// refused, and the question it refused.
+// refused, the question it refused, and whether the client asked for
+// recursion. Recursion is part of the key because an upstream that refuses a
+// recursive query may still answer the same question without recursion. The
+// cached refusal is never replayed to the client — the response is rebuilt
+// from the query at hand — so response-only fields like QNAME casing or EDNS
+// options (e.g. a DNS COOKIE) don't need to be part of the key.
 type refusedCacheKey struct {
 	resolver string
 	name     dnsname.FQDN
 	qtype    dns.Type
+	rd       bool
 }
 
-// refusedCacheEntry is a cached REFUSED response and when it expires.
-type refusedCacheEntry struct {
-	res   []byte
-	until time.Time
-}
-
-// cachedRefusal returns the REFUSED response that rr recently gave for fq's
-// question, rewritten to carry fq's transaction ID, or reports false if there
-// is none fresh enough to serve.
+// cachedRefusal reports whether rr recently refused fq's question. If so, it
+// returns a REFUSED response for fq: the current query's transaction ID,
+// flags, QNAME casing and EDNS options (including any DNS COOKIE), never
+// another request's response.
 func (f *forwarder) cachedRefusal(fq *forwardQuery, rr resolverAndDelay) ([]byte, bool) {
-	domain, typ, err := nameFromQuery(fq.packet)
+	key, err := refusedCacheKeyOf(fq.packet, rr)
 	if err != nil {
 		return nil, false
 	}
 	f.mu.Lock()
-	e, ok := f.refusedAnswers[refusedCacheKey{rr.name.Addr, domain, typ}]
+	until, ok := f.refusedAnswers[key]
 	f.mu.Unlock()
-	if !ok || time.Now().After(e.until) {
+	if !ok || time.Now().After(until) {
 		return nil, false
 	}
-	res := append([]byte(nil), e.res...)
-	binary.BigEndian.PutUint16(res[0:2], uint16(fq.txid))
+	res, err := refusedResponseFromQuery(fq.packet)
+	if err != nil {
+		return nil, false
+	}
 	return res, true
 }
 
-// noteRefusal records res, an upstream's REFUSED answer to fq's question, so
-// that further queries for that question aren't sent to rr for
-// refusedCacheTTL.
-func (f *forwarder) noteRefusal(fq *forwardQuery, rr resolverAndDelay, res []byte) {
-	if len(res) < headerBytes {
-		return
-	}
-	domain, typ, err := nameFromQuery(fq.packet)
+// noteRefusal records that rr refused fq's question, so that further queries
+// for that question aren't sent to rr for refusedCacheTTL.
+func (f *forwarder) noteRefusal(fq *forwardQuery, rr resolverAndDelay) {
+	key, err := refusedCacheKeyOf(fq.packet, rr)
 	if err != nil {
 		return
 	}
-	key := refusedCacheKey{rr.name.Addr, domain, typ}
 	now := time.Now()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.refusedAnswers == nil {
-		f.refusedAnswers = make(map[refusedCacheKey]refusedCacheEntry, 1)
+		f.refusedAnswers = make(map[refusedCacheKey]time.Time, 1)
 	}
 	// Evict lazily: expired entries first, then arbitrary ones to stay
 	// within refusedCacheMaxEntries.
-	for k, e := range f.refusedAnswers {
-		if now.After(e.until) {
+	for k, until := range f.refusedAnswers {
+		if now.After(until) {
 			delete(f.refusedAnswers, k)
 		}
 	}
@@ -986,10 +988,80 @@ func (f *forwarder) noteRefusal(fq *forwardQuery, rr resolverAndDelay, res []byt
 			break
 		}
 	}
-	f.refusedAnswers[key] = refusedCacheEntry{
-		res:   append([]byte(nil), res...),
-		until: now.Add(refusedCacheTTL),
+	f.refusedAnswers[key] = now.Add(refusedCacheTTL)
+}
+
+// refusedCacheKeyOf returns the cache key for a refusal of the question in
+// bs, which was asked of rr.
+func refusedCacheKeyOf(bs []byte, rr resolverAndDelay) (refusedCacheKey, error) {
+	var parser dns.Parser
+	hdr, err := parser.Start(bs)
+	if err != nil {
+		return refusedCacheKey{}, err
 	}
+	if hdr.Response {
+		return refusedCacheKey{}, errNotQuery
+	}
+	q, err := parser.Question()
+	if err != nil {
+		return refusedCacheKey{}, err
+	}
+	name, err := dnsname.ToFQDN(rawNameToLower(q.Name.Data[:q.Name.Length]))
+	if err != nil {
+		return refusedCacheKey{}, err
+	}
+	return refusedCacheKey{resolver: rr.name.Addr, name: name, qtype: q.Type, rd: hdr.RecursionDesired}, nil
+}
+
+// refusedResponseFromQuery returns a REFUSED reply for the query bs. The
+// reply mirrors bs — its transaction ID, flags, question (with its original
+// casing) and EDNS options (including any DNS COOKIE) — so it always answers
+// the client's own request, never a cached response belonging to another.
+func refusedResponseFromQuery(bs []byte) ([]byte, error) {
+	var parser dns.Parser
+	hdr, err := parser.Start(bs)
+	if err != nil {
+		return nil, err
+	}
+	if hdr.Response {
+		return nil, errNotQuery
+	}
+	q, err := parser.Question()
+	if err != nil {
+		return nil, err
+	}
+
+	hdr.Response = true
+	hdr.RecursionAvailable = hdr.RecursionDesired
+	hdr.RCode = dns.RCodeRefused
+	b := dns.NewBuilder(nil, hdr)
+	b.StartQuestions()
+	b.Question(q)
+	// Echo the query's EDNS options back (RFC 6891), so the client's own
+	// options — notably its DNS COOKIE — are returned rather than another
+	// client's from a cached response. Queries carry neither answers nor
+	// authorities, but the parser must traverse every section in order to
+	// reach the additionals.
+	parser.SkipAllQuestions()
+	parser.SkipAllAnswers()
+	parser.SkipAllAuthorities()
+	for {
+		rh, err := parser.AdditionalHeader()
+		if err != nil {
+			break
+		}
+		if rh.Type != dns.TypeOPT {
+			parser.SkipAdditional()
+			continue
+		}
+		opt, err := parser.OPTResource()
+		if err != nil {
+			break
+		}
+		b.StartAdditionals()
+		b.OPTResource(rh, opt)
+	}
+	return b.Finish()
 }
 
 func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) (ret []byte, err error) {
