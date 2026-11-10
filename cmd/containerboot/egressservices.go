@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -198,6 +199,8 @@ func (ep *egressProxy) addrsHaveChanged(nm netmapState) bool {
 // configuration. It uses the provided status to determine what is currently
 // applied and updates the status after a successful sync.
 func (ep *egressProxy) syncEgressConfigs(cfgs egressservices.Configs, status *egressservices.Status, nm netmapState) (*egressservices.Status, error) {
+	// Rebuilt below, so a removed target's stale entry can't trigger a resync on every netmap update.
+	ep.targetFQDNs = nil
 	if !(wantsServicesConfigured(cfgs) || hasServicesConfigured(status)) {
 		return nil, nil
 	}
@@ -484,6 +487,11 @@ func (ep *egressProxy) tailnetTargetIPsForSvc(svc egressservices.Config, nm netm
 		return addrs, nil
 	}
 	egressAddrs, err := resolveTailnetFQDN(nm, svc.TailnetTarget.FQDN)
+	// Egress target endpoints configured via FQDN are stored, so
+	// that we can determine if a netmap update should trigger a
+	// resync. Failed and empty lookups are stored too, so that a
+	// target that later becomes reachable triggers a resync.
+	mak.Set(&ep.targetFQDNs, svc.TailnetTarget.FQDN, egressAddrs)
 	if err != nil {
 		log.Printf("error fetching backend addresses for %q: %v", svc.TailnetTarget.FQDN, err)
 		return addrs, nil
@@ -500,10 +508,6 @@ func (ep *egressProxy) tailnetTargetIPsForSvc(svc egressservices.Config, nm netm
 		}
 		addrs = append(addrs, addr.Addr())
 	}
-	// Egress target endpoints configured via FQDN are stored, so
-	// that we can determine if a netmap update should trigger a
-	// resync.
-	mak.Set(&ep.targetFQDNs, svc.TailnetTarget.FQDN, egressAddrs)
 	return addrs, nil
 }
 
@@ -522,16 +526,14 @@ func (ep *egressProxy) shouldResync(nm netmapState) bool {
 	}
 
 	// If the IPs for any of the egress services configured via FQDN have
-	// changed, resync.
+	// changed, resync. Resolve the same way sync does, so that Tailscale
+	// Service and 4via6 targets are checked as well as peer devices.
 	for fqdn, ips := range ep.targetFQDNs {
-		for nn := range nm.peers() {
-			if equalFQDNs(nn.Name(), fqdn) {
-				if !views.SliceEqual(views.SliceOf(ips), nn.Addresses()) {
-					log.Printf("backend addresses for egress target %q have changed old IPs %v, new IPs %v trigger egress config resync", nn.Name(), ips, nn.Addresses().AsSlice())
-					return true
-				}
-				break
-			}
+		// An error means the target has no addresses, sync logs why.
+		newIPs, _ := resolveTailnetFQDN(nm, fqdn)
+		if !slices.Equal(ips, newIPs) {
+			log.Printf("backend addresses for egress target %q have changed old IPs %v, new IPs %v trigger egress config resync", fqdn, ips, newIPs)
+			return true
 		}
 	}
 	return false
@@ -593,12 +595,6 @@ func lookupCurrentConfig(svcName string, status *egressservices.Status) (*egress
 	}
 	c, ok := status.Services[svcName]
 	return c, ok
-}
-
-func equalFQDNs(s, s1 string) bool {
-	s, _ = strings.CutSuffix(s, ".")
-	s1, _ = strings.CutSuffix(s1, ".")
-	return strings.EqualFold(s, s1)
 }
 
 // rule contains configuration for an egress proxy firewall rule.
