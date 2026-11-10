@@ -1361,6 +1361,275 @@ func TestForwarderRcodeNoTCPRetry(t *testing.T) {
 	}
 }
 
+// runEchoDNSServer runs a UDP+TCP DNS server on a single loopback port that
+// answers every query with response, rewritten to carry the query's
+// transaction ID, the way a real upstream echoes it. Unlike runDNSServer, the
+// reply always matches the query, so consecutive queries may vary their
+// transaction IDs. It returns the port and counters of the queries the server
+// received on each transport.
+func runEchoDNSServer(tb testing.TB, response []byte) (port uint16, udpQueries, tcpQueries func() int64) {
+	tb.Helper()
+	logf := tstest.WhileTestRunningLogger(tb)
+
+	var udpCount, tcpCount atomic.Int64
+
+	// Repeatedly listen until we can get the same port for UDP and TCP.
+	const tries = 25
+	var (
+		tcpLn *net.TCPListener
+		udpLn *net.UDPConn
+		err   error
+	)
+	for range tries {
+		if tcpLn != nil {
+			tcpLn.Close()
+			tcpLn = nil
+		}
+		tcpLn, err = net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+		if err != nil {
+			tb.Fatal(err)
+		}
+		udpLn, err = net.ListenUDP("udp4", &net.UDPAddr{
+			IP:   net.IPv4(127, 0, 0, 1),
+			Port: tcpLn.Addr().(*net.TCPAddr).Port,
+		})
+		if err == nil {
+			break
+		}
+	}
+	if tcpLn == nil || udpLn == nil {
+		if tcpLn != nil {
+			tcpLn.Close()
+		}
+		if udpLn != nil {
+			udpLn.Close()
+		}
+		tb.Skipf("failed to listen on same port for TCP/UDP after %d tries", tries)
+	}
+	port = uint16(tcpLn.Addr().(*net.TCPAddr).Port)
+
+	reply := func(req []byte) []byte {
+		res := append([]byte(nil), response...)
+		copy(res[0:2], req[0:2]) // echo the query's transaction ID
+		return res
+	}
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for {
+			conn, err := tcpLn.Accept()
+			if err != nil {
+				return
+			}
+			tcpCount.Add(1)
+			wg.Go(func() {
+				defer conn.Close()
+				var length uint16
+				if err := binary.Read(conn, binary.BigEndian, &length); err != nil {
+					logf("error reading length header: %v", err)
+					return
+				}
+				req := make([]byte, length)
+				if _, err := io.ReadFull(conn, req); err != nil {
+					logf("error reading query: %v", err)
+					return
+				}
+				res := reply(req)
+				out := make([]byte, len(res)+2)
+				binary.BigEndian.PutUint16(out, uint16(len(res)))
+				copy(out[2:], res)
+				if _, err := conn.Write(out); err != nil {
+					logf("error writing response: %v", err)
+				}
+			})
+		}
+	})
+	wg.Go(func() {
+		for {
+			buf := make([]byte, 65535)
+			n, addr, err := udpLn.ReadFromUDPAddrPort(buf)
+			if err != nil {
+				return
+			}
+			udpCount.Add(1)
+			go udpLn.WriteToUDPAddrPort(reply(buf[:n]), addr)
+		}
+	})
+
+	tb.Cleanup(func() {
+		tcpLn.Close()
+		udpLn.Close()
+		wg.Wait()
+	})
+	return port, udpCount.Load, tcpCount.Load
+}
+
+// TestForwarderRefusedBackoff checks that an upstream that answers REFUSED is
+// not re-queried in a tight loop when the client keeps retrying the same
+// question: after the first refusal, further queries within refusedCacheTTL
+// are answered from the refusal cache, with the retry's transaction ID, and
+// reach neither the upstream's UDP port nor its TCP port. Once the cached
+// refusal expires, the upstream is asked again.
+//
+// See tailscale/tailscale#22162.
+func TestForwarderRefusedBackoff(t *testing.T) {
+	const domain = "refused-backoff.example.com."
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+	response := makeTestResponse(t, domain, dns.RCodeRefused)
+
+	port, udpQueries, tcpQueries := runEchoDNSServer(t, response)
+
+	// Long enough that the retry loop below finishes well inside one TTL,
+	// short enough that waiting out the expiry below stays cheap.
+	tstest.Replace(t, &refusedCacheTTL, time.Second)
+
+	fwd := newTestForwarder(t, beVerbose)
+	resolvers := []resolverAndDelay{{name: &dnstype.Resolver{Addr: fmt.Sprintf("127.0.0.1:%d", port)}}}
+
+	query := func(txid uint16) []byte {
+		t.Helper()
+		req := append([]byte(nil), request...)
+		binary.BigEndian.PutUint16(req[0:2], txid)
+		rchan := make(chan *Response, 1)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := fwd.forwardWithDestChan(ctx, packet{
+			bs:     req,
+			family: "udp",
+			addr:   netip.MustParseAddrPort("127.0.0.1:12345"),
+		}, rchan, resolvers...); err != nil {
+			t.Fatalf("forwardWithDestChan: %v", err)
+		}
+		select {
+		case res := <-rchan:
+			return res.Bs
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for response: %v", ctx.Err())
+			return nil
+		}
+	}
+
+	const queries = 100
+	for i := range queries {
+		// Each retry carries a new transaction ID, like a real client's.
+		txid := uint16(i + 1)
+		resp := query(txid)
+		if got := binary.BigEndian.Uint16(resp[0:2]); got != txid {
+			t.Fatalf("response %d: transaction ID = %d, want %d", i, got, txid)
+		}
+		if rcode := getRCode(resp); rcode != dns.RCodeRefused {
+			t.Fatalf("response %d: rcode = %v, want REFUSED", i, rcode)
+		}
+	}
+
+	// The loop above is a client retry storm, but only the first query may
+	// reach the upstream; the rest must be answered from the refusal cache.
+	if got := udpQueries(); got != 1 {
+		t.Errorf("upstream saw %d UDP queries over %d client queries; want 1", got, queries)
+	}
+	if got := tcpQueries(); got != 0 {
+		t.Errorf("upstream saw %d TCP connections over %d client queries; want 0", got, queries)
+	}
+
+	// The refusal is cached, not remembered forever: once the TTL passes,
+	// the upstream is queried again (and refuses again).
+	time.Sleep(refusedCacheTTL + 100*time.Millisecond)
+	if resp := query(0xBEEF); getRCode(resp) != dns.RCodeRefused {
+		t.Fatalf("rcode after cache expiry = %v, want REFUSED", getRCode(resp))
+	}
+	if got := udpQueries(); got != 2 {
+		t.Errorf("upstream saw %d UDP queries after cache expiry; want 2", got)
+	}
+	if got := tcpQueries(); got != 0 {
+		t.Errorf("upstream saw %d TCP connections after cache expiry; want 0", got)
+	}
+}
+
+// TestForwarderRefusedCacheKeepsRaceWinner checks that a cached REFUSED from
+// one resolver doesn't stop the other resolvers in the race from being
+// queried: an upstream that keeps refusing is answered from the cache while a
+// second upstream's NOERROR still reaches the client. This is the behavior
+// added by the fix for tailscale/tailscale#19053, which must not regress.
+func TestForwarderRefusedCacheKeepsRaceWinner(t *testing.T) {
+	const domain = "refused-cache-race.example.com."
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+	refused := makeTestResponse(t, domain, dns.RCodeRefused)
+	answer := makeTestResponse(t, domain, dns.RCodeSuccess, netip.MustParseAddr("127.0.0.1"))
+
+	var refusedQueries, answeredQueries atomic.Int64
+	refusingPort := runDNSServer(t, nil, refused, func(isTCP bool, gotRequest []byte) {
+		refusedQueries.Add(1)
+	})
+	// The answering upstream is slower than the refusing one, as in the
+	// split-DNS setups that hit #22162: the REFUSED always arrives first,
+	// so the race's hold (not a scheduling accident) is what lets it win.
+	// 350ms is an ordinary cross-region latency, well inside rcodeHoldGrace.
+	answeringPort := runDNSServer(t, &testDNSServerOptions{ResponseDelay: 350 * time.Millisecond},
+		answer, func(isTCP bool, gotRequest []byte) {
+			answeredQueries.Add(1)
+		})
+
+	fwd := newTestForwarder(t, beVerbose)
+	resolvers := []resolverAndDelay{
+		{name: &dnstype.Resolver{Addr: fmt.Sprintf("127.0.0.1:%d", refusingPort)}},
+		{name: &dnstype.Resolver{Addr: fmt.Sprintf("127.0.0.1:%d", answeringPort)}},
+	}
+
+	query := func() []byte {
+		t.Helper()
+		rchan := make(chan *Response, 1)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := fwd.forwardWithDestChan(ctx, packet{
+			bs:     request,
+			family: "udp",
+			addr:   netip.MustParseAddrPort("127.0.0.1:12345"),
+		}, rchan, resolvers...); err != nil {
+			t.Fatalf("forwardWithDestChan: %v", err)
+		}
+		return (<-rchan).Bs
+	}
+
+	// Long enough that the cached refusal cannot expire mid-test.
+	tstest.Replace(t, &refusedCacheTTL, 10*time.Second)
+
+	// A first query populates the cache: the refusing upstream refuses and
+	// the answering upstream wins the race.
+	if resp := query(); !bytes.Equal(resp, answer) {
+		t.Fatalf("invalid response\ngot:  %+v\nwant: %+v", resp, answer)
+	}
+	// The losing resolver's refusal is recorded by its send goroutine as it
+	// finishes, which can trail the winning answer by a scheduler beat.
+	// Wait for it so the queries below exercise the cache rather than the
+	// race to record it.
+	if err := tstest.WaitFor(5*time.Second, func() error {
+		fwd.mu.Lock()
+		defer fwd.mu.Unlock()
+		if len(fwd.refusedAnswers) == 0 {
+			return errors.New("refusal not cached yet")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("waiting for the refusal to be cached: %v", err)
+	}
+
+	// The refusing upstream is now answered from the cache while the
+	// answering upstream is still queried, and still wins.
+	const queries = 5
+	for range queries {
+		if resp := query(); !bytes.Equal(resp, answer) {
+			t.Errorf("invalid response\ngot:  %+v\nwant: %+v", resp, answer)
+		}
+	}
+
+	if got := refusedQueries.Load(); got != 1 {
+		t.Errorf("refusing upstream saw %d queries over %d client queries; want 1", got, queries+1)
+	}
+	if got := answeredQueries.Load(); got != queries+1 {
+		t.Errorf("answering upstream saw %d queries over %d client queries; want %d", got, queries+1, queries+1)
+	}
+}
+
 // TestForwarderRaceLoserNoReadError checks that the losing resolver in a race
 // isn't counted in dns_query_fwd_udp_error_read when the query's teardown
 // closes its socket.

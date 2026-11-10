@@ -122,6 +122,21 @@ var tcpQueryTimeout = 5 * time.Second
 // It's a var only so tests can shorten it.
 var rcodeHoldGrace = udpRaceTimeout
 
+// refusedCacheTTL is how long an upstream's REFUSED answer to a question
+// suppresses sending that question to that upstream again. Without it, a
+// client that retries a REFUSED answer in a tight loop drags tailscaled into
+// an unthrottled retry storm against the refusing upstream, whose traffic
+// starves everything else on the link (tailscale/tailscale#22162). The window
+// is short because a REFUSED is often a policy decision that can change at
+// any moment.
+//
+// It's a var only so tests can shorten it.
+var refusedCacheTTL = 2 * time.Second
+
+// refusedCacheMaxEntries bounds the size of the refusal cache. Entries are
+// evicted lazily, so no goroutine is needed to keep the cache fresh.
+const refusedCacheMaxEntries = 64
+
 // txid identifies a DNS transaction.
 //
 // As the standard DNS Request ID is only 16 bits, we extend it:
@@ -352,6 +367,13 @@ type forwarder struct {
 	// schemeCache is an immutable copy of schemes. Do not read directly,
 	// use schemeCacheLocked() which will regenerate its contents as needed.
 	schemeCache views.Map[string, CustomSchemeHandler]
+
+	// refusedAnswers caches recent upstream REFUSED answers per resolver
+	// and question, so that a client retrying a REFUSED answer doesn't
+	// re-query the refusing upstream at an unthrottled rate. Guarded by mu.
+	//
+	// See tailscale/tailscale#22162.
+	refusedAnswers map[refusedCacheKey]refusedCacheEntry
 
 	// acceptDNS tracks the CorpDNS pref (--accept-dns)
 	// This lets us skip health warnings if the forwarder receives inbound
@@ -753,6 +775,16 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		return nil, fmt.Errorf("tls:// resolvers not supported yet")
 	}
 
+	// If this upstream refused the same question recently, answer from that
+	// refusal instead of querying it again, so a client retrying a REFUSED
+	// answer cannot hammer the refusing upstream
+	// (tailscale/tailscale#22162). The refusal enters the race like any
+	// other resolver error, so a healthier resolver still answers first.
+	if res, ok := f.cachedRefusal(fq, rr); ok {
+		metricDNSFwdRefusedCached.Add(1)
+		return nil, rcodeResponseError{dns.RCodeRefused, res}
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -834,6 +866,9 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		// Convert it back to the soft error callers expect.
 		switch rcode := getRCode(resp); rcode {
 		case dns.RCodeServerFailure, dns.RCodeRefused:
+			if rcode == dns.RCodeRefused {
+				f.noteRefusal(fq, rr, resp)
+			}
 			return nil, rcodeResponseError{rcode, resp}
 		}
 		return &Response{Bs: resp}, nil
@@ -842,6 +877,12 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	// If we got a truncated UDP response, return that instead of an error.
 	if trErr, ok := errors.AsType[truncatedResponseError](err); ok {
 		return &Response{Bs: trErr.res}, nil
+	}
+	// A refusal can also surface as an error when the race's other arm
+	// failed first, e.g. when the UDP reply was lost and only the TCP retry
+	// got the REFUSED answer.
+	if rcodeErr, ok := errors.AsType[rcodeResponseError](err); ok && rcodeErr.rcode == dns.RCodeRefused {
+		f.noteRefusal(fq, rr, rcodeErr.res)
 	}
 	return nil, err
 }
@@ -880,6 +921,76 @@ var errTxIDMismatch = errors.New("txid doesn't match")
 // retries are disabled, so that a failed UDP query returns at once instead of
 // waiting out its deadline.
 var errTCPRetryDisabled = errors.New("no TCP retry: disabled by envknob or control knob")
+
+// refusedCacheKey identifies an upstream's REFUSED answer: the resolver that
+// refused, and the question it refused.
+type refusedCacheKey struct {
+	resolver string
+	name     dnsname.FQDN
+	qtype    dns.Type
+}
+
+// refusedCacheEntry is a cached REFUSED response and when it expires.
+type refusedCacheEntry struct {
+	res   []byte
+	until time.Time
+}
+
+// cachedRefusal returns the REFUSED response that rr recently gave for fq's
+// question, rewritten to carry fq's transaction ID, or reports false if there
+// is none fresh enough to serve.
+func (f *forwarder) cachedRefusal(fq *forwardQuery, rr resolverAndDelay) ([]byte, bool) {
+	domain, typ, err := nameFromQuery(fq.packet)
+	if err != nil {
+		return nil, false
+	}
+	f.mu.Lock()
+	e, ok := f.refusedAnswers[refusedCacheKey{rr.name.Addr, domain, typ}]
+	f.mu.Unlock()
+	if !ok || time.Now().After(e.until) {
+		return nil, false
+	}
+	res := append([]byte(nil), e.res...)
+	binary.BigEndian.PutUint16(res[0:2], uint16(fq.txid))
+	return res, true
+}
+
+// noteRefusal records res, an upstream's REFUSED answer to fq's question, so
+// that further queries for that question aren't sent to rr for
+// refusedCacheTTL.
+func (f *forwarder) noteRefusal(fq *forwardQuery, rr resolverAndDelay, res []byte) {
+	if len(res) < headerBytes {
+		return
+	}
+	domain, typ, err := nameFromQuery(fq.packet)
+	if err != nil {
+		return
+	}
+	key := refusedCacheKey{rr.name.Addr, domain, typ}
+	now := time.Now()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.refusedAnswers == nil {
+		f.refusedAnswers = make(map[refusedCacheKey]refusedCacheEntry, 1)
+	}
+	// Evict lazily: expired entries first, then arbitrary ones to stay
+	// within refusedCacheMaxEntries.
+	for k, e := range f.refusedAnswers {
+		if now.After(e.until) {
+			delete(f.refusedAnswers, k)
+		}
+	}
+	for len(f.refusedAnswers) >= refusedCacheMaxEntries {
+		for k := range f.refusedAnswers {
+			delete(f.refusedAnswers, k)
+			break
+		}
+	}
+	f.refusedAnswers[key] = refusedCacheEntry{
+		res:   append([]byte(nil), res...),
+		until: now.Add(refusedCacheTTL),
+	}
+}
 
 func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) (ret []byte, err error) {
 	ipp, ok := rr.name.IPPort()

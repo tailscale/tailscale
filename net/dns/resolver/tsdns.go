@@ -1607,6 +1607,10 @@ var (
 	metricDNSFwdUDPErrorRead    = clientmetric.NewCounter("dns_query_fwd_udp_error_read")
 	metricDNSFwdUDPSuccess      = clientmetric.NewCounter("dns_query_fwd_udp_success")
 
+	// metricDNSFwdRefusedCached counts queries answered from the forwarder's
+	// recent-REFUSED cache rather than by re-querying the refusing upstream.
+	metricDNSFwdRefusedCached = clientmetric.NewCounter("dns_query_fwd_refused_cached")
+
 	// metricDNSFwdUDPReadCtxDone counts reads that ended because the query
 	// ended, either by losing a race or by running out its deadline. Those
 	// reads used to be counted as upstream read failures. Counting them here
