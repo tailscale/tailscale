@@ -404,6 +404,8 @@ type LogCatcher struct {
 	gotErr error
 	reqs   int
 	raw    bool // indicates whether to store the raw JSON logs uploaded, instead of just the text
+
+	unexpected []string // log lines containing "[unexpected]"
 }
 
 // UseLogf makes the logcatcher implementation use a given logf function
@@ -425,6 +427,15 @@ func (lc *LogCatcher) logsContains(sub mem.RO) bool {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
 	return mem.Contains(mem.B(lc.buf.Bytes()), sub)
+}
+
+// unexpectedLines returns the captured log lines that contain
+// "[unexpected]", which tailscaled uses to flag conditions that
+// should never happen.
+func (lc *LogCatcher) unexpectedLines() []string {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	return lc.unexpected
 }
 
 func (lc *LogCatcher) numRequests() int {
@@ -512,6 +523,9 @@ func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		id := privID.Public().String()[:3] // good enough for integration tests
 		for _, ent := range jreq {
+			if strings.Contains(ent.Text, "[unexpected]") {
+				lc.unexpected = append(lc.unexpected, strings.TrimSpace(ent.Text))
+			}
 			if lc.raw {
 				lc.buf.Write(bodyBytes)
 				continue
@@ -599,6 +613,9 @@ func NewTestEnv(t testing.TB, opts ...TestEnvOpt) *TestEnv {
 		if err := e.TrafficTrap.Err(); err != nil {
 			e.t.Errorf("traffic trap: %v", err)
 			e.t.Logf("logs: %s", e.LogCatcher.logsString())
+		}
+		for _, line := range e.LogCatcher.unexpectedLines() {
+			e.t.Errorf("tailscaled logged: %s", line)
 		}
 		e.LogCatcherServer.Close()
 		e.TrafficTrapServer.Close()
@@ -953,6 +970,7 @@ func (n *TestNode) daemonEnv(ipnGOOS string) []string {
 		"TS_PANIC_IF_HIT_MAIN_CONTROL=1",
 		"TS_DISABLE_PORTMAPPER=1", // shouldn't be needed; test is all localhost
 		"TS_DEBUG_LOG_RATE=all",
+		"IN_TS_TEST=1", // upload logs immediately, so the LogCatcher sees them before the test ends; skip external network probes
 	}
 	if n.allowUpdates {
 		env = append(env, "TS_TEST_ALLOW_AUTO_UPDATE=1")
