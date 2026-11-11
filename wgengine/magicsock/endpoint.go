@@ -59,8 +59,8 @@ func init() {
 // to the peer.
 type endpoint struct {
 	// atomically accessed; declared first for alignment reasons
-	lastRecvWG            mono.Time // last time there were incoming packets from this peer destined for wireguard-go (e.g. not disco)
-	lastRecvUDPAny        mono.Time // last time there were incoming UDP packets from this peer of any kind
+	lastRecvWG            mono.AtomicTime // last time there were incoming packets from this peer destined for wireguard-go (e.g. not disco)
+	lastRecvUDPAny        mono.AtomicTime // last time there were incoming UDP packets from this peer of any kind
 	numStopAndResetAtomic int64
 	debugUpdates          *ringlog.RingLog[EndpointChange]
 
@@ -544,6 +544,54 @@ func (st *endpointState) addPongReplyLocked(r pongReply) {
 	st.recentPong = i
 }
 
+// untrustBestAddrLocked ends the trust window of de.bestAddr without
+// forgetting the address. addrForSendLocked then sends to both the best
+// address and DERP, and the next pong from any address can replace it.
+// A pong from the best address itself restores trust.
+//
+// de.mu must be held.
+func (de *endpoint) untrustBestAddrLocked(why string) {
+	if !de.bestAddr.ap.IsValid() {
+		return
+	}
+	de.debugUpdates.Add(EndpointChange{
+		When: time.Now(),
+		What: why,
+		From: de.bestAddr,
+	})
+	de.trustBestAddrUntil = 0
+}
+
+// bestAddrUnansweredLocked reports whether the current direct best address
+// was pinged at or after at (the start of a ping round) and has not answered
+// any ping since it was last pinged.
+//
+// de.mu must be held.
+func (de *endpoint) bestAddrUnansweredLocked(at mono.Time) bool {
+	if !de.bestAddr.isDirect() {
+		return false
+	}
+	st, ok := de.endpointState[de.bestAddr.ap]
+	if !ok || st.lastPing.IsZero() || st.lastPing.Before(at) {
+		return false
+	}
+	return de.bestAddrAt.Before(st.lastPing)
+}
+
+// untrustBestAddrIfOmittedLocked stops trusting the direct best address if
+// the peer's latest CallMeMaybe, which lists all of its current endpoints,
+// does not include it. The peer has then moved to another network, however
+// we learned that address (for example from an incoming ping instead of an
+// earlier CallMeMaybe, in which case deleteEndpointLocked doesn't apply).
+//
+// de.mu must be held.
+func (de *endpoint) untrustBestAddrIfOmittedLocked(eps []netip.AddrPort) {
+	if !de.bestAddr.isDirect() || slices.Contains(eps, de.bestAddr.ap) {
+		return
+	}
+	de.untrustBestAddrLocked("handleCallMeMaybe-bestAddr-omitted")
+}
+
 func (de *endpoint) deleteEndpointLocked(why string, ep netip.AddrPort) {
 	de.debugUpdates.Add(EndpointChange{
 		When: time.Now(),
@@ -597,9 +645,9 @@ func (de *endpoint) noteRecvActivity(src epAddr, now mono.Time) bool {
 		de.mu.Unlock()
 	}
 
-	elapsed := now.Sub(de.lastRecvWG.LoadAtomic())
+	elapsed := now.Sub(de.lastRecvWG.Load())
 	if elapsed > 10*time.Second {
-		de.lastRecvWG.StoreAtomic(now)
+		de.lastRecvWG.Store(now)
 		return true
 	}
 	return false
@@ -843,7 +891,7 @@ func (de *endpoint) heartbeatForLifetime() {
 		p.resetCycleEndpointLocked()
 		return
 	}
-	inactiveFor := mono.Now().Sub(max(de.lastRecvUDPAny.LoadAtomic(), de.lastSendAny))
+	inactiveFor := mono.Now().Sub(max(de.lastRecvUDPAny.Load(), de.lastSendAny))
 	delta := afterInactivityFor - inactiveFor
 	if delta.Abs() > udpLifetimeProbeSchedulingTolerance {
 		if delta < 0 {
@@ -917,7 +965,7 @@ func (de *endpoint) heartbeat() {
 			// a WireGuard keepalive may have fallen somewhere within the
 			// sessionActiveTimeout window. heartbeatForLifetime will also
 			// perform a similar check, and reschedule as necessary.
-			inactiveFor := now.Sub(max(de.lastSendAny, de.lastRecvUDPAny.LoadAtomic()))
+			inactiveFor := now.Sub(max(de.lastSendAny, de.lastRecvUDPAny.Load()))
 			after := afterInactivityFor - inactiveFor
 			if after < 0 {
 				// shouldn't happen
@@ -2001,6 +2049,13 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 			latency: latency,
 			wireMTU: pingSizeToPktLen(sp.size, sp.to),
 		}
+		if sp.purpose == pingDiscovery && thisPong.epAddr != de.bestAddr.epAddr && de.bestAddrUnansweredLocked(sp.at) {
+			// Another address answered a discovery ping, but the current
+			// best address was pinged in the same round and has stayed
+			// silent. Its trust window (trustUDPAddrDuration) only
+			// reflects an older pong, so don't wait for it to run out.
+			de.untrustBestAddrLocked("handlePongConnLocked-bestAddr-unanswered")
+		}
 		bestUntrusted := now.After(de.trustBestAddrUntil)
 		if betterAddr(thisPong, de.bestAddr) || bestUntrusted {
 			de.c.logf("magicsock: disco: node %v %v now using %v mtu=%v tx=%x", de.publicKey.ShortString(), de.discoShort(), sp.to, thisPong.wireMTU, m.TxID[:6])
@@ -2208,6 +2263,10 @@ func (de *endpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 			de.deleteEndpointLocked("handleCallMeMaybe", ep)
 		}
 	}
+
+	// If the peer no longer lists our best address, stop trusting it.
+	// The pings below tell us right away if it still works.
+	de.untrustBestAddrIfOmittedLocked(m.MyNumber)
 
 	// Zero out all the lastPing times to force sendPingsLocked to send new ones,
 	// even if it's been less than 5 seconds ago.

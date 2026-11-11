@@ -1178,7 +1178,7 @@ func (c *Conn) LastRecvActivityOfNodeKey(nk key.NodePublic) string {
 	if !ok {
 		return "never"
 	}
-	saw := de.lastRecvWG.LoadAtomic()
+	saw := de.lastRecvWG.Load()
 	if saw == 0 {
 		return "never"
 	}
@@ -1753,6 +1753,11 @@ type udpReceiveConfig struct {
 	directBytes, peerRelayBytes     *expvar.Int
 }
 
+const (
+	// readErrRetryDelay paces a [conn.ReceiveFunc]'s read errors.
+	readErrRetryDelay = 100 * time.Millisecond
+)
+
 func (c *Conn) mkReceiveFunc(cfg udpReceiveConfig) conn.ReceiveFunc {
 	ruc := cfg.ruc
 	directPacketMetric, peerRelayPacketMetric := cfg.directPackets, cfg.peerRelayPackets
@@ -1793,7 +1798,16 @@ func (c *Conn) mkReceiveFunc(cfg udpReceiveConfig) conn.ReceiveFunc {
 					metricRecvUDPErrorReachability.Add(1)
 					continue
 				}
-				return 0, err
+				if !neterror.IsUDPReadUnknown(err) {
+					return 0, err
+				}
+
+				metricRecvUDPErrorUnknown.Add(1)
+				select {
+				case <-c.connCtx.Done():
+				case <-time.After(readErrRetryDelay):
+				}
+				continue
 			}
 
 			reportToCaller := false
@@ -1925,7 +1939,7 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		ep = de
 	}
 	now := mono.Now()
-	ep.lastRecvUDPAny.StoreAtomic(now)
+	ep.lastRecvUDPAny.Store(now)
 	connNoted := ep.noteRecvActivity(src, now)
 	if buildfeatures.HasNetLog {
 		if update := c.connCounter.Load(); update != nil {
@@ -2262,7 +2276,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		// Record receive time for UDP transport packets.
 		pi, ok := c.peerMap.byEpAddr[src]
 		if ok {
-			pi.ep.lastRecvUDPAny.StoreAtomic(mono.Now())
+			pi.ep.lastRecvUDPAny.Store(mono.Now())
 		}
 	}
 
@@ -3984,6 +3998,13 @@ func (c *Conn) Rebind() {
 		return
 	}
 
+	// Our endpoints were gathered on the old network. Mark them stale so
+	// that enqueueCallMeMaybe waits for fresh STUN results instead of
+	// sending the old list to peers.
+	c.mu.Lock()
+	c.lastEndpointsTime = time.Time{}
+	c.mu.Unlock()
+
 	var ifIPs []netip.Prefix
 	if c.netMon != nil {
 		st := c.netMon.InterfaceState()
@@ -4351,6 +4372,8 @@ var (
 
 	// UDP reads matching neterror.IsUDPReadFeedback.
 	metricRecvUDPErrorReachability = clientmetric.NewCounter("magicsock_recv_udp_error_reachability")
+	// UDP reads matching neterror.IsUDPReadUnknown.
+	metricRecvUDPErrorUnknown = clientmetric.NewCounter("magicsock_recv_udp_error_unknown")
 
 	// Sends (data)
 	//
@@ -4578,7 +4601,7 @@ func (le *lazyEndpoint) InitiationMessagePublicKey(peerPublicKey [32]byte) {
 		return
 	}
 	now := mono.Now()
-	ep.lastRecvUDPAny.StoreAtomic(now)
+	ep.lastRecvUDPAny.Store(now)
 	ep.noteRecvActivity(le.src, now)
 }
 
