@@ -852,11 +852,16 @@ func applyDefaultProxyClass(ctx context.Context, logger *zap.SugaredLogger, cl c
 }
 
 func deployNameserver(ctx context.Context, logger *zap.SugaredLogger, cl client.Client, img *tsapi.NameserverImage) (*tsapi.DNSConfig, error) {
+	// Delete any DNSConfig left behind by a previous run that didn't reach cleanup.
+	if err := deleteDNSConfigAndWait(ctx, logger, cl); err != nil {
+		return nil, err
+	}
+
 	dc := &tsapi.DNSConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "dns"},
 		Spec:       tsapi.DNSConfigSpec{Nameserver: &tsapi.Nameserver{Image: img}},
 	}
-	if err := createOrUpdate(ctx, cl, dc); err != nil {
+	if err := cl.Create(ctx, dc); err != nil {
 		return nil, fmt.Errorf("failed to create DNSConfig: %w", err)
 	}
 
@@ -877,6 +882,35 @@ func deployNameserver(ctx context.Context, logger *zap.SugaredLogger, cl client.
 				return dc, nil
 			}
 			logger.Info("waiting for nameserver to be ready...")
+		}
+	}
+}
+
+func deleteDNSConfigAndWait(ctx context.Context, logger *zap.SugaredLogger, cl client.Client) error {
+	dc := &tsapi.DNSConfig{ObjectMeta: metav1.ObjectMeta{Name: "dns"}}
+	if err := cl.Delete(ctx, dc); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("deleting stale DNSConfig: %w", err)
+	}
+	logger.Info("deleting stale DNSConfig from a previous run; waiting for it to be removed...")
+
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for stale DNSConfig to be deleted (likely a stuck operator finalizer): %w", ctx.Err())
+		case <-ticker.C:
+			switch err := cl.Get(ctx, client.ObjectKeyFromObject(dc), dc); {
+			case apierrors.IsNotFound(err):
+				return nil
+			case err != nil:
+				return fmt.Errorf("waiting for stale DNSConfig deletion: %w", err)
+			}
 		}
 	}
 }
