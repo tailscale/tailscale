@@ -1187,6 +1187,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 			vlogf("netmap: ending timeout goroutine")
 			return
 		case <-watchdogTimedOut:
+			metricMapRequestWatchdogTimeout.Add(1)
 			c.logf("map response long-poll timed out!")
 			cancel()
 			return
@@ -2003,6 +2004,10 @@ var (
 	metricMapRequests     = clientmetric.NewCounter("controlclient_map_requests")
 	metricMapRequestsLite = clientmetric.NewCounter("controlclient_map_requests_lite")
 	metricMapRequestsPoll = clientmetric.NewCounter("controlclient_map_requests_poll")
+
+	// Includes both the initial HTTP request and waits for map responses;
+	// this is not exclusively a streaming keepalive timeout or a reconnect.
+	metricMapRequestWatchdogTimeout = clientmetric.NewCounter("controlclient_map_request_watchdog_timeout")
 
 	metricMapResponseMessages   = clientmetric.NewCounter("controlclient_map_response_message") // any message type
 	metricMapResponsePings      = clientmetric.NewCounter("controlclient_map_response_ping")

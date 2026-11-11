@@ -23,6 +23,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"os/user"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -55,6 +56,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/rands"
+	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/zstdframe"
 	"tailscale.com/version"
 )
@@ -65,6 +67,8 @@ var (
 
 	// runWindowsServiceTests enables the Windows service-mode integration tests, on by default in CI.
 	runWindowsServiceTests = flag.Bool("run-windows-service-tests", cibuild.On(), "run Windows service-mode integration tests")
+	// When false, each Windows node keeps an IPN bus watcher open instead, as the GUI does.
+	windowsUnattended = flag.Bool("windows-unattended", true, "pass --unattended to tailscale up on Windows")
 )
 
 // MainError is an error that's set if an error conditions happens outside of a
@@ -404,6 +408,8 @@ type LogCatcher struct {
 	gotErr error
 	reqs   int
 	raw    bool // indicates whether to store the raw JSON logs uploaded, instead of just the text
+
+	nodeWriters map[string]io.Writer // by /node/<key> upload path, for nodes with no stderr to read
 }
 
 // UseLogf makes the logcatcher implementation use a given logf function
@@ -446,14 +452,38 @@ func (lc *LogCatcher) Reset() {
 	lc.buf.Reset()
 }
 
+// nodePath returns a log target path whose uploaded log lines lc also writes to w.
+func (lc *LogCatcher) nodePath(w io.Writer) string {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	if lc.nodeWriters == nil {
+		lc.nodeWriters = make(map[string]io.Writer)
+	}
+	key := strconv.Itoa(len(lc.nodeWriters))
+	lc.nodeWriters[key] = w
+	return "/node/" + key
+}
+
+// nodeWriter returns the writer that nodePath registered for key, or nil.
+func (lc *LogCatcher) nodeWriter(key string) io.Writer {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	return lc.nodeWriters[key]
+}
+
 func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// POST /c/<collection-name>/<private-ID>
+	// POST [/node/<key>]/c/<collection-name>/<private-ID>
 	if r.Method != "POST" {
 		log.Printf("bad logcatcher method: %v", r.Method)
 		http.Error(w, "only POST is supported", 400)
 		return
 	}
-	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/c/"), "/")
+	path, nodeKey := r.URL.Path, ""
+	if rest, ok := strings.CutPrefix(path, "/node/"); ok {
+		nodeKey, path, _ = strings.Cut(rest, "/")
+		path = "/" + path
+	}
+	pathParts := strings.Split(strings.TrimPrefix(path, "/c/"), "/")
 	if len(pathParts) != 2 {
 		log.Printf("bad logcatcher path: %q", r.URL.Path)
 		http.Error(w, "bad URL", 400)
@@ -496,6 +526,17 @@ func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var ent Entry
 		err = json.Unmarshal(bodyBytes, &ent)
 		jreq = append(jreq, ent)
+	}
+
+	if nw := lc.nodeWriter(nodeKey); nw != nil && err == nil {
+		// Outside lc.mu, since the node's log line hooks run inside Write.
+		var out bytes.Buffer
+		for _, ent := range jreq {
+			if text := strings.TrimSpace(ent.Text); text != "" {
+				fmt.Fprintf(&out, "%s\n", text)
+			}
+		}
+		nw.Write(out.Bytes())
 	}
 
 	lc.mu.Lock()
@@ -617,9 +658,11 @@ type TestNode struct {
 
 	dir          string // temp dir for sock & state
 	configFile   string // or empty for none
+	syspolicy    map[pkey.Key]any
 	sockFile     string
 	stateFile    string
 	upFlagGOOS   string // if non-empty, sets TS_DEBUG_UP_FLAG_GOOS for cmd/tailscale CLI
+	logTarget    string // if non-empty, sets TS_LOG_TARGET instead of the log catcher's URL
 	encryptState bool
 	allowUpdates bool
 	tunMode      bool // TUN rather than userspace networking
@@ -638,6 +681,19 @@ func (n *TestNode) writeBlankEnvFile() string {
 		t.Fatalf("writing %s: %v", path, err)
 	}
 	return path
+}
+
+// writeSyspolicy writes the node's syspolicy settings to path as JSON.
+func (n *TestNode) writeSyspolicy(path string) {
+	t := n.env.t
+	t.Helper()
+	b, err := json.Marshal(n.syspolicy)
+	if err != nil {
+		t.Fatalf("encoding syspolicy: %v", err)
+	}
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatalf("writing %s: %v", path, err)
+	}
 }
 
 // TestNodeOpt represents an option that can be passed to NewTestNode.
@@ -714,10 +770,11 @@ func NewTestNode(t *testing.T, env *TestEnv, opts ...TestNodeOpt) *TestNode {
 		n.sockFile = `\\.\pipe\tailscale-test-` + rands.HexString(8)
 	}
 
-	// Look for a data race or panic.
+	// Look for a data race or crash.
 	// Once we see the start marker, start logging the rest.
 	var sawRace bool
 	var sawPanic bool
+	var failed bool
 	n.addLogLineHook(func(line []byte) {
 		lineB := mem.B(line)
 		if mem.Contains(lineB, mem.S("DEBUG-ADDR=")) {
@@ -726,10 +783,15 @@ func NewTestNode(t *testing.T, env *TestEnv, opts ...TestNodeOpt) *TestNode {
 		if mem.Contains(lineB, mem.S("WARNING: DATA RACE")) {
 			sawRace = true
 		}
-		if mem.HasPrefix(lineB, mem.S("panic: ")) {
+		if mem.HasPrefix(lineB, mem.S("panic: ")) || mem.HasPrefix(lineB, mem.S("fatal error: ")) {
 			sawPanic = true
 		}
 		if sawRace || sawPanic {
+			if !failed {
+				failed = true
+				// Fail here, since the Windows service restarts a crashed tailscaled.
+				t.Error("tailscaled crashed or hit a data race, its output follows")
+			}
 			t.Logf("%s", line)
 		}
 	})
@@ -760,6 +822,18 @@ func (n *TestNode) diskPrefs() *ipn.Prefs {
 	fs, err := store.New(nil, n.stateFile)
 	if err != nil {
 		t.Fatalf("reading prefs, NewFileStore: %v", err)
+	}
+	if runtime.GOOS == "windows" && !*windowsUnattended {
+		// Without --unattended the prefs go to the CLI user's own profile, which needs a Windows SID.
+		u, err := user.Current()
+		if err != nil {
+			t.Fatalf("reading prefs, user.Current: %v", err)
+		}
+		p, err := ipnlocal.ReadDefaultUserPrefsForTest(t.Logf, fs, ipn.WindowsUserID(u.Uid))
+		if err != nil {
+			t.Fatalf("reading prefs, ReadDefaultUserPrefsForTest: %v", err)
+		}
+		return p.AsStruct()
 	}
 	p, err := ipnlocal.ReadStartupPrefsForTest(t.Logf, fs)
 	if err != nil {
@@ -943,7 +1017,7 @@ func (n *TestNode) awaitTailscaledRunnable() error {
 func (n *TestNode) daemonEnv(ipnGOOS string) []string {
 	env := []string{
 		"TS_DEBUG_PERMIT_HTTP_C2N=1",
-		"TS_LOG_TARGET=" + n.env.LogCatcherServer.URL,
+		"TS_LOG_TARGET=" + cmp.Or(n.logTarget, n.env.LogCatcherServer.URL),
 		"HTTP_PROXY=" + n.env.TrafficTrapServer.URL,
 		"HTTPS_PROXY=" + n.env.TrafficTrapServer.URL,
 		"TS_DEBUG_FAKE_GOOS=" + ipnGOOS,
@@ -986,8 +1060,9 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 	}
 
 	if runtime.GOOS == "windows" && n.tunMode {
-		// TODO(#20443): plumb service logs here so races/panics/DEBUG-ADDR are seen in service mode.
 		n.tailscaledParser = &nodeOutputParser{n: n}
+		// The service has no stderr to read, so its uploaded logs feed the parser instead.
+		n.logTarget = n.env.LogCatcherServer.URL + n.env.LogCatcher.nodePath(n.tailscaledParser)
 		return n.startWindowsServiceDaemon()
 	}
 
@@ -1017,6 +1092,13 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 	if n.configFile != "" {
 		cmd.Args = append(cmd.Args, "--config="+n.configFile)
 	}
+	var syspolicyFile string
+	if n.syspolicy != nil {
+		syspolicyFile = filepath.Join(n.dir, "syspolicy.json")
+		n.writeSyspolicy(syspolicyFile)
+	}
+	// An empty --syspolicy-file stops tailscaled from reading the machine-wide policy file.
+	cmd.Args = append(cmd.Args, "--syspolicy-file="+syspolicyFile)
 	if n.encryptState {
 		cmd.Args = append(cmd.Args, "--encrypt-state")
 	}
@@ -1056,10 +1138,35 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		cmd.Process.Kill()
 		cmd.Process.Wait()
 	})
+	// This checks ipnGOOS, since a fake-Windows node also disconnects once the CLI exits.
+	if ipnGOOS == "windows" && !*windowsUnattended {
+		n.watchIPNBusLikeGUI()
+	}
 	return &Daemon{
 		Process: cmd.Process,
 		node:    n,
 	}
+}
+
+// watchIPNBusLikeGUI keeps an IPN bus watcher open for the rest of the test, as the GUI does.
+func (n *TestNode) watchIPNBusLikeGUI() {
+	t := n.env.t
+	t.Helper()
+	var w *local.IPNBusWatcher
+	if err := tstest.WaitFor(90*time.Second, func() (err error) {
+		w, err = n.LocalClient().WatchIPNBus(t.Context(), 0)
+		return err
+	}); err != nil {
+		t.Fatalf("watching IPN bus: %v", err)
+	}
+	t.Cleanup(func() { w.Close() })
+	go func() {
+		for {
+			if _, err := w.Next(); err != nil {
+				return
+			}
+		}
+	}()
 }
 
 func (n *TestNode) MustUp(extraArgs ...string) {
@@ -1234,12 +1341,15 @@ func (n *TestNode) TailscaleForOutput(arg ...string) *exec.Cmd {
 // It does not start the process.
 func (n *TestNode) Tailscale(arg ...string) *exec.Cmd {
 	isUp := len(arg) > 0 && arg[0] == "up"
-	if isUp && cmp.Or(n.upFlagGOOS, runtime.GOOS) == "windows" {
+	if isUp && *windowsUnattended && cmp.Or(n.upFlagGOOS, runtime.GOOS) == "windows" {
 		isBareUp := len(arg) == 1
 		// --unattended keeps the current profile after the CLI exits; without it
 		// Windows switches to an empty background profile and the node drops to NoState.
-		// TODO(yaruk): also run tests without --unattended; see #20751.
-		if !isBareUp && !slices.Contains(arg, "--unattended") {
+		setsUnattended := slices.ContainsFunc(arg, func(a string) bool {
+			name, _, _ := strings.Cut(a, "=")
+			return name == "--unattended" || name == "-unattended"
+		})
+		if !isBareUp && !setsUnattended {
 			arg = append(arg, "--unattended")
 		}
 	}

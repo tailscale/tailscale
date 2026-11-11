@@ -70,3 +70,25 @@ func TestIsClosedPipeError(t *testing.T) {
 		}
 	}
 }
+
+func TestIsUDPReadErrorUnknown(t *testing.T) {
+	for _, tt := range []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{errors.New("unknown error"), false},
+		{windows.WSAEADDRNOTAVAIL, false},
+		{windows.WSAEHOSTUNREACH, false},
+		{windows.WSAECONNRESET, false},
+		{syscall.EADDRNOTAVAIL, false},
+		{net.ErrClosed, false},
+	} {
+		wrapped := &net.OpError{Op: "read", Net: "udp4", Err: &os.SyscallError{
+			Syscall: "WSARecvFrom", Err: tt.err,
+		}}
+		if got := IsUDPReadUnknown(wrapped); got != tt.want {
+			t.Errorf("IsUDPReadUnknown(wrapped %v) = %v, want %v", tt.err, got, tt.want)
+		}
+	}
+}

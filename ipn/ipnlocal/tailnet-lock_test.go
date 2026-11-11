@@ -26,10 +26,12 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tka"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
@@ -1172,5 +1174,50 @@ func TestRotationTracker(t *testing.T) {
 				t.Errorf("rotationTracker.obsoleteKeys() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLogoutDuringTKASyncIgnoresStaleNetmap(t *testing.T) {
+	inBootstrap := make(chan struct{})
+	release := make(chan struct{})
+	ts, client := fakeNoiseServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(inBootstrap)
+		<-release
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer ts.Close()
+
+	lb, _, cc := newLocalBackendWithMockEngineAndControl(t, true)
+	mustDo(t)(lb.Start(ipn.Options{}))
+	mustDo2(t)(lb.EditPrefs(&ipn.MaskedPrefs{Prefs: ipn.Prefs{WantRunning: true}, WantRunningSet: true}))
+	self := makePeer(1)
+	cc().authenticated(buildNetmapWithPeers(self))
+
+	// Block in tkaSyncIfNeeded's bootstrap fetch, which runs with b.mu released.
+	lb.mu.Lock()
+	lb.ccAuto = fakeControlClient(t, client)
+	lb.mu.Unlock()
+	nm := buildNetmapWithPeers(self)
+	nm.AllCaps = set.Of(nodecap.TailnetLock)
+	nm.TKAEnabled = true
+	oldCC := cc()
+	sent := make(chan struct{})
+	go func() {
+		defer close(sent)
+		oldCC.send(sendOpt{nm: nm})
+	}()
+
+	<-inBootstrap
+	if err := lb.Logout(t.Context(), ipnauth.Self); err != nil {
+		t.Errorf("Logout: %v", err)
+	}
+	close(release)
+	<-sent
+
+	if nm := lb.NetMapNoPeers(); nm != nil {
+		t.Errorf("netmap = %v after logout, want nil", nm)
+	}
+	if st := lb.State(); st != ipn.NeedsLogin {
+		t.Errorf("state = %v after logout, want NeedsLogin", st)
 	}
 }

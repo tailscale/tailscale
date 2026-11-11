@@ -23,7 +23,9 @@ const cooldownSeconds = 300
 func LinkChangeLogLimiter(ctx context.Context, logf logger.Logf, nm *Monitor) logger.Logf {
 	var formatLastSeen sync.Map // map[string]int64
 
-	sub := eventbus.SubscribeFunc(nm.b, func(cd *ChangeDelta) {
+	// The delta is passed by value, but it contains pointers to the old and
+	// new interface states, which are shared. The delta must not be mutated.
+	sub := eventbus.SubscribeFunc(nm.b, func(cd ChangeDelta) {
 		// Any link changes that are flagged as likely require a rebind are
 		// interesting enough that we should log them.
 		if cd.RebindLikelyRequired {

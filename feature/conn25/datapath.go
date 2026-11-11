@@ -48,13 +48,12 @@ type Conn25Datapath interface {
 	// non-app-connector traffic.
 	ConnectorRealIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, error)
 
-	// ClientFlowCreated is called after a client-side flow for transitIP has
-	// been installed in the client flow table.
-	ClientFlowCreated(transitIP netip.Addr)
-	// ClientFlowRemoved is called after such a flow is removed. For each
-	// flow installed in the client flow table, ClientFlowCreated is called
-	// before any ClientFlowRemoved that fires for it.
-	ClientFlowRemoved(transitIP netip.Addr)
+	// ClientFlowCreated is called before a client-side flow for transitIP has
+	// been installed in the client flow table, and returns a cleanup function
+	// that the caller must invoke when that flow is removed. The cleanup takes
+	// effect at most once; implementations must ignore repeat calls rather than
+	// release the flow's hold on its address assignment more than once.
+	ClientFlowCreated(transitIP netip.Addr) func()
 }
 
 // datapathHandler handles packets from the datapath,
@@ -267,15 +266,13 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed, tun *tstu
 
 	// Notify Conn25 that a flow for transitIP is being established before
 	// installing it in the flow table. This guarantees that ClientFlowCreated
-	// for this flow precedes any ClientFlowRemoved that fires for it.
-	dh.conn25.ClientFlowCreated(transitIP)
+	// for this flow precedes the cleanup that fires when it is removed.
+	flowCleanup := dh.conn25.ClientFlowCreated(transitIP)
 
 	dh.clientFlowTable.NewFlow(FlowData{
-		FromTun: outgoing,
-		FromWG:  incoming,
-		OnRemove: func() {
-			dh.conn25.ClientFlowRemoved(transitIP)
-		},
+		FromTun:  outgoing,
+		FromWG:   incoming,
+		OnRemove: flowCleanup,
 	})
 	outgoing.Action(p)
 	return filter.Accept

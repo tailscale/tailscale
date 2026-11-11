@@ -239,7 +239,7 @@ func (d *Detector) dialContext(ctx context.Context, network, addr string) (net.C
 
 	dl := &net.Dialer{
 		Timeout: Timeout,
-		Control: func(network, address string, c syscall.RawConn) error {
+		ControlContext: func(_ context.Context, network, address string, c syscall.RawConn) error {
 			return setSocketInterfaceIndex(c, ifIndex, d.logf)
 		},
 	}

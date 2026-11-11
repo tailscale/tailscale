@@ -129,7 +129,7 @@ func (c *Conn) ServeHTTPDebug(w http.ResponseWriter, r *http.Request) {
 }
 
 func printEndpointHTML(w io.Writer, ep *endpoint) {
-	lastRecv := ep.lastRecvWG.LoadAtomic()
+	lastRecv := ep.lastRecvWG.Load()
 
 	ep.mu.Lock()
 	defer ep.mu.Unlock()

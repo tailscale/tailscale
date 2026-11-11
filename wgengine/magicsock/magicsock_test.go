@@ -30,7 +30,6 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
-	"unsafe"
 
 	qt "github.com/frankban/quicktest"
 	"github.com/google/go-cmp/cmp"
@@ -1570,36 +1569,6 @@ func TestDiscoStringLogRace(t *testing.T) {
 		de.mu.Lock()
 	}()
 	wg.Wait()
-}
-
-// Test32bitAlignment verifies that the 64-bit atomic mono.Time fields are
-// 64-bit aligned, so that StoreAtomic and LoadAtomic won't panic on 32-bit
-// platforms.
-//
-// For normal Go atomic types (sync/atomic.Int64, etc), the Go compiler
-// guarantees 64-bit alignment on 32-bit platforms with an unexported magic
-// embedded struct field. We can't make mono.Time use that easily. We could change
-// mono.Time to be type Time struct { atomic.Int64 }, but that's pretty invasive.
-// Instead, we just have this test to keep us safe on 32-bit platforms.
-func Test32bitAlignment(t *testing.T) {
-	if rt := reflect.TypeFor[mono.Time](); rt.Kind() != reflect.Int64 {
-		t.Fatalf("mono.Time is not a 64-bit integer type anymore; this test may be irrelevant now or out of date")
-	}
-
-	de := endpoint{
-		c: &Conn{},
-	}
-
-	if off := unsafe.Offsetof(de.lastRecvWG); off%8 != 0 {
-		t.Fatalf("endpoint.lastRecvWG is not 8-byte aligned")
-	}
-	if off := unsafe.Offsetof(de.lastRecvUDPAny); off%8 != 0 {
-		t.Fatalf("endpoint.lastRecvUDPAny is not 8-byte aligned")
-	}
-
-	// Verify these don't panic.
-	de.lastRecvWG.StoreAtomic(mono.Now())
-	de.lastRecvUDPAny.StoreAtomic(mono.Now())
 }
 
 // newTestConn returns a new Conn.
@@ -4308,11 +4277,11 @@ func TestConn_receiveIP(t *testing.T) {
 
 	newPeerMapInsertableEndpoint := func(lastRecvWG mono.Time) *endpoint {
 		ep := &endpoint{
-			nodeID:     1,
-			publicKey:  key.NewNode().Public(),
-			lastRecvWG: lastRecvWG,
-			c:          &Conn{logf: func(msg string, args ...any) {}},
+			nodeID:    1,
+			publicKey: key.NewNode().Public(),
+			c:         &Conn{logf: func(msg string, args ...any) {}},
 		}
+		ep.lastRecvWG.Store(lastRecvWG)
 		ep.updateDiscoKey(key.NewDisco().Public())
 		return ep
 	}

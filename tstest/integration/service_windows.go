@@ -52,6 +52,10 @@ func (n *TestNode) startWindowsServiceDaemon() *Daemon {
 	}
 	stageWintun(t, filepath.Dir(n.env.daemon))
 	n.writeServiceEnvFile()
+	if n.syspolicy != nil {
+		// The service takes no flags, so it reads the default --syspolicy-file path.
+		n.writeSyspolicy(filepath.Join(serviceStateDir(), "syspolicy.json"))
+	}
 
 	if !installed {
 		// install-system-daemon fails if the service is already there.
@@ -71,6 +75,10 @@ func (n *TestNode) startWindowsServiceDaemon() *Daemon {
 	})
 
 	proc = n.startService()
+	if !*windowsUnattended {
+		// Before waitServiceReady, so its status polls don't each connect and disconnect the user.
+		n.watchIPNBusLikeGUI()
+	}
 	n.waitServiceReady(90 * time.Second)
 	return &Daemon{node: n, svc: n, Process: proc}
 }

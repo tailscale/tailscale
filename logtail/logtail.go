@@ -331,10 +331,11 @@ type Logger struct {
 	shutdownDone    chan struct{} // closed when shutdown complete
 
 	// Metrics (see [Logger.ExpVar] for details).
-	uploadCalls   expvar.Int
-	failedCalls   expvar.Int
-	uploadedBytes expvar.Int
-	uploadingTime expvar.Int
+	uploadCalls               expvar.Int
+	failedCalls               expvar.Int
+	uploadedBytes             expvar.Int
+	uploadedUncompressedBytes expvar.Int
+	uploadingTime             expvar.Int
 }
 
 type atomicSocktatsLabel struct{ p atomic.Uint32 }
@@ -587,7 +588,10 @@ func (lg *Logger) internetUp() bool {
 // onChangeDelta is an eventbus subscriber function that handles
 // [netmon.ChangeDelta] events to detect whether the Internet is expected to be
 // reachable.
-func (lg *Logger) onChangeDelta(delta *netmon.ChangeDelta) {
+//
+// The delta is passed by value, but it contains pointers to the old and
+// new interface states, which are shared. The delta must not be mutated.
+func (lg *Logger) onChangeDelta(delta netmon.ChangeDelta) {
 	if delta.AnyInterfaceUp() {
 		fmt.Fprintf(lg.stderr, "logtail: internet back up\n")
 		lg.networkIsUp.Set()
@@ -683,6 +687,11 @@ func (lg *Logger) upload(ctx context.Context, body []byte, origlen int) (retryAf
 	}
 
 	lg.uploadedBytes.Add(int64(len(body)))
+	if origlen == -1 {
+		lg.uploadedUncompressedBytes.Add(int64(len(body)))
+	} else {
+		lg.uploadedUncompressedBytes.Add(int64(origlen))
+	}
 	lg.uploadingTime.Add(int64(time.Since(startUpload)))
 	return 0, nil
 }
@@ -714,6 +723,10 @@ func (lg *Logger) StartFlush() {
 //   - counter_uploaded_bytes: Total number of bytes successfully uploaded
 //     (which is calculated after compression is applied).
 //
+//   - counter_uploaded_uncompressed_bytes: Total pre-compression body bytes
+//     successfully uploaded. When no upload is in flight, divide by successful
+//     calls (upload calls minus errors) to obtain the mean uncompressed batch size.
+//
 //   - counter_uploading_nsecs: Total number of nanoseconds spent uploading.
 //
 //   - buffer: An optional [metrics.Set] with metrics for the [Buffer].
@@ -722,6 +735,7 @@ func (lg *Logger) ExpVar() expvar.Var {
 	m.Set("counter_upload_calls", &lg.uploadCalls)
 	m.Set("counter_upload_errors", &lg.failedCalls)
 	m.Set("counter_uploaded_bytes", &lg.uploadedBytes)
+	m.Set("counter_uploaded_uncompressed_bytes", &lg.uploadedUncompressedBytes)
 	m.Set("counter_uploading_nsecs", &lg.uploadingTime)
 	if v, ok := lg.buffer.(interface{ ExpVar() expvar.Var }); ok {
 		m.Set("buffer", v.ExpVar())

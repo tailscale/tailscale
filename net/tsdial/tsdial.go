@@ -371,17 +371,17 @@ func (d *Dialer) closeSysConn(id int) {
 
 // peerDialControlFunc is non-nil on platforms that require a way to
 // bind to dial out to other peers.
-var peerDialControlFunc func(*Dialer) func(network, address string, c syscall.RawConn) error
+var peerDialControlFunc func(*Dialer) func(ctx context.Context, network, address string, c syscall.RawConn) error
 
 // PeerDialControlFunc returns a function
-// that can assigned to net.Dialer.Control to set sockopts or whatnot
+// that can be assigned to net.Dialer.ControlContext to set socket options
 // to make a dial escape the current platform's network sandbox.
 //
 // On many platforms the returned func will be nil.
 //
 // Notably, this is non-nil on iOS and macOS when run as a Network or
 // System Extension (the GUI variants).
-func (d *Dialer) PeerDialControlFunc() func(network, address string, c syscall.RawConn) error {
+func (d *Dialer) PeerDialControlFunc() func(ctx context.Context, network, address string, c syscall.RawConn) error {
 	if peerDialControlFunc == nil {
 		return nil
 	}
@@ -747,9 +747,9 @@ func (d *Dialer) dialPeerAPI(ctx context.Context, network, addr string) (net.Con
 func (d *Dialer) getPeerDialer() *net.Dialer {
 	d.peerDialerOnce.Do(func() {
 		d.peerDialer = &net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: netknob.PlatformTCPKeepAlive(),
-			Control:   d.PeerDialControlFunc(),
+			Timeout:        30 * time.Second,
+			KeepAlive:      netknob.PlatformTCPKeepAlive(),
+			ControlContext: d.PeerDialControlFunc(),
 		}
 	})
 	return d.peerDialer

@@ -212,14 +212,16 @@ type watchSession struct {
 	// Empty string means default/device scope.
 	policyUID string
 
-	// hiddenNetworkDevices is the parsed GUI visibility policy from the
-	// most recent effective policy snapshot for this session.
-	hiddenNetworkDevices hiddenNetworkDevices
+	// policy is the effective policy snapshot most recently delivered to
+	// this session, or nil if it didn't request [ipn.NotifySysPolicyChanged]
+	policy *policyclient.PolicySnapshot
 
 	// suspended is whether this session fell behind and is waiting for
 	// [LocalBackend.ResumeWatchNotifications]. See [ipn.NotifySuspendWhenBehind].
 	suspended bool
 }
+
+func (sess *watchSession) Policy() *policyclient.PolicySnapshot { return sess.policy }
 
 var (
 	// errShutdown indicates that the [LocalBackend.Shutdown] was called.
@@ -316,7 +318,8 @@ type LocalBackend struct {
 	// for testing and graceful shutdown purposes.
 	goTracker goroutines.Tracker
 
-	startOnce sync.Once // protects the one‑time initialization in [LocalBackend.Start]
+	startOnce    sync.Once  // protects the one‑time initialization in [LocalBackend.Start]
+	beginLoginMu sync.Mutex // serializes beginLoginAs calls; acquire before b.mu
 
 	// extHost is the bridge between [LocalBackend] and the registered [ipnext.Extension]s.
 	// It may be nil in tests that use direct composite literal initialization of [LocalBackend]
@@ -681,9 +684,11 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	}
 
 	netMon := sys.NetMon.Get()
-	b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logID, netMon, sys.HealthTracker.Get(), sys.Bus.Get())
-	if err != nil {
-		logf("error setting up sockstat logger: %v", err)
+	if buildfeatures.HasLogTail {
+		b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logID, netMon, sys.HealthTracker.Get(), sys.Bus.Get())
+		if err != nil {
+			logf("error setting up sockstat logger: %v", err)
+		}
 	}
 	// Enable sockstats logs only on non-mobile unstable builds
 	if version.IsUnstableBuild() && !version.IsMobile() && b.sockstatLogger != nil {
@@ -1484,6 +1489,18 @@ func (b *LocalBackend) Prefs() ipn.PrefsView {
 	return b.sanitizedPrefsLocked()
 }
 
+// ServeConfig provides a view of the current serve mappings.
+// If serving is not configured, the returned view is not Valid.
+//
+// It is defined even in ts_omit_serve builds, where it always returns
+// an invalid view, so that features like ACME that consult the serve
+// config, but don't require serve, still compile.
+func (b *LocalBackend) ServeConfig() ipn.ServeConfigView {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.serveConfig
+}
+
 func (b *LocalBackend) sanitizedPrefsLocked() ipn.PrefsView {
 	syncs.RequiresMutex(&b.mu)
 	return stripKeysFromPrefs(b.pm.CurrentPrefs())
@@ -2077,8 +2094,12 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 			b.logf("[v1] TKA sync error: %v", err)
 		}
 		b.mu.Lock()
-		// As we stepped outside of the lock, it's possible for b.cc
-		// to now be nil.
+		if b.cc != c {
+			// The client was replaced (e.g. by Logout) while b.mu was released.
+			b.logf("Ignoring SetControlClientStatus from old client")
+			return
+		}
+		// b.cc is nil for a cached netmap applied by startLocked.
 		if b.cc != nil {
 			if b.tka != nil {
 				head, err := b.tka.authority.Head().MarshalText()
@@ -2508,11 +2529,10 @@ func (b *LocalBackend) sysPolicyChangedForSession(sess *watchSession) {
 		return
 	}
 
-	sess.hiddenNetworkDevices = hiddenNetworkDevicesFromPolicy(snapshot)
+	sess.policy = snapshot
 	n := ipn.Notify{
-		Policy:            snapshot,
-		NodeGUIVisibility: b.nodeGUIVisibilityLocked(sess.hiddenNetworkDevices),
-		Version:           version.Long(),
+		Policy:  snapshot,
+		Version: version.Long(),
 	}
 	for _, f := range b.extHost.Hooks().MutateNotifyLocked {
 		f(&n)
@@ -4099,14 +4119,14 @@ func (b *LocalBackend) buildInitialNotifyLocked(sb *ipnstate.StatusBuilder, sess
 		ini.Policy, err = b.polc.GetPolicySnapshot(sess.policyUID)
 		if err != nil {
 			b.logf("syspolicy: GetPolicySnapshot(%q): %v", sess.policyUID, err)
-		} else if ini.Policy != nil {
-			sess.hiddenNetworkDevices = hiddenNetworkDevicesFromPolicy(ini.Policy)
-			ini.NodeGUIVisibility = b.nodeGUIVisibilityLocked(sess.hiddenNetworkDevices)
 		}
+		sess.policy = ini.Policy
 	}
 	if mask&ipn.NotifyPeerWireGuardState != 0 {
 		ini.PeerState = maps.Clone(b.peerWGState)
 	}
+
+	b.mutateNotifyForSessionLocked(sess, ini)
 	return ini
 }
 
@@ -4430,7 +4450,8 @@ func (b *LocalBackend) suspendLaggingWatchSessionLocked(sess *watchSession) {
 // into full-Node [Notify.PeersChanged] entries for sessions that asked
 // for peer changes but not patches, and tracking on sess which
 // [tailcfg.UserProfileView]s have already been delivered so subsequent
-// sends only carry new/changed profiles.
+// sends only carry new/changed profiles. Finally, it runs the extensions'
+// [ipnext.Hooks.MutateNotifyForSessionLocked] hooks, if any, on the result.
 //
 // The returned pointer is either n itself (no adjustments needed for
 // this session) or a fresh *ipn.Notify with the adjusted fields. The
@@ -4454,11 +4475,7 @@ func (b *LocalBackend) notifyForSessionLocked(sess *watchSession, n *ipn.Notify)
 	stripPatches := len(n.PeerChangedPatch) > 0 && !wantsPeerPatches
 	stripPeerState := len(n.PeerState) > 0 && sess.mask&ipn.NotifyPeerWireGuardState == 0
 	promotePatches := len(n.PeerChangedPatch) > 0 && wantsPeerChanges && !wantsPeerPatches
-	refreshNodeGUIVisibility :=
-		sess.mask&ipn.NotifySysPolicyChanges != 0 &&
-			(n.SelfChange != nil ||
-				len(n.PeersChanged) != 0 ||
-				len(n.PeersRemoved) != 0)
+	mutateHooks := b.extHost.Hooks().MutateNotifyForSessionLocked
 
 	if sess.selfChangeResetsImplicitState(n.SelfChange.View()) {
 		sess.lastSentUserProfile = nil
@@ -4488,13 +4505,10 @@ func (b *LocalBackend) notifyForSessionLocked(sess *watchSession, n *ipn.Notify)
 	}
 	replaceUserProfiles := !stripUserProfiles && len(sessUserProfiles) != len(n.UserProfiles)
 
-	if !stripPeersChanged && !stripPeersRemoved && !stripPatches && !stripPeerState && !stripUserProfiles && !replaceUserProfiles && !promotePatches && !refreshNodeGUIVisibility {
+	if !stripPeersChanged && !stripPeersRemoved && !stripPatches && !stripPeerState && !stripUserProfiles && !replaceUserProfiles && !promotePatches && len(mutateHooks) == 0 {
 		return n
 	}
 	nCopy := *n
-	if refreshNodeGUIVisibility {
-		nCopy.NodeGUIVisibility = b.nodeGUIVisibilityLocked(sess.hiddenNetworkDevices)
-	}
 	if stripPeersChanged {
 		nCopy.PeersChanged = nil
 	}
@@ -4525,7 +4539,18 @@ func (b *LocalBackend) notifyForSessionLocked(sess *watchSession, n *ipn.Notify)
 	} else if replaceUserProfiles {
 		nCopy.UserProfiles = sessUserProfiles
 	}
+	b.mutateNotifyForSessionLocked(sess, &nCopy)
 	return &nCopy
+}
+
+// mutateNotifyForSessionLocked lets extensions adjust n, which must not be
+// shared with other sessions, before it is delivered to sess.
+//
+// b.mu must be held.
+func (b *LocalBackend) mutateNotifyForSessionLocked(sess *watchSession, n *ipn.Notify) {
+	for _, f := range b.extHost.Hooks().MutateNotifyForSessionLocked {
+		f(sess, n)
+	}
 }
 
 // selfChangeResetsImplicitState reports whether self changes the identity of
@@ -4682,14 +4707,14 @@ func (b *LocalBackend) tellRecipientToBrowseToURLLocked(url string, recipient no
 
 // onClientVersion is called on MapResponse updates when a MapResponse contains
 // a non-nil ClientVersion message.
-func (b *LocalBackend) onClientVersion(v *tailcfg.ClientVersion) {
+func (b *LocalBackend) onClientVersion(v tailcfg.ClientVersion) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.lastClientVersion = v
-	b.health.SetLatestVersion(v)
+	b.lastClientVersion = &v
+	b.health.SetLatestVersion(&v)
 	prefs := b.pm.CurrentPrefs()
 	if prefs.Valid() && prefs.AutoUpdate().Check {
-		b.sendLocked(ipn.Notify{ClientVersion: v})
+		b.sendLocked(ipn.Notify{ClientVersion: &v})
 	}
 }
 

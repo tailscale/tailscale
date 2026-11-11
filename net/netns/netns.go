@@ -19,6 +19,7 @@ import (
 	"net/netip"
 	"runtime"
 	"sync/atomic"
+	"syscall"
 
 	"tailscale.com/net/netknob"
 	"tailscale.com/net/netmon"
@@ -97,7 +98,7 @@ func Listener(logf logger.Logf, netMon *netmon.Monitor) *net.ListenConfig {
 	return &net.ListenConfig{Control: control(logf, netMon)}
 }
 
-// NewDialer returns a new Dialer using a net.Dialer with its Control
+// NewDialer returns a new Dialer using a net.Dialer with its ControlContext
 // hook func initialized as necessary to run in a logical network
 // namespace that doesn't route back into Tailscale. It also handles
 // using a SOCKS if configured in the environment with ALL_PROXY.
@@ -110,22 +111,46 @@ func NewDialer(logf logger.Logf, netMon *netmon.Monitor) Dialer {
 	})
 }
 
-// FromDialer returns sets d.Control as necessary to run in a logical
-// network namespace that doesn't route back into Tailscale. It also
-// handles using a SOCKS if configured in the environment with
-// ALL_PROXY.
+// FromDialer configures d to run in a logical network namespace that doesn't
+// route back into Tailscale. Namespace setup runs before any caller-supplied
+// ControlContext hook; if setup fails, the caller's hook is not run.
+// FromDialer panics if d.Control is non-nil; use ControlContext instead, even
+// when netns is disabled.
+//
+// FromDialer modifies d and may wrap it to use SOCKS if configured by ALL_PROXY.
+// The hooks apply to the underlying socket (to the proxy when using SOCKS).
+// When netns is disabled, d is returned unchanged and without proxy wrapping.
 func FromDialer(logf logger.Logf, netMon *netmon.Monitor, d *net.Dialer) Dialer {
 	if netMon == nil {
 		panic("netns.FromDialer called with nil netMon")
 	}
+	if d.Control != nil {
+		panic("netns.FromDialer: use ControlContext instead of Control")
+	}
 	if disabled.Load() {
 		return d
 	}
-	d.Control = control(logf, netMon)
+	setNamespaceControl(d, control(logf, netMon))
 	if wrapDialer != nil {
 		return wrapDialer(d)
 	}
 	return d
+}
+
+// setNamespaceControl installs namespace setup without discarding the caller's
+// socket configuration, such as TCP keepalive or user-timeout options. Namespace
+// setup runs first; the caller's ControlContext hook runs only if it succeeds.
+func setNamespaceControl(d *net.Dialer, namespaceControl func(string, string, syscall.RawConn) error) {
+	callerControlContext := d.ControlContext
+	d.ControlContext = func(ctx context.Context, network, address string, c syscall.RawConn) error {
+		if err := namespaceControl(network, address, c); err != nil {
+			return err
+		}
+		if callerControlContext != nil {
+			return callerControlContext(ctx, network, address, c)
+		}
+		return nil
+	}
 }
 
 // IsSOCKSDialer reports whether d is SOCKS-proxying dialer as returned by

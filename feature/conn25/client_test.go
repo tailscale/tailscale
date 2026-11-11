@@ -602,7 +602,7 @@ func TestReconfigDoesNotReissueInUseAddresses(t *testing.T) {
 // TestAddressExpiryDependsOnActiveFlows creates a Conn25 and
 //
 //  1. runs a DNS response through it
-//  2. uses the ClientFlowCreated/Removed API and advances the clock
+//  2. uses the ClientFlowCreated API and its cleanup function, and advances the clock
 //  3. runs a second DNS response through the Conn25
 //  4. asserts things about the expected state of the clients assignments
 //     table based on 1-3
@@ -696,9 +696,9 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 			// So the expired entry is removed.
 			name: "last-flow-removed-a-while-ago",
 			flowsAndTimeFx: func(c *Conn25, clock *tstest.Clock, transit netip.Addr) {
-				c.ClientFlowCreated(transit)
+				removeFlow := c.ClientFlowCreated(transit)
 				clock.Advance(30 * time.Hour)
-				c.ClientFlowRemoved(transit)
+				removeFlow()
 				clock.Advance(3 * time.Minute)
 			},
 			wantUnexpiredDstIPs: set.SetOf([]netip.Addr{ipTwo}),
@@ -712,9 +712,9 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 			// And so the expired entry is not removed.
 			name: "last-flow-recently-removed",
 			flowsAndTimeFx: func(c *Conn25, clock *tstest.Clock, transit netip.Addr) {
-				c.ClientFlowCreated(transit)
+				removeFlow := c.ClientFlowCreated(transit)
 				clock.Advance(30 * time.Hour)
-				c.ClientFlowRemoved(transit)
+				removeFlow()
 				clock.Advance(1 * time.Second)
 			},
 			wantUnexpiredDstIPs: set.SetOf([]netip.Addr{ipOne, ipTwo}),
@@ -810,6 +810,184 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestFlowRemovedAfterTransitIPReassigned checks that a flow removal arriving
+// after its assignment was dropped, and the transit IP handed back out, leaves
+// the new assignment alone. The datapath creates flows on tun goroutines while
+// [client.reset] runs on the profile-change path, so a flow created just before
+// a reset can outlive the assignment it was counted against.
+func TestFlowRemovedAfterTransitIPReassigned(t *testing.T) {
+	const appName = "app1"
+	const domain = dnsname.FQDN("example.com.")
+	const ttl = 5 * time.Minute
+	dstOne := netip.MustParseAddr("1.0.0.1")
+	dstTwo := netip.MustParseAddr("1.0.0.2")
+
+	sn := makeSelfNode(t, []appctype.AppConnectorAttr{{
+		Name:       appName,
+		Connectors: []string{"tag:woo"},
+		Domains:    []string{"example.com"},
+		Mode:       appctype.MagicIP,
+	}}, arbitraryPools, nil)
+
+	c := newConn25(logger.Discard)
+	clock := tstest.NewClock(tstest.ClockOpts{Start: time.Now()})
+	c.client.assignments.clock = clock
+	c.reconfig(mustConfig(t, sn))
+
+	before, err := c.client.reserveAddresses(appName, domain, dstOne, ttl, testConnectorPeer, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transit := before.connectorAddr.transit
+
+	// A flow is established against that assignment, and then the profile
+	// changes and the client's state is reset out from under the flow.
+	removeFlow := c.ClientFlowCreated(transit)
+	c.client.reset()
+
+	// reset rebuilds the pools, so iteration restarts and the next assignment
+	// is handed the same transit IP, now for a different destination.
+	after, err := c.client.reserveAddresses(appName, domain, dstTwo, ttl, testConnectorPeer, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.connectorAddr.transit != transit {
+		t.Fatalf("transit %v was not reissued after reset (got %v); this test no longer covers reassignment", transit, after.connectorAddr.transit)
+	}
+	if after == before {
+		t.Fatal("expected a distinct assignment after reset")
+	}
+
+	// The pre-reset flow is finally torn down. The removal refers to an
+	// assignment that no longer exists, so it must not touch the new one.
+	removeFlow()
+
+	if got := after.activeFlowCount; got != 0 {
+		t.Errorf("activeFlowCount for reissued transit %v = %d, want 0", transit, got)
+	}
+
+	// A zero flow count must leave the reissued assignment able to expire and
+	// return its addresses to the pools. A negative count can never satisfy
+	// popExpired's zero-flow test, which would pin it in the expiry heap.
+	clock.Advance(ttl + deadFlowWaitTimeout + time.Minute)
+	if got := c.client.assignments.popExpired(clock.Now()); got != after {
+		t.Errorf("popExpired = %+v, want the reissued assignment for %v", got, dstTwo)
+	}
+}
+
+// TestFlowRemovedDoesNotReclaimReissuedTransitIPInUse is
+// [TestFlowRemovedAfterTransitIPReassigned] where the reissued assignment has a
+// live flow of its own. A removal misattributed to it would drop its count to
+// zero while that flow is still forwarding, reclaiming both of its addresses
+// back to the pools mid-connection. Clamping the count at zero does not catch
+// this, because the misattributed decrement lands on a positive count.
+func TestFlowRemovedDoesNotReclaimReissuedTransitIPInUse(t *testing.T) {
+	const appName = "app1"
+	const domain = dnsname.FQDN("example.com.")
+	const ttl = 5 * time.Minute
+	dstOne := netip.MustParseAddr("1.0.0.1")
+	dstTwo := netip.MustParseAddr("1.0.0.2")
+
+	sn := makeSelfNode(t, []appctype.AppConnectorAttr{{
+		Name:       appName,
+		Connectors: []string{"tag:woo"},
+		Domains:    []string{"example.com"},
+		Mode:       appctype.MagicIP,
+	}}, arbitraryPools, nil)
+
+	c := newConn25(logger.Discard)
+	clock := tstest.NewClock(tstest.ClockOpts{Start: time.Now()})
+	c.client.assignments.clock = clock
+	c.reconfig(mustConfig(t, sn))
+
+	before, err := c.client.reserveAddresses(appName, domain, dstOne, ttl, testConnectorPeer, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transit := before.connectorAddr.transit
+
+	removeStaleFlow := c.ClientFlowCreated(transit)
+	c.client.reset()
+
+	after, err := c.client.reserveAddresses(appName, domain, dstTwo, ttl, testConnectorPeer, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.connectorAddr.transit != transit {
+		t.Fatalf("transit %v was not reissued after reset (got %v); this test no longer covers reassignment", transit, after.connectorAddr.transit)
+	}
+	if after == before {
+		t.Fatal("expected a distinct assignment after reset")
+	}
+
+	// The reissued assignment picks up a flow of its own, which is still live
+	// when the pre-reset flow is torn down.
+	c.ClientFlowCreated(transit)
+	if got := after.activeFlowCount; got != 1 {
+		t.Fatalf("activeFlowCount for the reissued assignment = %d, want 1", got)
+	}
+	removeStaleFlow()
+	if got := after.activeFlowCount; got != 1 {
+		t.Errorf("activeFlowCount after the stale removal = %d, want 1", got)
+	}
+
+	// With a flow still active, the assignment must hold its addresses.
+	clock.Advance(ttl + deadFlowWaitTimeout + time.Minute)
+	if got := c.client.assignments.popExpired(clock.Now()); got != nil {
+		t.Errorf("popExpired = %+v, want nil; the assignment for %v is still in use", got, dstTwo)
+	}
+}
+
+// TestFlowCleanupRunsOnce checks that a flow's cleanup releases its hold on the
+// assignment at most once, so a caller that runs the same cleanup more than
+// once cannot undercount the flows still forwarding over that assignment and
+// have its addresses reclaimed back to the pools mid-connection.
+func TestFlowCleanupRunsOnce(t *testing.T) {
+	const appName = "app1"
+	const domain = dnsname.FQDN("example.com.")
+	const ttl = 5 * time.Minute
+	dst := netip.MustParseAddr("1.0.0.1")
+
+	sn := makeSelfNode(t, []appctype.AppConnectorAttr{{
+		Name:       appName,
+		Connectors: []string{"tag:woo"},
+		Domains:    []string{"example.com"},
+		Mode:       appctype.MagicIP,
+	}}, arbitraryPools, nil)
+
+	c := newConn25(logger.Discard)
+	clock := tstest.NewClock(tstest.ClockOpts{Start: time.Now()})
+	c.client.assignments.clock = clock
+	c.reconfig(mustConfig(t, sn))
+
+	as, err := c.client.reserveAddresses(appName, domain, dst, ttl, testConnectorPeer, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transit := as.connectorAddr.transit
+
+	// Two flows over the same transit IP. The first is torn down; the second
+	// stays live.
+	removeFirstFlow := c.ClientFlowCreated(transit)
+	c.ClientFlowCreated(transit)
+	if got := as.activeFlowCount; got != 2 {
+		t.Fatalf("activeFlowCount = %d, want 2", got)
+	}
+
+	removeFirstFlow()
+	removeFirstFlow()
+	removeFirstFlow()
+	if got := as.activeFlowCount; got != 1 {
+		t.Errorf("activeFlowCount after repeated cleanup of one flow = %d, want 1", got)
+	}
+
+	// With a flow still active, the assignment must hold its addresses.
+	clock.Advance(ttl + deadFlowWaitTimeout + time.Minute)
+	if got := c.client.assignments.popExpired(clock.Now()); got != nil {
+		t.Errorf("popExpired = %+v, want nil; the assignment for %v is still in use", got, dst)
 	}
 }
 

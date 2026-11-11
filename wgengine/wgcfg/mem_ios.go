@@ -13,15 +13,12 @@ func getMemoryOptions() []device.Option {
 	// avoid getting killed.
 	//
 	// See _notios.go for a longer explanation of what the Queue{In,Out}boundSize
-	// knobs control and the tradeoffs involved. Eventually Queue{In,Out}boundSize
-	// should be CPU-scaled, and WithPreallocated... removed, but we keep them all
-	// static for now, until the [device.WaitPool] ceiling is eliminated.
-	// (See tailscale/corp#46396).
+	// knobs control and the tradeoffs involved.
 	return []device.Option{
 		device.WithQueueStagedSize(64),
 		device.WithQueueOutboundSize(64),
 		device.WithQueueInboundSize(64),
 		device.WithQueueHandshakeSize(64),
-		device.WithPreallocatedBuffersPerPool(64),
+		device.WithQueueStagedGlobalLimit(64),
 	}
 }

@@ -4,7 +4,6 @@
 package health
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"maps"
@@ -883,20 +882,12 @@ func TestControlHealthIgnoredOutsideMapPoll(t *testing.T) {
 			t.Error("got a warning with code 'control-health', want none")
 		}
 
-		// An event is emitted when SetIPNState is run above,
-		// so only fail on the second event.
-		eventCounter := 0
-		expectOne := func(c *Change) error {
-			eventCounter++
-			if eventCounter == 1 {
-				return nil
-			}
-			return errors.New("saw more than 1 event")
-		}
-
+		// Other Warnables emit events above, but SetControlHealth must not
+		// emit a control health change outside of a map poll.
 		synctest.Wait()
-		if err := eventbustest.Expect(tw, expectOne); err == nil {
-			t.Error("event got emitted, want it to not be called")
+		controlHealthChanged := func(c Change) bool { return c.ControlHealthChanged }
+		if err := eventbustest.Expect(tw, controlHealthChanged); err == nil {
+			t.Error("got a ControlHealthChanged event, want none")
 		}
 	})
 }
