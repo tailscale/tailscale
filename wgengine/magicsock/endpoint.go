@@ -562,12 +562,17 @@ func (de *endpoint) untrustBestAddrLocked(why string) {
 	de.trustBestAddrUntil = 0
 }
 
+// bestAddrUnansweredMinWait is the minimum time the best address must have
+// stayed silent after a ping before another address's pong may displace it.
+const bestAddrUnansweredMinWait = 20 * time.Millisecond
+
 // bestAddrUnansweredLocked reports whether the current direct best address
 // was pinged at or after at (the start of a ping round) and has not answered
-// any ping since it was last pinged.
+// any ping since it was last pinged, for clearly longer than its known
+// latency would explain.
 //
 // de.mu must be held.
-func (de *endpoint) bestAddrUnansweredLocked(at mono.Time) bool {
+func (de *endpoint) bestAddrUnansweredLocked(at, now mono.Time) bool {
 	if !de.bestAddr.isDirect() {
 		return false
 	}
@@ -575,7 +580,14 @@ func (de *endpoint) bestAddrUnansweredLocked(at mono.Time) bool {
 	if !ok || st.lastPing.IsZero() || st.lastPing.Before(at) {
 		return false
 	}
-	return de.bestAddrAt.Before(st.lastPing)
+	if !de.bestAddrAt.Before(st.lastPing) {
+		return false // it answered since it was last pinged
+	}
+	// The pong we're handling may simply have arrived before the best
+	// address's own pong. Only call the best address silent if it has been
+	// quiet for clearly longer than its usual round trip.
+	wait := max(bestAddrUnansweredMinWait, 2*de.bestAddr.latency)
+	return now.Sub(st.lastPing) > wait
 }
 
 // untrustBestAddrIfOmittedLocked stops trusting the direct best address if
@@ -2049,11 +2061,12 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 			latency: latency,
 			wireMTU: pingSizeToPktLen(sp.size, sp.to),
 		}
-		if sp.purpose == pingDiscovery && thisPong.epAddr != de.bestAddr.epAddr && de.bestAddrUnansweredLocked(sp.at) {
+		if sp.purpose == pingDiscovery && thisPong.epAddr != de.bestAddr.epAddr && de.bestAddrUnansweredLocked(sp.at, now) {
 			// Another address answered a discovery ping, but the current
 			// best address was pinged in the same round and has stayed
-			// silent. Its trust window (trustUDPAddrDuration) only
-			// reflects an older pong, so don't wait for it to run out.
+			// silent for clearly longer than its usual round trip. Its
+			// trust window (trustUDPAddrDuration) only reflects an older
+			// pong, so don't wait for it to run out.
 			de.untrustBestAddrLocked("handlePongConnLocked-bestAddr-unanswered")
 		}
 		bestUntrusted := now.After(de.trustBestAddrUntil)
