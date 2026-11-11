@@ -44,7 +44,6 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
-	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -520,7 +519,7 @@ func runLocalCreds(ctx context.Context, args []string) error {
 		runLocalAPIProxy()
 		return nil
 	}
-	printf("curl --unix-socket %s http://local-tailscaled.sock/localapi/v0/status\n", paths.DefaultTailscaledSocket())
+	printf("curl --unix-socket %s http://local-tailscaled.sock/localapi/v0/status\n", localClient.Socket)
 	return nil
 }
 
