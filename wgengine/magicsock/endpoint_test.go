@@ -1259,70 +1259,77 @@ func TestChangedActiveDiscoLocked(t *testing.T) {
 
 // Test_endpoint_handlePongConnLocked_unansweredBestAddr verifies that a pong
 // from a new address replaces a trusted best address when that best address
-// was pinged in the same round and has not answered (the peer changed
-// network), but not when the best address is simply still working.
+// was pinged in the same round and has stayed silent for clearly longer than
+// its usual round trip (the peer changed network), but not when the best
+// address is simply still working or its own pong is just a bit late.
+//
+// This test deliberately does not use synctest: inside synctest.Test,
+// mono.Now() is negative, so trustBestAddrUntil = 0 (set when untrusting)
+// would still look like a time in the future.
 func Test_endpoint_handlePongConnLocked_unansweredBestAddr(t *testing.T) {
 	oldAddr := epAddr{ap: netip.MustParseAddrPort("192.168.1.140:56816")}
 	newAddr := epAddr{ap: netip.MustParseAddrPort("203.0.113.5:2326")}
 
 	for _, tc := range []struct {
 		name         string
-		bestAnswered bool // best addr answered a ping after the round started
-		bestPinged   bool // best addr has an endpointState that was pinged in the round
+		pongDelay    time.Duration // time between the round's pings and the new address's pong
+		bestAnswered bool          // best addr answered a ping after the round started
+		bestPinged   bool          // best addr has an endpointState that was pinged in the round
 		wantBestAddr epAddr
 	}{
-		{name: "best-silent", bestPinged: true, wantBestAddr: newAddr},
-		{name: "best-answered", bestPinged: true, bestAnswered: true, wantBestAddr: oldAddr},
-		{name: "best-not-pinged", bestPinged: false, wantBestAddr: oldAddr},
+		{name: "best-silent", pongDelay: 80 * time.Millisecond, bestPinged: true, wantBestAddr: newAddr},
+		{name: "best-answered", pongDelay: 80 * time.Millisecond, bestPinged: true, bestAnswered: true, wantBestAddr: oldAddr},
+		{name: "best-not-pinged", pongDelay: 80 * time.Millisecond, bestPinged: false, wantBestAddr: oldAddr},
+		// Two working paths: the other address's pong simply arrives before
+		// the best address's own pong. The best address must keep its place.
+		{name: "best-healthy-other-pong-first", pongDelay: 3 * time.Millisecond, bestPinged: true, wantBestAddr: oldAddr},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				now := mono.Now()
-				c := &Conn{
-					logf:    func(msg string, args ...any) {},
-					peerMap: newPeerMap(),
-				}
-				c.discoAtomic.Set(key.NewDisco())
+			now := mono.Now()
+			c := &Conn{
+				logf:    func(msg string, args ...any) {},
+				peerMap: newPeerMap(),
+			}
+			c.discoAtomic.Set(key.NewDisco())
 
-				roundStart := now.Add(-80 * time.Millisecond)
-				de := &endpoint{
-					c:                  c,
-					bestAddr:           addrQuality{epAddr: oldAddr, latency: 3 * time.Millisecond},
-					bestAddrAt:         now.Add(-3 * time.Second),
-					trustBestAddrUntil: now.Add(3 * time.Second), // still trusted
-					sentPing:           make(map[stun.TxID]sentPing),
-					endpointState:      make(map[netip.AddrPort]*endpointState),
-					debugUpdates:       ringlog.New[EndpointChange](10),
-				}
-				oldState := &endpointState{}
-				if tc.bestPinged {
-					oldState.lastPing = roundStart
-				}
-				if tc.bestAnswered {
-					de.bestAddrAt = roundStart.Add(3 * time.Millisecond)
-				}
-				de.endpointState[oldAddr.ap] = oldState
-				de.endpointState[newAddr.ap] = &endpointState{lastPing: roundStart}
+			roundStart := now.Add(-tc.pongDelay)
+			de := &endpoint{
+				c:                  c,
+				bestAddr:           addrQuality{epAddr: oldAddr, latency: 3 * time.Millisecond},
+				bestAddrAt:         now.Add(-3 * time.Second),
+				trustBestAddrUntil: now.Add(3 * time.Second), // still trusted
+				sentPing:           make(map[stun.TxID]sentPing),
+				endpointState:      make(map[netip.AddrPort]*endpointState),
+				debugUpdates:       ringlog.New[EndpointChange](10),
+			}
+			oldState := &endpointState{}
+			if tc.bestPinged {
+				oldState.lastPing = roundStart
+			}
+			if tc.bestAnswered {
+				de.bestAddrAt = roundStart.Add(3 * time.Millisecond)
+			}
+			de.endpointState[oldAddr.ap] = oldState
+			de.endpointState[newAddr.ap] = &endpointState{lastPing: roundStart}
 
-				txid := stun.NewTxID()
-				timer := time.NewTimer(time.Hour)
-				timer.Stop()
-				de.sentPing[txid] = sentPing{
-					to:      newAddr,
-					at:      roundStart,
-					timer:   timer,
-					purpose: pingDiscovery,
-				}
-				di := &discoInfo{discoKey: key.NewDisco().Public(), discoShort: "test"}
-				pong := &disco.Pong{TxID: txid, Src: newAddr.ap}
+			txid := stun.NewTxID()
+			timer := time.NewTimer(time.Hour)
+			timer.Stop()
+			de.sentPing[txid] = sentPing{
+				to:      newAddr,
+				at:      roundStart,
+				timer:   timer,
+				purpose: pingDiscovery,
+			}
+			di := &discoInfo{discoKey: key.NewDisco().Public(), discoShort: "test"}
+			pong := &disco.Pong{TxID: txid, Src: newAddr.ap}
 
-				if !de.handlePongConnLocked(pong, di, newAddr) {
-					t.Fatal("expected knownTxID to be true")
-				}
-				if de.bestAddr.epAddr != tc.wantBestAddr {
-					t.Errorf("bestAddr = %v; want %v", de.bestAddr.epAddr, tc.wantBestAddr)
-				}
-			})
+			if !de.handlePongConnLocked(pong, di, newAddr) {
+				t.Fatal("expected knownTxID to be true")
+			}
+			if de.bestAddr.epAddr != tc.wantBestAddr {
+				t.Errorf("bestAddr = %v; want %v", de.bestAddr.epAddr, tc.wantBestAddr)
+			}
 		})
 	}
 }
