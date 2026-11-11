@@ -999,11 +999,13 @@ func TestUpdateDiscoKey(t *testing.T) {
 	zero := key.DiscoPublic{}
 
 	tests := []struct {
-		name          string
-		setup         func(de *endpoint)
-		newKey        key.DiscoPublic
-		wantChanged   bool
-		wantActiveKey key.DiscoPublic
+		name           string
+		setup          func(de *endpoint)
+		newKey         key.DiscoPublic
+		wantChanged    bool
+		wantActiveKey  key.DiscoPublic
+		wantTsmpActive bool
+		wantTSMPKey    key.DiscoPublic
 	}{
 		{
 			name:          "first-key-set",
@@ -1038,9 +1040,43 @@ func TestUpdateDiscoKey(t *testing.T) {
 					tsmpActive: true,
 				})
 			},
-			newKey:        dk3,
+			newKey:         dk3,
+			wantChanged:    true,
+			wantActiveKey:  dk2,
+			wantTsmpActive: true,
+			wantTSMPKey:    dk2,
+		},
+		{
+			name: "control-key-matches-active-tsmp-key",
+			setup: func(de *endpoint) {
+				de.disco.Store(&endpointDisco{
+					controlKey: dk1, controlShort: dk1.ShortString(),
+					tsmpKey: dk2, tsmpShort: dk2.ShortString(),
+					tsmpActive: true,
+				})
+			},
+			newKey:         dk2,
+			wantChanged:    true,
+			wantActiveKey:  dk2,
+			wantTsmpActive: true,
+			wantTSMPKey:    dk2,
+		},
+		{
+			// Control and the active TSMP key are the same key. A later
+			// control rotation is a peer restart: prefer the new control
+			// key and keep the retired TSMP material.
+			name: "equal-control-and-tsmp-key-rotates",
+			setup: func(de *endpoint) {
+				de.disco.Store(&endpointDisco{
+					controlKey: dk1, controlShort: dk1.ShortString(),
+					tsmpKey: dk1, tsmpShort: dk1.ShortString(),
+					tsmpActive: true,
+				})
+			},
+			newKey:        dk2,
 			wantChanged:   true,
 			wantActiveKey: dk2,
+			wantTSMPKey:   dk1,
 		},
 		{
 			name: "control-key-cleared-tsmp-present",
@@ -1051,9 +1087,11 @@ func TestUpdateDiscoKey(t *testing.T) {
 					tsmpActive: false,
 				})
 			},
-			newKey:        zero,
-			wantChanged:   true,
-			wantActiveKey: dk2,
+			newKey:         zero,
+			wantChanged:    true,
+			wantActiveKey:  dk2,
+			wantTsmpActive: true,
+			wantTSMPKey:    dk2,
 		},
 		{
 			name: "control-key-cleared-no-tsmp",
@@ -1076,8 +1114,15 @@ func TestUpdateDiscoKey(t *testing.T) {
 			if got := de.updateDiscoKey(tt.newKey); got != tt.wantChanged {
 				t.Errorf("expected de.updateDiscoKey()=%t, got %t", tt.wantChanged, got)
 			}
-			if got := de.disco.Load().key(); got != tt.wantActiveKey {
+			gotDisco := de.disco.Load()
+			if got := gotDisco.key(); got != tt.wantActiveKey {
 				t.Errorf("active key: got %v, want %v", got, tt.wantActiveKey)
+			}
+			if got := gotDisco.tsmpIsActive(); got != tt.wantTsmpActive {
+				t.Errorf("tsmpActive: got %t, want %t", got, tt.wantTsmpActive)
+			}
+			if got := gotDisco.keyFromTSMP(); got != tt.wantTSMPKey {
+				t.Errorf("tsmp key: got %v, want %v", got, tt.wantTSMPKey)
 			}
 		})
 	}
@@ -1182,28 +1227,57 @@ func TestUpdateFromNodeChangedActiveDisco(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		initialControl key.DiscoPublic
+		initial        *endpointDisco
 		netmapKey      key.DiscoPublic
 		wantCalled     bool
+		wantActiveKey  key.DiscoPublic
+		wantTsmpActive bool
 	}{
 		{
-			name:           "control-key-changes-fires",
-			initialControl: dk1,
-			netmapKey:      dk2,
-			wantCalled:     true,
+			name:          "control-key-changes-fires",
+			initial:       &endpointDisco{controlKey: dk1, controlShort: dk1.ShortString()},
+			netmapKey:     dk2,
+			wantCalled:    true,
+			wantActiveKey: dk2,
 		},
 		{
-			name:           "control-key-unchanged-no-fire",
-			initialControl: dk1,
+			name:          "control-key-unchanged-no-fire",
+			initial:       &endpointDisco{controlKey: dk1, controlShort: dk1.ShortString()},
+			netmapKey:     dk1,
+			wantCalled:    false,
+			wantActiveKey: dk1,
+		},
+		{
+			// Control and the active TSMP key match, then control rotates.
+			// updateFromNode must follow that new key and drop discovery trust.
+			name: "equal-tsmp-active-rotates-fires",
+			initial: &endpointDisco{
+				controlKey: dk1, controlShort: dk1.ShortString(),
+				tsmpKey: dk1, tsmpShort: dk1.ShortString(),
+				tsmpActive: true,
+			},
+			netmapKey:     dk2,
+			wantCalled:    true,
+			wantActiveKey: dk2,
+		},
+		{
+			name: "equal-tsmp-active-unchanged-no-fire",
+			initial: &endpointDisco{
+				controlKey: dk1, controlShort: dk1.ShortString(),
+				tsmpKey: dk1, tsmpShort: dk1.ShortString(),
+				tsmpActive: true,
+			},
 			netmapKey:      dk1,
 			wantCalled:     false,
+			wantActiveKey:  dk1,
+			wantTsmpActive: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			de := &endpoint{c: &Conn{logf: func(string, ...any) {}}}
-			de.disco.Store(&endpointDisco{controlKey: tt.initialControl, controlShort: tt.initialControl.ShortString()})
+			de.disco.Store(tt.initial)
 
 			// Set a future trustBestAddrUntil so we can detect if it was zeroed.
 			de.trustBestAddrUntil = mono.Now().Add(time.Hour)
@@ -1219,6 +1293,13 @@ func TestUpdateFromNodeChangedActiveDisco(t *testing.T) {
 			}
 			if !tt.wantCalled && addrUntil != before {
 				t.Errorf("trustBestAddrUntil unexpectedly changed from %v to %v", before, addrUntil)
+			}
+			gotDisco := de.disco.Load()
+			if got := gotDisco.key(); got != tt.wantActiveKey {
+				t.Errorf("active key: got %v, want %v", got, tt.wantActiveKey)
+			}
+			if got := gotDisco.tsmpIsActive(); got != tt.wantTsmpActive {
+				t.Errorf("tsmpActive: got %t, want %t", got, tt.wantTsmpActive)
 			}
 		})
 	}
