@@ -248,6 +248,15 @@ func TestPCP(t *testing.T) {
 		extPort := uint16(20001) // 4e 21 in hex
 		checkMapping(t, n, extPort, netip.AddrPortFrom(clientIPv4(1), 40769))
 		expiry := mappingExpiry(n, extPort)
+		before := n.portMappings()
+
+		// MAP UDP of int 192.168.0.101:40769 to any ext IP and port for 7200s, with a different nonce 95bcb5d93d07ecbbc8b3bd4e
+		got = sendUDPToRouter(t, s, pxpPort, mustHex("02 01 00 00 00 00 1c 20 00 00 00 00 00 00 00 00 00 00 ff ff c0 a8 00 65 "+
+			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 4e 11 00 00 00 9f 41 00 00 00 00 00 00 00 00 00 00 00 00 ff ff 00 00 00 00"))
+		// NOT_AUTHORIZED, error lifetime 1800s, rest of the request copied
+		checkReply(t, got, "02 81 00 02 00 00 07 08 ?? ?? ?? ?? 00 00 00 00 00 00 00 00 00 00 00 00 "+
+			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 4e 11 00 00 00 9f 41 00 00 00 00 00 00 00 00 00 00 00 00 ff ff 00 00 00 00")
+		checkPortMap(t, n, before)
 
 		// MAP UDP of int 192.168.0.101:40769 to any ext IP and port for 7200s, same nonce
 		got = sendUDPToRouter(t, s, pxpPort, mustHex("02 01 00 00 00 00 1c 20 00 00 00 00 00 00 00 00 00 00 ff ff c0 a8 00 65 "+
@@ -275,6 +284,14 @@ func TestPCP(t *testing.T) {
 		const deleteReply = "02 81 00 00 00 00 00 00 ?? ?? ?? ?? 00 00 00 00 00 00 00 00 00 00 00 00 " +
 			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f 11 00 00 00 9f 42 00 00 00 00 00 00 00 00 00 00 00 00 ff ff 00 00 00 00"
 
+		// Same delete with a different nonce 95bcb5d93d07ecbbc8b3bd4e
+		got = sendUDPToRouter(t, s, pxpPort, mustHex("02 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ff ff c0 a8 00 65 "+
+			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 4e 11 00 00 00 9f 42 00 00 00 00 00 00 00 00 00 00 00 00 ff ff 00 00 00 00"))
+		// NOT_AUTHORIZED, error lifetime 1800s, rest of the request copied
+		checkReply(t, got, "02 81 00 02 00 00 07 08 ?? ?? ?? ?? 00 00 00 00 00 00 00 00 00 00 00 00 "+
+			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 4e 11 00 00 00 9f 42 00 00 00 00 00 00 00 00 00 00 00 00 ff ff 00 00 00 00")
+		checkPortMap(t, n, before)
+
 		got = sendUDPToRouter(t, s, pxpPort, mustHex(deleteReq))
 		checkReply(t, got, deleteReply)
 		checkDeleted(t, n, extPort, before)
@@ -284,6 +301,42 @@ func TestPCP(t *testing.T) {
 		got = sendUDPToRouter(t, s, pxpPort, mustHex(deleteReq))
 		checkReply(t, got, deleteReply)
 		checkPortMap(t, n, after)
+	})
+	t.Run("expired-udp", func(t *testing.T) {
+		before := n.portMappings()
+		// MAP UDP of int 192.168.0.101:40771 to any ext IP and port 20007 for 7200s, with nonce 95bcb5d93d07ecbbc8b3bd50
+		got := sendUDPToRouter(t, s, pxpPort, mustHex("02 01 00 00 00 00 1c 20 00 00 00 00 00 00 00 00 00 00 ff ff c0 a8 00 65 "+
+			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 50 11 00 00 00 9f 43 4e 27 00 00 00 00 00 00 00 00 00 00 ff ff 00 00 00 00"))
+		// success, MAP UDP of int port 40771 to ext 2.1.1.1:20007 for 7200s, same nonce
+		checkReply(t, got, "02 81 00 00 00 00 1c 20 ?? ?? ?? ?? 00 00 00 00 00 00 00 00 00 00 00 00 "+
+			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 50 11 00 00 00 9f 43 4e 27 00 00 00 00 00 00 00 00 00 00 ff ff 02 01 01 01")
+		extPort := uint16(20007) // 4e 27 in hex
+		checkMapping(t, n, extPort, netip.AddrPortFrom(clientIPv4(1), 40771))
+
+		// Expire the mapping by hand rather than wait out its lifetime.
+		n.natMu.Lock()
+		wan := netip.AddrPortFrom(n.wanIP4, extPort)
+		pm := n.portMap[wan]
+		pm.ExpiresAt = time.Now().Add(-time.Second)
+		n.portMap[wan] = pm
+		n.natMu.Unlock()
+		checkPortMap(t, n, before)
+
+		// Same MAP with a different nonce 95bcb5d93d07ecbbc8b3bd51, brand new mapping since old one was gone (expired)
+		const newNonceReq = "02 01 00 00 00 00 1c 20 00 00 00 00 00 00 00 00 00 00 ff ff c0 a8 00 65 " +
+			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 51 11 00 00 00 9f 43 4e 27 00 00 00 00 00 00 00 00 00 00 ff ff 00 00 00 00"
+		// success, MAP UDP of int port 40771 to ext 2.1.1.1:20007 for 7200s, same nonce
+		const newNonceReply = "02 81 00 00 00 00 1c 20 ?? ?? ?? ?? 00 00 00 00 00 00 00 00 00 00 00 00 " +
+			"95 bc b5 d9 3d 07 ec bb c8 b3 bd 51 11 00 00 00 9f 43 4e 27 00 00 00 00 00 00 00 00 00 00 ff ff 02 01 01 01"
+
+		got = sendUDPToRouter(t, s, pxpPort, mustHex(newNonceReq))
+		checkReply(t, got, newNonceReply)
+		checkMapping(t, n, extPort, netip.AddrPortFrom(clientIPv4(1), 40771))
+		checkExpiresWithin(t, n, extPort, 2*time.Hour)
+
+		// Same MAP request again, which only succeeds if the router stored the new nonce
+		got = sendUDPToRouter(t, s, pxpPort, mustHex(newNonceReq))
+		checkReply(t, got, newNonceReply)
 	})
 	t.Run("request-unsupported", func(t *testing.T) {
 		got := sendUDPToRouter(t, s, pxpPort, natpmpAddrReq)
