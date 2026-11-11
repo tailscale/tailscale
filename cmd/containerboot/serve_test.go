@@ -7,10 +7,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/ipn"
@@ -68,9 +73,12 @@ func TestUpdateServeConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fakeLC := &localclient.FakeLocalClient{}
-			err := updateServeConfig(context.Background(), tt.sc, tt.certDomain, fakeLC)
+			applied, err := updateServeConfig(context.Background(), tt.sc, tt.certDomain, fakeLC)
 			if err != nil {
 				t.Errorf("updateServeConfig() error = %v", err)
+			}
+			if applied != tt.wantCall {
+				t.Errorf("updateServeConfig() applied = %v, want %v", applied, tt.wantCall)
 			}
 			if fakeLC.SetServeCalled != tt.wantCall {
 				t.Errorf("SetServeConfig() called = %v, want %v", fakeLC.SetServeCalled, tt.wantCall)
@@ -371,6 +379,200 @@ func TestHasHTTPSEndpoint(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("hasHTTPSEndpoint() = %v, want %v", got, tt.want)
 			}
+		})
+	}
+}
+
+type recordingServeClient struct {
+	localclient.FakeLocalClient
+	calls            []string
+	applied          *ipn.ServeConfig
+	advertisedConfig *ipn.ServeConfig
+	setServeErr      error
+}
+
+func (c *recordingServeClient) SetServeConfig(ctx context.Context, sc *ipn.ServeConfig) error {
+	c.calls = append(c.calls, "SetServeConfig")
+	if c.setServeErr != nil {
+		return c.setServeErr
+	}
+	c.applied = sc
+	return c.FakeLocalClient.SetServeConfig(ctx, sc)
+}
+
+func (c *recordingServeClient) EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
+	c.calls = append(c.calls, "EditPrefs")
+	c.advertisedConfig = c.applied
+	return c.FakeLocalClient.EditPrefs(ctx, mp)
+}
+
+func TestUpdateServeConfigError(t *testing.T) {
+	wantErr := errors.New("cannot apply serve config")
+	client := &recordingServeClient{setServeErr: wantErr}
+	applied, err := updateServeConfig(t.Context(), &ipn.ServeConfig{}, "", client)
+	if applied || !errors.Is(err, wantErr) {
+		t.Errorf("updateServeConfig = (%v, %v), want (false, %v)", applied, err, wantErr)
+	}
+}
+
+func TestWatchServeConfigChangesAdvertisesServices(t *testing.T) {
+	tests := []struct {
+		name          string
+		certShareMode string
+		autoAdvertise string
+	}{
+		{name: "default", autoAdvertise: "true"},
+		{name: "read_only_certs", certShareMode: "ro", autoAdvertise: "true"},
+		{name: "read_write_certs", certShareMode: "rw", autoAdvertise: "true"},
+		{name: "operator_managed", autoAdvertise: "false"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TS_EXPERIMENTAL_SERVICE_AUTO_ADVERTISEMENT", tt.autoAdvertise)
+			path := filepath.Join(t.TempDir(), "serve.json")
+			sc := &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:frontend": {TCP: map[uint16]*ipn.TCPPortHandler{80: {TCPForward: "127.0.0.1:8080"}}},
+					"svc:backend":  {TCP: map[uint16]*ipn.TCPPortHandler{80: {TCPForward: "127.0.0.1:8081"}}},
+				},
+			}
+			b, err := json.Marshal(sc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, b, 0600); err != nil {
+				t.Fatal(err)
+			}
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				var certDomain atomic.Pointer[string]
+				certDomain.Store(new("test-node.tailnet.ts.net"))
+				changed := make(chan bool, 1)
+				client := &recordingServeClient{}
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					watchServeConfigChangesLoop(ctx, changed, &certDomain, client, nil, &settings{
+						ServeConfigPath: path,
+						CertShareMode:   tt.certShareMode,
+					}, nil, nil, nil)
+				}()
+				changed <- true
+				synctest.Wait()
+				// Let advertisement finish, then check that an unchanged file
+				// does not reapply handlers or advertise again.
+				time.Sleep(20 * time.Second)
+				synctest.Wait()
+				changed <- true
+				synctest.Wait()
+				cancel()
+				<-done
+				wantCalls := []string{"SetServeConfig"}
+				if tt.autoAdvertise == "true" {
+					wantCalls = append(wantCalls, "EditPrefs")
+				}
+				if diff := cmp.Diff(wantCalls, client.calls); diff != "" {
+					t.Fatalf("service configuration and advertisement order (-want +got):\n%s", diff)
+				}
+				if diff := cmp.Diff(sc, client.applied); diff != "" {
+					t.Errorf("applied handlers (-want +got):\n%s", diff)
+				}
+				if tt.autoAdvertise == "false" {
+					return
+				}
+				if diff := cmp.Diff(sc, client.advertisedConfig); diff != "" {
+					t.Errorf("handlers installed before advertisement (-want +got):\n%s", diff)
+				}
+				mp := client.EditPrefsCalls[0]
+				if !mp.AdvertiseServicesSet {
+					t.Fatal("advertised services were not set")
+				}
+				slices.Sort(mp.AdvertiseServices)
+				if diff := cmp.Diff([]string{"svc:backend", "svc:frontend"}, mp.AdvertiseServices); diff != "" {
+					t.Errorf("advertised services (-want +got):\n%s", diff)
+				}
+			})
+		})
+	}
+}
+
+func TestWatchServeConfigChangesRetriesHTTPS(t *testing.T) {
+	for _, serviceHTTPS := range []bool{false, true} {
+		name := "node_https"
+		if serviceHTTPS {
+			name = "service_https"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("TS_EXPERIMENTAL_SERVICE_AUTO_ADVERTISEMENT", "true")
+			path := filepath.Join(t.TempDir(), "serve.json")
+			// No certificate-domain placeholder: the file remains identical
+			// when HTTPS becomes available, so rejected configs must not be cached.
+			sc := &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:backend": {TCP: map[uint16]*ipn.TCPPortHandler{80: {TCPForward: "127.0.0.1:8081"}}},
+				},
+			}
+			httpsTCP := map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}}
+			httpsWeb := map[ipn.HostPort]*ipn.WebServerConfig{
+				"frontend.tailnet.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:8080"}}},
+			}
+			if serviceHTTPS {
+				sc.Services["svc:frontend"] = &ipn.ServiceConfig{TCP: httpsTCP, Web: httpsWeb}
+			} else {
+				sc.TCP, sc.Web = httpsTCP, httpsWeb
+			}
+			b, err := json.Marshal(sc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, b, 0600); err != nil {
+				t.Fatal(err)
+			}
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				var certDomain atomic.Pointer[string]
+				certDomain.Store(new(kubetypes.ValueNoHTTPS))
+				changed := make(chan bool, 1)
+				client := &recordingServeClient{}
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					watchServeConfigChangesLoop(ctx, changed, &certDomain, client, nil, &settings{ServeConfigPath: path}, nil, nil, nil)
+				}()
+				changed <- true
+				synctest.Wait()
+				if len(client.calls) != 0 {
+					t.Errorf("rejected HTTPS config must not be applied or advertised; got %v", client.calls)
+				}
+				certDomain.Store(new("test-node.tailnet.ts.net"))
+				changed <- true
+				synctest.Wait()
+				cancel()
+				<-done
+				if diff := cmp.Diff([]string{"SetServeConfig", "EditPrefs"}, client.calls); diff != "" {
+					t.Fatalf("retry configuration and advertisement order (-want +got):\n%s", diff)
+				}
+				if diff := cmp.Diff(sc, client.advertisedConfig); diff != "" {
+					t.Errorf("handlers installed before advertisement (-want +got):\n%s", diff)
+				}
+				got := client.EditPrefsCalls[0]
+				if !got.AdvertiseServicesSet {
+					t.Fatal("retried services were not advertised")
+				}
+				want := make(map[string]bool)
+				for svc := range sc.Services {
+					want[svc.String()] = true
+				}
+				advertised := make(map[string]bool)
+				for _, svc := range got.AdvertiseServices {
+					advertised[svc] = true
+				}
+				if diff := cmp.Diff(want, advertised); diff != "" {
+					t.Errorf("retried services (-want +got):\n%s", diff)
+				}
+			})
 		})
 	}
 }
