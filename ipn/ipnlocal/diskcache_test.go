@@ -8,16 +8,19 @@ import (
 	"testing"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tstest"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/eventbus"
+	"tailscale.com/util/set"
 	"tailscale.com/wgengine/magicsock"
 )
 
 // newCacheTestNetmap returns a minimal valid netmap suitable for testing disk
-// cache operations.
+// cache operations, for a node that is allowed to cache netmaps.
 func newCacheTestNetmap() *netmap.NetworkMap {
 	return &netmap.NetworkMap{
+		AllCaps: set.Of(nodecap.CacheNetworkMaps),
 		SelfNode: (&tailcfg.Node{
 			Name: "test-node.ts.net",
 			User: tailcfg.UserID(1),
@@ -108,6 +111,34 @@ func TestOnHomeDERPUpdate(t *testing.T) {
 		}
 		if got := loaded.SelfNode.HomeDERP(); got != wantDERP {
 			t.Errorf("cached SelfNode.HomeDERP() = %d, want %d", got, wantDERP)
+		}
+	})
+	t.Run("no_cache_cap", func(t *testing.T) {
+		b := newTestBackend(t)
+		done := make(chan struct{})
+		tstest.Replace(t, &testOnlyHomeDERPUpdate, func() { close(done) })
+
+		nm := newCacheTestNetmap()
+		nm.AllCaps = nil
+		b.currentNode().SetNetMap(nm)
+
+		bus := b.Sys().Bus.Get()
+		ec := bus.Client("test.TestOnHomeDERPUpdate")
+		pub := eventbus.Publish[magicsock.HomeDERPChanged](ec)
+
+		const wantDERP = 11
+		pub.Publish(magicsock.HomeDERPChanged{Old: 0, New: wantDERP})
+		<-done
+
+		if got := b.currentNode().homeDERP.Load(); got != wantDERP {
+			t.Errorf("b.homeDERP = %d, want %d", got, wantDERP)
+		}
+
+		// Without the capability, the update must not create a cache.
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if _, ok := b.loadDiskCacheLocked(); ok {
+			t.Fatal("loadDiskCacheLocked returned ok=true; want no cache without the CacheNetworkMaps capability")
 		}
 	})
 	t.Run("old_does_not_match", func(t *testing.T) {
