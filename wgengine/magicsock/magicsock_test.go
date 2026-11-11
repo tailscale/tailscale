@@ -5052,10 +5052,10 @@ func TestUpsertPeerTSMPKeyPreservedOnControlUpdate(t *testing.T) {
 }
 
 // TestUpsertPeerControlRotationAfterTSMP verifies that a peer which advertised
-// its control disco key over TSMP follows a later control rotation. The
-// restarted peer's new key becomes active and indexed for that node without
-// any inbound disco or TSMP for the new key. A second peer that still uses
-// the retired key must not make that stale key look selected.
+// its disco key over TSMP follows a later disco key learned via control. The
+// restarted peer's new key becomes active for that node without any inbound
+// disco or TSMP for the new key. A second peer that still uses the retired key
+// must not make that stale key look selected.
 func TestUpsertPeerControlRotationAfterTSMP(t *testing.T) {
 	dkA := key.NewDisco().Public()
 	dkB := key.NewDisco().Public()

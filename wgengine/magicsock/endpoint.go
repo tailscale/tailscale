@@ -1544,7 +1544,7 @@ func (de *endpoint) setLastPing(ipp netip.AddrPort, now mono.Time) {
 }
 
 // updateDiscoKey replaces the controlClient learned disco key for de.
-// It updates only the control-provided key and keeps any TSMP key material.
+// It updates only the control-provided key and keeps any TSMP-provided key material.
 //
 // Active-key precedence is recomputed from the snapshot loaded on each CAS
 // attempt:
@@ -1583,7 +1583,7 @@ func (de *endpoint) updateDiscoKey(key key.DiscoPublic) bool {
 				epDisco.tsmpActive = true
 			case old.tsmpActive && old.controlKey == old.tsmpKey && key != old.controlKey:
 				// Peer restarted. The active TSMP key is the retired control
-				// key, which this update drops from the peer index.
+				// key, so elect the new control key as the active one.
 				epDisco.tsmpActive = false
 			default:
 				epDisco.tsmpActive = old.tsmpActive
