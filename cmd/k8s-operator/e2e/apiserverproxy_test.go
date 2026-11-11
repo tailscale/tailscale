@@ -15,7 +15,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -93,9 +92,7 @@ func TestAPIServerProxyGroupAuth(t *testing.T) {
 
 	proxyURL := waitForKubeAPIServerProxyReady(t, pg.Name)
 
-	proxyCl, err := client.New(&rest.Config{Host: proxyURL}, client.Options{
-		HTTPClient: newHTTPClient(tnClient),
-	})
+	proxyCl, err := apiServerProxyClient(proxyURL)
 	if err != nil {
 		t.Fatalf("creating client for %s: %v", proxyURL, err)
 	}
@@ -262,29 +259,19 @@ func applyProxyGroupProxyClass(t *testing.T) string {
 // TLS cert issued, and the Tailscale Service advertised by the replicas.
 func waitForKubeAPIServerProxyReady(t *testing.T, pgName string) string {
 	t.Helper()
-
-	pg := &tsapi.ProxyGroup{ObjectMeta: metav1.ObjectMeta{Name: pgName}}
+	var pg *tsapi.ProxyGroup
 	trigger := triggerReconcile(t, client.ObjectKey{Name: pgName}, &tsapi.ProxyGroup{}, 30*time.Second)
 
 	if err := tstest.WaitFor(5*time.Minute, func() error {
 		trigger()
-		if err := get(t.Context(), kubeClient, pg); err != nil {
+		var err error
+		pg, err = proxyGroupReady(t.Context(), pgName)
+		if err != nil {
 			return err
 		}
-
-		if !tsoperator.ProxyGroupIsReady(pg) {
-			ready := meta.FindStatusCondition(pg.Status.Conditions, string(tsapi.ProxyGroupReady))
-			if ready == nil {
-				return fmt.Errorf("ProxyGroup %s has no %s condition yet", pgName, tsapi.ProxyGroupReady)
-			}
-
-			return fmt.Errorf("ProxyGroup %s not ready: reason=%s message=%q", pgName, ready.Reason, ready.Message)
-		}
-
 		if pg.Status.URL == "" {
 			return fmt.Errorf("ProxyGroup %s is ready but status.url is not set yet", pgName)
 		}
-
 		return nil
 	}); err != nil {
 		t.Fatalf("waiting for ProxyGroup %s to be ready: %v", pgName, err)
