@@ -18,7 +18,7 @@ func TestLocalCredsSocket(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("tests the Linux Unix socket output")
 	}
-	for _, socket := range []string{paths.DefaultTailscaledSocket(), "local/foo.sock"} {
+	for _, socket := range []string{paths.DefaultTailscaledSocket(), "local/foo.sock", ""} {
 		t.Run(socket, func(t *testing.T) {
 			var out bytes.Buffer
 			tstest.Replace[io.Writer](t, &Stdout, &out)
@@ -27,7 +27,11 @@ func TestLocalCredsSocket(t *testing.T) {
 			if err := newRootCmd().ParseAndRun(context.Background(), []string{"--socket", socket, "debug", "local-creds"}); err != nil {
 				t.Fatal(err)
 			}
-			want := "curl --unix-socket " + socket + " http://local-tailscaled.sock/localapi/v0/status\n"
+			want := socket
+			if want == "" {
+				want = paths.DefaultTailscaledSocket()
+			}
+			want = "curl --unix-socket " + want + " http://local-tailscaled.sock/localapi/v0/status\n"
 			if got := out.String(); got != want {
 				t.Errorf("output = %q; want %q", got, want)
 			}
