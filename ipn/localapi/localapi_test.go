@@ -5,6 +5,7 @@ package localapi
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -877,6 +878,7 @@ func TestServeDialSelf(t *testing.T) {
 		name       string
 		host       string
 		port       string
+		connection string // defaults to "upgrade"
 		wantSelf   bool
 		wantAddr   string
 		wantStatus int
@@ -904,12 +906,22 @@ func TestServeDialSelf(t *testing.T) {
 			wantSelf:   true,
 			wantStatus: http.StatusOK,
 		},
+		{
+			// As sent by net/http/httputil.ReverseProxy.
+			name:       "connection_header_case",
+			host:       "127.0.0.1",
+			port:       "8080",
+			connection: "Upgrade",
+			wantSelf:   true,
+			wantAddr:   "127.0.0.1:8080",
+			wantStatus: http.StatusOK,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest("POST", "http://local-tailscaled.sock/localapi/v0/dial", nil)
-			req.Header.Set("Connection", "upgrade")
+			req.Header.Set("Connection", cmp.Or(tt.connection, "upgrade"))
 			req.Header.Set("Upgrade", "ts-dial")
 			req.Header.Set("Dial-Host", tt.host)
 			req.Header.Set("Dial-Port", tt.port)
