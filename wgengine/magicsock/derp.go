@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"reflect"
 	"slices"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -98,6 +99,30 @@ type activeDerp struct {
 	// It is always non-nil and initialized to a non-zero Time.
 	lastWrite  *time.Time
 	createTime time.Time
+	// recv tracks what the connection has received, to tell a quiet
+	// connection from a dead one. It is always non-nil.
+	recv *derpRecvState
+}
+
+// derpRecvState tracks the liveness of a DERP connection.
+type derpRecvState struct {
+	// lastFrame is the wall time of the last frame received from the
+	// server (or of a successful ping, or of the connection's creation),
+	// in Unix nanoseconds.
+	//
+	// It's wall time rather than monotonic time because Go's monotonic
+	// clock stops while the device sleeps (on Apple platforms, Linux and
+	// Android), but the server's keepalive clock doesn't, nor do the NAT
+	// mapping timeouts along the path.
+	lastFrame atomic.Int64
+
+	// pinging is whether a liveness ping is in flight.
+	pinging atomic.Bool
+}
+
+// noteFrame records that a frame was received at now.
+func (s *derpRecvState) noteFrame(now time.Time) {
+	s.lastFrame.Store(now.UnixNano())
 }
 
 var (
@@ -360,8 +385,10 @@ func (c *Conn) derpWriteChanForRegion(regionID tailcfg.DERPRegionID, peer key.No
 	// below when we have both.)
 	ad, ok := c.activeDerp[regionID]
 	if ok {
-		*ad.lastWrite = time.Now()
+		now := time.Now()
+		*ad.lastWrite = now
 		c.setPeerLastDerpLocked(peer, regionID, regionID)
+		c.maybePingQuietDERPLocked(regionID, ad, now)
 		return ad.writeCh
 	}
 
@@ -375,7 +402,9 @@ func (c *Conn) derpWriteChanForRegion(regionID tailcfg.DERPRegionID, peer key.No
 		if r, ok := c.derpRoute[peer]; ok {
 			if ad, ok := c.activeDerp[r.regionID]; ok && ad.c == r.dc {
 				c.setPeerLastDerpLocked(peer, r.regionID, regionID)
-				*ad.lastWrite = time.Now()
+				now := time.Now()
+				*ad.lastWrite = now
+				c.maybePingQuietDERPLocked(r.regionID, ad, now)
 				return ad.writeCh
 			}
 		}
@@ -433,6 +462,8 @@ func (c *Conn) derpWriteChanForRegion(regionID tailcfg.DERPRegionID, peer key.No
 	ad.lastWrite = new(time.Time)
 	*ad.lastWrite = time.Now()
 	ad.createTime = time.Now()
+	ad.recv = new(derpRecvState)
+	ad.recv.noteFrame(ad.createTime)
 	c.activeDerp[regionID] = ad
 	metricNumDERPConns.Set(int64(len(c.activeDerp)))
 	c.logActiveDerpLocked()
@@ -460,7 +491,7 @@ func (c *Conn) derpWriteChanForRegion(regionID tailcfg.DERPRegionID, peer key.No
 		}()
 	}
 
-	go c.runDerpReader(ctx, regionID, dc, wg, startGate)
+	go c.runDerpReader(ctx, regionID, dc, ad.recv, wg, startGate)
 	go c.runDerpWriter(ctx, dc, ch, wg, startGate)
 	go func() {
 		select {
@@ -530,7 +561,7 @@ type derpReadResult struct {
 
 // runDerpReader runs in a goroutine for the life of a DERP
 // connection, handling received packets.
-func (c *Conn) runDerpReader(ctx context.Context, regionID tailcfg.DERPRegionID, dc *derphttp.Client, wg *syncs.WaitGroupChan, startGate <-chan struct{}) {
+func (c *Conn) runDerpReader(ctx context.Context, regionID tailcfg.DERPRegionID, dc *derphttp.Client, recv *derpRecvState, wg *syncs.WaitGroupChan, startGate <-chan struct{}) {
 	defer wg.Decr()
 	defer dc.Close()
 
@@ -599,6 +630,7 @@ func (c *Conn) runDerpReader(ctx context.Context, regionID tailcfg.DERPRegionID,
 		bo.BackOff(ctx, nil) // reset
 
 		now := time.Now()
+		recv.noteFrame(now)
 		if lastPacketTime.IsZero() || now.Sub(lastPacketTime) > frameReceiveRecordRate {
 			c.health.NoteDERPRegionReceivedFrame(regionID)
 			lastPacketTime = now
@@ -941,6 +973,53 @@ func (c *Conn) maybeCloseDERPsOnRebind(okayLocalIPs []netip.Prefix) {
 	c.logActiveDerpLocked()
 }
 
+// maybePingQuietDERPLocked pings the server behind ad, which is about to
+// be written to, if nothing has been received from it for longer than
+// the server keepalive interval. If the ping fails, it closes the
+// connection, so the next write reconnects.
+//
+// A live DERP server sends a keepalive at least every [derp.KeepAlive],
+// but the client otherwise only notices a dead connection when its read
+// deadline expires, up to two minutes later. That happens when a device
+// that slept (such as a suspended iOS app) loses its TCP connection
+// without the local network state changing, so no rebind is triggered.
+// Until then, packets written to the connection go nowhere and the
+// server keeps routing replies to the old connection. See
+// https://github.com/tailscale/tailscale/issues/15776.
+//
+// c.mu must be held.
+func (c *Conn) maybePingQuietDERPLocked(regionID tailcfg.DERPRegionID, ad activeDerp, now time.Time) {
+	if now.Sub(time.Unix(0, ad.recv.lastFrame.Load())) < derpQuietPingThreshold {
+		return
+	}
+	if !ad.recv.pinging.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer ad.recv.pinging.Store(false)
+		ctx, cancel := context.WithTimeout(c.connCtx, derpQuietPingTimeout)
+		defer cancel()
+		err := ad.c.Ping(ctx)
+		if err == nil {
+			ad.recv.noteFrame(time.Now())
+			return
+		}
+		if c.connCtx.Err() != nil {
+			return
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if cur, ok := c.activeDerp[regionID]; !ok || cur.c != ad.c {
+			// Already closed or replaced.
+			return
+		}
+		c.logf("magicsock: derp-%d quiet for %v, ping failed: %v", regionID, now.Sub(time.Unix(0, ad.recv.lastFrame.Load())).Round(time.Second), err)
+		metricDERPQuietPingFail.Add(1)
+		c.closeOrReconnectDERPLocked(regionID, "quiet-ping-fail")
+		c.logActiveDerpLocked()
+	}()
+}
+
 // closeOrReconnectDERPLocked closes the DERP connection to the
 // provided regionID and starts reconnecting it if it's our current
 // home DERP.
@@ -1082,4 +1161,14 @@ const (
 	// derpCleanStaleInterval is how often cleanStaleDerp runs when there
 	// are potentially-stale DERP connections to close.
 	derpCleanStaleInterval = 15 * time.Second
+
+	// derpQuietPingThreshold is how long a DERP connection can go without
+	// receiving anything before a write to it first pings the server.
+	// It's a bit over the server's keepalive interval plus jitter, so a
+	// live connection is rarely pinged.
+	derpQuietPingThreshold = derp.KeepAlive + 10*time.Second
+
+	// derpQuietPingTimeout is how long to wait for the pong to a
+	// liveness ping before closing the connection.
+	derpQuietPingTimeout = 3 * time.Second
 )
