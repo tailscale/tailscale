@@ -1257,114 +1257,100 @@ func TestChangedActiveDiscoLocked(t *testing.T) {
 	})
 }
 
-// Test_endpoint_handlePongConnLocked_unansweredBestAddr verifies that a pong
-// from a new address replaces a trusted best address when that best address
-// was pinged in the same round and has stayed silent for clearly longer than
-// its usual round trip (the peer changed network), but not when the best
-// address is simply still working or its own pong is just a bit late.
-//
-// This test deliberately does not use synctest: inside synctest.Test,
-// mono.Now() is negative, so trustBestAddrUntil = 0 (set when untrusting)
-// would still look like a time in the future.
-func Test_endpoint_handlePongConnLocked_unansweredBestAddr(t *testing.T) {
+// Test_endpoint_handlePongConnLocked_ambiguousAddr verifies that when a new
+// address answers a ping but the trusted best address, pinged in the same
+// round, stays silent, we keep the best address and also send to the new one,
+// until the best address answers again or the trust window ends.
+func Test_endpoint_handlePongConnLocked_ambiguousAddr(t *testing.T) {
 	oldAddr := epAddr{ap: netip.MustParseAddrPort("192.168.1.140:56816")}
 	newAddr := epAddr{ap: netip.MustParseAddrPort("203.0.113.5:2326")}
 
 	for _, tc := range []struct {
-		name         string
-		pongDelay    time.Duration // time between the round's pings and the new address's pong
-		bestAnswered bool          // best addr answered a ping after the round started
-		bestPinged   bool          // best addr has an endpointState that was pinged in the round
-		wantBestAddr epAddr
+		name          string
+		bestPinged    bool // best addr was pinged in the same round
+		bestAnswered  bool // ...and answered
+		wantAmbiguous bool
 	}{
-		{name: "best-silent", pongDelay: 80 * time.Millisecond, bestPinged: true, wantBestAddr: newAddr},
-		{name: "best-answered", pongDelay: 80 * time.Millisecond, bestPinged: true, bestAnswered: true, wantBestAddr: oldAddr},
-		{name: "best-not-pinged", pongDelay: 80 * time.Millisecond, bestPinged: false, wantBestAddr: oldAddr},
-		// Two working paths: the other address's pong simply arrives before
-		// the best address's own pong. The best address must keep its place.
-		{name: "best-healthy-other-pong-first", pongDelay: 3 * time.Millisecond, bestPinged: true, wantBestAddr: oldAddr},
+		{name: "best-silent", bestPinged: true, wantAmbiguous: true},
+		{name: "best-answered", bestPinged: true, bestAnswered: true, wantAmbiguous: false},
+		{name: "best-not-pinged", bestPinged: false, wantAmbiguous: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			now := mono.Now()
-			c := &Conn{
-				logf:    func(msg string, args ...any) {},
-				peerMap: newPeerMap(),
-			}
-			c.discoAtomic.Set(key.NewDisco())
+			synctest.Test(t, func(t *testing.T) {
+				now := mono.Now()
+				c := &Conn{
+					logf:    func(msg string, args ...any) {},
+					peerMap: newPeerMap(),
+				}
+				c.discoAtomic.Set(key.NewDisco())
 
-			roundStart := now.Add(-tc.pongDelay)
-			de := &endpoint{
-				c:                  c,
-				bestAddr:           addrQuality{epAddr: oldAddr, latency: 3 * time.Millisecond},
-				bestAddrAt:         now.Add(-3 * time.Second),
-				trustBestAddrUntil: now.Add(3 * time.Second), // still trusted
-				sentPing:           make(map[stun.TxID]sentPing),
-				endpointState:      make(map[netip.AddrPort]*endpointState),
-				debugUpdates:       ringlog.New[EndpointChange](10),
-			}
-			oldState := &endpointState{}
-			if tc.bestPinged {
-				oldState.lastPing = roundStart
-			}
-			if tc.bestAnswered {
-				de.bestAddrAt = roundStart.Add(3 * time.Millisecond)
-			}
-			de.endpointState[oldAddr.ap] = oldState
-			de.endpointState[newAddr.ap] = &endpointState{lastPing: roundStart}
+				roundStart := now.Add(-80 * time.Millisecond)
+				trustUntil := now.Add(3 * time.Second)
+				de := &endpoint{
+					c:                  c,
+					bestAddr:           addrQuality{epAddr: oldAddr, latency: 3 * time.Millisecond},
+					bestAddrAt:         now.Add(-3 * time.Second),
+					trustBestAddrUntil: trustUntil,
+					sentPing:           make(map[stun.TxID]sentPing),
+					endpointState:      make(map[netip.AddrPort]*endpointState),
+					debugUpdates:       ringlog.New[EndpointChange](10),
+				}
+				oldState := &endpointState{}
+				if tc.bestPinged {
+					oldState.lastPing = roundStart
+				}
+				if tc.bestAnswered {
+					de.bestAddrAt = roundStart.Add(3 * time.Millisecond)
+				}
+				de.endpointState[oldAddr.ap] = oldState
+				de.endpointState[newAddr.ap] = &endpointState{lastPing: roundStart}
 
-			txid := stun.NewTxID()
-			timer := time.NewTimer(time.Hour)
-			timer.Stop()
-			de.sentPing[txid] = sentPing{
-				to:      newAddr,
-				at:      roundStart,
-				timer:   timer,
-				purpose: pingDiscovery,
-			}
-			di := &discoInfo{discoKey: key.NewDisco().Public(), discoShort: "test"}
-			pong := &disco.Pong{TxID: txid, Src: newAddr.ap}
+				txid := stun.NewTxID()
+				timer := time.NewTimer(time.Hour)
+				timer.Stop()
+				de.sentPing[txid] = sentPing{
+					to:      newAddr,
+					at:      roundStart,
+					timer:   timer,
+					purpose: pingDiscovery,
+				}
+				di := &discoInfo{discoKey: key.NewDisco().Public(), discoShort: "test"}
+				pong := &disco.Pong{TxID: txid, Src: newAddr.ap}
 
-			if !de.handlePongConnLocked(pong, di, newAddr) {
-				t.Fatal("expected knownTxID to be true")
-			}
-			if de.bestAddr.epAddr != tc.wantBestAddr {
-				t.Errorf("bestAddr = %v; want %v", de.bestAddr.epAddr, tc.wantBestAddr)
-			}
-		})
-	}
-}
-
-// TestEndpointUntrustBestAddrIfOmitted verifies that a CallMeMaybe that
-// doesn't list the current direct best address ends its trust window, however
-// that address was learned.
-func TestEndpointUntrustBestAddrIfOmitted(t *testing.T) {
-	a := netip.MustParseAddrPort("192.168.1.140:56816")
-	b := netip.MustParseAddrPort("203.0.113.5:2326")
-	relayAddr := epAddr{ap: a}
-	relayAddr.vni.Set(7)
-
-	for _, tc := range []struct {
-		name      string
-		bestAddr  epAddr
-		eps       []netip.AddrPort
-		wantTrust bool
-	}{
-		{name: "omitted", bestAddr: epAddr{ap: a}, eps: []netip.AddrPort{b}, wantTrust: false},
-		{name: "listed", bestAddr: epAddr{ap: a}, eps: []netip.AddrPort{a, b}, wantTrust: true},
-		{name: "no-best-addr", bestAddr: epAddr{}, eps: []netip.AddrPort{b}, wantTrust: true},
-		{name: "relay-best-addr", bestAddr: relayAddr, eps: []netip.AddrPort{b}, wantTrust: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			trustUntil := mono.Now().Add(time.Hour)
-			de := &endpoint{
-				bestAddr:           addrQuality{epAddr: tc.bestAddr},
-				trustBestAddrUntil: trustUntil,
-				debugUpdates:       ringlog.New[EndpointChange](10),
-			}
-			de.untrustBestAddrIfOmittedLocked(tc.eps)
-			if got := de.trustBestAddrUntil == trustUntil; got != tc.wantTrust {
-				t.Errorf("trust kept = %v; want %v", got, tc.wantTrust)
-			}
+				if !de.handlePongConnLocked(pong, di, newAddr) {
+					t.Fatal("expected knownTxID to be true")
+				}
+				if de.bestAddr.epAddr != oldAddr {
+					t.Errorf("bestAddr = %v; want it unchanged (%v)", de.bestAddr.epAddr, oldAddr)
+				}
+				got := de.ambiguousAddrForSendLocked(now)
+				want := epAddr{}
+				if tc.wantAmbiguous {
+					want = newAddr
+				}
+				if got != want {
+					t.Errorf("ambiguousAddrForSendLocked = %v; want %v", got, want)
+				}
+				if tc.wantAmbiguous {
+					// The extra address is only used while best is trusted.
+					if got := de.ambiguousAddrForSendLocked(trustUntil.Add(time.Second)); got.ap.IsValid() {
+						t.Errorf("after trust window, ambiguousAddrForSendLocked = %v; want none", got)
+					}
+					// A pong from the best address ends the ambiguity.
+					de.ambiguousAddr = newAddr
+					de.ambiguousUntil = trustUntil
+					bestTxid := stun.NewTxID()
+					bestTimer := time.NewTimer(time.Hour)
+					bestTimer.Stop()
+					de.sentPing[bestTxid] = sentPing{to: oldAddr, at: now, timer: bestTimer, purpose: pingDiscovery}
+					if !de.handlePongConnLocked(&disco.Pong{TxID: bestTxid, Src: oldAddr.ap}, di, oldAddr) {
+						t.Fatal("expected knownTxID to be true")
+					}
+					if got := de.ambiguousAddrForSendLocked(now); got.ap.IsValid() {
+						t.Errorf("after best addr answered, ambiguousAddrForSendLocked = %v; want none", got)
+					}
+				}
+			})
 		})
 	}
 }
