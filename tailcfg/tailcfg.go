@@ -624,7 +624,7 @@ func (n *Node) DisplayNames(forOwner bool) (name, hostIfDifferent string) {
 // IsRouter reports whether n is a router: it routes addresses besides its own.
 // Examples: an exit node, a subnet router, an app connector, etc.
 func (n *Node) IsRouter() bool {
-	// TODO(sfllaw): Keep this aligned with dbx.Node.IsSubnetRouter.
+	// TODO(sfllaw): Keep this aligned with dbx.Node.IsRouter.
 	for _, r := range n.AllowedIPs {
 		if !slices.Contains(n.Addresses, r) {
 			return true
