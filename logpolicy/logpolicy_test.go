@@ -91,6 +91,23 @@ func TestOptions(t *testing.T) {
 	}
 }
 
+func TestOptionsDisableFilchBuffer(t *testing.T) {
+	defer resetLogTarget()
+	dir := t.TempDir()
+
+	config, policy := Options{Dir: dir, DisableFilchBuffer: true}.init(false)
+	if config.Buffer != nil {
+		t.Errorf("DisableFilchBuffer: config.Buffer = %T; want nil (in-memory buffer)", config.Buffer)
+	}
+	policy.Close()
+
+	config, policy = Options{Dir: dir}.init(false)
+	if config.Buffer == nil {
+		t.Error("default Options: config.Buffer = nil; want on-disk filch buffer")
+	}
+	policy.Close()
+}
+
 // TestInvalidLogTarget is a test for #17792
 func TestInvalidLogTarget(t *testing.T) {
 	defer resetLogTarget()

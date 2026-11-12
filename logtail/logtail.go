@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"expvar"
 	"fmt"
 	"io"
@@ -110,7 +111,7 @@ func newLogger(cfg Config) *Logger {
 		maxUploadSize:  cfg.MaxUploadSize,
 		skipClientTime: cfg.SkipClientTime,
 		drainWake:      make(chan struct{}, 1),
-		sentinel:       make(chan int32, 16),
+		flushChanged:   make(chan struct{}),
 		flushDelayFn:   cfg.FlushDelayFn,
 		clock:          cfg.Clock,
 		metricsDelta:   cfg.MetricsDelta,
@@ -299,7 +300,6 @@ type Logger struct {
 	drainBuf       []byte               // owned by drainPending for reuse
 	flushDelayFn   func() time.Duration // negative or zero return value to upload aggressively, or >0 to batch at this delay
 	flushPending   atomic.Bool
-	sentinel       chan int32
 	clock          tstime.Clock
 	compressLogs   bool
 	uploadCancel   func()
@@ -329,6 +329,15 @@ type Logger struct {
 	shutdownStartMu sync.Mutex    // guards the closing of shutdownStart
 	shutdownStart   chan struct{} // closed when shutdown begins
 	shutdownDone    chan struct{} // closed when shutdown complete
+
+	// flushMu guards drainedGen and flushChanged. drainedGen is
+	// incremented every time drainPending finds the buffer empty
+	// with no batch in flight (see noteBufferDrained);
+	// flushChanged is closed and replaced on each increment to
+	// wake FlushContext waiters.
+	flushMu      sync.Mutex
+	drainedGen   uint64
+	flushChanged chan struct{}
 
 	// Metrics (see [Logger.ExpVar] for details).
 	uploadCalls               expvar.Int
@@ -397,10 +406,13 @@ func (lg *Logger) Shutdown(ctx context.Context) error {
 		return nil
 	default:
 	}
+	// Write the closing line before signaling shutdown, so the
+	// uploader's final drain (which starts once shutdownStart is
+	// closed) is guaranteed to see it.
+	io.WriteString(lg, "logger closing down\n")
 	close(lg.shutdownStart)
 	lg.shutdownStartMu.Unlock()
 
-	io.WriteString(lg, "logger closing down\n")
 	<-done
 
 	return nil
@@ -412,6 +424,23 @@ func (lg *Logger) Shutdown(ctx context.Context) error {
 // Deprecated: use Shutdown
 func (lg *Logger) Close() {
 	lg.Shutdown(context.Background())
+}
+
+// noteBufferDrained records that drainPending found the buffer
+// empty. Since uploading only calls drainPending again after the
+// previous batch's upload resolved, everything drained before
+// this point has been uploaded (or dropped because the logger is
+// disabled). FlushContext waits for a drainedGen newer than the
+// one it observed on entry.
+func (lg *Logger) noteBufferDrained() {
+	lg.flushMu.Lock()
+	defer lg.flushMu.Unlock()
+	if lg.flushChanged == nil {
+		lg.flushChanged = make(chan struct{})
+	}
+	lg.drainedGen++
+	close(lg.flushChanged)
+	lg.flushChanged = make(chan struct{})
 }
 
 // drainBlock is called by drainPending when there are no logs to drain.
@@ -446,10 +475,19 @@ func (lg *Logger) drainPending() (b []byte) {
 	}()
 
 	maxLen := cmp.Or(lg.maxUploadSize, maxSize)
+	// finalDrain is set once shutdown begins while blocked: make
+	// one last non-blocking pass over whatever is buffered
+	// (including the "logger closing down" line, which Shutdown
+	// writes before signaling shutdown), then return instead of
+	// blocking again.
+	var finalDrain bool
 	for len(b) < maxLen {
 		line, err := lg.buffer.TryReadLine()
 		switch {
 		case err == io.EOF:
+			if len(b) == len("[") {
+				lg.noteBufferDrained()
+			}
 			return b
 		case err != nil:
 			b = append(b, '{')
@@ -462,6 +500,10 @@ func (lg *Logger) drainPending() (b []byte) {
 			if len(b) > len("[") {
 				return b
 			}
+			lg.noteBufferDrained()
+			if finalDrain {
+				return b
+			}
 
 			// We're about to block. If we're holding on to too much memory
 			// in our buffer from a previous large write, let it go.
@@ -471,7 +513,7 @@ func (lg *Logger) drainPending() (b []byte) {
 			}
 
 			if shuttingDown := lg.drainBlock(); shuttingDown {
-				return b
+				finalDrain = true
 			}
 			continue
 		}
@@ -565,9 +607,25 @@ func (lg *Logger) uploading(ctx context.Context) {
 			}
 		}
 
+		if ctx.Err() != nil {
+			// Shutdown's context expired. Stop here rather
+			// than draining (and, for filch, rotating away)
+			// more buffered logs that we would no longer
+			// attempt to upload; leaving them in the buffer
+			// lets the next process upload them.
+			return
+		}
 		select {
 		case <-lg.shutdownStart:
-			return
+			// Shutting down: keep draining and uploading
+			// until the buffer is empty (drainPending
+			// returns an empty body), instead of abandoning
+			// everything past the first batch. If the logger
+			// is disabled, batches are being dropped, so
+			// don't consume any more of the buffer.
+			if len(body) == 0 || logtailDisabled.Load() || lg.disabled.Load() {
+				return
+			}
 		default:
 		}
 	}
@@ -699,10 +757,58 @@ func (lg *Logger) upload(ctx context.Context, body []byte, origlen int) (retryAf
 // Flush uploads all logs to the server. It blocks until complete or there is an
 // unrecoverable error.
 //
-// TODO(bradfitz): this apparently just returns nil, as of tailscale/corp@9c2ec35.
-// Finish cleaning this up.
+// Because a batch that keeps failing is retried indefinitely,
+// Flush can block forever if the server never accepts an upload.
+// Prefer FlushContext with a deadline.
 func (lg *Logger) Flush() error {
-	return nil
+	return lg.FlushContext(context.Background())
+}
+
+// FlushContext blocks until all logs written before the call have
+// been uploaded, or ctx is done. Logs written concurrently with
+// the call may or may not be included.
+//
+// Cancelling ctx only stops the wait; it does not cancel uploads
+// or drop buffered logs, which keep retrying in the background
+// (and, with a filch buffer, survive for the next process).
+// FlushContext therefore requires the background uploader started
+// by NewLogger.
+//
+// If the logger is disabled (see SetEnabled and Disable), buffered
+// logs may be dropped rather than uploaded; FlushContext does not
+// report that.
+func (lg *Logger) FlushContext(ctx context.Context) error {
+	lg.flushMu.Lock()
+	if lg.flushChanged == nil {
+		lg.flushChanged = make(chan struct{})
+	}
+	gen := lg.drainedGen
+	lg.flushMu.Unlock()
+
+	lg.tryDrainWake()
+	for {
+		lg.flushMu.Lock()
+		if lg.drainedGen > gen {
+			lg.flushMu.Unlock()
+			return nil
+		}
+		changed := lg.flushChanged
+		lg.flushMu.Unlock()
+
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-lg.shutdownDone:
+			lg.flushMu.Lock()
+			drained := lg.drainedGen > gen
+			lg.flushMu.Unlock()
+			if drained {
+				return nil
+			}
+			return errors.New("logtail: logger shut down before flush completed")
+		}
+	}
 }
 
 // StartFlush starts a log upload, if anything is pending.

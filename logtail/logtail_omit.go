@@ -49,7 +49,11 @@ func (*Logger) Write(p []byte) (n int, err error) {
 
 func (*Logger) Logf(format string, args ...any)    {}
 func (*Logger) Shutdown(ctx context.Context) error { return nil }
-func (*Logger) SetVerbosityLevel(level int)        {}
+func (*Logger) Flush() error                       { return nil }
+func (*Logger) FlushContext(ctx context.Context) error {
+	return ctx.Err()
+}
+func (*Logger) SetVerbosityLevel(level int) {}
 
 func (l *Logger) SetSockstatsLabel(label any) {}
 

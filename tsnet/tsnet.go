@@ -1153,7 +1153,6 @@ func (s *Server) startLogger(closePool *closeOnErrorPool, health *health.Tracker
 	if err != nil {
 		return fmt.Errorf("error creating filch: %w", err)
 	}
-	closePool.add(s.logbuffer)
 	c := logtail.Config{
 		Collection:   lpc.Collection,
 		PrivateID:    lpc.PrivateID,
@@ -1165,7 +1164,15 @@ func (s *Server) startLogger(closePool *closeOnErrorPool, health *health.Tracker
 		MetricsDelta: clientmetric.EncodeLogTailMetricsDelta,
 	}
 	s.logtail = logtail.NewLogger(c, tsLogf)
-	closePool.addFunc(func() { s.logtail.Shutdown(context.Background()) })
+	closePool.addFunc(func() {
+		// Bound the flush as in Server.Close, and shut the
+		// logger down before closing its filch buffer, which
+		// it still needs to drain from.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		s.logtail.Shutdown(ctx)
+		s.logbuffer.Close()
+	})
 	return nil
 }
 
