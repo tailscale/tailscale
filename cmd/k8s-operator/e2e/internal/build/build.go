@@ -109,6 +109,85 @@ func Tag(dir string) (tag string, dirty bool, err error) {
 	return tag, dirty, nil
 }
 
+// WorktreeForRef creates a detached git worktree of ref under a temp dir and
+// returns its path plus a cleanup func. Point Opts.Dir at it to build that ref's
+// images, chart, and CRDs; repoRoot may be any path inside the repository.
+func WorktreeForRef(ctx context.Context, repoRoot, ref string) (dir string, cleanup func(), err error) {
+	dir, err = os.MkdirTemp("", "ts-k8s-e2e-worktree-")
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to create worktree temp dir: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, "git", "worktree", "add", "--detach", dir, ref)
+	cmd.Dir = repoRoot
+	if out, err := cmd.CombinedOutput(); err != nil {
+		os.RemoveAll(dir)
+		return "", nil, fmt.Errorf("git worktree add %s at %q: %w: %s", ref, dir, err, out)
+	}
+	cleanup = func() {
+		// --force because the e2e build writes into the worktree (generated
+		// CRDs, chart artifacts), leaving it dirty.
+		rm := exec.Command("git", "worktree", "remove", "--force", dir)
+		rm.Dir = repoRoot
+		if _, err := rm.CombinedOutput(); err != nil {
+			// Best-effort: fall back to removing the dir and pruning the
+			// stale worktree registration.
+			os.RemoveAll(dir)
+			prune := exec.Command("git", "worktree", "prune")
+			prune.Dir = repoRoot
+			prune.Run()
+		}
+	}
+	return dir, cleanup, nil
+}
+
+// RemoveLeakedWorktrees removes leftover ts-k8s-e2e-worktree-* worktrees from a prior
+// interrupted run, which would otherwise accumulate. It force-removes any
+// ts-k8s-e2e-worktree-* worktree that is not locked. It is best-effort:
+// individual failures are ignored.
+func RemoveLeakedWorktrees(ctx context.Context, repoRoot string) {
+	for _, path := range leakedWorktrees(ctx, repoRoot) {
+		rm := exec.CommandContext(ctx, "git", "worktree", "remove", "--force", path)
+		rm.Dir = repoRoot
+		if err := rm.Run(); err != nil {
+			os.RemoveAll(path)
+		}
+	}
+	// Drop any registrations left pointing at now-removed directories.
+	prune := exec.CommandContext(ctx, "git", "worktree", "prune")
+	prune.Dir = repoRoot
+	prune.Run()
+}
+
+// leakedWorktrees returns the paths of registered worktrees whose directory
+// basename starts with the ts-k8s-e2e-worktree- prefix and that are not locked.
+func leakedWorktrees(ctx context.Context, repoRoot string) []string {
+	list := exec.CommandContext(ctx, "git", "worktree", "list", "--porcelain")
+	list.Dir = repoRoot
+	out, err := list.Output()
+	if err != nil {
+		return nil
+	}
+	var leaked []string
+	// Porcelain output is one blank-line-separated stanza per worktree: a
+	// "worktree <path>" line followed by attribute lines (e.g. "locked").
+	for _, stanza := range strings.Split(strings.TrimSpace(string(out)), "\n\n") {
+		var path string
+		var locked bool
+		for _, line := range strings.Split(stanza, "\n") {
+			switch {
+			case strings.HasPrefix(line, "worktree "):
+				path = strings.TrimPrefix(line, "worktree ")
+			case line == "locked" || strings.HasPrefix(line, "locked "):
+				locked = true
+			}
+		}
+		if path != "" && !locked && strings.HasPrefix(filepath.Base(path), "ts-k8s-e2e-worktree-") {
+			leaked = append(leaked, path)
+		}
+	}
+	return leaked
+}
+
 // ImageRepo returns the image repository for name: <registry>/<name>, or
 // local/<name> when no registry is configured.
 func ImageRepo(registry, name string) string {
