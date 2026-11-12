@@ -380,7 +380,7 @@ func (n *network) handlePCPRequest(req UDPPacket) {
 			epoch := uint32(time.Now().Unix())
 			res = binary.BigEndian.AppendUint32(res, epoch)
 			res = append(res, make([]byte, 12)...) // reserved (96 bits)
-			res = append(res, req.Payload[24:]...)
+			res = append(res, req.Payload[24:]...) // nonce, protocol, int port, ext port and IP copied from request
 			n.WriteUDPPacketNoNAT(UDPPacket{
 				Src:     req.Dst,
 				Dst:     req.Src,
@@ -478,7 +478,9 @@ func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec 
 		now := time.Now()
 		for _, v := range n.portMap {
 			// A mapping made with NAT-PMP or UPnP has no nonce, so a PCP
-			// request for it is treated as a nonce mismatch.
+			// request for it is treated as a nonce mismatch. This is not
+			// explicitly covered by the RFCs, but we discussed and decided
+			// on this approach because it's useful for our tests.
 			if v.dst == dst && now.Before(v.ExpiresAt) && (v.Service != PCP || v.pcpNonce != nonce) {
 				n.logf("vnet: rejected PCP map request for %v with mismatched nonce", dst)
 				return 0, false
