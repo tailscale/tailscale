@@ -5020,6 +5020,115 @@ func TestUpsertPeerTSMPKeyPreservedOnControlUpdate(t *testing.T) {
 	}
 }
 
+// TestUpsertPeerControlRotationAfterTSMP verifies that a peer which advertised
+// its disco key over TSMP follows a later disco key learned via control. The
+// restarted peer's new key becomes active for that node without any inbound
+// disco or TSMP for the new key. A second peer that still uses the retired key
+// must not make that stale key look selected.
+func TestUpsertPeerControlRotationAfterTSMP(t *testing.T) {
+	dkA := key.NewDisco().Public()
+	dkB := key.NewDisco().Public()
+	dkC := key.NewDisco().Public()
+
+	// withOtherPeer keeps dkA indexed by a second node so a global
+	// knownPeerDiscoKey(dkA) hit cannot hide a stale active key on peer1.
+	run := func(t *testing.T, withOtherPeer bool) {
+		conn := newTestConn(t)
+
+		nk1 := key.NewNode().Public()
+		peer1 := &tailcfg.Node{
+			ID:        1,
+			Key:       nk1,
+			DiscoKey:  dkA,
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+		}
+		peers := []*tailcfg.Node{peer1}
+		var nk2 key.NodePublic
+		if withOtherPeer {
+			nk2 = key.NewNode().Public()
+			peers = append(peers, &tailcfg.Node{
+				ID:        2,
+				Key:       nk2,
+				DiscoKey:  dkA,
+				Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")},
+			})
+		}
+		conn.SetNetworkMap(tailcfg.NodeView{}, nodeViews(peers))
+		conn.HandleDiscoKeyAdvertisement(peer1.View(),
+			packet.TSMPDiscoKeyAdvertisement{Key: dkA})
+
+		ep, ok := conn.peerMap.endpointForNodeKey(nk1)
+		if !ok {
+			t.Fatal("peer1 endpoint missing")
+		}
+		if got := ep.disco.Load(); got.key() != dkA || !got.tsmpIsActive() {
+			t.Fatalf("after TSMP advertisement: key=%v tsmpActive=%v, want %v active", got.key(), got.tsmpIsActive(), dkA)
+		}
+
+		check := func(want key.DiscoPublic) {
+			t.Helper()
+			ep, ok := conn.peerMap.endpointForNodeKey(nk1)
+			if !ok {
+				t.Fatal("peer1 endpoint missing")
+			}
+			got := ep.disco.Load()
+			if got.key() != want || got.tsmpIsActive() {
+				t.Errorf("active key=%v tsmpActive=%v, want %v tsmpActive=false", got.key(), got.tsmpIsActive(), want)
+			}
+			if got.keyFromTSMP() != dkA {
+				t.Errorf("tsmp key=%v, want retired material %v", got.keyFromTSMP(), dkA)
+			}
+			if !conn.peerMap.knownPeerDiscoKey(got.key()) {
+				t.Errorf("selected key %v failed knownPeerDiscoKey", got.key())
+			}
+			if _, ok := conn.peerMap.nodesOfDisco[got.key()][nk1]; !ok {
+				t.Errorf("selected key %v does not map to peer1", got.key())
+			}
+		}
+
+		peer1.DiscoKey = dkB
+		conn.UpsertPeer(peer1.View())
+		check(dkB)
+		if _, ok := conn.peerMap.nodesOfDisco[dkA][nk1]; ok {
+			t.Error("retired key A should not map to peer1")
+		}
+		if _, ok := conn.peerMap.nodesOfDisco[dkB][nk1]; !ok {
+			t.Error("key B should map to peer1")
+		}
+		if withOtherPeer {
+			if _, ok := conn.peerMap.nodesOfDisco[dkA][nk2]; !ok {
+				t.Error("key A should still map to the other peer")
+			}
+			if !conn.peerMap.knownPeerDiscoKey(dkA) {
+				t.Error("key A should remain known via the other peer")
+			}
+		} else if conn.peerMap.knownPeerDiscoKey(dkA) {
+			t.Error("retired key A should not pass knownPeerDiscoKey")
+		}
+
+		peer1.DiscoKey = dkC
+		conn.UpsertPeer(peer1.View())
+		check(dkC)
+		if _, ok := conn.peerMap.nodesOfDisco[dkB][nk1]; ok {
+			t.Error("key B should not map to peer1 after rotation to C")
+		}
+		if _, ok := conn.peerMap.nodesOfDisco[dkC][nk1]; !ok {
+			t.Error("key C should map to peer1")
+		}
+		if _, ok := conn.peerMap.nodesOfDisco[dkA][nk1]; ok {
+			t.Error("key A should not map to peer1 after rotation to C")
+		}
+		if withOtherPeer {
+			if _, ok := conn.peerMap.nodesOfDisco[dkA][nk2]; !ok {
+				t.Error("key A should still map to the other peer after rotation to C")
+			}
+		}
+	}
+
+	t.Run("retired-key-unknown", func(t *testing.T) { run(t, false) })
+	t.Run("other-peer-keeps-retired-key", func(t *testing.T) { run(t, true) })
+}
+
 func TestUnambiguousNodeKeyOfPingLocked(t *testing.T) {
 	nk1 := key.NewNode().Public()
 	dk2 := key.NewDisco().Public()
