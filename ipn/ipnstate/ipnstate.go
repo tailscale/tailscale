@@ -370,7 +370,7 @@ func (ps *PeerStatus) HasCap(cap nodecap.Cap) bool {
 // Examples: an exit node, a subnet router, an app connector, etc.
 // It is the analogue of [tailcfg.Node.IsRouter].
 func (ps *PeerStatus) IsRouter() bool {
-	// TODO(sfllaw): Keep this aligned with dbx.Node.IsSubnetRouter.
+	// TODO(sfllaw): Keep this aligned with dbx.Node.IsRouter.
 	if ps.AllowedIPs == nil {
 		return false
 	}
