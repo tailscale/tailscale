@@ -705,3 +705,22 @@ func IPCVersion() string {
 	}
 	return version.Long()
 }
+
+// MaxQueues limits the amount of tun and magicsock queues to open. The value
+// is capped by GOMAXPROCS and can be overridden by TS_DEBUG_MAX_QUEUES.
+//
+// Each extra queue means allocating a goroutine and related buffers, and brings
+// diminishing returns in performance (which also only apply to nodes speaking
+// with multiple concurrent peers), so we stop scaling at a sane default max:
+// 16.
+//
+// TODO(illotum): 16 is conservative. On a subnet router peering with 256
+// concurrent clients TX grows ~6x with 16 queues, and ~10x with 128. RX is
+// capped by someting else and doesn't scale with more queues at all. This value
+// may and should be reevaluated after other performance improvements.
+func MaxQueues() int {
+	if n, ok := LookupInt("TS_DEBUG_MAX_QUEUES"); ok {
+		return max(1, n)
+	}
+	return min(16, runtime.GOMAXPROCS(0))
+}

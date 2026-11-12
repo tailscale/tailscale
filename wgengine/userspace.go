@@ -430,6 +430,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		EventBus:       e.eventBus,
 		Logf:           logf,
 		Port:           conf.ListenPort,
+		UDPSockets:     envknob.MaxQueues(), // in sync with tun queues
 		EndpointsFunc:  endpointsFn,
 		DERPActiveFunc: e.RequestStatus,
 		IdleFunc:       e.tundev.IdleDuration,
