@@ -4,6 +4,8 @@
 package ktimeout
 
 import (
+	"errors"
+	"fmt"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -12,4 +14,12 @@ import (
 // SetUserTimeout sets the TCP_USER_TIMEOUT option on the given file descriptor.
 func SetUserTimeout(fd uintptr, timeout time.Duration) error {
 	return unix.SetsockoptInt(int(fd), unix.SOL_TCP, unix.TCP_USER_TIMEOUT, int(timeout/time.Millisecond))
+}
+
+func setUserTimeoutChecked(fd uintptr, timeout time.Duration) error {
+	err := SetUserTimeout(fd, timeout)
+	if errors.Is(err, unix.ENOPROTOOPT) || errors.Is(err, unix.EOPNOTSUPP) {
+		return fmt.Errorf("%w: %w", errors.ErrUnsupported, err)
+	}
+	return err
 }
