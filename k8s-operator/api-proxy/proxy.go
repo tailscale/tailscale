@@ -472,23 +472,7 @@ func (ap *APIServerProxy) addImpersonationHeadersAsRequired(r *http.Request) {
 }
 
 func (ap *APIServerProxy) whoIs(r *http.Request) (*apitype.WhoIsResponse, error) {
-	who, remoteErr := ap.lc.WhoIs(r.Context(), r.RemoteAddr)
-	if remoteErr == nil {
-		ap.log.Debugf("WhoIs from remote addr: %s", r.RemoteAddr)
-		return who, nil
-	}
-
-	var fwdErr error
-	fwdFor := r.Header.Get("X-Forwarded-For")
-	if fwdFor != "" && !ap.https {
-		who, fwdErr = ap.lc.WhoIs(r.Context(), fwdFor)
-		if fwdErr == nil {
-			ap.log.Debugf("WhoIs from X-Forwarded-For header: %s", fwdFor)
-			return who, nil
-		}
-	}
-
-	return nil, errors.Join(remoteErr, fwdErr)
+	return ap.lc.WhoIsProto(r.Context(), "tcp", r.RemoteAddr)
 }
 
 func (ap *APIServerProxy) authError(w http.ResponseWriter, err error) {
