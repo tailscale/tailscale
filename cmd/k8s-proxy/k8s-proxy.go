@@ -80,6 +80,7 @@ func run(logger *zap.SugaredLogger) error {
 		configPath = os.Getenv("TS_K8S_PROXY_CONFIG")
 		podUID     = os.Getenv("POD_UID")
 		podIP      = os.Getenv("POD_IP")
+		port       = os.Getenv("PORT")
 	)
 	if configPath == "" {
 		return errors.New("TS_K8S_PROXY_CONFIG unset")
@@ -205,11 +206,18 @@ func run(logger *zap.SugaredLogger) error {
 		authKey = *cfg.Parsed.AuthKey
 	}
 
+	// PORT is the static endpoint NodePort targetPort; WireGuard must listen on it.
+	tsPort, err := parsePort(port)
+	if err != nil {
+		return err
+	}
+
 	ts := &tsnet.Server{
 		Logf:     logger.Named("tsnet").Debugf,
 		UserLogf: logger.Named("tsnet").Infof,
 		Store:    st,
 		AuthKey:  authKey,
+		Port:     tsPort,
 	}
 
 	if cfg.Parsed.ServerURL != nil {
@@ -446,6 +454,19 @@ func run(logger *zap.SugaredLogger) error {
 
 func getLocalAddrPort(addr string, port uint16) string {
 	return net.JoinHostPort(addr, strconv.FormatUint(uint64(port), 10))
+}
+
+// parsePort parses the PORT env var. It returns 0 if PORT is unset, so tsnet
+// picks a random port.
+func parsePort(p string) (uint16, error) {
+	if p == "" {
+		return 0, nil
+	}
+	port, err := strconv.ParseUint(p, 10, 16)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse PORT %q: %w", p, err)
+	}
+	return uint16(port), nil
 }
 
 func getStateStore(path *string, logger *zap.SugaredLogger) (ipn.StateStore, error) {
