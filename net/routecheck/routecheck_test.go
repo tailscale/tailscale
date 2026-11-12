@@ -505,6 +505,22 @@ func TestProbeAllHARouters(t *testing.T) {
 			t.Errorf("reachable: got %v, want %v", gotReachable, wantReachable)
 		}
 
+		// The report indexes reachable connectors by the app they serve.
+		wantApps := map[string][]tailcfg.NodeID{
+			"example": {22, 41, 61},
+			"lonely":  {61},
+		}
+		gotApps := map[string][]tailcfg.NodeID{}
+		for app, nodes := range got.RoutableApps() {
+			for _, n := range nodes {
+				gotApps[app] = append(gotApps[app], n.ID)
+			}
+			slices.Sort(gotApps[app])
+		}
+		if diff := gcmp.Diff(wantApps, gotApps); diff != "" {
+			t.Errorf("routable apps -want +got:\n%s", diff)
+		}
+
 		// Every probed node should be pinged once, confirming that the
 		// dual-role node (22) isn't double-probed, that lone routers and lone
 		// connectors (1, 31, 51) aren't probed, and that a connector serving

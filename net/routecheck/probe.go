@@ -38,6 +38,7 @@ type probed struct {
 	tailcfg.NodeView
 	addr   netip.Addr
 	routes []netip.Prefix
+	apps   []string
 }
 
 func (c *Client) probe(ctx context.Context, nodes iter.Seq[probed], limit int, timeout time.Duration) (*Report, error) {
@@ -67,6 +68,7 @@ func (c *Client) probe(ctx context.Context, nodes iter.Seq[probed], limit int, t
 				Name:   n.Name(),
 				Addr:   n.addr,
 				Routes: n.routes,
+				Apps:   n.apps,
 			})
 		}
 	}
@@ -185,10 +187,12 @@ func (c *Client) Probe(ctx context.Context, nodes iter.Seq[tailcfg.NodeView], li
 			if !addr.IsValid() {
 				continue // No valid addresses.
 			}
+			apps, _ := connectorApps(n)
 			if !yield(probed{
 				NodeView: n,
 				addr:     addr,
 				routes:   routes(n),
+				apps:     apps,
 			}) {
 				return
 			}
@@ -224,6 +228,10 @@ func (c *Client) ProbeAllHARouters(ctx context.Context, limit int, timeout time.
 	// Group conn25 connectors by the app they serve, then probe only
 	// connectors for apps served by more than one node, since there is
 	// no point probing a connector when it is the only choice for its app.
+	//
+	// It is the control plane's responsibility to only provide app names on
+	// peers that are eligible connectors for this client, so there is no need
+	// to filter the peers here by the apps the self node uses.
 	connectorsByApp := make(map[string][]tailcfg.NodeView)
 	for _, nv := range peers {
 		apps, err := connectorApps(nv)

@@ -25,4 +25,5 @@ import (
 type ReportResponse struct {
 	Done   time.Time                   `json:"done"`
 	Routes routecheck.RoutablePrefixes `json:"routes"`
+	Apps   routecheck.RoutableApps     `json:"apps,omitempty"`
 }
