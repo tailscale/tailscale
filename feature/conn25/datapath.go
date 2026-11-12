@@ -31,14 +31,6 @@ var (
 // [*Conn25] is the only production implementation; the interface exists to let
 // datapath tests substitute a lightweight fake.
 type Conn25Datapath interface {
-	// ClientTransitIPForMagicIP returns a Transit IP for the given magicIP on a client.
-	// If the magicIP is within a configured Magic IP range for an app on the client,
-	// but not mapped to an active Transit IP, implementations should return [ErrUnmappedMagicIP].
-	// If magicIP is not within a configured Magic IP range, i.e. it is not actually a Magic IP,
-	// implementations should return a nil error, and a zero-value [netip.Addr] to indicate
-	// this potentially valid, non-app-connector traffic.
-	ClientTransitIPForMagicIP(magicIP netip.Addr) (netip.Addr, error)
-
 	// ConnectorRealIPForTransitIPConnection returns a real destination IP for the given
 	// srcIP and transitIP on a connector. If the transitIP is within a configured Transit IP
 	// range for an app on the connector, but not mapped to the client at srcIP, implementations
@@ -48,12 +40,12 @@ type Conn25Datapath interface {
 	// non-app-connector traffic.
 	ConnectorRealIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, error)
 
-	// ClientFlowCreated is called before a client-side flow for transitIP has
-	// been installed in the client flow table, and returns a cleanup function
-	// that the caller must invoke when that flow is removed. The cleanup takes
-	// effect at most once; implementations must ignore repeat calls rather than
-	// release the flow's hold on its address assignment more than once.
-	ClientFlowCreated(transitIP netip.Addr) func()
+	// ClientFlowCreatedForMagicIP is called before a client-side flow to
+	// magicIP is installed in the client flow table. It returns the hold that
+	// names the Transit IP to forward that flow to and keeps that address from
+	// being reclaimed, which the caller releases when the flow is removed, or
+	// right away if it ends up installing no flow at all.
+	ClientFlowCreatedForMagicIP(magicIP netip.Addr) (ClientFlowHold, error)
 }
 
 // datapathHandler handles packets from the datapath,
@@ -234,9 +226,17 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed, tun *tstu
 	// tun device, it can only be a new client flow, other (non-app-connector) traffic,
 	// or broken return app-connector traffic on a connector, which needs to be re-established
 	// with a new outbound packet.
+	//
+	// Resolve the Magic IP and notify Conn25 that a flow for it is being
+	// established, before installing that flow in the flow table. Resolving and
+	// counting together keeps the assignment from expiring out from under the
+	// flow in between, and guarantees that ClientFlowCreatedForMagicIP for this
+	// flow precedes the cleanup that fires when it is removed.
 	magicIP := p.Dst.Addr()
-	transitIP, err := dh.conn25.ClientTransitIPForMagicIP(magicIP)
+	hold, err := dh.conn25.ClientFlowCreatedForMagicIP(magicIP)
 	if err != nil {
+		// Nothing is installed on this path, so the hold goes back right away.
+		hold.Release()
 		if errors.Is(err, ErrUnmappedMagicIP) {
 			// Couldn't find a mapping. Tell the local application the host is
 			// unreachable so it can recover quickly instead of blackholing.
@@ -248,7 +248,9 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed, tun *tstu
 	}
 
 	// If this is normal non-app-connector traffic, forward it along unmodified.
+	transitIP := hold.transit
 	if !transitIP.IsValid() {
+		hold.Release()
 		return filter.Accept
 	}
 
@@ -264,15 +266,10 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed, tun *tstu
 		Action: dh.snatAction(magicIP),
 	}
 
-	// Notify Conn25 that a flow for transitIP is being established before
-	// installing it in the flow table. This guarantees that ClientFlowCreated
-	// for this flow precedes the cleanup that fires when it is removed.
-	flowCleanup := dh.conn25.ClientFlowCreated(transitIP)
-
 	dh.clientFlowTable.NewFlow(FlowData{
 		FromTun:  outgoing,
 		FromWG:   incoming,
-		OnRemove: flowCleanup,
+		OnRemove: hold.Release,
 	})
 	outgoing.Action(p)
 	return filter.Accept
