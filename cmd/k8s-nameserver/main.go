@@ -138,18 +138,22 @@ func (n *nameserver) handleFunc() func(w dns.ResponseWriter, r *dns.Msg) {
 			m.RecursionAvailable = false
 
 			ips := n.lookupIP4(fqdn)
-			if len(ips) == 0 {
+			// Also check if we have IPv6 records to determine correct response code.
+			// If the name exists (has AAAA records) but no A records, we return NOERROR
+			// per RFC 4074. If the name doesn't exist at all, we return NXDOMAIN.
+			ip6s := n.lookupIP6(fqdn)
+			if len(ips) == 0 && len(ip6s) == 0 {
 				// As we are the authoritative nameserver for MagicDNS
-				// names, if we do not have a record for this MagicDNS
+				// names, if we do not have any record for this MagicDNS
 				// name, it does not exist.
 				m = m.SetRcode(r, dns.RcodeNameError)
 				return
 			}
 			for _, ip := range ips {
 				rr := &dns.A{Hdr: dns.RR_Header{Name: q, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: defaultTTL}, A: ip}
-				m.SetRcode(r, dns.RcodeSuccess)
 				m.Answer = append(m.Answer, rr)
 			}
+			m.SetRcode(r, dns.RcodeSuccess)
 		case dns.TypeAAAA:
 			q := r.Question[0].Name
 			fqdn, err := dnsname.ToFQDN(q)
