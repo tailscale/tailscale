@@ -9,3 +9,7 @@
 //   - [LogResponse] will unmarshal the output of "tailscale lock log --json=1"
 //   - [StatusResponse] will unmarshal the output of "tailscale lock status --json=1".
 package tslockjsonv1
+
+// packageAPIIsStable marks this package for compatibility checks by tool/apidiff.
+//lint:ignore U1000 read by tool/apidiff
+const packageAPIIsStable = true
