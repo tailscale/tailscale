@@ -1256,3 +1256,107 @@ func TestChangedActiveDiscoLocked(t *testing.T) {
 		}
 	})
 }
+
+// Test_endpoint_altAddr verifies that when another direct address answers a
+// disco ping while the (still trusted) best address stays silent, packets are
+// also sent to that other address, and that this stops once the best address
+// answers or changes.
+func Test_endpoint_altAddr(t *testing.T) {
+	directAddrA := epAddr{ap: netip.MustParseAddrPort("192.0.2.1:7")} // old LAN address
+	directAddrB := epAddr{ap: netip.MustParseAddrPort("198.51.100.2:8")}
+
+	newEndpoint := func(now mono.Time, bestAddrAt mono.Time) *endpoint {
+		c := &Conn{
+			logf:    func(msg string, args ...any) {},
+			peerMap: newPeerMap(),
+		}
+		c.discoAtomic.Set(key.NewDisco())
+		return &endpoint{
+			c:                  c,
+			bestAddr:           addrQuality{epAddr: directAddrA, latency: 3 * time.Millisecond},
+			bestAddrAt:         bestAddrAt,
+			trustBestAddrUntil: now.Add(trustUDPAddrDuration),
+			sentPing:           make(map[stun.TxID]sentPing),
+			endpointState: map[netip.AddrPort]*endpointState{
+				directAddrA.ap: {},
+				directAddrB.ap: {},
+			},
+			debugUpdates: ringlog.New[EndpointChange](10),
+		}
+	}
+	// pong makes de receive a pong from `from` for a ping sent pingAfter ago.
+	pong := func(t *testing.T, de *endpoint, from epAddr, pingedAgo time.Duration) {
+		t.Helper()
+		txid := stun.NewTxID()
+		timer := time.NewTimer(time.Hour)
+		timer.Stop()
+		de.sentPing[txid] = sentPing{
+			to:      from,
+			at:      mono.Now().Add(-pingedAgo),
+			timer:   timer,
+			purpose: pingDiscovery,
+		}
+		di := &discoInfo{discoKey: key.NewDisco().Public(), discoShort: "test"}
+		if !de.handlePongConnLocked(&disco.Pong{TxID: txid, Src: from.ap}, di, from) {
+			t.Fatal("pong not recognized")
+		}
+	}
+
+	t.Run("silent-best-dual-sends", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			now := mono.Now()
+			// bestAddr last answered long before the ping below was sent.
+			de := newEndpoint(now, now.Add(-time.Second))
+			pong(t, de, directAddrB, 80*time.Millisecond)
+
+			if de.bestAddr.epAddr != directAddrA {
+				t.Fatalf("bestAddr = %v; want %v (still trusted)", de.bestAddr.epAddr, directAddrA)
+			}
+			if got := de.altAddrForSendLocked(mono.Now(), de.bestAddr.epAddr); got != directAddrB {
+				t.Fatalf("altAddrForSendLocked = %v; want %v", got, directAddrB)
+			}
+
+			// The window is bounded.
+			time.Sleep(trustUDPAddrDuration + time.Second)
+			if got := de.altAddrForSendLocked(mono.Now(), de.bestAddr.epAddr); got.ap.IsValid() {
+				t.Fatalf("altAddrForSendLocked after window = %v; want none", got)
+			}
+		})
+	})
+
+	t.Run("best-answers-later-stops-dual-send", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			now := mono.Now()
+			de := newEndpoint(now, now.Add(-time.Second))
+			pong(t, de, directAddrB, 80*time.Millisecond)
+			pong(t, de, directAddrA, 90*time.Millisecond) // best answers
+			if got := de.altAddrForSendLocked(mono.Now(), de.bestAddr.epAddr); got.ap.IsValid() {
+				t.Fatalf("altAddrForSendLocked = %v; want none after best answered", got)
+			}
+		})
+	})
+
+	t.Run("best-already-answered-no-dual-send", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			now := mono.Now()
+			// bestAddr answered after the ping to B was sent.
+			de := newEndpoint(now, now)
+			pong(t, de, directAddrB, 80*time.Millisecond)
+			if got := de.altAddrForSendLocked(mono.Now(), de.bestAddr.epAddr); got.ap.IsValid() {
+				t.Fatalf("altAddrForSendLocked = %v; want none (best is alive)", got)
+			}
+		})
+	})
+
+	t.Run("best-change-clears-alt", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			now := mono.Now()
+			de := newEndpoint(now, now.Add(-time.Second))
+			pong(t, de, directAddrB, 80*time.Millisecond)
+			de.setBestAddrLocked(addrQuality{epAddr: directAddrB})
+			if got := de.altAddrForSendLocked(mono.Now(), de.bestAddr.epAddr); got.ap.IsValid() {
+				t.Fatalf("altAddrForSendLocked = %v; want none after bestAddr changed", got)
+			}
+		})
+	})
+}
