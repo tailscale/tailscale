@@ -98,7 +98,6 @@ require (
 	github.com/mitchellh/go-ps v1.0.0
 	github.com/peterbourgon/ff/v3 v3.4.0
 	github.com/pires/go-proxyproto v0.15.0
-	github.com/pkg/errors v0.9.1
 	github.com/pkg/sftp v1.13.11
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/client_model v0.6.3
@@ -449,6 +448,7 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/pjbgf/sha1cd v0.6.0 // indirect
 	github.com/pkg/diff v0.0.0-20241224192749-4e6772a4315c // indirect
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/procfs v0.21.1 // indirect
