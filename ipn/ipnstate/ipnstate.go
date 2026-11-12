@@ -371,15 +371,16 @@ func (ps *PeerStatus) HasCap(cap nodecap.Cap) bool {
 // It is the analogue of [tailcfg.Node.IsRouter].
 func (ps *PeerStatus) IsRouter() bool {
 	// TODO(sfllaw): Keep this aligned with dbx.Node.IsSubnetRouter.
-	if ps.AllowedIPs != nil {
-		for _, r := range ps.AllowedIPs.All() {
-			if !r.IsSingleIP() || !slices.Contains(ps.TailscaleIPs, r.Addr()) {
-				return true
-			}
-		}
+	if ps.AllowedIPs == nil {
+		return false
 	}
 
-	return ps.HasCap(nodecap.Conn25Connector)
+	for _, r := range ps.AllowedIPs.All() {
+		if !r.IsSingleIP() || !slices.Contains(ps.TailscaleIPs, r.Addr()) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsTagged reports whether ps is tagged.

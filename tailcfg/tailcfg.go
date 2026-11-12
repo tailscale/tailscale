@@ -630,7 +630,7 @@ func (n *Node) IsRouter() bool {
 			return true
 		}
 	}
-	return n.HasCap(nodecap.Conn25Connector)
+	return false
 }
 
 // IsTagged reports whether the node has any tags.

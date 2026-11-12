@@ -226,7 +226,7 @@ func (c *Client) ProbeAllHARouters(ctx context.Context, limit int, timeout time.
 	// no point probing a connector when it is the only choice for its app.
 	connectorsByApp := make(map[string][]tailcfg.NodeView)
 	for _, nv := range peers {
-		apps, err := tailcfg.UnmarshalNodeCapViewJSON[string](nv.CapMap(), nodecap.Conn25Connector)
+		apps, err := connectorApps(nv)
 		if err != nil {
 			c.logf("routecheck: bad %s cap on node %v: %v", nodecap.Conn25Connector, nv.ID(), err)
 			continue

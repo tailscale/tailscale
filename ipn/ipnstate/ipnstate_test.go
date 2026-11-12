@@ -166,7 +166,7 @@ func TestPeerStatusIsRouter(t *testing.T) {
 					nodecap.Conn25Connector: nil,
 				},
 			},
-			want: true,
+			want: false,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

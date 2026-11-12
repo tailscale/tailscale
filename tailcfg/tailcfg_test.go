@@ -802,7 +802,7 @@ var nodeIsRouterCases = []struct {
 				nodecap.Conn25Connector: nil,
 			},
 		},
-		want: true,
+		want: false,
 	},
 }
 
