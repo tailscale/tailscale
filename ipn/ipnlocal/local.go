@@ -2521,7 +2521,7 @@ func (b *LocalBackend) sysPolicyChangedForSession(sess *watchSession) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if sess.suspended {
+	if sess.suspended || b.notifyWatchers[sess.sessionID] != sess {
 		return
 	}
 	snapshot, err := b.polc.GetPolicySnapshot(sess.policyUID)
@@ -2538,10 +2538,7 @@ func (b *LocalBackend) sysPolicyChangedForSession(sess *watchSession) {
 		f(&n)
 	}
 	nForSess := b.notifyForSessionLocked(sess, &n)
-	select {
-	case sess.ch <- nForSess:
-	default:
-	}
+	b.sendToWatchSessionLocked(sess, nForSess)
 }
 
 var (
@@ -4376,25 +4373,33 @@ func (b *LocalBackend) sendToLocked(n ipn.Notify, recipient notificationTarget) 
 			continue
 		}
 		nForSess := b.notifyForSessionLocked(sess, &n)
-		select {
-		case sess.ch <- nForSess:
-		default:
-			switch {
-			case sess.mask&ipn.NotifyInProcessNoDisconnect != 0:
-				metricWatchIPNBusBehindBlocked.Add(1)
-				select {
-				case sess.ch <- nForSess:
-				case <-sess.ctx.Done():
-				}
-			case sess.mask&ipn.NotifySuspendWhenBehind != 0:
-				metricWatchIPNBusBehindSuspended.Add(1)
-				b.logf("IPN bus watcher %s fell behind; suspending it", sess.sessionID)
-				b.suspendLaggingWatchSessionLocked(sess)
-			default:
-				metricWatchIPNBusBehindClosed.Add(1)
-				b.logf("IPN bus watcher %s fell behind; closing the watch", sess.sessionID)
-				b.closeLaggingWatchSessionLocked(sess)
+		b.sendToWatchSessionLocked(sess, nForSess)
+	}
+}
+
+// sendToWatchSessionLocked sends n to sess, handling a watcher that has
+// fallen behind according to its requested notification mode.
+//
+// b.mu must be held.
+func (b *LocalBackend) sendToWatchSessionLocked(sess *watchSession, n *ipn.Notify) {
+	select {
+	case sess.ch <- n:
+	default:
+		switch {
+		case sess.mask&ipn.NotifyInProcessNoDisconnect != 0:
+			metricWatchIPNBusBehindBlocked.Add(1)
+			select {
+			case sess.ch <- n:
+			case <-sess.ctx.Done():
 			}
+		case sess.mask&ipn.NotifySuspendWhenBehind != 0:
+			metricWatchIPNBusBehindSuspended.Add(1)
+			b.logf("IPN bus watcher %s fell behind; suspending it", sess.sessionID)
+			b.suspendLaggingWatchSessionLocked(sess)
+		default:
+			metricWatchIPNBusBehindClosed.Add(1)
+			b.logf("IPN bus watcher %s fell behind; closing the watch", sess.sessionID)
+			b.closeLaggingWatchSessionLocked(sess)
 		}
 	}
 }

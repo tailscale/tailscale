@@ -9435,6 +9435,54 @@ func TestPolicyChangeNotifiesWatcher(t *testing.T) {
 	nw.check()
 }
 
+func TestSysPolicyChangeSuspendsSlowConsumer(t *testing.T) {
+	sys := tsd.NewSystem()
+	sys.PolicyClient.Set(testPolicyClient{})
+	b := newTestLocalBackendWithSys(t, sys)
+
+	sess := &watchSession{
+		sessionID: "test-session",
+		ctx:       t.Context(),
+		mask:      ipn.NotifySysPolicyChanges | ipn.NotifySuspendWhenBehind,
+		ch:        make(chan *ipn.Notify, 1),
+	}
+
+	func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+
+		if b.notifyWatchers == nil {
+			b.notifyWatchers = make(map[string]*watchSession)
+		}
+		b.notifyWatchers[sess.sessionID] = sess
+	}()
+
+	sess.ch <- &ipn.Notify{} // sess.ch is 1-buffered; fill it before sending the policy changed notification
+
+	b.sysPolicyChangedForSession(sess) // shouldn't block
+
+	b.mu.Lock()
+	suspended := sess.suspended
+	numWatchers := len(b.notifyWatchers)
+	b.mu.Unlock()
+
+	if !suspended {
+		t.Error("watcher was not suspended after policy notification")
+	}
+	if numWatchers != 1 {
+		t.Errorf("watchers after suspension = %d; want 1", numWatchers)
+	}
+
+	select {
+	case n := <-sess.ch:
+		if n == nil || !n.Suspended {
+			t.Errorf("notification = %v; want Suspended", n)
+		}
+	default:
+		t.Fatal("no suspension notification received")
+	}
+}
+
 func TestPolicyNotifyPerUser(t *testing.T) {
 	setting.SetDefinitionsForTest(t,
 		setting.NewDefinition(
