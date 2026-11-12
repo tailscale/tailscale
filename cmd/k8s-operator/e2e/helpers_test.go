@@ -461,6 +461,44 @@ func waitForL3HAIngressReady(t *testing.T, svcName string) {
 	}
 }
 
+// requireL3HAReachable curls the ProxyGroup L3 HA ingress over the tailnet on
+// the VIPService address of every IP family of the Service's ClusterIP.
+func requireL3HAReachable(t *testing.T, svcName string) {
+	t.Helper()
+	var svcIPs []string
+	if err := tstest.WaitFor(2*time.Minute, func() error {
+		svc := &corev1.Service{ObjectMeta: objectMeta(ns, svcName)}
+		if err := get(t.Context(), kubeClient, svc); err != nil {
+			return err
+		}
+		if len(svc.Spec.ClusterIPs) == 0 {
+			return fmt.Errorf("Service %s has no ClusterIPs yet", svcName)
+		}
+		tsSvc, err := tsClient.VIPServices().Get(t.Context(), "svc:default-"+svcName)
+		if err != nil {
+			return fmt.Errorf("getting Tailscale Service for %s: %w", svcName, err)
+		}
+		ips := make([]string, 0, len(svc.Spec.ClusterIPs))
+		for _, clusterIP := range svc.Spec.ClusterIPs {
+			ip := ipMatchingFamily(tsSvc.Addrs, clusterIP)
+			if ip == "" {
+				return fmt.Errorf("Tailscale Service for %s has no address matching ClusterIP %s family (addrs %v)", svcName, clusterIP, tsSvc.Addrs)
+			}
+			ips = append(ips, ip)
+		}
+		svcIPs = ips
+		return nil
+	}); err != nil {
+		t.Fatalf("resolving Tailscale Service IPs for %s: %v", svcName, err)
+	}
+
+	for _, svcIP := range svcIPs {
+		if err := testIngressIsReachable(t, newHTTPClient(tnClient), "http://"+net.JoinHostPort(svcIP, "80")); err != nil {
+			t.Fatalf("L3 HA ingress %s not reachable on %s: %v", svcName, svcIP, err)
+		}
+	}
+}
+
 // removeStaticEndpoints removes the static endpoints configuration from the
 // named ProxyClass and waits for the change to be accepted.
 func removeStaticEndpoints(t *testing.T, name string) {

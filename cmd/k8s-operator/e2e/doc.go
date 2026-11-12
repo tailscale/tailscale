@@ -3,6 +3,21 @@
 
 // Package e2e runs end-to-end tests for the Tailscale Kubernetes operator.
 //
+// There are two modes, one mode can run at a time:
+//
+//   - Standard mode (default): runs the full suite against the operator's
+//     managed resources.
+//   - Upgrade/downgrade mode (--from-version set): runs only
+//     TestOperatorVersionChange, which installs the operator at one version,
+//     changes it to another, and asserts the managed resources stay healthy
+//     across the change. The rest of the suite is skipped, since this mode
+//     installs and upgrades the operator and can conflict with other tests.
+//
+// The standard-mode requirements and flags are described first, followed by
+// upgrade/downgrade mode.
+//
+// # Standard mode
+//
 // To run without arguments, it requires:
 //
 // * Kubernetes cluster with local kubeconfig for it (direct connection, no API server proxy)
@@ -36,4 +51,23 @@
 // * go
 // * container runtime with the docker daemon API available
 // * devcontrol: ./tool/go run --tags=tailscale_saas ./cmd/devcontrol --generate-test-devices=k8s-operator-e2e --scenario-output-dir=/tmp/k8s-operator-e2e --test-dns=http://localhost:8055
+//
+// # Upgrade/downgrade mode
+//
+// This mode runs TestOperatorVersionChange and skips the rest of the suite. The
+// operator is installed at --from-version and then changed to --to-version. Each
+// takes any git ref - a version tag, commit SHA, or "HEAD" for the current
+// checkout. --round-trip then changes back to --from-version in the same run,
+// exercising the change in both directions. The test is direction-neutral: pass
+// the older version as --from-version for an upgrade, or as --to-version for a
+// downgrade.
+//
+// For example, to upgrade from a released version to the current checkout against
+// devcontrol:
+//
+// go test -timeout=30m -v ./cmd/k8s-operator/e2e/ --build --cluster --devcontrol --from-version=v1.104.7 --to-version=HEAD
+//
+// To test an upgrade/downgrade round-trip against a real cluster and tailnet:
+//
+// go test -timeout=30m -v ./cmd/k8s-operator/e2e/ --build --registry my-registry --from-version=v1.104.7 --to-version=HEAD --round-trip
 package e2e

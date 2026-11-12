@@ -186,36 +186,8 @@ func TestL3HAIngress(t *testing.T) {
 			}
 			createAndCleanup(t, kubeClient, svc)
 
-			var svcIPs []string
 			waitForL3HAIngressReady(t, svc.Name)
-			if err := tstest.WaitFor(2*time.Minute, func() error {
-				readySvc := &corev1.Service{ObjectMeta: objectMeta(ns, svc.Name)}
-				if err := get(t.Context(), kubeClient, readySvc); err != nil {
-					return err
-				}
-				tsSvc, err := tsClient.VIPServices().Get(t.Context(), "svc:default-"+svc.Name)
-				if err != nil {
-					return fmt.Errorf("getting Tailscale Service: %w", err)
-				}
-				ips := make([]string, 0, len(readySvc.Spec.ClusterIPs))
-				for _, clusterIP := range readySvc.Spec.ClusterIPs {
-					ip := ipMatchingFamily(tsSvc.Addrs, clusterIP)
-					if ip == "" {
-						return fmt.Errorf("Tailscale Service has no IP matching Kubernetes ClusterIP %s family", clusterIP)
-					}
-					ips = append(ips, ip)
-				}
-				svcIPs = ips
-				return nil
-			}); err != nil {
-				t.Fatalf("error resolving Tailscale Service IPs: %v", err)
-			}
-
-			for _, svcIP := range svcIPs {
-				if err := testIngressIsReachable(t, newHTTPClient(tnClient), "http://"+net.JoinHostPort(svcIP, "80")); err != nil {
-					t.Fatal(err)
-				}
-			}
+			requireL3HAReachable(t, svc.Name)
 		})
 	}
 }
