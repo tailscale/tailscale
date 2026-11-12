@@ -92,6 +92,13 @@ type endpoint struct {
 	bestAddr           addrQuality // best non-DERP path; zero if none; mutate via setBestAddrLocked()
 	bestAddrAt         mono.Time   // time best address re-confirmed
 	trustBestAddrUntil mono.Time   // time when bestAddr expires
+
+	// ambiguousAddr, if valid, is a direct address that answered a disco
+	// ping while bestAddr, pinged in the same round, stayed silent. Until
+	// ambiguousUntil we send to it as well as to bestAddr, because we
+	// can't yet tell which one the peer is reachable at.
+	ambiguousAddr  epAddr
+	ambiguousUntil mono.Time
 	sentPing           map[stun.TxID]sentPing
 	endpointState      map[netip.AddrPort]*endpointState // netip.AddrPort type for key (instead of [epAddr]) as [endpointState] is irrelevant for Geneve-encapsulated paths
 	isCallMeMaybeEP    map[netip.AddrPort]bool
@@ -155,6 +162,36 @@ func (de *endpoint) setBestAddrLocked(v addrQuality) {
 		}
 	}
 	de.bestAddr = v
+	de.ambiguousAddr = epAddr{}
+}
+
+// bestAddrUnansweredLocked reports whether the current direct best address
+// was pinged at or after at (the start of a ping round) and has not answered
+// any ping since it was last pinged.
+//
+// de.mu must be held.
+func (de *endpoint) bestAddrUnansweredLocked(at mono.Time) bool {
+	if !de.bestAddr.isDirect() {
+		return false
+	}
+	st, ok := de.endpointState[de.bestAddr.ap]
+	if !ok || st.lastPing.IsZero() || st.lastPing.Before(at) {
+		return false
+	}
+	return de.bestAddrAt.Before(st.lastPing)
+}
+
+// ambiguousAddrForSendLocked returns an extra UDP address to send to besides
+// the one from addrForSendLocked, or the zero value if there is none. See
+// [endpoint.ambiguousAddr].
+//
+// de.mu must be held.
+func (de *endpoint) ambiguousAddrForSendLocked(now mono.Time) epAddr {
+	if !de.ambiguousAddr.ap.IsValid() || !de.bestAddr.ap.IsValid() ||
+		de.ambiguousAddr == de.bestAddr.epAddr || now.After(de.ambiguousUntil) {
+		return epAddr{}
+	}
+	return de.ambiguousAddr
 }
 
 const (
@@ -542,66 +579,6 @@ func (st *endpointState) addPongReplyLocked(r pongReply) {
 	}
 	st.recentPongs[i] = r
 	st.recentPong = i
-}
-
-// untrustBestAddrLocked ends the trust window of de.bestAddr without
-// forgetting the address. addrForSendLocked then sends to both the best
-// address and DERP, and the next pong from any address can replace it.
-// A pong from the best address itself restores trust.
-//
-// de.mu must be held.
-func (de *endpoint) untrustBestAddrLocked(why string) {
-	if !de.bestAddr.ap.IsValid() {
-		return
-	}
-	de.debugUpdates.Add(EndpointChange{
-		When: time.Now(),
-		What: why,
-		From: de.bestAddr,
-	})
-	de.trustBestAddrUntil = 0
-}
-
-// bestAddrUnansweredMinWait is the minimum time the best address must have
-// stayed silent after a ping before another address's pong may displace it.
-const bestAddrUnansweredMinWait = 20 * time.Millisecond
-
-// bestAddrUnansweredLocked reports whether the current direct best address
-// was pinged at or after at (the start of a ping round) and has not answered
-// any ping since it was last pinged, for clearly longer than its known
-// latency would explain.
-//
-// de.mu must be held.
-func (de *endpoint) bestAddrUnansweredLocked(at, now mono.Time) bool {
-	if !de.bestAddr.isDirect() {
-		return false
-	}
-	st, ok := de.endpointState[de.bestAddr.ap]
-	if !ok || st.lastPing.IsZero() || st.lastPing.Before(at) {
-		return false
-	}
-	if !de.bestAddrAt.Before(st.lastPing) {
-		return false // it answered since it was last pinged
-	}
-	// The pong we're handling may simply have arrived before the best
-	// address's own pong. Only call the best address silent if it has been
-	// quiet for clearly longer than its usual round trip.
-	wait := max(bestAddrUnansweredMinWait, 2*de.bestAddr.latency)
-	return now.Sub(st.lastPing) > wait
-}
-
-// untrustBestAddrIfOmittedLocked stops trusting the direct best address if
-// the peer's latest CallMeMaybe, which lists all of its current endpoints,
-// does not include it. The peer has then moved to another network, however
-// we learned that address (for example from an incoming ping instead of an
-// earlier CallMeMaybe, in which case deleteEndpointLocked doesn't apply).
-//
-// de.mu must be held.
-func (de *endpoint) untrustBestAddrIfOmittedLocked(eps []netip.AddrPort) {
-	if !de.bestAddr.isDirect() || slices.Contains(eps, de.bestAddr.ap) {
-		return
-	}
-	de.untrustBestAddrLocked("handleCallMeMaybe-bestAddr-omitted")
 }
 
 func (de *endpoint) deleteEndpointLocked(why string, ep netip.AddrPort) {
@@ -1178,6 +1155,7 @@ func (de *endpoint) send(flow int, buffs [][]byte, offset int) error {
 
 	now := mono.Now()
 	udpAddr, derpAddr, startWGPing := de.addrForSendLocked(now)
+	ambiguousAddr := de.ambiguousAddrForSendLocked(now)
 
 	if !hasUDPTransport {
 		// There are no UDP paths to discover; everything goes over DERP.
@@ -1245,6 +1223,12 @@ func (de *endpoint) send(flow int, buffs [][]byte, offset int) error {
 		if update := de.c.connCounter.Load(); err == nil && update != nil {
 			update(0, netip.AddrPortFrom(de.nodeAddr, 0), udpAddr.ap, len(buffs), txBytes, false)
 		}
+	}
+	if hasUDPTransport && ambiguousAddr.ap.IsValid() {
+		// The best address may no longer be reachable but another address
+		// of the peer just answered a ping. Send to it too until the
+		// ambiguity is resolved, as a duplicate is better than a lost packet.
+		de.c.sendUDPBatch(flow, ambiguousAddr, buffs, offset)
 	}
 	if derpAddr.IsValid() {
 		allOk := true
@@ -2061,14 +2045,6 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 			latency: latency,
 			wireMTU: pingSizeToPktLen(sp.size, sp.to),
 		}
-		if sp.purpose == pingDiscovery && thisPong.epAddr != de.bestAddr.epAddr && de.bestAddrUnansweredLocked(sp.at, now) {
-			// Another address answered a discovery ping, but the current
-			// best address was pinged in the same round and has stayed
-			// silent for clearly longer than its usual round trip. Its
-			// trust window (trustUDPAddrDuration) only reflects an older
-			// pong, so don't wait for it to run out.
-			de.untrustBestAddrLocked("handlePongConnLocked-bestAddr-unanswered")
-		}
 		bestUntrusted := now.After(de.trustBestAddrUntil)
 		if betterAddr(thisPong, de.bestAddr) || bestUntrusted {
 			de.c.logf("magicsock: disco: node %v %v now using %v mtu=%v tx=%x", de.publicKey.ShortString(), de.discoShort(), sp.to, thisPong.wireMTU, m.TxID[:6])
@@ -2079,6 +2055,19 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 				To:   thisPong,
 			})
 			de.setBestAddrLocked(thisPong)
+		} else if sp.purpose == pingDiscovery && thisPong.isDirect() &&
+			thisPong.epAddr != de.bestAddr.epAddr && de.bestAddrUnansweredLocked(sp.at) {
+			// A new address answered but the trusted best address, pinged
+			// in the same round, didn't. The peer may have changed network.
+			// Send to both while we wait to see which one is alive.
+			de.debugUpdates.Add(EndpointChange{
+				When: time.Now(),
+				What: "handlePongConnLocked-ambiguousAddr",
+				From: de.bestAddr,
+				To:   thisPong,
+			})
+			de.ambiguousAddr = thisPong.epAddr
+			de.ambiguousUntil = de.trustBestAddrUntil
 		}
 		if de.bestAddr.epAddr == thisPong.epAddr {
 			de.debugUpdates.Add(EndpointChange{
@@ -2090,6 +2079,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 			de.bestAddr.latency = latency
 			de.bestAddrAt = now
 			de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
+			de.ambiguousAddr = epAddr{} // best address is alive
 		}
 	}
 	return
@@ -2276,10 +2266,6 @@ func (de *endpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 			de.deleteEndpointLocked("handleCallMeMaybe", ep)
 		}
 	}
-
-	// If the peer no longer lists our best address, stop trusting it.
-	// The pings below tell us right away if it still works.
-	de.untrustBestAddrIfOmittedLocked(m.MyNumber)
 
 	// Zero out all the lastPing times to force sendPingsLocked to send new ones,
 	// even if it's been less than 5 seconds ago.
