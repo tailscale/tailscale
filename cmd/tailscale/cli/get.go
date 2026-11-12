@@ -170,6 +170,8 @@ func prefValue(flagName string, prefs *ipn.Prefs, st *ipnstate.Status) any {
 		return prefs.AutoUpdate.Check
 	case "auto-update":
 		return prefs.AutoUpdate.Apply.EqualBool(true)
+	case "auto-update-force-after":
+		return prefs.AutoUpdate.ForceAfter.String()
 	case "report-posture":
 		return prefs.PostureChecking
 	case "webclient":

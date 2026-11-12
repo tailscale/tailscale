@@ -332,6 +332,11 @@ func TestPrefsEqual(t *testing.T) {
 			true,
 		},
 		{
+			&Prefs{AutoUpdate: AutoUpdatePrefs{Check: true, Apply: opt.NewBool(true), ForceAfter: time.Hour}},
+			&Prefs{AutoUpdate: AutoUpdatePrefs{Check: true, Apply: opt.NewBool(true)}},
+			false,
+		},
+		{
 			&Prefs{AppConnector: AppConnectorPrefs{Advertise: true}},
 			&Prefs{AppConnector: AppConnectorPrefs{Advertise: true}},
 			true,
@@ -636,6 +641,17 @@ func TestPrefsPretty(t *testing.T) {
 		},
 		{
 			Prefs{
+				AutoUpdate: AutoUpdatePrefs{
+					Check:      true,
+					Apply:      opt.NewBool(true),
+					ForceAfter: 48 * time.Hour,
+				},
+			},
+			"linux",
+			`Prefs{ra=false dns=false want=false routes=[] nf=off update=on force-after=48h0m0s Persist=nil}`,
+		},
+		{
+			Prefs{
 				AppConnector: AppConnectorPrefs{
 					Advertise: true,
 				},
@@ -901,6 +917,15 @@ func TestMaskedPrefsPretty(t *testing.T) {
 				AutoUpdateSet: AutoUpdatePrefsMask{CheckSet: false, ApplySet: true},
 			},
 			want: `MaskedPrefs{AutoUpdate={Apply=false}}`,
+		},
+		{
+			m: &MaskedPrefs{
+				Prefs: Prefs{
+					AutoUpdate: AutoUpdatePrefs{ForceAfter: 48 * time.Hour},
+				},
+				AutoUpdateSet: AutoUpdatePrefsMask{ForceAfterSet: true},
+			},
+			want: `MaskedPrefs{AutoUpdate={ForceAfter=48h0m0s}}`,
 		},
 		{
 			m: &MaskedPrefs{

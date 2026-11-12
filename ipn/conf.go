@@ -174,7 +174,7 @@ func (c *ConfigVAlpha) ToPrefs() (MaskedPrefs, error) {
 	}
 	if c.AutoUpdate != nil {
 		mp.AutoUpdate = *c.AutoUpdate
-		mp.AutoUpdateSet = AutoUpdatePrefsMask{ApplySet: true, CheckSet: true}
+		mp.AutoUpdateSet = AutoUpdatePrefsMask{ApplySet: true, CheckSet: true, ForceAfterSet: true}
 	}
 	if c.AppConnector != nil {
 		mp.AppConnector = *c.AppConnector
