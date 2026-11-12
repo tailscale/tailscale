@@ -2354,7 +2354,7 @@ func (de *endpoint) resetLocked() {
 
 // invalidateDiscoPathLocked discards in-flight disco/relay state that was
 // established against the peer's current disco identity, so that path
-// discovery re-runs from scratch.
+// discovery re-runs from scratch
 func (de *endpoint) invalidateDiscoPathLocked() {
 	de.lastSendExt = 0
 	de.lastFullPing = 0
