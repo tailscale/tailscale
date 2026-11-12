@@ -5,6 +5,14 @@
 
 package clientmetric
 
+// Type is a metric type: counter or gauge.
+type Type uint8
+
+const (
+	TypeGauge Type = iota
+	TypeCounter
+)
+
 type Metric struct{}
 
 func (*Metric) Add(int64)              {}
