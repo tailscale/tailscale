@@ -174,6 +174,8 @@ func prefValue(flagName string, prefs *ipn.Prefs, st *ipnstate.Status) any {
 		return prefs.PostureChecking
 	case "webclient":
 		return prefs.RunWebClient
+	case "accept-login-requests":
+		return prefs.AcceptLoginRequests
 	case "operator":
 		return prefs.OperatorUser
 	case "snat-subnet-routes":

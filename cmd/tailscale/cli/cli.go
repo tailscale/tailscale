@@ -277,6 +277,7 @@ change in the future.
 			setCmd,
 			getCmd,
 			loginCmd,
+			loginBeaconCmd(),
 			logoutCmd,
 			switchCmd,
 			configureCmd(),

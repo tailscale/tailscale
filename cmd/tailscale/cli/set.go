@@ -51,6 +51,7 @@ type setArgsT struct {
 	shieldsUp                  bool
 	runSSH                     bool
 	runWebClient               bool
+	acceptLoginRequests        bool
 	hostname                   string
 	advertiseRoutes            string
 	advertiseDefaultRoute      bool
@@ -88,6 +89,9 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.updateCheck, "update-check", true, "notify about available Tailscale updates")
 	setf.BoolVar(&setArgs.updateApply, "auto-update", false, "automatically update to the latest available version")
 	setf.BoolVar(&setArgs.reportPosture, "report-posture", false, "allow management plane to gather device posture information")
+	if buildfeatures.HasLoginBeacon {
+		setf.BoolVar(&setArgs.acceptLoginRequests, "accept-login-requests", true, "receive LAN login requests from nearby devices")
+	}
 	setf.BoolVar(&setArgs.runWebClient, "webclient", false, "expose the web interface for managing this node over Tailscale at port 5252")
 	setf.BoolVar(&setArgs.remoteConfig, "remote-config", false, hidden+"delegate FULL remote control of this node's prefs and LocalAPI to the tailnet admin, bypassing Tailscale's per-feature double opt-in; only use when the tailnet admin owns or is fully trusted with this machine")
 	setf.BoolVar(&setArgs.sync, "sync", false, hidden+"actively sync configuration from the control plane (set to false only for network failure testing)")
@@ -154,6 +158,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			ShieldsUp:              setArgs.shieldsUp,
 			RunSSH:                 setArgs.runSSH,
 			RunWebClient:           setArgs.runWebClient,
+			AcceptLoginRequests:    setArgs.acceptLoginRequests,
 			Hostname:               setArgs.hostname,
 			OperatorUser:           setArgs.opUser,
 			NoSNAT:                 !setArgs.snat,

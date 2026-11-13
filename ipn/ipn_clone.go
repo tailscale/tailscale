@@ -84,6 +84,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	CorpDNS                    bool
 	RunSSH                     bool
 	RunWebClient               bool
+	AcceptLoginRequests        bool
 	WantRunning                bool
 	LoggedOut                  bool
 	ShieldsUp                  bool

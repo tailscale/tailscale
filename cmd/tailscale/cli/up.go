@@ -27,6 +27,7 @@ import (
 	_ "tailscale.com/feature/condregister/awsparamstore"
 	_ "tailscale.com/feature/condregister/identityfederation"
 	_ "tailscale.com/feature/condregister/oauthkey"
+	"tailscale.com/feature/loginbeacon/beaconcli"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
@@ -92,6 +93,9 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 		panic("cmd must be up or login")
 	}
 	upf := newFlagSet(cmd)
+	if buildfeatures.HasLoginBeacon && buildfeatures.HasIPNBus {
+		upf.Bool("enable-login-beacon", false, "advertise this login attempt to nearby devices on the LAN")
+	}
 
 	// When adding new flags, prefer to put them under "tailscale set" instead
 	// of here. Setting preferences via "tailscale up" is deprecated.
@@ -501,6 +505,10 @@ func presentSSHToggleRisk(wantSSH, haveSSH bool, acceptedRisks string) error {
 }
 
 func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retErr error) {
+	beaconEnabled := loginBeaconEnabled(cmd)
+	if beaconEnabled && (upArgs.authKeyOrFile != "" || upArgs.clientSecretOrFile != "" || upArgs.clientID != "") {
+		return errors.New("--enable-login-beacon requires interactive login")
+	}
 	var egg bool
 	if len(args) > 0 {
 		egg = fmt.Sprint(args) == "[up down down left right left right b a]"
@@ -618,7 +626,11 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	// once the loop below starts reading.
 	var nextNotify func() (ipn.Notify, error)
 	if buildfeatures.HasIPNBus {
-		watcher, err := localClient.WatchIPNBus(watchCtx, 0)
+		mask := ipn.NotifyWatchOpt(0)
+		if beaconEnabled {
+			mask = ipn.NotifyInitialState
+		}
+		watcher, err := localClient.WatchIPNBus(watchCtx, mask)
 		if err != nil {
 			return err
 		}
@@ -718,7 +730,19 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	upComplete := make(chan bool, 1)
 	watchErr := make(chan error, 1)
 
+	var beacon *beaconcli.LoginAttempt
+	if beaconEnabled {
+		beacon = beaconcli.NewLoginAttempt(&localClient, upArgs.hostname, cancelWatch)
+		defer func() {
+			if err := beacon.Stop(); err != nil {
+				errf("Unable to stop login beacon; daemon expiry still applies.\n")
+			}
+		}()
+	}
 	go func() {
+		if beacon != nil {
+			defer beacon.PumpDone()
+		}
 		var printed bool // whether we've yet printed anything to stdout or stderr
 		lastURLPrinted := ""
 
@@ -784,6 +808,12 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 				}
 				printed = true
 				lastURLPrinted = authURL
+				if beaconEnabled {
+					if err := beacon.Start(watchCtx); err != nil {
+						watchErr <- err
+						return
+					}
+				}
 				if upArgs.json {
 					js := &upOutputJSON{AuthURL: authURL, BackendState: st.BackendState}
 
@@ -961,6 +991,7 @@ func init() {
 	addPrefFlagMapping("operator", "OperatorUser")
 	addPrefFlagMapping("ssh", "RunSSH")
 	addPrefFlagMapping("webclient", "RunWebClient")
+	addPrefFlagMapping("accept-login-requests", "AcceptLoginRequests")
 	addPrefFlagMapping("nickname", "ProfileName")
 	addPrefFlagMapping("update-check", "AutoUpdate.Check")
 	addPrefFlagMapping("auto-update", "AutoUpdate.Apply")
@@ -992,7 +1023,7 @@ func addPrefFlagMapping(flagName string, prefNames ...string) {
 // correspond to an ipn.Pref.
 func preflessFlag(flagName string) bool {
 	switch flagName {
-	case "auth-key", "force-reauth", "reset", "qr", "qr-format", "json", "timeout", "accept-risk", "host-routes", "client-id", "audience", "client-secret", "id-token":
+	case "enable-login-beacon", "auth-key", "force-reauth", "reset", "qr", "qr-format", "json", "timeout", "accept-risk", "host-routes", "client-id", "audience", "client-secret", "id-token":
 		return true
 	}
 	return false
@@ -1148,6 +1179,8 @@ func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheck
 //
 // curUser is os.Getenv("USER"). It's pulled out for testability.
 func applyImplicitPrefs(prefs, oldPrefs *ipn.Prefs, env upCheckEnv) {
+	// Reception is managed by tailscale set, independently of login options.
+	prefs.AcceptLoginRequests = oldPrefs.AcceptLoginRequests
 	explicitOperator := false
 	env.flagSet.Visit(func(f *flag.Flag) {
 		if f.Name == "operator" {
