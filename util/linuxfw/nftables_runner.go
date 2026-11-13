@@ -628,7 +628,7 @@ type NetfilterRunner interface {
 // nftables or iptables.
 // As nftables is still experimental, iptables will be used unless
 // either the TS_DEBUG_FIREWALL_MODE environment variable, or the prefHint
-// parameter, is set to one of "nftables" or "auto".
+// parameter, is set to one of "nftables", "nftables-dedicated" or "auto".
 func New(logf logger.Logf, prefHint string) (NetfilterRunner, error) {
 	mode := detectFirewallMode(logf, prefHint)
 	switch mode {
@@ -641,6 +641,12 @@ func New(logf logger.Logf, prefHint string) (NetfilterRunner, error) {
 			return nil, err
 		}
 		return ipr, nil
+	case FirewallModeNfTablesDedicated:
+		nfr, err := newNfTablesDedicatedRunner(logf)
+		if err != nil {
+			return nil, err
+		}
+		return nfr, nil
 	case FirewallModeNfTables:
 		// Note that we don't simply return an newNfTablesRunner here because it
 		// would return a `nil` nftablesRunner which is different from returning
@@ -1842,7 +1848,8 @@ func cleanupConnmarkRules(logf logger.Logf, conn *nftables.Conn, table *nftables
 	}
 }
 
-// NfTablesCleanUp removes all Tailscale added nftables rules.
+// NfTablesCleanUp removes all Tailscale added nftables rules, from either
+// nftables runner.
 // Any errors that occur are logged to the provided logf.
 func NfTablesCleanUp(logf logger.Logf) {
 	conn, err := nftables.New()
@@ -1856,6 +1863,14 @@ func NfTablesCleanUp(logf logger.Logf) {
 	}
 
 	for _, table := range tables {
+		if table.Family == nftables.TableFamilyINet && table.Name == tsTableName {
+			conn.DelTable(table)
+			if err := conn.Flush(); err != nil {
+				logf("cleanup: flush delete table %s: %s", table.Name, err)
+			}
+			continue
+		}
+
 		// These table names were used briefly in 1.48.0.
 		if table.Name == "ts-filter" || table.Name == "ts-nat" {
 			conn.DelTable(table)

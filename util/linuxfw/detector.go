@@ -61,6 +61,9 @@ func detectFirewallMode(logf logger.Logf, prefHint string) FirewallMode {
 	case "nftables":
 		hostinfo.SetFirewallMode("nft-forced")
 		return FirewallModeNfTables
+	case "nftables-dedicated":
+		hostinfo.SetFirewallMode("nft-dedicated-forced")
+		return FirewallModeNfTablesDedicated
 	case "iptables":
 		hostinfo.SetFirewallMode("ipt-forced")
 		return FirewallModeIPTables

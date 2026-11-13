@@ -52,6 +52,10 @@ type FirewallMode string
 const (
 	FirewallModeIPTables FirewallMode = "iptables"
 	FirewallModeNfTables FirewallMode = "nftables"
+
+	// FirewallModeNfTablesDedicated is nftables with the router's rules in a
+	// dedicated "inet tailscale" table. It is never auto-detected.
+	FirewallModeNfTablesDedicated FirewallMode = "nftables-dedicated"
 )
 
 type CGNATMode string
