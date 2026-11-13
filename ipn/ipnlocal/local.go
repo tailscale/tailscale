@@ -53,6 +53,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/log/sockstatlog"
 	"tailscale.com/logpolicy"
+	"tailscale.com/logtail"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
@@ -6610,6 +6611,14 @@ func (b *LocalBackend) SetLogFlusher(flushFunc func()) {
 		return
 	}
 	b.logFlushFunc = flushFunc
+}
+
+// SetLogUploader sets the process-wide logtail logger used for tailscaled's
+// main log stream.
+//
+// It should only be called before the LocalBackend is used.
+func (b *LocalBackend) SetLogUploader(lg *logtail.Logger) {
+	// TODO: Implemented later for authenticated log uploads.
 }
 
 // TryFlushLogs calls the log flush function. It returns false if a log flush
