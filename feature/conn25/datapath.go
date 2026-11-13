@@ -47,8 +47,9 @@ type Conn25Datapath interface {
 	// or right away if it ends up installing no flow at all.
 	//
 	// Implementations must count nothing and return the zero [ClientFlowRef]
-	// when they return a non-nil error, since the caller does not release the
-	// reference on that path.
+	// when they return a non-nil error, or when the returned reference has no
+	// Transit IP, since the caller does not release the reference on either of
+	// those paths.
 	ClientFlowCreatedForMagicIP(magicIP netip.Addr) (ClientFlowRef, error)
 }
 
@@ -251,9 +252,10 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed, tun *tstu
 	}
 
 	// If this is normal non-app-connector traffic, forward it along unmodified.
+	// No reference to release: a reference without a Transit IP names no
+	// address assignment, so nothing was counted.
 	transitIP := ref.TransitIP()
 	if !transitIP.IsValid() {
-		ref.Release()
 		return filter.Accept
 	}
 
