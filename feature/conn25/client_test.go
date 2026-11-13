@@ -1079,7 +1079,7 @@ func TestClientFlowCreatedForMagicIPPinsAssignment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := ref.transit; got != transit {
+	if got := ref.TransitIP(); got != transit {
 		t.Fatalf("ClientFlowCreatedForMagicIP(%v) transit = %v, want %v", before.magic, got, transit)
 	}
 	if got := before.activeFlowCount; got != 1 {

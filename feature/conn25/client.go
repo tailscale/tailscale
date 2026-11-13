@@ -290,6 +290,10 @@ type ClientFlowRef struct {
 	release func()
 }
 
+func (r ClientFlowRef) TransitIP() netip.Addr {
+	return r.transit
+}
+
 func (r ClientFlowRef) Release() {
 	if r.release != nil {
 		r.release()

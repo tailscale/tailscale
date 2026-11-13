@@ -248,7 +248,7 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed, tun *tstu
 	}
 
 	// If this is normal non-app-connector traffic, forward it along unmodified.
-	transitIP := ref.transit
+	transitIP := ref.TransitIP()
 	if !transitIP.IsValid() {
 		ref.Release()
 		return filter.Accept
