@@ -316,6 +316,12 @@ type startProcessOpts struct {
 	extraEnv map[string]string
 	ptySize  windows.Coord
 	pipes    bool
+	// ownJob requests that the process be started in a new job object
+	// whose only handle is retained by the returned Process, so that the
+	// caller controls the whole process tree's lifetime. It is set for
+	// every caller-facing StartProcess method and left clear for the
+	// internal pseudoconsole relay, whose shell joins the caller's job.
+	ownJob bool
 }
 
 // StartProcess creates a new process running under ss via cmdLineInfo.
@@ -333,6 +339,7 @@ func (ss *Session) StartProcess(cmdLineInfo winutil.CommandLineInfo, extraEnv ma
 	opts := startProcessOpts{
 		token:    ss.token,
 		extraEnv: extraEnv,
+		ownJob:   true,
 	}
 	return startProcessInternal(ss, ss.logf, cmdLineInfo, opts)
 }
@@ -355,6 +362,7 @@ func (ss *Session) StartProcessWithPTY(cmdLineInfo winutil.CommandLineInfo, extr
 		token:    ss.token,
 		extraEnv: extraEnv,
 		ptySize:  initialPtySize,
+		ownJob:   true,
 	}
 	return startProcessInternal(ss, ss.logf, cmdLineInfo, opts)
 }
@@ -377,6 +385,7 @@ func (ss *Session) StartProcessWithPipes(cmdLineInfo winutil.CommandLineInfo, ex
 		token:    ss.token,
 		extraEnv: extraEnv,
 		pipes:    true,
+		ownJob:   true,
 	}
 	return startProcessInternal(ss, ss.logf, cmdLineInfo, opts)
 }
@@ -390,6 +399,7 @@ func StartCurrentUserProcessWithPTY(logf logger.Logf, cmdLineInfo winutil.Comman
 	opts := startProcessOpts{
 		extraEnv: extraEnv,
 		ptySize:  initialPtySize,
+		ownJob:   true,
 	}
 	return startProcessInternal(nil, logfOrDiscard(logf), cmdLineInfo, opts)
 }
@@ -403,6 +413,7 @@ func StartCurrentUserProcessWithPipes(logf logger.Logf, cmdLineInfo winutil.Comm
 	opts := startProcessOpts{
 		extraEnv: extraEnv,
 		pipes:    true,
+		ownJob:   true,
 	}
 	return startProcessInternal(nil, logfOrDiscard(logf), cmdLineInfo, opts)
 }
@@ -545,30 +556,26 @@ func startProcessInternal(ss *Session, logf logger.Logf, cmdLineInfo winutil.Com
 		env16 = winutil.NewEnvBlock(env)
 	}
 
-	if useToken {
-		// We want the child process to be assigned to job such that when it exits,
-		// its descendents within the job will be terminated as well.
+	if opts.ownJob {
+		// Start the process in a new job object so that the whole tree it
+		// spawns can be terminated together, like a Unix process group.
+		// The sole handle to the job stays with the Process (sp.job), held
+		// by this tailscaled for the session's lifetime. That gives the
+		// caller three things:
+		//   - Terminate kills the entire job, not just the root process.
+		//   - If this process dies, the OS closes the last job handle and
+		//     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE terminates the tree, so a
+		//     crashed service does not leak the user's session processes.
+		//   - A graceful session end clears kill-on-close before dropping
+		//     the handle, so processes the user backgrounded survive.
+		// The child does not inherit a job handle, so its survival never
+		// keeps the job alive past this process.
 		job, err := createJob()
 		if err != nil {
 			return nil, err
 		}
-		// We don't need to hang onto job beyond this func...
-		defer job.Close()
-
+		sp.job = job
 		if err := sib.AssignToJob(job.Handle()); err != nil {
-			return nil, err
-		}
-
-		// ...because we're now gonna make a read-only copy...
-		qjob, err := job.QueryOnlyClone()
-		if err != nil {
-			return nil, err
-		}
-		defer qjob.Close()
-
-		// ...which will be inherited by the child process.
-		// When the child process terminates, the job will too.
-		if err := sib.InheritHandles(qjob.Handle()); err != nil {
 			return nil, err
 		}
 	}
@@ -632,6 +639,7 @@ func startProcessInternal(ss *Session, logf logger.Logf, cmdLineInfo winutil.Com
 
 	sp.hproc = pi.Process
 	sp.pid = pi.ProcessId
+	sp.logf = logf
 	if ss != nil {
 		ss.addRef()
 		sp.sess = ss
@@ -688,20 +696,24 @@ func (job *jobObject) Handle() windows.Handle {
 	return windows.Handle(*job)
 }
 
-const _JOB_OBJECT_QUERY = 0x0004
-
-func (job *jobObject) QueryOnlyClone() (*jobObject, error) {
+// disableKillOnClose clears JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE so that closing
+// the last handle to the job leaves its remaining processes running, keeping
+// JOB_OBJECT_LIMIT_BREAKAWAY_OK as createJob set it. It is how a graceful
+// session end preserves processes the user backgrounded.
+func (job *jobObject) disableKillOnClose() error {
 	hjob := job.Handle()
-	cp := windows.CurrentProcess()
-
-	var dupe windows.Handle
-	err := windows.DuplicateHandle(cp, hjob, cp, &dupe, _JOB_OBJECT_QUERY, true, 0)
-	if err != nil {
-		return nil, err
+	if hjob == 0 {
+		return nil
 	}
-
-	result := jobObject(dupe)
-	return &result, nil
+	limitInfo := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{
+		BasicLimitInformation: windows.JOBOBJECT_BASIC_LIMIT_INFORMATION{
+			LimitFlags: windows.JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+		},
+	}
+	_, err := windows.SetInformationJobObject(hjob,
+		windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&limitInfo)),
+		uint32(unsafe.Sizeof(limitInfo)))
+	return err
 }
 
 func createStdPipes(sib *winutil.StartupInfoBuilder) (stdin io.WriteCloser, stdout, stderr io.ReadCloser, err error) {
@@ -751,6 +763,7 @@ func createStdPipes(sib *winutil.StartupInfoBuilder) (stdin io.WriteCloser, stdo
 // Process encapsulates a child process started with a Session.
 type Process struct {
 	sess    *Session
+	logf    logger.Logf
 	wStdin  io.WriteCloser
 	rStdout io.ReadCloser
 	rStderr io.ReadCloser
@@ -758,6 +771,11 @@ type Process struct {
 	pty     *conpty.PseudoConsole
 	hproc   windows.Handle
 	pid     uint32
+	// job is the process's job object when it was started with
+	// startProcessOpts.ownJob, or nil otherwise. Its only handle is held
+	// here for the process's lifetime. See the ownJob block in
+	// startProcessInternal.
+	job *jobObject
 }
 
 // Stdin returns the write side of a pipe connected to the child process's
@@ -778,8 +796,16 @@ func (sp *Process) Stderr() io.ReadCloser {
 	return sp.rStderr
 }
 
-// Terminate kills the process.
+// Terminate kills the process. When the process was started in its own job
+// object (see startProcessOpts.ownJob), it kills every process in that job,
+// the session's descendants too, like SIGKILL to a Unix process group.
 func (sp *Process) Terminate() {
+	if sp.job != nil {
+		if hjob := sp.job.Handle(); hjob != 0 {
+			windows.TerminateJobObject(hjob, 255)
+			return
+		}
+	}
 	if sp.hproc != 0 {
 		windows.TerminateProcess(sp.hproc, 255)
 	}
@@ -835,6 +861,19 @@ func (sp *Process) close(closeStdio bool) error {
 			sp.sess.release()
 			sp.sess = nil
 		}
+	}
+
+	if sp.job != nil {
+		// The root process has exited. Leave any processes the session
+		// backgrounded running by clearing kill-on-close before dropping
+		// the last job handle. A mandated teardown has already called
+		// Terminate, which killed the job, so this preserves nothing in
+		// that case.
+		if err := sp.job.disableKillOnClose(); err != nil {
+			sp.logf("s4u: clearing job kill-on-close: %v", err)
+		}
+		sp.job.Close()
+		sp.job = nil
 	}
 
 	if !closeStdio {
