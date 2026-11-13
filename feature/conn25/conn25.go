@@ -303,17 +303,6 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 	return nil
 }
 
-// ClientTransitIPForMagicIP returns the Transit IP currently assigned to magic IP.
-// It is a pure lookup: callers that are about to install a flow for the
-// result must use [Conn25.ClientFlowCreatedForMagicIP] instead, so that the
-// assignment is pinned by the same lock acquisition that resolves it.
-func (c *Conn25) ClientTransitIPForMagicIP(m netip.Addr) (netip.Addr, error) {
-	if addr, ok := c.client.transitIPForMagicIP(m); ok {
-		return addr, nil
-	}
-	return netip.Addr{}, c.unassignedMagicIPErr(m)
-}
-
 // ClientFlowCreatedForMagicIP implements [Conn25Datapath].
 // The datapath notifies Conn25 that a flow to magic IP is being established, and
 // Conn25 resolves m to its Transit IP and counts the flow against that address

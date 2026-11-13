@@ -42,19 +42,6 @@ type client struct {
 	byConnKey       map[key.NodePublic]set.Set[netip.Prefix]
 }
 
-// transitIPForMagicIP is a pure lookup of the Transit IP currently assigned to
-// magicIP. See also [Conn25.ClientTransitIPForMagicIP]. Callers that are about
-// to install a flow must use [client.flowCreatedForMagicIP] instead.
-func (c *client) transitIPForMagicIP(magicIP netip.Addr) (netip.Addr, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	v, ok := c.assignments.lookupByMagicIP(magicIP)
-	if ok {
-		return v.connectorAddr.transit, true
-	}
-	return netip.Addr{}, false
-}
-
 // linkLocalAllow returns true if the provided packet with a link-local Dst address has a
 // Dst that is one of our transit IPs, and false otherwise.
 // Tailscale's wireguard filters drop link-local unicast packets (see [wgengine/filter/filter.go])

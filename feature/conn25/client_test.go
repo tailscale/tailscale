@@ -1093,9 +1093,11 @@ func TestClientFlowCreatedForMagicIPPinsAssignment(t *testing.T) {
 	if !errors.Is(err, errPoolExhausted) {
 		t.Fatalf("reserveAddresses for %v = (%+v, %v), want errPoolExhausted", dstTwo, after, err)
 	}
-	if got, err := c.ClientTransitIPForMagicIP(before.magic); err != nil || got != transit {
-		t.Errorf("after the refused reservation, ClientTransitIPForMagicIP(%v) = (%v, %v), want (%v, nil)", before.magic, got, err, transit)
+	stillAssigned, err := c.ClientFlowCreatedForMagicIP(before.magic)
+	if got := stillAssigned.TransitIP(); err != nil || got != transit {
+		t.Errorf("after the refused reservation, ClientFlowCreatedForMagicIP(%v) = (%v, %v), want (%v, nil)", before.magic, got, err, transit)
 	}
+	stillAssigned.Release()
 }
 
 // TestResendTransitIPMappingConcurrent races resendTransitIPMapping, against a writer of client.assignments.

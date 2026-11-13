@@ -3416,7 +3416,7 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 	}
 }
 
-func TestClientTransitIPForMagicIP(t *testing.T) {
+func TestClientFlowCreatedForMagicIPResolution(t *testing.T) {
 	sn := makeSelfNode(t, []appctype.AppConnectorAttr{{Name: "app1", Mode: appctype.MagicIP}}, appctype.Conn25PoolsAttr{
 		V4MagicIPPool: []netipx.IPRange{v4RangeFrom("0", "10")}, // 100.64.0.0 - 100.64.0.10
 		V6MagicIPPool: []netipx.IPRange{v6RangeFrom("0", "10")},
@@ -3500,8 +3500,9 @@ func TestClientTransitIPForMagicIP(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			tip, err := c.ClientTransitIPForMagicIP(tt.mip)
-			if tip != tt.wantTip {
+			ref, err := c.ClientFlowCreatedForMagicIP(tt.mip)
+			defer ref.Release()
+			if tip := ref.TransitIP(); tip != tt.wantTip {
 				t.Fatalf("checking transit ip: want %v, got %v", tt.wantTip, tip)
 			}
 			if err != tt.wantErr {
