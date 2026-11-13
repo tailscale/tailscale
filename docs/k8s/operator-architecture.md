@@ -79,6 +79,13 @@ proxy that allows devices anywhere on the tailnet to access the Service.
 The proxy Pod uses `iptables` or `nftables` rules to DNAT traffic bound for the
 proxy's tailnet IP to the Service's internal Cluster IP instead.
 
+For TCP Services whose backends need the original tailnet client address, set
+`tailscale.com/proxy-protocol` to `"1"` or `"2"`. The ingress proxy then uses a
+TCP forwarder instead of DNAT and prepends a PROXY protocol header of the
+selected version to each connection. The Service backend must support and be
+configured to accept that PROXY protocol version. UDP and SCTP ports are not
+supported with this annotation.
+
 ```mermaid
 %%{ init: { 'theme':'neutral' } }%%
 flowchart TD
