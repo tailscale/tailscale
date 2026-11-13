@@ -1265,7 +1265,11 @@ func (c *sclient) run(ctx context.Context) error {
 		c.startStatsLoop(ctx)
 	}
 
-	c.keepAliveTimer = c.s.clock.AfterFunc(keepAliveInterval(), c.onKeepAliveTimer)
+	// Assign keepAliveTimer before arming it with Reset: its func
+	// resets it (in writePending), and Reset is what orders this
+	// assignment before the func runs.
+	c.keepAliveTimer = c.s.clock.AfterFunc(365*24*time.Hour, c.onKeepAliveTimer)
+	c.keepAliveTimer.Reset(keepAliveInterval())
 
 	for {
 		ft, fl, err := derp.ReadFrameHeader(c.br)
