@@ -1945,6 +1945,14 @@ func cleanUp(logf logger.Logf, interfaceName string) {
 		linuxfw.IPTablesCleanUp(logf)
 		linuxfw.NfTablesCleanUp(logf)
 	}
+	// A tun only has carrier (IFF_RUNNING) while a process holds it open. If
+	// it does, another tailscaled owns these addresses: e.g. a second daemon
+	// started alongside a running one, which then fails to bind its socket.
+	// Stripping them would take down the live daemon's data plane.
+	if ifi, err := net.InterfaceByName(interfaceName); err == nil && ifi.Flags&net.FlagRunning != 0 {
+		logf("router: %s is in use by another process; not removing its addresses", interfaceName)
+		return
+	}
 	removeOrphanedAddrsForCleanup(logf, osCommandRunner{ambientCapNetAdmin: useAmbientCaps()}, interfaceName)
 }
 
