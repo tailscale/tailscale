@@ -355,16 +355,14 @@ func (c *client) extraWireGuardAllowedIPs(id tailcfg.NodeID) views.Slice[netip.P
 	return views.SliceOf(tips)
 }
 
-func (c *client) rewriteDNSResponse(appName string, hdr dnsmessage.Header, questions []dnsmessage.Question, answers []dnsResponseRewrite) ([]byte, error) {
+func (c *client) rewriteDNSResponse(appName string, hdr dnsmessage.Header, question dnsmessage.Question, answers []dnsResponseRewrite) ([]byte, error) {
 	b := dnsmessage.NewBuilder(nil, hdr)
 	b.EnableCompression()
 	if err := b.StartQuestions(); err != nil {
 		return nil, err
 	}
-	for _, q := range questions {
-		if err := b.Question(q); err != nil {
-			return nil, err
-		}
+	if err := b.Question(question); err != nil {
+		return nil, err
 	}
 	if err := b.StartAnswers(); err != nil {
 		return nil, err
