@@ -38,6 +38,7 @@ import (
 	"tailscale.com/util/slicesx"
 	"tailscale.com/util/testenv"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 // nodeBackend is node-specific [LocalBackend] state. It is usually the current node.
@@ -271,20 +272,32 @@ func (nb *nodeBackend) NodeByKey(k key.NodePublic) (_ tailcfg.NodeID, ok bool) {
 	return nid, ok
 }
 
-// PeerAllowedIPs returns the prefixes from which the peer with the
-// given public key is currently allowed to originate traffic, or
-// ok=false if the key is unknown or the peer currently contributes no
-// prefixes.
-func (nb *nodeBackend) PeerAllowedIPs(k key.NodePublic) ([]netip.Prefix, bool) {
+// PeerWGConfig returns the [wgcfg.PeerConfig] to use for the peer with the
+// given public key, or ok=false if the key is unknown or the peer currently
+// contributes no routes.
+func (nb *nodeBackend) PeerWGConfig(k key.NodePublic) (_ wgcfg.PeerConfig, ok bool) {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
 	id, ok := nb.nodeByKey[k]
 	if !ok {
-		return nil, false
+		return wgcfg.PeerConfig{}, false
 	}
-	// Holding nb.mu satisfies routeMgr's serialization requirement:
-	// all routeMgr mutations also run under nb.mu.
-	return nb.routeMgr.PeerAllowedIPs(id)
+
+	peer, ok := nb.peers[id]
+	if !ok {
+		return wgcfg.PeerConfig{}, false
+	}
+
+	hybrid := peerUsesHybridHandshakes(peer)
+	allowedIPs, ok := nb.routeMgr.PeerAllowedIPs(id)
+	if !ok {
+		return wgcfg.PeerConfig{}, false
+	}
+	return wgcfg.PeerConfig{AllowedIPs: allowedIPs, Hybrid: hybrid}, true
+}
+
+func peerUsesHybridHandshakes(peer tailcfg.NodeView) bool {
+	return peer.Cap() >= 151 && !peer.HasCap(nodecap.DisableHybridHandshakes)
 }
 
 // NodeByWireGuardString returns the node ID of the peer whose
@@ -647,7 +660,24 @@ func (nb *nodeBackend) netMapWithPeers() *netmap.NetworkMap {
 	return nm
 }
 
-func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) (discoChanged []key.NodePublic, routeChanged routemanager.PeersWithRouteChanges) {
+// netmapResult describes the side effects of applying a new netmap
+// that the caller must propagate.
+type netmapResult struct {
+	// ChangedAllowedIPs are the peers whose allowed source prefixes
+	// changed; the caller syncs those peers to the WireGuard device.
+	ChangedAllowedIPs routemanager.PeersWithRouteChanges
+
+	// DiscoChanged is the set of peers whose disco key changed in a
+	// way that requires a WireGuard session reset (see
+	// [nodeBackend.discoChanged]).
+	DiscoChanged set.Set[key.NodePublic]
+
+	// HandshakeTypeChanged is the set of peers whose handshake type (standard
+	// or hybrid post-quantum) changed.
+	HandshakeTypeChanged set.Set[key.NodePublic]
+}
+
+func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) (res netmapResult) {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
 	nb.netMap = nm
@@ -655,7 +685,7 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) (discoChanged []key.Node
 	nb.updateNodeByKeyLocked()
 	nb.updateNodeByStableIDLocked()
 	nb.updateNodeByNameLocked()
-	discoChanged, routeChanged = nb.updatePeersLocked()
+	res = nb.updatePeersLocked()
 	nb.signalKeyWaitersForTestLocked()
 	if nm != nil {
 		nb.userProfiles = maps.Clone(nm.UserProfiles)
@@ -668,7 +698,7 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) (discoChanged []key.Node
 		nb.packetFilter = nil
 		nb.derpMapViewPub.Publish(tailcfg.DERPMapView{})
 	}
-	return discoChanged, routeChanged
+	return res
 }
 
 // peerNodeKeys returns the node public keys of all current peers.
@@ -858,17 +888,21 @@ func (nb *nodeBackend) ExtraDNSByName(hostname string) (_ netip.Addr, ok bool) {
 	return ip, ok
 }
 
-func (nb *nodeBackend) updatePeersLocked() (discoChanged []key.NodePublic, routeChanged routemanager.PeersWithRouteChanges) {
+func (nb *nodeBackend) updatePeersLocked() (res netmapResult) {
 	nm := nb.netMap
 	oldIDs := slices.Collect(maps.Keys(nb.peers))
 
-	// Snapshot the previous disco keys (by node key) before the peers
-	// map is repopulated, to detect restarted peers below.
-	var prevDisco map[key.NodePublic]key.DiscoPublic
+	// Snapshot the previous disco keys and hybrid handshake status (by node key)
+	// before the peers map is repopulated, to report changes to caller.
+	var (
+		prevDisco  map[key.NodePublic]key.DiscoPublic
+		prevHybrid map[key.NodePublic]bool
+	)
 	for _, p := range nb.peers {
 		if !p.DiscoKey().IsZero() {
 			mak.Set(&prevDisco, p.Key(), p.DiscoKey())
 		}
+		mak.Set(&prevHybrid, p.Key(), peerUsesHybridHandshakes(p))
 	}
 
 	if nm == nil {
@@ -883,7 +917,12 @@ func (nb *nodeBackend) updatePeersLocked() (discoChanged []key.NodePublic, route
 
 	for _, p := range nb.peers {
 		if prev, ok := prevDisco[p.Key()]; ok && nb.discoChanged(p.Key(), prev, p.DiscoKey()) {
-			discoChanged = append(discoChanged, p.Key())
+			res.DiscoChanged.Make()
+			res.DiscoChanged.Add(p.Key())
+		}
+		if prev, ok := prevHybrid[p.Key()]; ok && peerUsesHybridHandshakes(p) != prev {
+			res.HandshakeTypeChanged.Make()
+			res.HandshakeTypeChanged.Add(p.Key())
 		}
 	}
 
@@ -899,8 +938,9 @@ func (nb *nodeBackend) updatePeersLocked() (discoChanged []key.NodePublic, route
 	for _, p := range nb.peers {
 		rt.UpsertPeer(p)
 	}
-	res := rt.Commit()
-	return discoChanged, res.AllowedIPs
+	routeRes := rt.Commit()
+	res.ChangedAllowedIPs = routeRes.AllowedIPs
+	return res
 }
 
 // discoChanged reports whether a peer's disco key change from prev to
@@ -1065,6 +1105,10 @@ type netmapDeltaResult struct {
 	// RemovedPeers is a slice of peer stable node IDs (if any) that were
 	// removed by applying the delta.
 	RemovedPeers []tailcfg.StableNodeID
+
+	// HandshakeTypeChanged is the set of peers whose handshake type (standard
+	// or hybrid post-quantum) changed.
+	HandshakeTypeChanged set.Set[key.NodePublic]
 }
 
 // UpdateNetmapDelta applies the given netmap mutations to the live
@@ -1102,6 +1146,10 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (res netmap
 						res.DiscoChanged.Make()
 						res.DiscoChanged.Add(m.Node.Key())
 					}
+				}
+				if peerUsesHybridHandshakes(old) != peerUsesHybridHandshakes(m.Node) {
+					res.HandshakeTypeChanged.Make()
+					res.HandshakeTypeChanged.Add(m.Node.Key())
 				}
 				// Evict index entries derived from the old node value
 				// before re-adding them from the new one below, so a

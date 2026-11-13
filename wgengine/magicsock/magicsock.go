@@ -1536,7 +1536,22 @@ func (c *Conn) SendTo(flow int, buffs [][]byte, ep conn.Endpoint, offset int) (e
 	}
 	switch ep := ep.(type) {
 	case *endpoint:
-		return ep.send(flow, buffs, offset)
+		forceMirror := false
+		// We want to mirror retried hybrid post-quantum handshakes to DERP even when a
+		// valid UDP path exists, to mitigate against UDP datapaths whose PMTU cannot deliver
+		// the larger hybrid handshake packets.
+		//
+		// The following logic mirrors the entire packet batch if any packet within appears to
+		// be a handshake retry. If the batch contains both transport packets and handshake
+		// packets, this will mirror transport packets that don't strictly need to be mirrored.
+		//
+		// As of 2026-11-05, handshakes are always emitted as a separate batch of length 1 and
+		// not coalesced with transport data, and there are no plans to change that. So,
+		// this logic should precisely mirror handshake retries only.
+		if batchContainsHandshakeRetry(buffs, offset) {
+			forceMirror = true
+		}
+		return ep.send(flow, buffs, offset, forceMirror)
 	case *lazyEndpoint:
 		// A [*lazyEndpoint] may end up on this TX codepath when wireguard-go is
 		// deemed "under handshake load" and ends up transmitting a cookie reply
@@ -1550,6 +1565,17 @@ func (c *Conn) SendTo(flow int, buffs [][]byte, ep conn.Endpoint, offset int) (e
 		return c.pconn4.WriteWireGuardBatchTo(flow, buffs, ep.src, offset)
 	}
 	return nil
+}
+
+// batchContainsHandshakeRetry reports whether the packet batch contains at least one
+// packet that appears to be a retried handshake.
+func batchContainsHandshakeRetry(buffs [][]byte, offset int) bool {
+	for _, b := range buffs {
+		if device.PacketIsRetry(b[offset:]) {
+			return true
+		}
+	}
+	return false
 }
 
 var errConnClosed = errors.New("Conn closed")
