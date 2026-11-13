@@ -91,17 +91,6 @@ func verifyAuthenticode(path string) error {
 	return authenticode.Verify(path, certSubjectTailscale)
 }
 
-func isTSGUIPresent() bool {
-	us, err := os.Executable()
-	if err != nil {
-		return false
-	}
-
-	tsgui := filepath.Join(filepath.Dir(us), "tsgui.dll")
-	_, err = os.Stat(tsgui)
-	return err == nil
-}
-
 func (up *Updater) updateWindows() error {
 	if msi := os.Getenv(winMSIEnv); msi != "" {
 		// stdout/stderr from this part of the install could be lost since the
@@ -156,14 +145,7 @@ you can run the command prompt as Administrator one of these ways:
 	}
 	up.cleanupOldDownloads(filepath.Join(msiDir, "*.msi"))
 
-	qualifiers := []string{ver, arch}
-	// TODO(aaron): Temporary hack so autoupdate still works on winui builds;
-	// remove when we enable winui by default on the unstable track.
-	if isTSGUIPresent() {
-		qualifiers = append(qualifiers, "winui")
-	}
-
-	pkgsPath := fmt.Sprintf("%s/tailscale-setup-%s.msi", up.Track, strings.Join(qualifiers, "-"))
+	pkgsPath := fmt.Sprintf("%s/tailscale-setup-%s-%s.msi", up.Track, ver, arch)
 	msiTarget := filepath.Join(msiDir, path.Base(pkgsPath))
 	if err := up.downloadURLToFile(pkgsPath, msiTarget); err != nil {
 		return err
