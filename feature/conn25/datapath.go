@@ -45,6 +45,10 @@ type Conn25Datapath interface {
 	// that names the Transit IP to forward that flow to and keeps that address
 	// from being reclaimed, which the caller releases when the flow is removed,
 	// or right away if it ends up installing no flow at all.
+	//
+	// Implementations must count nothing and return the zero [ClientFlowRef]
+	// when they return a non-nil error, since the caller does not release the
+	// reference on that path.
 	ClientFlowCreatedForMagicIP(magicIP netip.Addr) (ClientFlowRef, error)
 }
 
@@ -235,8 +239,7 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed, tun *tstu
 	magicIP := p.Dst.Addr()
 	ref, err := dh.conn25.ClientFlowCreatedForMagicIP(magicIP)
 	if err != nil {
-		// Nothing is installed on this path, so the reference goes back right away.
-		ref.Release()
+		// No reference to release: an error means nothing was counted.
 		if errors.Is(err, ErrUnmappedMagicIP) {
 			// Couldn't find a mapping. Tell the local application the host is
 			// unreachable so it can recover quickly instead of blackholing.
