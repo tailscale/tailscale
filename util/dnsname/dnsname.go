@@ -102,14 +102,19 @@ func (f FQDN) NumLabels() int {
 }
 
 func (f FQDN) Contains(other FQDN) bool {
-	if f == other {
+	fDot := f.WithTrailingDot()
+	otherDot := other.WithTrailingDot()
+	if strings.EqualFold(fDot, otherDot) {
 		return true
 	}
-	cmp := f.WithTrailingDot()
+	cmp := fDot
 	if cmp != "." {
 		cmp = "." + cmp
 	}
-	return strings.HasSuffix(other.WithTrailingDot(), cmp)
+	if len(otherDot) < len(cmp) {
+		return false
+	}
+	return strings.EqualFold(otherDot[len(otherDot)-len(cmp):], cmp)
 }
 
 // Parent returns the parent domain by stripping the first label.
@@ -202,33 +207,43 @@ func SanitizeLabel(label string) string {
 
 // HasSuffix reports whether the provided name ends with the
 // component(s) in suffix, ignoring any trailing or leading dots.
+// Comparisons are case-insensitive.
 //
 // If suffix is the empty string, HasSuffix always reports false.
 func HasSuffix(name, suffix string) bool {
 	name = strings.TrimSuffix(name, ".")
-	suffix = strings.TrimSuffix(suffix, ".")
-	suffix = strings.TrimPrefix(suffix, ".")
-	nameBase := strings.TrimSuffix(name, suffix)
-	return len(nameBase) < len(name) && strings.HasSuffix(nameBase, ".")
+	suffix = strings.Trim(suffix, ".")
+	if suffix == "" || len(name) <= len(suffix) {
+		return false
+	}
+	if name[len(name)-len(suffix)-1] != '.' {
+		return false
+	}
+	return strings.EqualFold(name[len(name)-len(suffix):], suffix)
 }
 
 // TrimSuffix trims any trailing dots from a name and removes the
 // suffix ending if present. The name will never be returned with
-// a trailing dot, even after trimming.
+// a trailing dot, even after trimming. Comparisons are case-insensitive,
+// preserving the casing of the prefix.
 func TrimSuffix(name, suffix string) string {
 	if HasSuffix(name, suffix) {
 		name = strings.TrimSuffix(name, ".")
 		suffix = strings.Trim(suffix, ".")
-		name = strings.TrimSuffix(name, suffix)
+		name = name[:len(name)-len(suffix)]
 	}
 	return strings.TrimSuffix(name, ".")
 }
 
 // TrimCommonSuffixes returns hostname with some common suffixes removed.
+// Comparisons are case-insensitive.
 func TrimCommonSuffixes(hostname string) string {
-	hostname = strings.TrimSuffix(hostname, ".local")
-	hostname = strings.TrimSuffix(hostname, ".localdomain")
-	hostname = strings.TrimSuffix(hostname, ".lan")
+	for _, suffix := range []string{".local", ".localdomain", ".lan"} {
+		if len(hostname) >= len(suffix) && strings.EqualFold(hostname[len(hostname)-len(suffix):], suffix) {
+			hostname = hostname[:len(hostname)-len(suffix)]
+			break
+		}
+	}
 	return hostname
 }
 
