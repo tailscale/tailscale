@@ -1406,6 +1406,7 @@ func (b *LocalBackend) shutdown() {
 		b.notifyCancel()
 	}
 	b.appConnector.Close()
+	b.closeDiskCacheLocked()
 	b.mu.Unlock()
 
 	// These shutdown methods wait for goroutines that can acquire b.mu. The
@@ -8783,6 +8784,7 @@ func (b *LocalBackend) resetForProfileChangeLocked() error {
 		// down, so no need to do any work.
 		return nil
 	}
+	b.closeDiskCacheLocked()
 	if buildfeatures.HasDNS {
 		if dm, ok := b.sys.DNSManager.GetOK(); ok {
 			dm.Resolver().ClearNegativeCache()
