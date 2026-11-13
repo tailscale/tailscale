@@ -45,11 +45,16 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"tailscale.com/envknob"
 	"tailscale.com/types/logger"
 
 	gliderssh "github.com/tailscale/gliderssh"
 	gossh "golang.org/x/crypto/ssh"
 )
+
+// sshForwardGatewayPorts permits reverse TCP forwards to bind
+// non-loopback addresses. It is the equivalent of sshd's GatewayPorts.
+var sshForwardGatewayPorts = envknob.RegisterBool("TS_SSH_FORWARD_GATEWAY_PORTS")
 
 // fwdMaxSunPathLen is the sun_path capacity. It is the lexical length
 // cap on unix socket paths, the same one gliderssh's path validator
