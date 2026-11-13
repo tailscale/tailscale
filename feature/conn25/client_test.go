@@ -602,7 +602,7 @@ func TestReconfigDoesNotReissueInUseAddresses(t *testing.T) {
 // TestAddressExpiryDependsOnActiveFlows creates a Conn25 and
 //
 //  1. runs a DNS response through it
-//  2. uses the ClientFlowCreatedForMagicIP API and its cleanup function, and advances the clock
+//  2. uses the PrepareNewFlowForMagicIP API and its cleanup function, and advances the clock
 //  3. runs a second DNS response through the Conn25
 //  4. asserts things about the expected state of the clients assignments
 //     table based on 1-3
@@ -681,7 +681,7 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 			// And so that entry does not get expired.
 			name: "flows-not-zero",
 			flowsAndTimeFx: func(c *Conn25, clock *tstest.Clock, magic netip.Addr) {
-				c.ClientFlowCreatedForMagicIP(magic)
+				c.PrepareNewFlowForMagicIP(magic)
 				clock.Advance(30 * time.Hour)
 			},
 			wantUnexpiredDstIPs: set.SetOf([]netip.Addr{ipOne, ipTwo}),
@@ -696,7 +696,7 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 			// So the expired entry is removed.
 			name: "last-flow-removed-a-while-ago",
 			flowsAndTimeFx: func(c *Conn25, clock *tstest.Clock, magic netip.Addr) {
-				ref, _ := c.ClientFlowCreatedForMagicIP(magic)
+				ref, _ := c.PrepareNewFlowForMagicIP(magic)
 				clock.Advance(30 * time.Hour)
 				ref.Release()
 				clock.Advance(3 * time.Minute)
@@ -712,7 +712,7 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 			// And so the expired entry is not removed.
 			name: "last-flow-recently-removed",
 			flowsAndTimeFx: func(c *Conn25, clock *tstest.Clock, magic netip.Addr) {
-				ref, _ := c.ClientFlowCreatedForMagicIP(magic)
+				ref, _ := c.PrepareNewFlowForMagicIP(magic)
 				clock.Advance(30 * time.Hour)
 				ref.Release()
 				clock.Advance(1 * time.Second)
@@ -729,7 +729,7 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 			name:              "repeated-response-with-expired-and-active-flow",
 			secondDNSResponse: dnsRespIPOne,
 			flowsAndTimeFx: func(c *Conn25, clock *tstest.Clock, magic netip.Addr) {
-				c.ClientFlowCreatedForMagicIP(magic)
+				c.PrepareNewFlowForMagicIP(magic)
 				clock.Advance(30 * time.Hour)
 			},
 			wantUnexpiredDstIPs: set.SetOf([]netip.Addr{ipOne}),
@@ -845,7 +845,7 @@ func TestFlowRemovedAfterTransitIPReassigned(t *testing.T) {
 
 	// A flow is established against that assignment, and then the profile
 	// changes and the client's state is reset out from under the flow.
-	ref, err := c.ClientFlowCreatedForMagicIP(before.magic)
+	ref, err := c.PrepareNewFlowForMagicIP(before.magic)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -912,7 +912,7 @@ func TestFlowRemovedDoesNotReclaimReissuedTransitIPInUse(t *testing.T) {
 	}
 	transit := before.connectorAddr.transit
 
-	staleRef, err := c.ClientFlowCreatedForMagicIP(before.magic)
+	staleRef, err := c.PrepareNewFlowForMagicIP(before.magic)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -931,7 +931,7 @@ func TestFlowRemovedDoesNotReclaimReissuedTransitIPInUse(t *testing.T) {
 
 	// The reissued assignment picks up a flow of its own, which is still live
 	// when the pre-reset flow is torn down.
-	if _, err := c.ClientFlowCreatedForMagicIP(after.magic); err != nil {
+	if _, err := c.PrepareNewFlowForMagicIP(after.magic); err != nil {
 		t.Fatal(err)
 	}
 	if got := after.activeFlowCount; got != 1 {
@@ -978,11 +978,11 @@ func TestFlowCleanupRunsOnce(t *testing.T) {
 
 	// Two flows over the same assignment. The first is torn down; the second
 	// stays live.
-	firstRef, err := c.ClientFlowCreatedForMagicIP(as.magic)
+	firstRef, err := c.PrepareNewFlowForMagicIP(as.magic)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.ClientFlowCreatedForMagicIP(as.magic); err != nil {
+	if _, err := c.PrepareNewFlowForMagicIP(as.magic); err != nil {
 		t.Fatal(err)
 	}
 	if got := as.activeFlowCount; got != 2 {
@@ -1012,7 +1012,7 @@ var singleTransitIPPools = appctype.Conn25PoolsAttr{
 	V6TransitIPPool: []netipx.IPRange{v6RangeFrom("40", "40")},
 }
 
-// TestClientFlowCreatedForMagicIPPinsAssignment checks that resolving a Magic
+// TestPrepareNewFlowForMagicIPPinsAssignment checks that resolving a Magic
 // IP for a new flow and counting that flow against its assignment happen as one
 // step. The datapath DNATs the flow to the Transit IP this returns, so a window
 // between resolving that address and counting the flow would let a concurrent
@@ -1024,7 +1024,7 @@ var singleTransitIPPools = appctype.Conn25PoolsAttr{
 // first runs that sequence without resolving the Magic IP, to show that the
 // sweep really does reissue the address, so that the pinned half is not passing
 // vacuously.
-func TestClientFlowCreatedForMagicIPPinsAssignment(t *testing.T) {
+func TestPrepareNewFlowForMagicIPPinsAssignment(t *testing.T) {
 	const appName = "app1"
 	const domain = dnsname.FQDN("example.com.")
 	const ttl = 5 * time.Minute
@@ -1075,12 +1075,12 @@ func TestClientFlowCreatedForMagicIPPinsAssignment(t *testing.T) {
 	c, before = newExpiredAssignment(t)
 	transit = before.connectorAddr.transit
 
-	ref, err := c.ClientFlowCreatedForMagicIP(before.magic)
+	ref, err := c.PrepareNewFlowForMagicIP(before.magic)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := ref.TransitIP(); got != transit {
-		t.Fatalf("ClientFlowCreatedForMagicIP(%v) transit = %v, want %v", before.magic, got, transit)
+		t.Fatalf("PrepareNewFlowForMagicIP(%v) transit = %v, want %v", before.magic, got, transit)
 	}
 	if got := before.activeFlowCount; got != 1 {
 		t.Fatalf("activeFlowCount for the assignment for %v = %d, want 1", dstOne, got)
@@ -1093,9 +1093,9 @@ func TestClientFlowCreatedForMagicIPPinsAssignment(t *testing.T) {
 	if !errors.Is(err, errPoolExhausted) {
 		t.Fatalf("reserveAddresses for %v = (%+v, %v), want errPoolExhausted", dstTwo, after, err)
 	}
-	stillAssigned, err := c.ClientFlowCreatedForMagicIP(before.magic)
+	stillAssigned, err := c.PrepareNewFlowForMagicIP(before.magic)
 	if got := stillAssigned.TransitIP(); err != nil || got != transit {
-		t.Errorf("after the refused reservation, ClientFlowCreatedForMagicIP(%v) = (%v, %v), want (%v, nil)", before.magic, got, err, transit)
+		t.Errorf("after the refused reservation, PrepareNewFlowForMagicIP(%v) = (%v, %v), want (%v, nil)", before.magic, got, err, transit)
 	}
 	stillAssigned.Release()
 }

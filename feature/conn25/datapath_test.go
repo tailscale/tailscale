@@ -25,12 +25,12 @@ import (
 )
 
 type testConn25 struct {
-	clientFlowCreatedForMagicIPFn           func(netip.Addr) (netip.Addr, error)
+	prepareNewFlowForMagicIPFn           func(netip.Addr) (netip.Addr, error)
 	connectorRealIPForTransitIPConnectionFn func(netip.Addr, netip.Addr) (netip.Addr, error)
 }
 
-func (tc *testConn25) ClientFlowCreatedForMagicIP(magicIP netip.Addr) (ClientFlowRef, error) {
-	transitIP, err := tc.clientFlowCreatedForMagicIPFn(magicIP)
+func (tc *testConn25) PrepareNewFlowForMagicIP(magicIP netip.Addr) (ClientFlowRef, error) {
+	transitIP, err := tc.prepareNewFlowForMagicIPFn(magicIP)
 	if err != nil {
 		return ClientFlowRef{}, err
 	}
@@ -159,7 +159,7 @@ func (tn testNet) newClientDatapath(t *testing.T, throwMappingErr bool) *datapat
 	t.Helper()
 
 	mock := &testConn25{}
-	mock.clientFlowCreatedForMagicIPFn = func(mip netip.Addr) (netip.Addr, error) {
+	mock.prepareNewFlowForMagicIPFn = func(mip netip.Addr) (netip.Addr, error) {
 		if throwMappingErr {
 			return netip.Addr{}, errors.New("synthetic mapping error")
 		}
@@ -411,9 +411,9 @@ func TestClientFlowCache(t *testing.T) {
 			getTransitIPCalled := false
 
 			mock := &testConn25{}
-			mock.clientFlowCreatedForMagicIPFn = func(mip netip.Addr) (netip.Addr, error) {
+			mock.prepareNewFlowForMagicIPFn = func(mip netip.Addr) (netip.Addr, error) {
 				if getTransitIPCalled {
-					t.Errorf("ClientFlowCreatedForMagicIP unexpectedly called more than once")
+					t.Errorf("PrepareNewFlowForMagicIP unexpectedly called more than once")
 				}
 				getTransitIPCalled = true
 				return tn.transitIP, nil

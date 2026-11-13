@@ -40,7 +40,7 @@ type Conn25Datapath interface {
 	// non-app-connector traffic.
 	ConnectorRealIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, error)
 
-	// ClientFlowCreatedForMagicIP is called before a client-side flow to
+	// PrepareNewFlowForMagicIP is called before a client-side flow to
 	// magicIP is installed in the client flow table. It returns the reference
 	// that names the Transit IP to forward that flow to and keeps that address
 	// from being reclaimed, which the caller releases when the flow is removed,
@@ -50,7 +50,7 @@ type Conn25Datapath interface {
 	// when they return a non-nil error, or when the returned reference has no
 	// Transit IP, since the caller does not release the reference on either of
 	// those paths.
-	ClientFlowCreatedForMagicIP(magicIP netip.Addr) (ClientFlowRef, error)
+	PrepareNewFlowForMagicIP(magicIP netip.Addr) (ClientFlowRef, error)
 }
 
 // datapathHandler handles packets from the datapath,
@@ -235,10 +235,10 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed, tun *tstu
 	// Resolve the Magic IP and notify Conn25 that a flow for it is being
 	// established, before installing that flow in the flow table. Resolving and
 	// counting together keeps the assignment from expiring out from under the
-	// flow in between, and guarantees that ClientFlowCreatedForMagicIP for this
+	// flow in between, and guarantees that PrepareNewFlowForMagicIP for this
 	// flow precedes the cleanup that fires when it is removed.
 	magicIP := p.Dst.Addr()
-	ref, err := dh.conn25.ClientFlowCreatedForMagicIP(magicIP)
+	ref, err := dh.conn25.PrepareNewFlowForMagicIP(magicIP)
 	if err != nil {
 		// No reference to release: an error means nothing was counted.
 		if errors.Is(err, ErrUnmappedMagicIP) {
