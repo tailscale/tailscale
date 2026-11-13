@@ -25,16 +25,18 @@ import (
 )
 
 type testConn25 struct {
-	prepareNewFlowForMagicIPFn           func(netip.Addr) (netip.Addr, error)
+	prepareNewFlowForMagicIPFn              func(netip.Addr) (netip.Addr, error)
 	connectorRealIPForTransitIPConnectionFn func(netip.Addr, netip.Addr) (netip.Addr, error)
 }
 
-func (tc *testConn25) PrepareNewFlowForMagicIP(magicIP netip.Addr) (ClientFlowRef, error) {
+// PrepareNewFlowForMagicIP counts a flow, and so reports ok, exactly when
+// prepareNewFlowForMagicIPFn resolves magicIP to a Transit IP.
+func (tc *testConn25) PrepareNewFlowForMagicIP(magicIP netip.Addr) (ClientFlowRef, bool, error) {
 	transitIP, err := tc.prepareNewFlowForMagicIPFn(magicIP)
-	if err != nil {
-		return ClientFlowRef{}, err
+	if err != nil || !transitIP.IsValid() {
+		return ClientFlowRef{}, false, err
 	}
-	return ClientFlowRef{transit: transitIP}, nil
+	return ClientFlowRef{transit: transitIP}, true, nil
 }
 
 func (tc *testConn25) ConnectorRealIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, error) {

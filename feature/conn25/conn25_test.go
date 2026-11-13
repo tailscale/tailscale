@@ -3439,6 +3439,7 @@ func TestPrepareNewFlowForMagicIPResolution(t *testing.T) {
 		name    string
 		mip     netip.Addr
 		wantTip netip.Addr
+		wantOk  bool
 		wantErr error
 	}{
 		{
@@ -3457,6 +3458,7 @@ func TestPrepareNewFlowForMagicIPResolution(t *testing.T) {
 			name:    "mapped-magic-ip",
 			mip:     mappedMip,
 			wantTip: mappedTip,
+			wantOk:  true,
 			wantErr: nil,
 		},
 		{
@@ -3475,6 +3477,7 @@ func TestPrepareNewFlowForMagicIPResolution(t *testing.T) {
 			name:    "v6-mapped-magic-ip",
 			mip:     v6MappedMip,
 			wantTip: v6MappedTip,
+			wantOk:  true,
 			wantErr: nil,
 		},
 	} {
@@ -3500,10 +3503,15 @@ func TestPrepareNewFlowForMagicIPResolution(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			ref, err := c.PrepareNewFlowForMagicIP(tt.mip)
-			defer ref.Release()
+			ref, ok, err := c.PrepareNewFlowForMagicIP(tt.mip)
+			if ok {
+				defer ref.Release()
+			}
 			if tip := ref.TransitIP(); tip != tt.wantTip {
 				t.Fatalf("checking transit ip: want %v, got %v", tt.wantTip, tip)
+			}
+			if ok != tt.wantOk {
+				t.Fatalf("checking ok: want %v, got %v", tt.wantOk, ok)
 			}
 			if err != tt.wantErr {
 				t.Fatalf("checking error: want %v, got %v", tt.wantErr, err)

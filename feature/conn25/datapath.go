@@ -41,16 +41,17 @@ type Conn25Datapath interface {
 	ConnectorRealIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, error)
 
 	// PrepareNewFlowForMagicIP is called before a client-side flow to
-	// magicIP is installed in the client flow table. It returns the reference
-	// that names the Transit IP to forward that flow to and keeps that address
-	// from being reclaimed, which the caller releases when the flow is removed,
-	// or right away if it ends up installing no flow at all.
+	// magicIP is installed in the client flow table. It reports whether it
+	// counted the flow against an address assignment, and if so returns the
+	// reference that names the Transit IP to forward that flow to and keeps
+	// that address from being reclaimed.
 	//
-	// Implementations must count nothing and return the zero [ClientFlowRef]
-	// when they return a non-nil error, or when the returned reference has no
-	// Transit IP, since the caller does not release the reference on either of
-	// those paths.
-	PrepareNewFlowForMagicIP(magicIP netip.Addr) (ClientFlowRef, error)
+	// When ok is true, the caller must call Release on the reference exactly
+	// once: when the flow is removed, or right away if it ends up installing no
+	// flow at all. Implementations must count nothing and return ok false and
+	// the zero [ClientFlowRef] otherwise, including whenever they return a
+	// non-nil error, since the caller does not release on those paths.
+	PrepareNewFlowForMagicIP(magicIP netip.Addr) (ref ClientFlowRef, ok bool, err error)
 }
 
 // datapathHandler handles packets from the datapath,
@@ -238,7 +239,7 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed, tun *tstu
 	// flow in between, and guarantees that PrepareNewFlowForMagicIP for this
 	// flow precedes the cleanup that fires when it is removed.
 	magicIP := p.Dst.Addr()
-	ref, err := dh.conn25.PrepareNewFlowForMagicIP(magicIP)
+	ref, ok, err := dh.conn25.PrepareNewFlowForMagicIP(magicIP)
 	if err != nil {
 		// No reference to release: an error means nothing was counted.
 		if errors.Is(err, ErrUnmappedMagicIP) {
@@ -250,14 +251,12 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed, tun *tstu
 		dh.debugLogf("error mapping magic IP, passing packet unmodified: %v", err)
 		return filter.Accept
 	}
-
-	// If this is normal non-app-connector traffic, forward it along unmodified.
-	// No reference to release: a reference without a Transit IP names no
-	// address assignment, so nothing was counted.
-	transitIP := ref.TransitIP()
-	if !transitIP.IsValid() {
+	if !ok {
+		// This is normal non-app-connector traffic; forward it along
+		// unmodified. No reference to release: nothing was counted.
 		return filter.Accept
 	}
+	transitIP := ref.TransitIP()
 
 	// This is a new outbound client flow. Install a DNAT MagicIP-to-TransitIP action
 	// for the outgoing direction, and an SNAT TransitIP-to-MagicIP action for the
