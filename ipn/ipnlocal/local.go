@@ -836,6 +836,10 @@ func (b *LocalBackend) onHomeDERPUpdateLocked(du magicsock.HomeDERPChanged) {
 		return
 	}
 
+	if !cn.SelfHasCap(nodecap.CacheNetworkMaps) || !envknob.BoolDefaultTrue("TS_USE_CACHED_NETMAP") {
+		return
+	}
+
 	// Update the relevant parts of the cached copy of the network map, notably
 	// not including the peers.
 	if err := b.writeNetmapToDiskLockedWithoutPeers(b.NetMapNoPeers()); err != nil {
