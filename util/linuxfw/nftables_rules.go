@@ -19,6 +19,18 @@ import (
 	"tailscale.com/net/tsaddr"
 )
 
+// familyMatch matches packets of the IP family fam in inet tables, which see
+// both IPv4 and IPv6 packets. For other tables it returns nil.
+func familyMatch(table *nftables.Table, fam nftables.TableFamily) []expr.Any {
+	if table.Family != nftables.TableFamilyINet {
+		return nil
+	}
+	return []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{byte(fam)}},
+	}
+}
+
 // newLoadSaddrExpr creates a new nftables expression that loads the source
 // address of the packet into the given register.
 func newLoadSaddrExpr(proto nftables.TableFamily, destReg uint32) (expr.Any, error) {
@@ -66,7 +78,7 @@ func createLoopbackRule(
 	loopBackRule := &nftables.Rule{
 		Table: table,
 		Chain: chain,
-		Exprs: []expr.Any{
+		Exprs: append(familyMatch(table, proto),
 			&expr.Meta{
 				Key:      expr.MetaKeyIIFNAME,
 				Register: 1,
@@ -86,7 +98,7 @@ func createLoopbackRule(
 			&expr.Verdict{
 				Kind: expr.VerdictAccept,
 			},
-		},
+		),
 	}
 	return loopBackRule, nil
 }
@@ -136,7 +148,7 @@ func createRangeRule(
 	rule := &nftables.Rule{
 		Table: table,
 		Chain: chain,
-		Exprs: []expr.Any{
+		Exprs: append(familyMatch(table, nftables.TableFamilyIPv4),
 			&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
 			&expr.Cmp{
 				Op:       expr.CmpOpNeq,
@@ -160,7 +172,7 @@ func createRangeRule(
 			&expr.Verdict{
 				Kind: decision,
 			},
-		},
+		),
 	}
 	return rule, nil
 
@@ -220,7 +232,7 @@ func createDropOutgoingPacketFromCGNATRangeRuleWithTunname(table *nftables.Table
 	rule := &nftables.Rule{
 		Table: table,
 		Chain: chain,
-		Exprs: []expr.Any{
+		Exprs: append(familyMatch(table, nftables.TableFamilyIPv4),
 			&expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1},
 			&expr.Cmp{
 				Op:       expr.CmpOpEq,
@@ -244,7 +256,7 @@ func createDropOutgoingPacketFromCGNATRangeRuleWithTunname(table *nftables.Table
 			&expr.Verdict{
 				Kind: expr.VerdictDrop,
 			},
-		},
+		),
 	}
 	return rule, nil
 }
@@ -270,15 +282,15 @@ func createAcceptOutgoingPacketRule(table *nftables.Table, chain *nftables.Chain
 	}
 }
 
-// createAcceptOnPortRule creates a rule to accept incoming packets to
-// a given destination UDP port.
-func createAcceptOnPortRule(table *nftables.Table, chain *nftables.Chain, port uint16) *nftables.Rule {
+// createAcceptOnPortRule creates a rule to accept incoming packets of the IP
+// family fam to a given destination UDP port.
+func createAcceptOnPortRule(table *nftables.Table, chain *nftables.Chain, fam nftables.TableFamily, port uint16) *nftables.Rule {
 	portBytes := make([]byte, 2)
 	binary.BigEndian.PutUint16(portBytes, port)
 	return &nftables.Rule{
 		Table: table,
 		Chain: chain,
-		Exprs: []expr.Any{
+		Exprs: append(familyMatch(table, fam),
 			&expr.Meta{
 				Key:      expr.MetaKeyL4PROTO,
 				Register: 1,
@@ -298,7 +310,7 @@ func createAcceptOnPortRule(table *nftables.Table, chain *nftables.Chain, port u
 			&expr.Verdict{
 				Kind: expr.VerdictAccept,
 			},
-		},
+		),
 	}
 }
 

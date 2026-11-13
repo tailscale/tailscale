@@ -1241,7 +1241,7 @@ func addAcceptOutgoingPacketRule(conn *nftables.Conn, table *nftables.Table, cha
 // addAcceptOnPortRule adds a rule to accept incoming packets to
 // a given destination UDP port.
 func addAcceptOnPortRule(conn *nftables.Conn, table *nftables.Table, chain *nftables.Chain, port uint16) error {
-	rule := createAcceptOnPortRule(table, chain, port)
+	rule := createAcceptOnPortRule(table, chain, table.Family, port)
 	_ = conn.AddRule(rule)
 
 	if err := conn.Flush(); err != nil {
@@ -1254,7 +1254,7 @@ func addAcceptOnPortRule(conn *nftables.Conn, table *nftables.Table, chain *nfta
 // addAcceptOnPortRule removes a rule to accept incoming packets to
 // a given destination UDP port.
 func removeAcceptOnPortRule(conn *nftables.Conn, table *nftables.Table, chain *nftables.Chain, port uint16) error {
-	rule := createAcceptOnPortRule(table, chain, port)
+	rule := createAcceptOnPortRule(table, chain, table.Family, port)
 	rule, err := findRule(conn, rule)
 	if err != nil {
 		return fmt.Errorf("find rule: %v", err)
