@@ -19,7 +19,13 @@ import (
 )
 
 var (
-	ErrUnmappedMagicIP         = errors.New("unmapped magic IP")
+	ErrUnmappedMagicIP = errors.New("unmapped magic IP")
+
+	// ErrTransitIPNotRoutable is returned when a Magic IP is mapped to a
+	// Transit IP, but that Transit IP has not yet been registered with its
+	// connector and installed in WireGuard, so packets sent to it would be dropped.
+	ErrTransitIPNotRoutable = errors.New("transit IP not yet routable")
+
 	ErrUnmappedSrcAndTransitIP = errors.New("unmapped src and transit IP")
 )
 
@@ -34,6 +40,9 @@ type Conn25Datapath interface {
 	// ClientTransitIPForMagicIP returns a Transit IP for the given magicIP on a client.
 	// If the magicIP is within a configured Magic IP range for an app on the client,
 	// but not mapped to an active Transit IP, implementations should return [ErrUnmappedMagicIP].
+	// If the magicIP is mapped to a Transit IP, but that Transit IP is not yet usable
+	// because WireGuard has not been told to route it to the connector, implementations
+	// should return [ErrTransitIPNotRoutable].
 	// If magicIP is not within a configured Magic IP range, i.e. it is not actually a Magic IP,
 	// implementations should return a nil error, and a zero-value [netip.Addr] to indicate
 	// this potentially valid, non-app-connector traffic.
@@ -237,8 +246,9 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed, tun *tstu
 	magicIP := p.Dst.Addr()
 	transitIP, err := dh.conn25.ClientTransitIPForMagicIP(magicIP)
 	if err != nil {
-		if errors.Is(err, ErrUnmappedMagicIP) {
-			// Couldn't find a mapping. Tell the local application the host is
+		if errors.Is(err, ErrUnmappedMagicIP) || errors.Is(err, ErrTransitIPNotRoutable) {
+			// Either there's no mapping, or there is one but it can't carry
+			// traffic yet. Tell the local application the host is
 			// unreachable so it can recover quickly instead of blackholing.
 			dh.sendICMPHostUnreachable(p, tun)
 			return filter.Drop

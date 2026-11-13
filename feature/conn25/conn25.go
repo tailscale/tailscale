@@ -305,8 +305,14 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 
 // ClientTransitIPForMagicIP implements [Conn25Datapath].
 func (c *Conn25) ClientTransitIPForMagicIP(m netip.Addr) (netip.Addr, error) {
-	if addr, ok := c.client.transitIPForMagicIP(m); ok {
+	addr, err := c.client.transitIPForMagicIP(m)
+	if err == nil {
 		return addr, nil
+	}
+	if errors.Is(err, ErrTransitIPNotRoutable) {
+		// We hold an assignment for m, so it is definitely one of our Magic
+		// IPs; no need to range check it against the config.
+		return netip.Addr{}, err
 	}
 	cfg, ok := c.getConfig()
 	if !ok {
@@ -315,10 +321,6 @@ func (c *Conn25) ClientTransitIPForMagicIP(m netip.Addr) (netip.Addr, error) {
 	if !cfg.ipSets.v4Magic.Contains(m) && !cfg.ipSets.v6Magic.Contains(m) {
 		return netip.Addr{}, nil
 	}
-	// TODO(tailscale/corp#50405): Just because there is a TransitIP associated with the MagicIP,
-	// that doesn't mean the TransitIP is ready to use. We should also make sure that the TransitIP
-	// is installed in WireGuard for the correct node, which happens after it is registered with the
-	// connector. Perhaps a different error message to represent that.
 	return netip.Addr{}, ErrUnmappedMagicIP
 }
 

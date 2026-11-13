@@ -42,16 +42,40 @@ type client struct {
 	byConnKey       map[key.NodePublic]set.Set[netip.Prefix]
 }
 
+// errNoMagicIPAssignment is returned by [client.transitIPForMagicIP] when this
+// client holds no address assignment for the given Magic IP.
+var errNoMagicIPAssignment = errors.New("no address assignment for magic IP")
+
 // transitIPForMagicIP is part of the implementation of the [Conn25Datapath] interface for dataflow lookups.
+// It returns [errNoMagicIPAssignment] if there is no assignment for magicIP, and
+// [ErrTransitIPNotRoutable] if there is one but its Transit IP can't carry traffic yet.
 // See also [Conn25Datapath.ClientTransitIPForMagicIP].
-func (c *client) transitIPForMagicIP(magicIP netip.Addr) (netip.Addr, bool) {
+func (c *client) transitIPForMagicIP(magicIP netip.Addr) (netip.Addr, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	v, ok := c.assignments.lookupByMagicIP(magicIP)
-	if ok {
-		return v.connectorAddr.transit, true
+	as, ok := c.assignments.lookupByMagicIP(magicIP)
+	if !ok {
+		return netip.Addr{}, errNoMagicIPAssignment
 	}
-	return netip.Addr{}, false
+	if !c.transitIPRoutableLocked(as) {
+		return netip.Addr{}, ErrTransitIPNotRoutable
+	}
+	return as.connectorAddr.transit, nil
+}
+
+// transitIPRoutableLocked reports whether as's Transit IP is registered under
+// its connector's node key, i.e. whether [client.extraWireGuardAllowedIPs]
+// will tell WireGuard to route packets for it to that connector. Until it is,
+// sending to the Transit IP would be a black hole: the assignment exists, but
+// no peer claims the address.
+// c.mu must be held.
+func (c *client) transitIPRoutableLocked(as *addrs) bool {
+	conn := as.connectorAddr.node
+	if !conn.Valid() || conn.Key().IsZero() {
+		return false
+	}
+	tip := as.connectorAddr.transit
+	return c.byConnKey[conn.Key()].Contains(netip.PrefixFrom(tip, tip.BitLen()))
 }
 
 // linkLocalAllow returns true if the provided packet with a link-local Dst address has a

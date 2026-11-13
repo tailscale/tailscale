@@ -482,6 +482,69 @@ func TestTransitIPConnMapping(t *testing.T) {
 	}
 }
 
+// TestTransitIPForMagicIPRoutability checks that a Transit IP is only handed
+// to the datapath once it has been registered against its connector, which is
+// what puts it in that peer's WireGuard allowed IPs. Before that, and again
+// after a [client.reset] drops the registration, the mapping exists but
+// WireGuard would have nowhere to send the packets.
+func TestTransitIPForMagicIPRoutability(t *testing.T) {
+	magicIP := netip.MustParseAddr("100.64.0.1")
+	transitIP := netip.MustParseAddr("169.254.0.1")
+
+	c := newConn25(t.Logf).client
+	connector := (&tailcfg.Node{
+		ID:       tailcfg.NodeID(2),
+		Hostinfo: (&tailcfg.Hostinfo{AppConnector: opt.NewBool(true)}).View(),
+		Key:      key.NodePublicFromRaw32(mem.B([]byte{0: 0xff, 31: 0x02})),
+	}).View()
+	as := &addrs{
+		dst:           netip.MustParseAddr("1.2.3.1"),
+		magic:         magicIP,
+		generation:    c.currentGeneration(),
+		connectorAddr: connectorAddr{transit: transitIP, node: connector},
+		domain:        "woo.example.com.",
+		app:           "app1",
+	}
+
+	// No assignment at all yet.
+	if _, err := c.transitIPForMagicIP(magicIP); !errors.Is(err, errNoMagicIPAssignment) {
+		t.Errorf("before reserving: got error %v, want %v", err, errNoMagicIPAssignment)
+	}
+
+	// The assignment exists, but the connector hasn't acknowledged it, so the
+	// Transit IP isn't in WireGuard yet.
+	if err := c.assignments.insert(as); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.transitIPForMagicIP(magicIP); !errors.Is(err, ErrTransitIPNotRoutable) {
+		t.Errorf("before registering with the connector: got error %v, want %v", err, ErrTransitIPNotRoutable)
+	}
+
+	// Registering it with the connector makes it usable.
+	if err := c.addTransitIPForConnector(*as); err != nil {
+		t.Fatal(err)
+	}
+	tip, err := c.transitIPForMagicIP(magicIP)
+	if err != nil {
+		t.Errorf("after registering with the connector: unexpected error %v", err)
+	}
+	if tip != transitIP {
+		t.Errorf("after registering with the connector: got transit IP %v, want %v", tip, transitIP)
+	}
+
+	// A reset clears the WireGuard registrations along with everything else.
+	c.reset()
+	fresh := *as
+	fresh.expiresAt = time.Time{}
+	fresh.generation = c.currentGeneration()
+	if err := c.assignments.insert(&fresh); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.transitIPForMagicIP(magicIP); !errors.Is(err, ErrTransitIPNotRoutable) {
+		t.Errorf("after reset: got error %v, want %v", err, ErrTransitIPNotRoutable)
+	}
+}
+
 func TestIsKnownTransitIP(t *testing.T) {
 	knownTip := netip.MustParseAddr("100.64.0.41")
 	unknownTip := netip.MustParseAddr("100.64.0.42")
