@@ -47,6 +47,7 @@ func TestPrefsEqual(t *testing.T) {
 		"CorpDNS",
 		"RunSSH",
 		"RunWebClient",
+		"AcceptLoginRequests",
 		"WantRunning",
 		"LoggedOut",
 		"ShieldsUp",
@@ -473,6 +474,27 @@ func TestPrefsFromBytesPreservesOldValues(t *testing.T) {
 			}
 			if !old.Equals(&tt.want) {
 				t.Fatalf("got %+v; want %+v", old, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoginRequestDefaults(t *testing.T) {
+	for _, tt := range []struct {
+		json string
+		want bool
+	}{
+		{`{}`, true}, // existing profiles without this setting use the default
+		{`{"AcceptLoginRequests":false}`, false},
+		{`{"AcceptLoginRequests":true}`, true},
+	} {
+		t.Run(tt.json, func(t *testing.T) {
+			p := NewPrefs()
+			if err := PrefsFromBytes([]byte(tt.json), p); err != nil {
+				t.Fatal(err)
+			}
+			if p.AcceptLoginRequests != tt.want {
+				t.Fatalf("AcceptLoginRequests = %v; want %v", p.AcceptLoginRequests, tt.want)
 			}
 		})
 	}

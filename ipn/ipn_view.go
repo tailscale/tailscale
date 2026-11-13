@@ -307,6 +307,10 @@ func (v PrefsView) RunSSH() bool { return v.ж.RunSSH }
 // policies as configured by the Tailnet's admin(s).
 func (v PrefsView) RunWebClient() bool { return v.ж.RunWebClient }
 
+// AcceptLoginRequests permits receiving LAN login beacons. It defaults on.
+// Administrative policy may prohibit reception even when this is true.
+func (v PrefsView) AcceptLoginRequests() bool { return v.ж.AcceptLoginRequests }
+
 // WantRunning indicates whether networking should be active on
 // this node.
 func (v PrefsView) WantRunning() bool { return v.ж.WantRunning }
@@ -501,6 +505,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	CorpDNS                    bool
 	RunSSH                     bool
 	RunWebClient               bool
+	AcceptLoginRequests        bool
 	WantRunning                bool
 	LoggedOut                  bool
 	ShieldsUp                  bool

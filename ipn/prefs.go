@@ -145,6 +145,10 @@ type Prefs struct {
 	// policies as configured by the Tailnet's admin(s).
 	RunWebClient bool
 
+	// AcceptLoginRequests permits receiving LAN login beacons. It defaults on.
+	// Administrative policy may prohibit reception even when this is true.
+	AcceptLoginRequests bool
+
 	// WantRunning indicates whether networking should be active on
 	// this node.
 	WantRunning bool
@@ -366,6 +370,7 @@ type MaskedPrefs struct {
 	CorpDNSSet                    bool                `json:",omitempty"`
 	RunSSHSet                     bool                `json:",omitempty"`
 	RunWebClientSet               bool                `json:",omitempty"`
+	AcceptLoginRequestsSet        bool                `json:",omitempty"`
 	WantRunningSet                bool                `json:",omitempty"`
 	LoggedOutSet                  bool                `json:",omitempty"`
 	ShieldsUpSet                  bool                `json:",omitempty"`
@@ -678,6 +683,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.RunSSH == p2.RunSSH &&
 		p.Sync.Normalized() == p2.Sync.Normalized() &&
 		p.RunWebClient == p2.RunWebClient &&
+		p.AcceptLoginRequests == p2.AcceptLoginRequests &&
 		p.WantRunning == p2.WantRunning &&
 		p.LoggedOut == p2.LoggedOut &&
 		p.NotepadURLs == p2.NotepadURLs &&
@@ -745,6 +751,7 @@ func NewPrefs() *Prefs {
 		ControlURL: "",
 
 		CorpDNS:             true,
+		AcceptLoginRequests: true,
 		WantRunning:         false,
 		NetfilterMode:       preftype.NetfilterOn,
 		NoStatefulFiltering: opt.NewBool(true),

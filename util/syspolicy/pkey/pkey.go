@@ -21,6 +21,10 @@ const KeyPathSeparator = '/'
 // Otherwise, the [TestKnownKeysRegistered] test will fail as a reminder.
 
 const (
+	// AllowLoginBeacon permits LAN login beacon sending and reception.
+	// Unset means allowed; false prohibits both roles.
+	AllowLoginBeacon Key = "AllowLoginBeacon"
+
 	// Keys with a string value
 	ControlURL Key = "LoginURL"  // default ""; if blank, ipn uses ipn.DefaultControlURL.
 	LogTarget  Key = "LogTarget" // default ""; if blank logging uses logtail.DefaultHost.

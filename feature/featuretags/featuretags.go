@@ -228,6 +228,7 @@ var Features = map[FeatureTag]FeatureMeta{
 		Sym:  "LogTail",
 		Desc: "upload logs to log.tailscale.com (debug logs for bug reports and also by network flow logs if enabled)",
 	},
+	"loginbeacon": {Sym: "LoginBeacon", Desc: "LAN multicast login-beacon for headless/tvOS devices"},
 	"oauthkey": {Sym: "OAuthKey", Desc: "OAuth secret-to-authkey resolution support"},
 	"outboundproxy": {
 		Sym:  "OutboundProxy",
