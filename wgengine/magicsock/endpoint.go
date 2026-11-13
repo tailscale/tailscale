@@ -92,6 +92,15 @@ type endpoint struct {
 	bestAddr           addrQuality // best non-DERP path; zero if none; mutate via setBestAddrLocked()
 	bestAddrAt         mono.Time   // time best address re-confirmed
 	trustBestAddrUntil mono.Time   // time when bestAddr expires
+
+	// altAddr, if valid, is a direct address that answered a disco ping
+	// while bestAddr stayed silent (see [endpoint.noteAltAddrLocked]). Until
+	// altAddrUntil, packets are sent to it in addition to bestAddr, so that
+	// traffic is not stalled while we cannot tell whether bestAddr is still
+	// reachable (e.g. the peer just switched networks). It is cleared as soon
+	// as bestAddr answers again or changes.
+	altAddr      epAddr
+	altAddrUntil mono.Time
 	sentPing           map[stun.TxID]sentPing
 	endpointState      map[netip.AddrPort]*endpointState // netip.AddrPort type for key (instead of [epAddr]) as [endpointState] is irrelevant for Geneve-encapsulated paths
 	isCallMeMaybeEP    map[netip.AddrPort]bool
@@ -154,7 +163,60 @@ func (de *endpoint) setBestAddrLocked(v addrQuality) {
 				de.publicKey.ShortString(), int64(mono.Since(de.c.initializedAt)/time.Microsecond), isCached)
 		}
 	}
+	if v.epAddr != de.bestAddr.epAddr {
+		de.clearAltAddrLocked()
+	}
 	de.bestAddr = v
+}
+
+// clearAltAddrLocked forgets the alternate send address.
+//
+// de.mu must be held.
+func (de *endpoint) clearAltAddrLocked() {
+	de.altAddr = epAddr{}
+	de.altAddrUntil = 0
+}
+
+// noteAltAddrLocked records that alt, a direct address other than
+// de.bestAddr, answered a disco ping that was sent at pingAt, while
+// de.bestAddr has not answered since then.
+//
+// In that situation we can't tell whether bestAddr is dead (the peer changed
+// network and bestAddr's trust window of trustUDPAddrDuration has not run out
+// yet) or merely slower than alt. Rather than guess, send to both until the
+// situation resolves: the first reply decides which one becomes bestAddr.
+//
+// de.mu must be held.
+func (de *endpoint) noteAltAddrLocked(alt epAddr, pingAt, now mono.Time) {
+	if !alt.isDirect() || !de.bestAddr.isDirect() || alt == de.bestAddr.epAddr {
+		return
+	}
+	if de.bestAddrAt.After(pingAt) {
+		// bestAddr answered after alt's ping was sent; it is alive.
+		return
+	}
+	if de.altAddr != alt {
+		de.debugUpdates.Add(EndpointChange{
+			When: time.Now(),
+			What: "handlePongConnLocked-altAddr",
+			From: de.bestAddr,
+			To:   addrQuality{epAddr: alt},
+		})
+	}
+	de.altAddr = alt
+	de.altAddrUntil = now.Add(trustUDPAddrDuration)
+}
+
+// altAddrForSendLocked returns the extra direct address, if any, that packets
+// should also be sent to in addition to udpAddr (the result of
+// [endpoint.addrForSendLocked]). The zero epAddr means none.
+//
+// de.mu must be held.
+func (de *endpoint) altAddrForSendLocked(now mono.Time, udpAddr epAddr) epAddr {
+	if de.isWireguardOnly || !de.altAddr.isDirect() || !now.Before(de.altAddrUntil) || de.altAddr == udpAddr {
+		return epAddr{}
+	}
+	return de.altAddr
 }
 
 const (
@@ -1118,6 +1180,7 @@ func (de *endpoint) send(flow int, buffs [][]byte, offset int) error {
 
 	now := mono.Now()
 	udpAddr, derpAddr, startWGPing := de.addrForSendLocked(now)
+	altAddr := de.altAddrForSendLocked(now, udpAddr)
 
 	if !hasUDPTransport {
 		// There are no UDP paths to discover; everything goes over DERP.
@@ -1185,6 +1248,12 @@ func (de *endpoint) send(flow int, buffs [][]byte, offset int) error {
 		if update := de.c.connCounter.Load(); err == nil && update != nil {
 			update(0, netip.AddrPortFrom(de.nodeAddr, 0), udpAddr.ap, len(buffs), txBytes, false)
 		}
+	}
+	if hasUDPTransport && altAddr.ap.IsValid() {
+		// Best-effort duplicate send; WireGuard drops the duplicate packets.
+		// Errors are ignored: they must not mark udpAddr as bad or fail the
+		// send when the primary path works.
+		de.c.sendUDPBatch(flow, altAddr, buffs, offset)
 	}
 	if derpAddr.IsValid() {
 		allOk := true
@@ -1875,6 +1944,7 @@ func (de *endpoint) clearBestAddrLocked() {
 	de.setBestAddrLocked(addrQuality{})
 	de.bestAddrAt = 0
 	de.trustBestAddrUntil = 0
+	de.clearAltAddrLocked()
 }
 
 // noteBadEndpoint marks udpAddr as a bad endpoint that would need to be
@@ -2020,6 +2090,12 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 			wireMTU: pingSizeToPktLen(sp.size, sp.to),
 		}
 		bestUntrusted := now.After(de.trustBestAddrUntil)
+		if !bestUntrusted && !betterAddr(thisPong, de.bestAddr) && thisPong.epAddr != de.bestAddr.epAddr {
+			// A different address answered, but bestAddr is still trusted
+			// and not worse. If bestAddr has not answered since this ping
+			// was sent, keep sending to it but also to this address.
+			de.noteAltAddrLocked(thisPong.epAddr, sp.at, now)
+		}
 		if betterAddr(thisPong, de.bestAddr) || bestUntrusted {
 			de.c.logf("magicsock: disco: node %v %v now using %v mtu=%v tx=%x", de.publicKey.ShortString(), de.discoShort(), sp.to, thisPong.wireMTU, m.TxID[:6])
 			de.debugUpdates.Add(EndpointChange{
@@ -2040,6 +2116,8 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 			de.bestAddr.latency = latency
 			de.bestAddrAt = now
 			de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
+			// bestAddr answered, so there is no ambiguity anymore.
+			de.clearAltAddrLocked()
 		}
 	}
 	return
