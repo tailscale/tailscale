@@ -25,20 +25,22 @@ import (
 )
 
 type testConn25 struct {
-	clientTransitIPForMagicIPFn             func(netip.Addr) (netip.Addr, error)
+	prepareNewFlowForMagicIPFn              func(netip.Addr) (netip.Addr, error)
 	connectorRealIPForTransitIPConnectionFn func(netip.Addr, netip.Addr) (netip.Addr, error)
 }
 
-func (tc *testConn25) ClientTransitIPForMagicIP(magicIP netip.Addr) (netip.Addr, error) {
-	return tc.clientTransitIPForMagicIPFn(magicIP)
+// PrepareNewFlowForMagicIP counts a flow, and so reports ok, exactly when
+// prepareNewFlowForMagicIPFn resolves magicIP to a Transit IP.
+func (tc *testConn25) PrepareNewFlowForMagicIP(magicIP netip.Addr) (ClientFlowRef, bool, error) {
+	transitIP, err := tc.prepareNewFlowForMagicIPFn(magicIP)
+	if err != nil || !transitIP.IsValid() {
+		return ClientFlowRef{}, false, err
+	}
+	return ClientFlowRef{transit: transitIP}, true, nil
 }
 
 func (tc *testConn25) ConnectorRealIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, error) {
 	return tc.connectorRealIPForTransitIPConnectionFn(srcIP, transitIP)
-}
-
-func (tc *testConn25) ClientFlowCreated(transitIP netip.Addr) func() {
-	return func() {}
 }
 
 // testNet is the cast of addresses the datapath tests run against: a client,
@@ -159,7 +161,7 @@ func (tn testNet) newClientDatapath(t *testing.T, throwMappingErr bool) *datapat
 	t.Helper()
 
 	mock := &testConn25{}
-	mock.clientTransitIPForMagicIPFn = func(mip netip.Addr) (netip.Addr, error) {
+	mock.prepareNewFlowForMagicIPFn = func(mip netip.Addr) (netip.Addr, error) {
 		if throwMappingErr {
 			return netip.Addr{}, errors.New("synthetic mapping error")
 		}
@@ -411,9 +413,9 @@ func TestClientFlowCache(t *testing.T) {
 			getTransitIPCalled := false
 
 			mock := &testConn25{}
-			mock.clientTransitIPForMagicIPFn = func(mip netip.Addr) (netip.Addr, error) {
+			mock.prepareNewFlowForMagicIPFn = func(mip netip.Addr) (netip.Addr, error) {
 				if getTransitIPCalled {
-					t.Errorf("ClientGetTransitIPForMagicIP unexpectedly called more than once")
+					t.Errorf("PrepareNewFlowForMagicIP unexpectedly called more than once")
 				}
 				getTransitIPCalled = true
 				return tn.transitIP, nil

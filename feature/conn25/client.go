@@ -42,18 +42,6 @@ type client struct {
 	byConnKey       map[key.NodePublic]set.Set[netip.Prefix]
 }
 
-// transitIPForMagicIP is part of the implementation of the [Conn25Datapath] interface for dataflow lookups.
-// See also [Conn25Datapath.ClientTransitIPForMagicIP].
-func (c *client) transitIPForMagicIP(magicIP netip.Addr) (netip.Addr, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	v, ok := c.assignments.lookupByMagicIP(magicIP)
-	if ok {
-		return v.connectorAddr.transit, true
-	}
-	return netip.Addr{}, false
-}
-
 // linkLocalAllow returns true if the provided packet with a link-local Dst address has a
 // Dst that is one of our transit IPs, and false otherwise.
 // Tailscale's wireguard filters drop link-local unicast packets (see [wgengine/filter/filter.go])
@@ -280,16 +268,41 @@ func (c *client) enqueueAddressAssignment(addrs *addrs) error {
 	}
 }
 
-func (c *client) flowCreated(transit netip.Addr) func() {
+// ClientFlowRef is a client-side flow's reference to the address assignment it
+// was counted against.
+type ClientFlowRef struct {
+	transit netip.Addr
+	// Release must be called once the flow is gone, or right away if the caller
+	// ends up installing no flow at all.
+	release func()
+}
+
+func (r ClientFlowRef) TransitIP() netip.Addr {
+	return r.transit
+}
+
+func (r ClientFlowRef) Release() {
+	if r.release != nil {
+		r.release()
+	}
+}
+
+// flowCreatedForMagicIP resolves magicIP to the transit IP currently assigned
+// to it and records that a flow is being established against that assignment,
+// returning the reference that both names that transit IP and keeps the
+// assignment from being reclaimed. It reports whether magicIP had an
+// assignment at all.
+func (c *client) flowCreatedForMagicIP(magicIP netip.Addr) (ClientFlowRef, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	entry, ok := c.assignments.byTransitIP[transit]
+	entry, ok := c.assignments.lookupByMagicIP(magicIP)
 	if !ok {
-		return func() {}
+		return ClientFlowRef{}, false
 	}
+	transit := entry.connectorAddr.transit
 	entry.activeFlowCount++
 	var released bool
-	return func() {
+	return ClientFlowRef{transit: transit, release: func() {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if released {
@@ -304,7 +317,7 @@ func (c *client) flowCreated(transit netip.Addr) func() {
 		if entry.activeFlowCount == 0 {
 			entry.zeroFlowTime = c.assignments.clock.Now()
 		}
-	}
+	}}, true
 }
 
 func (c *client) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
