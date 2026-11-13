@@ -6,7 +6,32 @@ package main
 import (
 	"slices"
 	"testing"
+	"time"
 )
+
+func TestGoTestTimeout(t *testing.T) {
+	tests := []struct {
+		name string
+		args [][]string
+		want time.Duration
+	}{
+		{"default", nil, defaultGoTestTimeout},
+		{"eq", [][]string{{"-v", "-timeout=3m"}}, 3 * time.Minute},
+		{"space", [][]string{{"-timeout", "20s", "-v"}}, 20 * time.Second},
+		{"double-dash", [][]string{{"--timeout=1h"}}, time.Hour},
+		{"test-prefix", [][]string{nil, {"-test.timeout=7s"}}, 7 * time.Second},
+		{"zero", [][]string{{"-timeout=0"}}, 0},
+		{"last-wins", [][]string{{"-timeout=1m"}, {"-timeout=2m"}}, 2 * time.Minute},
+		{"invalid", [][]string{{"-timeout=bogus"}}, defaultGoTestTimeout},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := goTestTimeout(tt.args...); got != tt.want {
+				t.Errorf("goTestTimeout(%q) = %v; want %v", tt.args, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestSplitArgs(t *testing.T) {
 	tests := []struct {
