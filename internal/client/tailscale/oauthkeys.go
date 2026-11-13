@@ -16,6 +16,9 @@ type ResolveAuthKeyArgs struct {
 	// OAuth secret case, and required to be the same as the list of tags for which the OAuth
 	// secret is allowed to issue auth keys).
 	Tags []string
+	// AuthErrorRetries is the maximum number of token acquisition attempts on
+	// transient errors, using exponential backoff. Values <= 1 make one attempt.
+	AuthErrorRetries int
 }
 
 // HookResolveAuthKey resolves to [oauthkey.ResolveAuthKey] when the
