@@ -281,35 +281,37 @@ func (c *client) enqueueAddressAssignment(addrs *addrs) error {
 	}
 }
 
-// ClientFlowHold is a client-side flow's hold on the address assignment it was counted against.
-type ClientFlowHold struct {
+// ClientFlowRef is a client-side flow's reference to the address assignment it
+// was counted against.
+type ClientFlowRef struct {
 	transit netip.Addr
 	// Release must be called once the flow is gone, or right away if the caller
 	// ends up installing no flow at all.
 	release func()
 }
 
-func (h ClientFlowHold) Release() {
-	if h.release != nil {
-		h.release()
+func (r ClientFlowRef) Release() {
+	if r.release != nil {
+		r.release()
 	}
 }
 
 // flowCreatedForMagicIP resolves magicIP to the transit IP currently assigned
 // to it and records that a flow is being established against that assignment,
-// returning the hold that both names that transit IP and keeps the assignment
-// from being reclaimed. It reports whether magicIP had an assignment at all.
-func (c *client) flowCreatedForMagicIP(magicIP netip.Addr) (ClientFlowHold, bool) {
+// returning the reference that both names that transit IP and keeps the
+// assignment from being reclaimed. It reports whether magicIP had an
+// assignment at all.
+func (c *client) flowCreatedForMagicIP(magicIP netip.Addr) (ClientFlowRef, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.assignments.lookupByMagicIP(magicIP)
 	if !ok {
-		return ClientFlowHold{}, false
+		return ClientFlowRef{}, false
 	}
 	transit := entry.connectorAddr.transit
 	entry.activeFlowCount++
 	var released bool
-	return ClientFlowHold{transit: transit, release: func() {
+	return ClientFlowRef{transit: transit, release: func() {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if released {

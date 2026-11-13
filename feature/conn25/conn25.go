@@ -317,14 +317,14 @@ func (c *Conn25) ClientTransitIPForMagicIP(m netip.Addr) (netip.Addr, error) {
 // ClientFlowCreatedForMagicIP implements [Conn25Datapath].
 // The datapath notifies Conn25 that a flow to magic IP is being established, and
 // Conn25 resolves m to its Transit IP and counts the flow against that address
-// assignment in one step, returning the hold that names that Transit IP and
-// keeps it and its associated addresses from being removed from Conn25's state
-// and returned to their pools while the flow uses them.
-func (c *Conn25) ClientFlowCreatedForMagicIP(m netip.Addr) (ClientFlowHold, error) {
-	if hold, ok := c.client.flowCreatedForMagicIP(m); ok {
-		return hold, nil
+// assignment in one step, returning the reference that names that Transit IP
+// and keeps it and its associated addresses from being removed from Conn25's
+// state and returned to their pools while the flow uses them.
+func (c *Conn25) ClientFlowCreatedForMagicIP(m netip.Addr) (ClientFlowRef, error) {
+	if ref, ok := c.client.flowCreatedForMagicIP(m); ok {
+		return ref, nil
 	}
-	return ClientFlowHold{}, c.unassignedMagicIPErr(m)
+	return ClientFlowRef{}, c.unassignedMagicIPErr(m)
 }
 
 // unassignedMagicIPErr classifies a magic IP that has no active address

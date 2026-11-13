@@ -41,11 +41,11 @@ type Conn25Datapath interface {
 	ConnectorRealIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, error)
 
 	// ClientFlowCreatedForMagicIP is called before a client-side flow to
-	// magicIP is installed in the client flow table. It returns the hold that
-	// names the Transit IP to forward that flow to and keeps that address from
-	// being reclaimed, which the caller releases when the flow is removed, or
-	// right away if it ends up installing no flow at all.
-	ClientFlowCreatedForMagicIP(magicIP netip.Addr) (ClientFlowHold, error)
+	// magicIP is installed in the client flow table. It returns the reference
+	// that names the Transit IP to forward that flow to and keeps that address
+	// from being reclaimed, which the caller releases when the flow is removed,
+	// or right away if it ends up installing no flow at all.
+	ClientFlowCreatedForMagicIP(magicIP netip.Addr) (ClientFlowRef, error)
 }
 
 // datapathHandler handles packets from the datapath,
@@ -233,10 +233,10 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed, tun *tstu
 	// flow in between, and guarantees that ClientFlowCreatedForMagicIP for this
 	// flow precedes the cleanup that fires when it is removed.
 	magicIP := p.Dst.Addr()
-	hold, err := dh.conn25.ClientFlowCreatedForMagicIP(magicIP)
+	ref, err := dh.conn25.ClientFlowCreatedForMagicIP(magicIP)
 	if err != nil {
-		// Nothing is installed on this path, so the hold goes back right away.
-		hold.Release()
+		// Nothing is installed on this path, so the reference goes back right away.
+		ref.Release()
 		if errors.Is(err, ErrUnmappedMagicIP) {
 			// Couldn't find a mapping. Tell the local application the host is
 			// unreachable so it can recover quickly instead of blackholing.
@@ -248,9 +248,9 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed, tun *tstu
 	}
 
 	// If this is normal non-app-connector traffic, forward it along unmodified.
-	transitIP := hold.transit
+	transitIP := ref.transit
 	if !transitIP.IsValid() {
-		hold.Release()
+		ref.Release()
 		return filter.Accept
 	}
 
@@ -269,7 +269,7 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed, tun *tstu
 	dh.clientFlowTable.NewFlow(FlowData{
 		FromTun:  outgoing,
 		FromWG:   incoming,
-		OnRemove: hold.Release,
+		OnRemove: ref.Release,
 	})
 	outgoing.Action(p)
 	return filter.Accept
