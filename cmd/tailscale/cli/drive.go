@@ -20,6 +20,8 @@ const (
 	driveRenameUsage  = "tailscale drive rename <oldname> <newname>"
 	driveUnshareUsage = "tailscale drive unshare <name>"
 	driveListUsage    = "tailscale drive list"
+	driveLsUsage      = "tailscale drive ls <node>:<share>[/<path>]"
+	driveGetUsage     = "tailscale drive get <node>:<share>/<file> [destination]"
 )
 
 func init() {
@@ -29,16 +31,34 @@ func init() {
 func driveCmd() *ffcli.Command {
 	return &ffcli.Command{
 		Name:      "drive",
-		ShortHelp: "Share a directory with your tailnet",
+		ShortHelp: "Share and access directories on your tailnet",
 		ShortUsage: strings.Join([]string{
 			driveShareUsage,
 			driveRenameUsage,
 			driveUnshareUsage,
 			driveListUsage,
+			driveLsUsage,
+			driveGetUsage,
 		}, "\n"),
 		LongHelp:  buildShareLongHelp(),
 		UsageFunc: usageFuncNoDefaultValues,
 		Subcommands: []*ffcli.Command{
+			{
+				Name:       "get",
+				ShortUsage: driveGetUsage,
+				ShortHelp:  "[ALPHA] Download a remote file",
+				Exec:       runDriveGet,
+				LongHelp: "Download a single remote file. The destination defaults to the current directory.\n" +
+					"An existing destination directory receives the remote file's basename.\n" +
+					"Existing files are never overwritten. Downloads use private permissions\n" +
+					"(0600 before umask on Unix) and require a filesystem supporting hard links.",
+			},
+			{
+				Name:       "ls",
+				ShortUsage: driveLsUsage,
+				ShortHelp:  "[ALPHA] List a remote share directory",
+				Exec:       runDriveLs,
+			},
 			{
 				Name:       "share",
 				ShortUsage: driveShareUsage,
@@ -65,6 +85,49 @@ func driveCmd() *ffcli.Command {
 			},
 		},
 	}
+}
+
+// driveRemotePath identifies a share and an optional path within it on a node.
+type driveRemotePath struct {
+	node  string
+	share string
+	path  string
+}
+
+// parseDriveRemotePath parses node:share[/path]. Paths are slash-separated,
+// preserved literally (not URL-decoded), and may not contain parent traversal.
+// Node names and IPv4 addresses are supported; IPv6 literals are not yet supported.
+func parseDriveRemotePath(arg string) (driveRemotePath, error) {
+	node, rest, ok := strings.Cut(arg, ":")
+	if !ok || node == "" || strings.ContainsAny(node, "/\\[] \t\r\n") || strings.ContainsRune(arg, '\x00') {
+		return driveRemotePath{}, fmt.Errorf("invalid remote path %q: expected <node>:<share>[/<path>]", arg)
+	}
+	share, path, _ := strings.Cut(rest, "/")
+	if strings.TrimSpace(share) == "" || share == "." || share == ".." || strings.ContainsAny(share, ":\\") {
+		return driveRemotePath{}, fmt.Errorf("invalid remote path %q: expected a share name after ':'", arg)
+	}
+	for _, part := range strings.Split(path, "/") {
+		if part == ".." {
+			return driveRemotePath{}, fmt.Errorf("invalid remote path %q: '..' is not allowed", arg)
+		}
+	}
+	return driveRemotePath{node: node, share: share, path: path}, nil
+}
+
+// runDriveLs is the entry point for the "tailscale drive ls" command.
+func runDriveLs(ctx context.Context, args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: %s", driveLsUsage)
+	}
+	remote, err := parseDriveRemotePath(args[0])
+	if err != nil {
+		return err
+	}
+	st, err := localClient.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("getting Tailscale status: %w", err)
+	}
+	return listDriveDirectory(ctx, Stdout, st, remote, driveWebDAVURL())
 }
 
 // runDriveShare is the entry point for the "tailscale drive share" command.
