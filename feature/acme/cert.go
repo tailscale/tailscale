@@ -231,7 +231,8 @@ type issuance struct {
 }
 
 // issuanceTimeout bounds one issuance. It has to cover control's wait
-// for DNS propagation, the CA's validation, and finalization.
+// for DNS propagation, the dns-01 settle, the CA's validation, and
+// finalization.
 const issuanceTimeout = 5 * time.Minute
 
 // startIssuance returns the issuance in flight for domain, starting one
@@ -575,6 +576,11 @@ func (e *extension) issueACMECert(ctx context.Context, b *ipnlocal.LocalBackend,
 	}
 	args.traceACME(order)
 
+	// dns-01 challenges are accepted after every record is published and
+	// the settle has passed, so a wildcard order (two authorizations on
+	// one record name) waits once.
+	var dnsChallenges []*xacme.Challenge
+	published := false
 	for _, aurl := range order.AuthzURLs {
 		az, err := ac.GetAuthorization(ctx, aurl)
 		if err != nil {
@@ -599,12 +605,32 @@ func (e *extension) issueACMECert(ctx context.Context, b *ipnlocal.LocalBackend,
 			}
 			args.traceACME(chal)
 		case acmeChallengeDNS01:
-			if err := fulfillACMEDNS01Challenge(ctx, b, ac, az, args.logf, args.traceACME); err != nil {
+			ch, didPublish, err := e.publishDNS01Challenge(ctx, b, ac, az, args.logf)
+			if err != nil {
 				return nil, err
 			}
+			dnsChallenges = append(dnsChallenges, ch)
+			published = published || didPublish
 		default:
 			return nil, fmt.Errorf("unknown ACME challenge type %q", args.challengeType)
 		}
+	}
+	if published && e.dnsSettle > 0 {
+		args.logf("waiting %v for the DNS record to propagate before accepting the challenge", e.dnsSettle)
+		t := time.NewTimer(e.dnsSettle)
+		select {
+		case <-t.C:
+		case <-ctx.Done():
+			t.Stop()
+			return nil, ctx.Err()
+		}
+	}
+	for _, ch := range dnsChallenges {
+		chal, err := ac.Accept(ctx, ch)
+		if err != nil {
+			return nil, fmt.Errorf("Accept: %v", err)
+		}
+		args.traceACME(chal)
 	}
 
 	// Wait for each authorization to settle before waiting on the order.
@@ -704,45 +730,50 @@ func isOrderRejected(err error) bool {
 	return ae.StatusCode >= 400 && ae.StatusCode < 500 && ae.StatusCode != http.StatusTooManyRequests
 }
 
-func fulfillACMEDNS01Challenge(ctx context.Context, b *ipnlocal.LocalBackend, ac *xacme.Client, az *xacme.Authorization, logf logger.Logf, traceACME func(any)) error {
-	for _, ch := range az.Challenges {
-		if ch.Type != string(acmeChallengeDNS01) {
-			continue
-		}
-		rec, err := ac.DNS01ChallengeRecord(ch.Token)
-		if err != nil {
-			return err
-		}
-		// For wildcards, the challenge is on the base domain.
-		// e.g., "*.node.ts.net" -> "_acme-challenge.node.ts.net"
-		key := "_acme-challenge." + strings.TrimPrefix(az.Identifier.Value, "*.")
-
-		// Do a best-effort lookup to see if we've already created this DNS name
-		// in a previous attempt. Don't burn too much time on it, though. Worst
-		// case we ask the server to create something that already exists.
-		var resolver net.Resolver
-		lookupCtx, lookupCancel := context.WithTimeout(ctx, 500*time.Millisecond)
-		txts, _ := resolver.LookupTXT(lookupCtx, key)
-		lookupCancel()
-		if slices.Contains(txts, rec) {
-			logf("TXT record already existed for %s", key)
-		} else {
-			logf("starting SetDNS call for %s...", key)
-			err = b.SetDNS(ctx, key, rec)
-			if err != nil {
-				return fmt.Errorf("SetDNS %q => %q: %w", key, rec, err)
-			}
-			logf("did SetDNS for %s", key)
-		}
-
-		chal, err := ac.Accept(ctx, ch)
-		if err != nil {
-			return fmt.Errorf("Accept: %v", err)
-		}
-		traceACME(chal)
-		return nil
+// publishDNS01Challenge makes the TXT record for az's dns-01 challenge
+// available through control, unless a lookup shows it is already
+// published. It returns the challenge for the caller to accept and
+// whether this call published the record.
+func (e *extension) publishDNS01Challenge(ctx context.Context, b *ipnlocal.LocalBackend, ac *xacme.Client, az *xacme.Authorization, logf logger.Logf) (ch *xacme.Challenge, published bool, err error) {
+	ch = challengeByType(az.Challenges, string(acmeChallengeDNS01))
+	if ch == nil {
+		return nil, false, errors.New("dns-01 challenge not offered")
 	}
-	return errors.New("dns-01 challenge not offered")
+	rec, err := ac.DNS01ChallengeRecord(ch.Token)
+	if err != nil {
+		return nil, false, err
+	}
+	// For wildcards, the challenge is on the base domain.
+	// e.g., "*.node.ts.net" -> "_acme-challenge.node.ts.net"
+	key := "_acme-challenge." + strings.TrimPrefix(az.Identifier.Value, "*.")
+
+	// Do a best-effort lookup to see if we've already created this DNS name
+	// in a previous attempt. Don't burn too much time on it, though. Worst
+	// case we ask the server to create something that already exists.
+	lookupTXT := e.lookupTXT
+	if lookupTXT == nil {
+		lookupTXT = new(net.Resolver).LookupTXT
+	}
+	lookupCtx, lookupCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	txts, _ := lookupTXT(lookupCtx, key)
+	lookupCancel()
+	if slices.Contains(txts, rec) {
+		logf("TXT record already existed for %s", key)
+		return ch, false, nil
+	}
+
+	setDNS := e.setDNS
+	if setDNS == nil {
+		setDNS = func(ctx context.Context, b *ipnlocal.LocalBackend, name, value string) error {
+			return b.SetDNS(ctx, name, value)
+		}
+	}
+	logf("starting SetDNS call for %s...", key)
+	if err := setDNS(ctx, b, key, rec); err != nil {
+		return nil, false, fmt.Errorf("SetDNS %q => %q: %w", key, rec, err)
+	}
+	logf("did SetDNS for %s", key)
+	return ch, true, nil
 }
 
 // validLookingCertDomain reports whether name looks like a valid domain

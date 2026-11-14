@@ -3,10 +3,10 @@
 
 // Package acme registers the ACME/TLS-cert feature and implements its
 // associated [ipnext.Extension]. The extension owns the per-LocalBackend
-// in-flight certificate issuances, the refresh loop's cancel func, and
-// the test-only cert override; together with the cert
-// acquisition logic in this package, it is everything tailscaled needs
-// to obtain and renew TLS certificates via ACME.
+// in-flight certificate issuances, the dns-01 propagation settle, the
+// refresh loop's cancel func, and the test-only hooks; together with the
+// cert acquisition logic in this package, it is everything tailscaled
+// needs to obtain and renew TLS certificates via ACME.
 //
 // In builds without ACME support (js or ts_omit_acme), this package is
 // not linked in; [ipn/ipnlocal] then exposes only stub wrappers that
@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
@@ -124,6 +125,17 @@ type extension struct {
 	// Tests use it to assert whether an operation kicked off async work.
 	goroutinesStarted atomic.Int64
 
+	// dnsSettle is how long a dns-01 issuance waits after publishing
+	// its TXT record before asking the CA to validate. Zero means no
+	// wait. Set once by newExtension; tests set it directly.
+	dnsSettle time.Duration
+
+	// setDNS and lookupTXT, if non-nil, replace [LocalBackend.SetDNS]
+	// and the system resolver's TXT lookup in the dns-01 flow. Tests
+	// set them; production leaves them nil.
+	setDNS    func(ctx context.Context, b *ipnlocal.LocalBackend, name, value string) error
+	lookupTXT func(ctx context.Context, name string) ([]string, error)
+
 	// mu guards the test/lifecycle fields below.
 	mu sync.Mutex
 
@@ -162,7 +174,31 @@ func newExtension(logf logger.Logf, _ ipnext.SafeBackend) (ipnext.Extension, err
 		logf:       logger.WithPrefix(logf, featureName+": "),
 		baseCtx:    baseCtx,
 		baseCancel: baseCancel,
+		dnsSettle:  dnsSettleFromEnv(logf),
 	}, nil
+}
+
+// defaultDNSSettle is how long a dns-01 issuance waits after control
+// has published the TXT record before asking the CA to validate it.
+// Control answers set-dns after a fixed wait of its own, but the record
+// reaches the DNS provider's anycast servers some time later, and the CA
+// validates from several vantage points that must all see it.
+const defaultDNSSettle = 30 * time.Second
+
+// dnsSettleFromEnv returns the dns-01 settle to use: defaultDNSSettle,
+// or the duration in TS_DEBUG_ACME_DNS_SETTLE when it is set. "0"
+// disables the settle.
+func dnsSettleFromEnv(logf logger.Logf) time.Duration {
+	s := envknob.String("TS_DEBUG_ACME_DNS_SETTLE")
+	if s == "" {
+		return defaultDNSSettle
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d < 0 {
+		logf("acme: ignoring TS_DEBUG_ACME_DNS_SETTLE=%q: %v", s, err)
+		return defaultDNSSettle
+	}
+	return d
 }
 
 // Name implements [ipnext.Extension].
