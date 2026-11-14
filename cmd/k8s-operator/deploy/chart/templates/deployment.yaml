@@ -6,8 +6,9 @@ kind: Deployment
 metadata:
   name: {{ include "tailscale-operator.fullname" . }}
   namespace: {{ .Release.Namespace }}
-  {{- if .Values.annotations }}
-  annotations: {{- toYaml .Values.annotations | nindent 4 }}
+  {{- with .Values.operatorConfig.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
   replicas: 1
