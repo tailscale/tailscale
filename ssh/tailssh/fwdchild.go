@@ -68,10 +68,6 @@ const fwdUmask = 0o177
 // does not acknowledge receipt.
 const fwdResultAckWait = 30 * time.Second
 
-// fwdRelayCloseDrainTimeout bounds delivery of queued client payload after a
-// full close. A service that stops reading must not retain the relay forever.
-const fwdRelayCloseDrainTimeout = 5 * time.Second
-
 // agentDirRoot is the only parent an agent-forwarding directory is
 // created under. The child runs with no environment, so os.TempDir
 // cannot redirect it, and it names the parent explicitly anyway;

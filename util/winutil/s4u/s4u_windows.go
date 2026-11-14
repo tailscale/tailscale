@@ -124,10 +124,18 @@ const (
 // characters.
 //
 // The current OS thread's access token must have SeTcbPrivilege.
+//
+// When capLevel is CapCreateProcess and u is a member of the Administrators
+// group whose logon would produce a UAC-filtered token, the session uses the
+// linked full token instead, as OpenSSH for Windows does: there is no way to
+// answer a UAC elevation prompt from a remote session.
 func Login(logf logger.Logf, srcName string, u *user.User, capLevel CapabilityLevel) (sess *Session, err error) {
 	token, err := createToken(srcName, u, tokenTypeImpersonation, capLevel)
 	if err != nil {
 		return nil, err
+	}
+	if capLevel == CapCreateProcess {
+		token = maybeLinkedToken(logfOrDiscard(logf), u, token)
 	}
 	tokenCloseOnce := sync.OnceFunc(func() { token.Close() })
 	defer func() {
@@ -179,6 +187,33 @@ func Login(logf logger.Logf, srcName string, u *user.User, capLevel CapabilityLe
 	}
 
 	return &Session{logf: logf, token: sessToken, userProfile: userProfile, capLevel: capLevel}, nil
+}
+
+// maybeLinkedToken returns token's linked (unfiltered) token if token is a
+// UAC-filtered token, closing token, and otherwise returns token unchanged.
+// The caller must hold SeTcbPrivilege for the linked token to be a usable
+// primary token rather than an identification-level one.
+//
+// UAC filters the logon of a local Administrators member other than the
+// built-in Administrator (see LocalAccountTokenFilterPolicy); domain
+// accounts' network logons are not filtered, so for them this is a no-op.
+func maybeLinkedToken(logf logger.Logf, u *user.User, token windows.Token) windows.Token {
+	limited, err := winutil.IsTokenLimited(token)
+	if err != nil {
+		logf("(s4u) IsTokenLimited(%q): %v", u.Username, err)
+		return token
+	}
+	if !limited {
+		return token
+	}
+	linked, err := token.GetLinkedToken()
+	if err != nil {
+		logf("(s4u) GetLinkedToken(%q): %v; using the UAC-filtered token", u.Username, err)
+		return token
+	}
+	logf("(s4u) using the linked (unfiltered) administrator token for %q", u.Username)
+	token.Close()
+	return linked
 }
 
 // Close unloads the user profile and S4U access token associated with the
@@ -281,12 +316,17 @@ type startProcessOpts struct {
 	extraEnv map[string]string
 	ptySize  windows.Coord
 	pipes    bool
+	// ownJob requests that the process be started in a new job object
+	// whose only handle is retained by the returned Process, so that the
+	// caller controls the whole process tree's lifetime. It is set for
+	// every caller-facing StartProcess method and left clear for the
+	// internal pseudoconsole relay, whose shell joins the caller's job.
+	ownJob bool
 }
 
 // StartProcess creates a new process running under ss via cmdLineInfo.
-// The process will either be started with its working directory set to the S4U
-// user's profile directory, or for Administrative users, the system32
-// directory. The child process will receive the S4U user's environment.
+// The process is started with its working directory set to the S4U user's
+// profile directory. The child process will receive the S4U user's environment.
 // extraEnv, when specified, contains any additional environment
 // variables to be inserted into the environment.
 //
@@ -299,6 +339,7 @@ func (ss *Session) StartProcess(cmdLineInfo winutil.CommandLineInfo, extraEnv ma
 	opts := startProcessOpts{
 		token:    ss.token,
 		extraEnv: extraEnv,
+		ownJob:   true,
 	}
 	return startProcessInternal(ss, ss.logf, cmdLineInfo, opts)
 }
@@ -306,9 +347,8 @@ func (ss *Session) StartProcess(cmdLineInfo winutil.CommandLineInfo, extraEnv ma
 // StartProcessWithPTY creates a new process running under ss via cmdLineInfo
 // with a pseudoconsole initialized to initialPtySize. The resulting Process
 // will return non-nil values from Stdin and Stdout, but Stderr will return nil.
-// The process will either be started with its working directory set to the S4U
-// user's profile directory, or for Administrative users, the system32
-// directory. The child process will receive the S4U user's environment.
+// The process is started with its working directory set to the S4U user's
+// profile directory. The child process will receive the S4U user's environment.
 // extraEnv, when specified, contains any additional environment
 // variables to be inserted into the environment.
 //
@@ -322,6 +362,7 @@ func (ss *Session) StartProcessWithPTY(cmdLineInfo winutil.CommandLineInfo, extr
 		token:    ss.token,
 		extraEnv: extraEnv,
 		ptySize:  initialPtySize,
+		ownJob:   true,
 	}
 	return startProcessInternal(ss, ss.logf, cmdLineInfo, opts)
 }
@@ -329,9 +370,8 @@ func (ss *Session) StartProcessWithPTY(cmdLineInfo winutil.CommandLineInfo, extr
 // StartProcessWithPipes creates a new process running under ss via cmdLineInfo
 // with all standard handles set to pipes. The resulting Process will return
 // non-nil values from Stdin, Stdout, and Stderr.
-// The process will either be started with its working directory set to the S4U
-// user's profile directory, or for Administrative users, the system32
-// directory. The child process will receive the S4U user's environment.
+// The process is started with its working directory set to the S4U user's
+// profile directory. The child process will receive the S4U user's environment.
 // extraEnv, when specified, contains any additional environment
 // variables to be inserted into the environment.
 //
@@ -345,8 +385,44 @@ func (ss *Session) StartProcessWithPipes(cmdLineInfo winutil.CommandLineInfo, ex
 		token:    ss.token,
 		extraEnv: extraEnv,
 		pipes:    true,
+		ownJob:   true,
 	}
 	return startProcessInternal(ss, ss.logf, cmdLineInfo, opts)
+}
+
+// StartCurrentUserProcessWithPTY is like [Session.StartProcessWithPTY], but
+// runs the process as the current user, with no S4U logon and thus no
+// SeTcbPrivilege requirement. The child inherits the current environment,
+// with extraEnv merged in, and starts in the current user's home directory.
+// Logs are written to logf, if non-nil.
+func StartCurrentUserProcessWithPTY(logf logger.Logf, cmdLineInfo winutil.CommandLineInfo, extraEnv map[string]string, initialPtySize windows.Coord) (*Process, error) {
+	opts := startProcessOpts{
+		extraEnv: extraEnv,
+		ptySize:  initialPtySize,
+		ownJob:   true,
+	}
+	return startProcessInternal(nil, logfOrDiscard(logf), cmdLineInfo, opts)
+}
+
+// StartCurrentUserProcessWithPipes is like [Session.StartProcessWithPipes], but
+// runs the process as the current user, with no S4U logon and thus no
+// SeTcbPrivilege requirement. The child inherits the current environment,
+// with extraEnv merged in, and starts in the current user's home directory.
+// Logs are written to logf, if non-nil.
+func StartCurrentUserProcessWithPipes(logf logger.Logf, cmdLineInfo winutil.CommandLineInfo, extraEnv map[string]string) (*Process, error) {
+	opts := startProcessOpts{
+		extraEnv: extraEnv,
+		pipes:    true,
+		ownJob:   true,
+	}
+	return startProcessInternal(nil, logfOrDiscard(logf), cmdLineInfo, opts)
+}
+
+func logfOrDiscard(logf logger.Logf) logger.Logf {
+	if logf == nil {
+		return logger.Discard
+	}
+	return logf
 }
 
 // startProcessInternal is the common implementation behind Session's exported
@@ -377,7 +453,6 @@ func startProcessInternal(ss *Session, logf logger.Logf, cmdLineInfo winutil.Com
 	useToken := opts.token != 0
 	usePty := ptySizeValid && !useToken
 	useRelay := ptySizeValid && useToken
-	useSystem32WD := useToken && opts.token.IsElevated()
 
 	if usePty {
 		sp.pty, err = conpty.NewPseudoConsole(opts.ptySize)
@@ -448,28 +523,30 @@ func startProcessInternal(ss *Session, logf logger.Logf, cmdLineInfo winutil.Com
 	}
 	logf("starting %s", cmdLineStr)
 
+	// The child starts in its user's profile directory, like a shell
+	// started by OpenSSH. For the current user this is os.UserHomeDir; if
+	// that is unknown the child inherits our working directory instead.
 	var env []string
-	var wd16 *uint16
+	var wd string
 	if useToken {
 		env, err = opts.token.Environ(false)
 		if err != nil {
 			return nil, err
 		}
-
-		folderID := windows.FOLDERID_Profile
-		if useSystem32WD {
-			folderID = windows.FOLDERID_System
-		}
-		wd, err := opts.token.KnownFolderPath(folderID, windows.KF_FLAG_DEFAULT)
-		if err != nil {
-			return nil, err
-		}
-		wd16, err = windows.UTF16PtrFromString(wd)
+		wd, err = opts.token.KnownFolderPath(windows.FOLDERID_Profile, windows.KF_FLAG_DEFAULT)
 		if err != nil {
 			return nil, err
 		}
 	} else {
 		env = os.Environ()
+		wd, _ = os.UserHomeDir()
+	}
+	var wd16 *uint16
+	if wd != "" {
+		wd16, err = windows.UTF16PtrFromString(wd)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	env = mergeEnv(env, opts.extraEnv)
@@ -479,30 +556,26 @@ func startProcessInternal(ss *Session, logf logger.Logf, cmdLineInfo winutil.Com
 		env16 = winutil.NewEnvBlock(env)
 	}
 
-	if useToken {
-		// We want the child process to be assigned to job such that when it exits,
-		// its descendents within the job will be terminated as well.
+	if opts.ownJob {
+		// Start the process in a new job object so that the whole tree it
+		// spawns can be terminated together, like a Unix process group.
+		// The sole handle to the job stays with the Process (sp.job), held
+		// by this tailscaled for the session's lifetime. That gives the
+		// caller three things:
+		//   - Terminate kills the entire job, not just the root process.
+		//   - If this process dies, the OS closes the last job handle and
+		//     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE terminates the tree, so a
+		//     crashed service does not leak the user's session processes.
+		//   - A graceful session end clears kill-on-close before dropping
+		//     the handle, so processes the user backgrounded survive.
+		// The child does not inherit a job handle, so its survival never
+		// keeps the job alive past this process.
 		job, err := createJob()
 		if err != nil {
 			return nil, err
 		}
-		// We don't need to hang onto job beyond this func...
-		defer job.Close()
-
+		sp.job = job
 		if err := sib.AssignToJob(job.Handle()); err != nil {
-			return nil, err
-		}
-
-		// ...because we're now gonna make a read-only copy...
-		qjob, err := job.QueryOnlyClone()
-		if err != nil {
-			return nil, err
-		}
-		defer qjob.Close()
-
-		// ...which will be inherited by the child process.
-		// When the child process terminates, the job will too.
-		if err := sib.InheritHandles(qjob.Handle()); err != nil {
 			return nil, err
 		}
 	}
@@ -512,11 +585,27 @@ func startProcessInternal(ss *Session, logf logger.Logf, cmdLineInfo winutil.Com
 		return nil, err
 	}
 
+	switch {
+	case useRelay:
+		// DETACHED_PROCESS so that the relay does not receive a console;
+		// it creates a pseudoconsole for the process it runs.
+		creationFlags |= windows.DETACHED_PROCESS
+	case opts.pipes:
+		// Give the child a console of its own, with no window. It must
+		// have some console: a console process with none causes each
+		// console program it starts to allocate a new console, and their
+		// C runtimes then point their standard handles at that console
+		// rather than at our inherited pipes, so their output is lost.
+		// (For a shell, that would be the output of every command.)
+		// Sharing our console instead would tie the child to our
+		// console's lifetime and Ctrl-C events.
+		creationFlags |= windows.CREATE_NO_WINDOW
+	}
+
 	var pi windows.ProcessInformation
 	if useToken {
-		// DETACHED_PROCESS so that the child does not receive a console.
 		// CREATE_NEW_PROCESS_GROUP so that the child's console group is isolated from ours.
-		creationFlags |= windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP
+		creationFlags |= windows.CREATE_NEW_PROCESS_GROUP
 		doCreate := func() {
 			err = windows.CreateProcessAsUser(opts.token, exePath, cmdLine, nil, nil, inheritHandles, creationFlags, env16, wd16, si, &pi)
 		}
@@ -550,6 +639,7 @@ func startProcessInternal(ss *Session, logf logger.Logf, cmdLineInfo winutil.Com
 
 	sp.hproc = pi.Process
 	sp.pid = pi.ProcessId
+	sp.logf = logf
 	if ss != nil {
 		ss.addRef()
 		sp.sess = ss
@@ -606,20 +696,24 @@ func (job *jobObject) Handle() windows.Handle {
 	return windows.Handle(*job)
 }
 
-const _JOB_OBJECT_QUERY = 0x0004
-
-func (job *jobObject) QueryOnlyClone() (*jobObject, error) {
+// disableKillOnClose clears JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE so that closing
+// the last handle to the job leaves its remaining processes running, keeping
+// JOB_OBJECT_LIMIT_BREAKAWAY_OK as createJob set it. It is how a graceful
+// session end preserves processes the user backgrounded.
+func (job *jobObject) disableKillOnClose() error {
 	hjob := job.Handle()
-	cp := windows.CurrentProcess()
-
-	var dupe windows.Handle
-	err := windows.DuplicateHandle(cp, hjob, cp, &dupe, _JOB_OBJECT_QUERY, true, 0)
-	if err != nil {
-		return nil, err
+	if hjob == 0 {
+		return nil
 	}
-
-	result := jobObject(dupe)
-	return &result, nil
+	limitInfo := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{
+		BasicLimitInformation: windows.JOBOBJECT_BASIC_LIMIT_INFORMATION{
+			LimitFlags: windows.JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+		},
+	}
+	_, err := windows.SetInformationJobObject(hjob,
+		windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&limitInfo)),
+		uint32(unsafe.Sizeof(limitInfo)))
+	return err
 }
 
 func createStdPipes(sib *winutil.StartupInfoBuilder) (stdin io.WriteCloser, stdout, stderr io.ReadCloser, err error) {
@@ -669,6 +763,7 @@ func createStdPipes(sib *winutil.StartupInfoBuilder) (stdin io.WriteCloser, stdo
 // Process encapsulates a child process started with a Session.
 type Process struct {
 	sess    *Session
+	logf    logger.Logf
 	wStdin  io.WriteCloser
 	rStdout io.ReadCloser
 	rStderr io.ReadCloser
@@ -676,6 +771,11 @@ type Process struct {
 	pty     *conpty.PseudoConsole
 	hproc   windows.Handle
 	pid     uint32
+	// job is the process's job object when it was started with
+	// startProcessOpts.ownJob, or nil otherwise. Its only handle is held
+	// here for the process's lifetime. See the ownJob block in
+	// startProcessInternal.
+	job *jobObject
 }
 
 // Stdin returns the write side of a pipe connected to the child process's
@@ -696,8 +796,16 @@ func (sp *Process) Stderr() io.ReadCloser {
 	return sp.rStderr
 }
 
-// Terminate kills the process.
+// Terminate kills the process. When the process was started in its own job
+// object (see startProcessOpts.ownJob), it kills every process in that job,
+// the session's descendants too, like SIGKILL to a Unix process group.
 func (sp *Process) Terminate() {
+	if sp.job != nil {
+		if hjob := sp.job.Handle(); hjob != 0 {
+			windows.TerminateJobObject(hjob, 255)
+			return
+		}
+	}
 	if sp.hproc != 0 {
 		windows.TerminateProcess(sp.hproc, 255)
 	}
@@ -711,12 +819,28 @@ func (sp *Process) Terminate() {
 // If the process was created with a pseudoconsole then the caller must continue
 // concurrently draining sp's stdout until either Close finishes executing, or EOF.
 func (sp *Process) Close() error {
-	for _, pc := range []*io.WriteCloser{&sp.wStdin, &sp.wResize} {
-		if *pc == nil {
-			continue
-		}
-		(*pc).Close()
-		(*pc) = nil
+	return sp.close(true)
+}
+
+// Release is like Close, but leaves the pipes returned by Stdin, Stdout, and
+// Stderr open. It is for callers that copy those pipes concurrently and want
+// to drain them to EOF after the process exits; they own the pipes afterwards
+// and must close them.
+//
+// If the process was created with a pseudoconsole then the caller must continue
+// concurrently draining sp's stdout until either Release finishes executing, or EOF.
+func (sp *Process) Release() error {
+	return sp.close(false)
+}
+
+func (sp *Process) close(closeStdio bool) error {
+	if sp.wResize != nil {
+		sp.wResize.Close()
+		sp.wResize = nil
+	}
+	if closeStdio && sp.wStdin != nil {
+		sp.wStdin.Close()
+		sp.wStdin = nil
 	}
 
 	if sp.pty != nil {
@@ -739,6 +863,22 @@ func (sp *Process) Close() error {
 		}
 	}
 
+	if sp.job != nil {
+		// The root process has exited. Leave any processes the session
+		// backgrounded running by clearing kill-on-close before dropping
+		// the last job handle. A mandated teardown has already called
+		// Terminate, which killed the job, so this preserves nothing in
+		// that case.
+		if err := sp.job.disableKillOnClose(); err != nil {
+			sp.logf("s4u: clearing job kill-on-close: %v", err)
+		}
+		sp.job.Close()
+		sp.job = nil
+	}
+
+	if !closeStdio {
+		return nil
+	}
 	// Order is important here. Do not close sp.rStdout until _after_
 	// ss.pty (when present) has been closed! We're going to do one better by
 	// doing this after the process is done.
@@ -874,12 +1014,19 @@ func beRelay(args []string) error {
 	defer psp.Close()
 
 	go resizeLoop(logf, resize, psp.PTYResizer())
+	outDone := make(chan struct{})
+	go func() {
+		defer close(outDone)
+		if debugRelay {
+			debugLogPTYOutput(logf, os.Stdout, psp.rStdout)
+		} else {
+			io.Copy(os.Stdout, psp.rStdout)
+		}
+	}()
 	if debugRelay {
 		go debugLogPTYInput(logf, psp.wStdin, os.Stdin)
-		go debugLogPTYOutput(logf, os.Stdout, psp.rStdout)
 	} else {
 		go io.Copy(psp.wStdin, os.Stdin)
-		go io.Copy(os.Stdout, psp.rStdout)
 	}
 
 	exitCode, err := psp.Wait()
@@ -891,9 +1038,21 @@ func beRelay(args []string) error {
 		logf("relayed process returned %v", exitCode)
 	}
 
-	if err := psp.Close(); err != nil {
-		logf("s4u.Process.Close error: %v", err)
+	// The process has exited, but its last output may still be in the
+	// pseudoconsole. Release closes the pseudoconsole, which is what makes
+	// the output pipe reach EOF; drain it before exiting, or the tail of
+	// the output of a short command ("echo hello") is lost.
+	if err := psp.Release(); err != nil {
+		logf("s4u.Process.Release error: %v", err)
 		return err
+	}
+	<-outDone
+	psp.rStdout.Close()
+	psp.wStdin.Close()
+	// The relay stands in for the process it ran, so its exit code is
+	// that process's exit code.
+	if exitCode != 0 {
+		os.Exit(int(exitCode))
 	}
 	return nil
 }
@@ -923,25 +1082,33 @@ func mergeEnv(existingEnv []string, extraEnv map[string]string) []string {
 		return existingEnv
 	}
 
-	mergedMap := make(map[string]string, len(existingEnv)+len(extraEnv))
+	// Windows environment variable names are case-insensitive, so the merge
+	// is keyed by upper-cased name, but each variable keeps the spelling it
+	// was first seen with so that the child sees the names it expects.
+	type kv struct{ k, v string }
+	mergedMap := make(map[string]kv, len(existingEnv)+len(extraEnv))
 	for _, line := range existingEnv {
 		k, v, _ := strings.Cut(line, "=")
-		mergedMap[strings.ToUpper(k)] = v
+		mergedMap[strings.ToUpper(k)] = kv{k, v}
 	}
 
 	for k, v := range extraEnv {
-		mergedMap[strings.ToUpper(k)] = v
+		uk := strings.ToUpper(k)
+		if old, ok := mergedMap[uk]; ok {
+			k = old.k
+		}
+		mergedMap[uk] = kv{k, v}
 	}
 
 	result := make([]string, 0, len(mergedMap))
-	for k, v := range mergedMap {
-		result = append(result, strings.Join([]string{k, v}, "="))
+	for _, e := range mergedMap {
+		result = append(result, e.k+"="+e.v)
 	}
 
 	slices.SortFunc(result, func(a, b string) int {
 		ka, _, _ := strings.Cut(a, "=")
 		kb, _, _ := strings.Cut(b, "=")
-		return strings.Compare(ka, kb)
+		return strings.Compare(strings.ToUpper(ka), strings.ToUpper(kb))
 	})
 	return result
 }

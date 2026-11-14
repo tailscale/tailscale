@@ -11,12 +11,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
-
-	gliderssh "github.com/tailscale/gliderssh"
 )
 
 // monitorProcess identifies one exec child. ID is the exec request ID, which
@@ -148,59 +145,4 @@ func systemHostKeyFile(typ string) string {
 		return ""
 	}
 	return "/etc/ssh/ssh_host_" + typ + "_key"
-}
-
-// handleSSHAgentForwarding starts a Unix socket listener and in the background
-// forwards agent connections between the listener and the gliderssh.Session.
-// On success, it assigns ss.agentListener.
-//
-// The listener and its containing directory are created by a user-cred
-// child through conn.fwdListenAgent. See the docs there for the modes.
-func (ss *sshSession) handleSSHAgentForwarding(s gliderssh.Session, lu *userMeta) error {
-	if !gliderssh.AgentRequested(ss) || !ss.conn.finalAction.AllowAgentForwarding {
-		return nil
-	}
-	// The latched AllowAgentForwarding bit may be stale. See recheckPolicy.
-	if !ss.conn.recheckPolicy() {
-		return nil
-	}
-	if sshDisableForwarding() {
-		// TODO(bradfitz): or do we want to return an error here instead so the user
-		// gets an error if they ran with ssh -A? But for now we just silently
-		// don't work, like the condition above.
-		return nil
-	}
-	ss.logf("ssh: agent forwarding requested")
-	ln, socket, err := ss.conn.fwdListenAgent(s.Context(), lu)
-	if err != nil {
-		return err
-	}
-	// The listener's own address is the kernel's bound path; socket is
-	// the path the child reported and the monitor validated. They must
-	// agree: the cleanup removes the directory of the validated path, so
-	// a child whose report and actual bind disagree is refused.
-	if got := ln.Addr().String(); got != socket {
-		ln.Close()
-		return fmt.Errorf("agent forwarding socket path %q does not match the listener's bound path %q", socket, got)
-	}
-	ss.agentListener = ln
-	go gliderssh.ForwardAgentConnections(ln, s)
-	return nil
-}
-
-// closeAgentForwarding closes the agent forwarding listener and removes the
-// temporary directory that holds its socket, so neither outlives the
-// session. The removal rules are platform-specific: on the monitor
-// platforms the directory was created by a user-cred child while the
-// removal runs with the daemon's credentials; see
-// removeAgentForwardingDir in fwdmonitor.go and fwdplan9.go.
-func (ss *sshSession) closeAgentForwarding() {
-	ln := ss.agentListener
-	if ln == nil {
-		return
-	}
-	ss.agentListener = nil
-	dir := filepath.Dir(ln.Addr().String())
-	ln.Close()
-	removeAgentForwardingDir(dir, ss.conn.localUser, ss.logf)
 }
