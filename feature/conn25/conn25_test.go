@@ -3143,7 +3143,8 @@ func TestMapDNSResponseUpdatesToken(t *testing.T) {
 
 // TestMapDNSResponsePassesThroughUnattributableResponses asserts that
 // mapDNSResponse only rewrites a response it can attribute to a connector.
-// TODO(tailscale/corp#50408): update to also validate app in request to configured apps.
+// Attribution to the app the query was actually made for, rather than the first
+// app configured for the domain, is covered by [TestMapDNSResponseUsesRequestedApp].
 func TestMapDNSResponsePassesThroughUnattributableResponses(t *testing.T) {
 	const domain = "example.com."
 	dst := netip.MustParseAddr("1.0.0.1")
@@ -3206,6 +3207,182 @@ func TestMapDNSResponsePassesThroughUnattributableResponses(t *testing.T) {
 				t.Errorf("want no assignments, got %d", n)
 			}
 		})
+	}
+}
+
+// TestMapDNSResponseUsesRequestedApp asserts that mapDNSResponse attributes a
+// connector's answer to the app the DoH query was made for, named by the app
+// query parameter of the request URL, rather than to the first app configured
+// for the queried domain. The app an assignment is registered under is the app
+// the connector later authorizes the TransitIPRequest against, so naming a
+// different one either fails the request or records the wrong app. A response
+// whose app cannot be determined, or that names an app which does not serve the
+// queried name, is passed through unmodified.
+func TestMapDNSResponseUsesRequestedApp(t *testing.T) {
+	const domain = "example.com."
+	dst := netip.MustParseAddr("1.0.0.1")
+
+	app := func(name, domain string) appctype.AppConnectorAttr {
+		return appctype.AppConnectorAttr{
+			Name:       name,
+			Connectors: []string{"tag:woo"},
+			Domains:    []string{domain},
+			Mode:       appctype.MagicIP,
+		}
+	}
+	sameDomain := []appctype.AppConnectorAttr{app("appA", "example.com"), app("appB", "example.com")}
+
+	for _, tt := range []struct {
+		name         string
+		apps         []appctype.AppConnectorAttr
+		query        dnsname.FQDN
+		requestedApp string
+		wantApp      string // empty means the response must be left unmodified.
+	}{
+		{
+			// Two apps serve the domain; the query was made for the second.
+			name:         "second-app-for-domain",
+			apps:         sameDomain,
+			query:        domain,
+			requestedApp: "appB",
+			wantApp:      "appB",
+		},
+		{
+			// The requested app serves the name by wildcard while another app
+			// with the exact domain shadows it in appNamesByDomain. It must
+			// still be attributed, or legitimate routing would break.
+			name:         "wildcard-app-shadowed-by-exact",
+			apps:         []appctype.AppConnectorAttr{app("appA", "example.com"), app("appB", "*.example.com")},
+			query:        domain,
+			requestedApp: "appB",
+			wantApp:      "appB",
+		},
+		{
+			// A subdomain of an app's exact domain is allowed by the
+			// connector's name check, but appNames prefers the wildcard app.
+			// The URL's app must win again.
+			name:         "subdomain-of-exact-domain-app",
+			apps:         []appctype.AppConnectorAttr{app("appB", "*.example.com"), app("appA", "example.com")},
+			query:        "sub.example.com.",
+			requestedApp: "appA",
+			wantApp:      "appA",
+		},
+		{
+			name:         "unconfigured-app",
+			apps:         sameDomain,
+			query:        domain,
+			requestedApp: "appC",
+		},
+		{
+			name:         "app-does-not-serve-name",
+			apps:         []appctype.AppConnectorAttr{app("appA", "example.com"), app("appB", "other.com")},
+			query:        domain,
+			requestedApp: "appB",
+		},
+		{
+			name:         "missing-app-parameter",
+			apps:         sameDomain,
+			query:        domain,
+			requestedApp: "",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newConn25(logger.Discard)
+			c.reconfig(mustConfig(t, makeSelfNode(t, tt.apps, arbitraryPools, nil)))
+			ext := &extension{
+				conn25: c,
+				host: &testHost{
+					nb: &testNodeBackend{peers: []tailcfg.NodeView{testConnectorPeer}},
+				},
+			}
+
+			res := makeDNSResponse(t, string(tt.query), []*dnsmessage.AResource{{A: dst.As4()}})
+			res.DoHMeta = testPeerAPIDoHMeta(t, testConnectorAddr, tt.requestedApp, nil)
+
+			got := ext.mapDNSResponse(res)
+
+			if tt.wantApp == "" {
+				if diff := cmp.Diff(res.Bs, got); diff != "" {
+					t.Errorf("response should not be rewritten (-want, +got):\n%s", diff)
+				}
+				if n := len(c.client.assignments.byMagicIP); n != 0 {
+					t.Errorf("want no assignments, got %d", n)
+				}
+				return
+			}
+
+			as, ok := c.client.assignments.lookupByDomainDst(tt.query, dst)
+			if !ok {
+				t.Fatal("no assignment")
+			}
+			if as.app != tt.wantApp {
+				t.Errorf("assignment app: got %q, want %q", as.app, tt.wantApp)
+			}
+
+			// The response must have been rewritten to answer with the magic IP
+			// that was assigned for the destination.
+			var p dnsmessage.Parser
+			if _, err := p.Start(got); err != nil {
+				t.Fatalf("parsing rewritten response: %v", err)
+			}
+			if _, err := p.AllQuestions(); err != nil {
+				t.Fatal(err)
+			}
+			h, err := p.AnswerHeader()
+			if err != nil {
+				t.Fatalf("reading answer header: %v", err)
+			}
+			if h.Type != dnsmessage.TypeA {
+				t.Fatalf("answer type: got %v, want A", h.Type)
+			}
+			r, err := p.AResource()
+			if err != nil {
+				t.Fatalf("reading A answer: %v", err)
+			}
+			if gotIP := netip.AddrFrom4(r.A); gotIP != as.magic {
+				t.Errorf("rewritten A record: got %v, want magic IP %v", gotIP, as.magic)
+			}
+		})
+	}
+}
+
+func TestAppFromRequestURL(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		url     string
+		want    string
+		wantErr bool
+	}{
+		{name: "one-app", url: "http://100.64.0.1:1234/dns-query?app=appA", want: "appA"},
+		{name: "escaped-app", url: "http://100.64.0.1:1234/dns-query?app=a%3Ab", want: "a:b"},
+		{name: "no-query", url: "http://100.64.0.1:1234/dns-query", wantErr: true},
+		{name: "no-app-parameter", url: "http://100.64.0.1:1234/dns-query?other=x", wantErr: true},
+		{name: "empty-app-parameter", url: "http://100.64.0.1:1234/dns-query?app=", wantErr: true},
+		{name: "repeated-app-parameter", url: "http://100.64.0.1:1234/dns-query?app=appA&app=appB", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			u, err := url.Parse(tt.url)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := appFromRequestURL(u)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("appFromRequestURL(%q) = %q, want error", tt.url, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("appFromRequestURL(%q): %v", tt.url, err)
+			}
+			if got != tt.want {
+				t.Errorf("appFromRequestURL(%q) = %q, want %q", tt.url, got, tt.want)
+			}
+		})
+	}
+
+	if _, err := appFromRequestURL(nil); err == nil {
+		t.Error("appFromRequestURL(nil) = nil error, want error")
 	}
 }
 
