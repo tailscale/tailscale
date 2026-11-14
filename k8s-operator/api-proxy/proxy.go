@@ -441,6 +441,13 @@ func (ap *APIServerProxy) recordRequestAsEvent(req *http.Request, who *apitype.W
 func (ap *APIServerProxy) addImpersonationHeadersAsRequired(r *http.Request) {
 	r.URL.Scheme = ap.upstreamURL.Scheme
 	r.URL.Host = ap.upstreamURL.Host
+	// r.Host determines the outbound Host header (and HTTP/2 :authority).
+	// Without this, it stays whatever Host the client used to reach this
+	// proxy, which mismatches the upstream apiserver and gets rejected
+	// with 421 Misdirected Request by strict HTTP/2 virtual-host matching
+	// (e.g. an Istio ingress gateway terminating TLS in front of the
+	// apiserver).
+	r.Host = ap.upstreamURL.Host
 	if !ap.authMode {
 		// If we are not providing authentication, then we are just
 		// proxying to the Kubernetes API, so we don't need to do
