@@ -655,6 +655,11 @@ func (d *Dialer) dialOneUser(ctx context.Context, network string, ipp netip.Addr
 
 	if routes := d.routes.Load(); routes != nil {
 		if isTailscaleRoute, _ := routes.Lookup(ipp.Addr()); isTailscaleRoute {
+			// This is a check to prevent userspace mode
+			// from dialing via the host's default route.
+			if d.UseNetstackForIP != nil {
+				return nil, fmt.Errorf("no tailnet peer for %v; refusing to dial it from the local network", ipp.Addr())
+			}
 			return d.getPeerDialer().DialContext(ctx, network, ipp.String())
 		}
 
