@@ -27,6 +27,11 @@ func TestFQDN(t *testing.T) {
 		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com", "", true, 0},
 		{strings.Repeat("aaaaa.", 60) + "com", "", true, 0},
 		{"foo..com", "", true, 0},
+		{"foo..", "", true, 0},
+		{"..", "", true, 0},
+		{"com." + strings.Repeat("a", 64), "", true, 0},
+		{strings.Repeat("a", 64), "", true, 0},
+		{strings.Repeat("a", 63), FQDN(strings.Repeat("a", 63) + "."), false, 1},
 	}
 
 	for _, test := range tests {
@@ -328,7 +333,7 @@ func TestValidHostname(t *testing.T) {
 		{" example", `contains invalid character`},
 		{"example-.com", `must end with a letter or number`},
 		{strings.Repeat("a", 63), ""},
-		{strings.Repeat("a", 64), `is too long, max length is 63 bytes`},
+		{strings.Repeat("a", 64), `is not a valid DNS label`},
 		{strings.Repeat(strings.Repeat("a", 63)+".", 4), "is too long to be a DNS name"},
 		{"www.what🤦lol.example.com", "contains invalid character"},
 	}

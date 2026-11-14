@@ -58,8 +58,8 @@ func ToFQDN(s string) (FQDN, error) {
 	}
 
 	st := 0
-	for i := range len(s) {
-		if s[i] != '.' {
+	for i := range len(s) + 1 {
+		if i < len(s) && s[i] != '.' {
 			continue
 		}
 		label := s[st:i]
