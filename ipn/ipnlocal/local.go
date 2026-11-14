@@ -274,10 +274,15 @@ type LocalBackend struct {
 	pushDeviceToken          syncs.AtomicValue[string]
 	backendLogID             logid.PublicID // or zero value if logging not in use
 	unregisterSysPolicyWatch func()
-	varRoot                  string         // or empty if SetVarRoot never called
-	logFlushFunc             func()         // or nil if SetLogFlusher wasn't called
-	em                       *expiryManager // non-nil; TODO(nickkhyl): move to nodeBackend
-	sshAtomicBool            atomic.Bool    // TODO(nickkhyl): move to nodeBackend
+	varRoot                  string // or empty if SetVarRoot never called
+	logFlushFunc             func() // or nil if SetLogFlusher wasn't called
+	// logUploader is the process-wide logtail logger for tailscaled's main
+	// log stream. Set via [LocalBackend.SetLogUploader]. May be nil.
+	logUploader *logtail.Logger
+	// logAuth caches tokens for authenticated log uploads (for node logs and netlog).
+	logAuth       logAuthCache
+	em            *expiryManager // non-nil; TODO(nickkhyl): move to nodeBackend
+	sshAtomicBool atomic.Bool    // TODO(nickkhyl): move to nodeBackend
 	// webClientAtomicBool controls whether the web client is running. This should
 	// be true unless the disable-web-client node attribute has been set.
 	webClientAtomicBool atomic.Bool // TODO(nickkhyl): move to nodeBackend
@@ -638,6 +643,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		em:           newExpiryManager(logf, sys.Bus.Get()),
 		loginFlags:   loginFlags,
 		clock:        clock,
+		logAuth:      logAuthCache{logf: logf},
 	}
 
 	sys.NoiseRoundTripper.Set(noiseRoundTripper{b})
@@ -6619,11 +6625,15 @@ func (b *LocalBackend) SetLogFlusher(flushFunc func()) {
 }
 
 // SetLogUploader sets the process-wide logtail logger used for tailscaled's
-// main log stream.
+// main log stream. It enables authenticated log uploads when the node is in a
+// tailnet (see [LocalBackend.updateLogUploadAuth]).
 //
 // It should only be called before the LocalBackend is used.
 func (b *LocalBackend) SetLogUploader(lg *logtail.Logger) {
-	// TODO: Implemented later for authenticated log uploads.
+	if !buildfeatures.HasLogTail {
+		return
+	}
+	b.logUploader = lg
 }
 
 // TryFlushLogs calls the log flush function. It returns false if a log flush
@@ -7695,6 +7705,15 @@ func (b *LocalBackend) resolveExitNodeInPrefsLocked(prefs *ipn.Prefs) (changed b
 // received nm. If nm is nil, it resets all configuration as though
 // Tailscale is turned off.
 func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
+	// Cache any log-upload bearer token, then remove it from nm before any
+	// subsystem observes the netmap. The token must not be installed into
+	// the published map (status, WhoIs, SelfChange, the disk cache, or
+	// debug dumps).
+	if buildfeatures.HasLogTail {
+		b.updateLogUploadAuth(nm)
+	}
+	stripLogUploadAuth(nm)
+
 	if buildfeatures.HasCacheNetMap {
 		// As a defensive measure, if something triggers a panic when we are
 		// installing a network map, make an effort to discard any cached netmaps.
@@ -8533,6 +8552,18 @@ func (s netLogNodeSource) NetLogIDs() (nodeID, domainID logid.PrivateID, logExit
 		return logid.PrivateID{}, logid.PrivateID{}, false, false
 	}
 	return nodeID, domainID, nm.SelfNode.HasCap(nodecap.LogExitFlows), true
+}
+
+// LogUploadAuth implements [wgengine.NetLogSource].
+func (s netLogNodeSource) LogUploadAuth() (authID string, authToken func() string) {
+	nm := s.b.NetMap()
+	if nm == nil || !nm.SelfNode.Valid() {
+		return "", nil
+	}
+	id := formatAuthID(nm.SelfNode.ID())
+	return string(id), func() string {
+		return string(s.b.logAuth.loadToken(id))
+	}
 }
 
 // Compile-time assertion that netLogNodeSource implements
