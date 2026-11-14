@@ -16,6 +16,7 @@ import (
 	"tailscale.com/net/traffic"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tsconst"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
@@ -37,6 +38,7 @@ type probed struct {
 	tailcfg.NodeView
 	addr   netip.Addr
 	routes []netip.Prefix
+	apps   []string
 }
 
 func (c *Client) probe(ctx context.Context, nodes iter.Seq[probed], limit int, timeout time.Duration) (*Report, error) {
@@ -66,6 +68,7 @@ func (c *Client) probe(ctx context.Context, nodes iter.Seq[probed], limit int, t
 				Name:   n.Name(),
 				Addr:   n.addr,
 				Routes: n.routes,
+				Apps:   n.apps,
 			})
 		}
 	}
@@ -184,10 +187,12 @@ func (c *Client) Probe(ctx context.Context, nodes iter.Seq[tailcfg.NodeView], li
 			if !addr.IsValid() {
 				continue // No valid addresses.
 			}
+			apps, _ := connectorApps(n)
 			if !yield(probed{
 				NodeView: n,
 				addr:     addr,
 				routes:   routes(n),
+				apps:     apps,
 			}) {
 				return
 			}
@@ -208,15 +213,41 @@ func (c *Client) ProbeAllHARouters(ctx context.Context, limit int, timeout time.
 		return nil, err
 	}
 
+	peers := c.nb.NodeBackend().Peers()
 	// When a prefix is routed by multiple nodes, we probe those nodes.
 	// There is no point to probing a router when it is the only choice.
 	// These nodes are referred to a High Availability (HA) routers.
 	var nodes []tailcfg.NodeView
-	for _, rs := range c.RoutersByPrefix() {
+	for _, rs := range GroupRoutersByPrefix(peers) {
 		if len(rs) <= 1 {
 			continue
 		}
 		nodes = append(nodes, rs...) // Note: this introduces duplicates.
+	}
+
+	// Group conn25 connectors by the app they serve, then probe only
+	// connectors for apps served by more than one node, since there is
+	// no point probing a connector when it is the only choice for its app.
+	//
+	// It is the control plane's responsibility to only provide app names on
+	// peers that are eligible connectors for this client, so there is no need
+	// to filter the peers here by the apps the self node uses.
+	connectorsByApp := make(map[string][]tailcfg.NodeView)
+	for _, nv := range peers {
+		apps, err := connectorApps(nv)
+		if err != nil {
+			c.logf("routecheck: bad %s cap on node %v: %v", nodecap.Conn25Connector, nv.ID(), err)
+			continue
+		}
+		for _, app := range apps {
+			connectorsByApp[app] = append(connectorsByApp[app], nv)
+		}
+	}
+	for _, cs := range connectorsByApp {
+		if len(cs) <= 1 {
+			continue
+		}
+		nodes = append(nodes, cs...)
 	}
 
 	// Sort by Node.ID and deduplicate to avoid double-probing.

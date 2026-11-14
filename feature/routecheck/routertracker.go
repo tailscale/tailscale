@@ -185,7 +185,7 @@ func (rt *RouterTracker) watchIPNBus(ctx context.Context, done chan<- struct{}, 
 			// Bootstrap the router set from the initial Status.
 			// This will trigger the initial probe for all routers.
 			for _, ps := range s.Peer {
-				if ps.IsRouter() {
+				if ps.IsRouter() || routecheck.PeerStatusIsConn25Connector(ps) {
 					nid := ps.NodeID
 					routers.Add(nid)
 					added = append(added, nid)
@@ -194,17 +194,17 @@ func (rt *RouterTracker) watchIPNBus(ctx context.Context, done chan<- struct{}, 
 		}
 		for _, p := range n.PeersChanged {
 			nid := p.ID
-			wasRouter := routers.Contains(p.ID)
-			isRouter := p.IsRouter()
+			wasTracked := routers.Contains(p.ID)
+			isProbeTarget := p.IsRouter() || routecheck.IsConn25Connector(p.View())
 			switch {
-			case !wasRouter && isRouter:
+			case !wasTracked && isProbeTarget:
 				routers.Add(nid)
 				added = append(added, nid)
-			case wasRouter && isRouter:
+			case wasTracked && isProbeTarget:
 				// TODO(sfllaw): Tune this to ignore changes
 				// that don’t affect this node’s status as a router.
 				modified = append(modified, nid)
-			case wasRouter && !isRouter:
+			case wasTracked && !isProbeTarget:
 				routers.Delete(nid)
 				removed = append(removed, nid)
 			}
