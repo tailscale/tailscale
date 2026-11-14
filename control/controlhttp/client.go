@@ -183,7 +183,10 @@ var forceNoise443 = envknob.RegisterBool("TS_FORCE_NOISE_443")
 // forceNoise443 reports whether the controlclient noise dialer should always
 // use HTTPS connections as its underlay connection (double crypto). This can
 // be necessary when networks or middle boxes are messing with port 80.
-func (d *Dialer) forceNoise443() bool {
+//
+// If heuristic is true, force is only a guess based on a recent dial, and the
+// caller should still fall back to port 80 if the HTTPS dial fails.
+func (d *Dialer) forceNoise443() (force, heuristic bool) {
 	if runtime.GOOS == "plan9" {
 		// For running demos of Plan 9 in a browser with network relays,
 		// we want to minimize the number of connections we're making.
@@ -191,10 +194,10 @@ func (d *Dialer) forceNoise443() bool {
 		// costs server-side but the costs are tiny and number of Plan 9
 		// users doesn't make it worth it. Just disable this and always use
 		// HTTPS for Plan 9. That also reduces some log spam.
-		return true
+		return true, false
 	}
 	if forceNoise443() {
-		return true
+		return true, false
 	}
 
 	if d.HealthTracker.LastNoiseDialWasRecent() {
@@ -207,10 +210,10 @@ func (d *Dialer) forceNoise443() bool {
 		if d.logPort80Failure.CompareAndSwap(true, false) {
 			d.logf("controlhttp: forcing port 443 dial due to recent noise dial")
 		}
-		return true
+		return true, true
 	}
 
-	return false
+	return false, false
 }
 
 func (d *Dialer) clock() tstime.Clock {
@@ -285,10 +288,11 @@ func (a *Dialer) dialHostOpt(ctx context.Context, optAddr netip.Addr, optACEHost
 		}
 	}
 
-	forceTLS := a.forceNoise443()
+	forceTLS, forceTLSHeuristic := a.forceNoise443()
 
 	// Start the plaintext HTTP attempt first, unless disabled by the envknob.
-	if !forceTLS || u443 == nil {
+	tried80 := !forceTLS || u443 == nil
+	if tried80 {
 		go try(u80)
 	}
 
@@ -329,6 +333,18 @@ func (a *Dialer) dialHostOpt(ctx context.Context, optAddr netip.Addr, optACEHost
 				} // else we lost the race and it started already which is what we want
 			case u443:
 				err443 = res.err
+				if !tried80 && forceTLSHeuristic {
+					// TLS was only forced because of a recent dial, which
+					// may itself have been on port 80 against a control
+					// server with no HTTPS listener (e.g. a self-hosted
+					// http:// login server). Try port 80 rather than
+					// failing forever while retries keep the recent-dial
+					// window open. See tailscale/tailscale#15008.
+					tried80 = true
+					err80 = nil
+					go try(u80)
+					continue
+				}
 			default:
 				panic("invalid")
 			}
