@@ -17,11 +17,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/tailscale/netlink"
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/netipx"
+	"golang.org/x/time/rate"
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
@@ -2111,4 +2114,45 @@ func TestCleanUpOnlyTouchesTunInterface(t *testing.T) {
 	if !slices.Contains(fake.ips, "100.64.0.5/32 dev eth0") {
 		t.Errorf("non-Tailscale CGNAT addr on eth0 was wrongly removed; ips=%q", fake.ips)
 	}
+}
+
+func TestRouteRecovery(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fake := NewFakeOS(t)
+		p := netip.MustParsePrefix("192.168.1.0/24")
+		r := &linuxRouter{logf: t.Logf, cmd: fake, nfr: fake.nfr, ipRuleAvailable: true,
+			interfaceV6Usable: func() bool { return true },
+			routeFixLimiter:   rate.NewLimiter(rate.Every(5*time.Second), 10),
+			localRoutes:       map[netip.Prefix]bool{p: true}}
+		for range 10 {
+			r.onThrowRouteDeleted(netmon.TailscaleThrowRouteDeleted{Dst: p})
+		}
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if len(fake.routes) != 1 {
+			t.Fatalf("routes = %v", fake.routes)
+		}
+		fake.routes = nil
+		r.onThrowRouteDeleted(netmon.TailscaleThrowRouteDeleted{Dst: p})
+		r.mu.Lock()
+		delete(r.localRoutes, p)
+		r.mu.Unlock()
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if len(fake.routes) != 0 {
+			t.Fatalf("restored obsolete route: %v", fake.routes)
+		}
+		r.mu.Lock()
+		r.localRoutes[p] = true
+		r.mu.Unlock()
+		r.onThrowRouteDeleted(netmon.TailscaleThrowRouteDeleted{Dst: p})
+		r.mu.Lock()
+		r.closed.Store(true)
+		r.mu.Unlock()
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if len(fake.routes) != 0 {
+			t.Fatalf("restored after shutdown: %v", fake.routes)
+		}
+	})
 }

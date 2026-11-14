@@ -28,6 +28,11 @@ type unspecifiedMessage struct{}
 
 func (unspecifiedMessage) ignore() bool { return false }
 
+// TailscaleThrowRouteDeleted reports deletion of a throw route in Tailscale routing table 52.
+type TailscaleThrowRouteDeleted struct {
+	Dst netip.Prefix
+}
+
 // RuleDeleted reports that one of Tailscale's policy routing rules
 // was deleted.
 type RuleDeleted struct {
@@ -48,6 +53,8 @@ type nlConn struct {
 	logf         logger.Logf
 	conn         *netlink.Conn
 	buffered     []netlink.Message
+
+	throwRoutesDeleted *eventbus.Publisher[TailscaleThrowRouteDeleted]
 
 	// addrCache maps interface indices to a set of addresses, and is
 	// used to suppress duplicate RTM_NEWADDR messages. It is populated
@@ -78,6 +85,8 @@ func newOSMon(bus *eventbus.Bus, logf logger.Logf, m *Monitor) (osMon, error) {
 		logf:         logf,
 		conn:         conn,
 		addrCache:    make(map[uint32]map[netip.Addr]bool),
+
+		throwRoutesDeleted: eventbus.Publish[TailscaleThrowRouteDeleted](client),
 	}, nil
 }
 
@@ -209,8 +218,25 @@ func (c *nlConn) Receive() (message, error) {
 				rmsg.Attributes.OutIface, rmsg.Attributes.Table)
 		}
 		if msg.Header.Type == unix.RTM_DELROUTE {
-			// Just logging it for now.
-			// (Debugging https://github.com/tailscale/tailscale/issues/643)
+			// RTA_TABLE overrides the table in the message header.
+			table := uint32(rmsg.Table)
+			if rmsg.Attributes.Table != 0 {
+				table = rmsg.Attributes.Table
+			}
+			if table == tsTable && rmsg.Type == unix.RTN_THROW {
+				if len(rmsg.Attributes.Dst) == 0 && rmsg.DstLength == 0 {
+					switch rmsg.Family {
+					case unix.AF_INET:
+						dst = netip.PrefixFrom(netip.IPv4Unspecified(), 0)
+					case unix.AF_INET6:
+						dst = netip.PrefixFrom(netip.IPv6Unspecified(), 0)
+					}
+				}
+				if dst.IsValid() && ((rmsg.Family == unix.AF_INET && dst.Addr().Is4()) ||
+					(rmsg.Family == unix.AF_INET6 && dst.Addr().Is6())) {
+					c.throwRoutesDeleted.Publish(TailscaleThrowRouteDeleted{Dst: dst.Masked()})
+				}
+			}
 			return unspecifiedMessage{}, nil
 		}
 
