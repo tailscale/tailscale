@@ -127,3 +127,20 @@ type ServiceClientPrefRequest struct {
 	// DatabaseName is the database name that the user entered in the service launch. Optional.
 	DatabaseName string `json:",omitzero"`
 }
+
+// WakeOnLANResponse is the response to a LocalAPI "wake-on-lan" request.
+type WakeOnLANResponse struct {
+	// Via is the name of the node that sent the magic packets.
+	// It's the local node's name if the packets were sent locally.
+	Via string
+
+	// MACs are the MAC addresses that magic packets were sent to.
+	MACs []string
+
+	// SentTo are the network interface names, on the Via node,
+	// that magic packets were broadcast on.
+	SentTo []string `json:",omitempty"`
+
+	// Errors are any errors encountered sending the packets.
+	Errors []string `json:",omitempty"`
+}
