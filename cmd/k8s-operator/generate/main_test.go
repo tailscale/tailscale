@@ -97,6 +97,21 @@ func TestGenerate(t *testing.T) {
 			t.Errorf("%s CRD found in chart install that should not contain a CRD", name)
 		}
 	}
+
+	// proxyConfig.defaultTags may be a comma-separated string or a list;
+	// the operator expects PROXY_TAGS as a comma-separated string.
+	for _, args := range [][]string{
+		{"--set", `proxyConfig.defaultTags=tag:a\,tag:b`},
+		{"--set-json", `proxyConfig.defaultTags=["tag:a","tag:b"]`},
+	} {
+		out, err := exec.Command(helmCLIPath, append([]string{"template", helmPackagePath}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("templating Helm chart with %v failed: %v, %s", args, err, out)
+		}
+		if want := "- name: PROXY_TAGS\n              value: tag:a,tag:b\n"; !strings.Contains(string(out), want) {
+			t.Errorf("templating Helm chart with %v: PROXY_TAGS is not %q", args, "tag:a,tag:b")
+		}
+	}
 }
 
 func TestCRDsExist(t *testing.T) {

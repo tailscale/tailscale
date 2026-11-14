@@ -107,7 +107,7 @@ spec:
             - name: PROXY_IMAGE
               value: {{ coalesce .Values.proxyConfig.image.repo .Values.proxyConfig.image.repository }}{{- if .Values.proxyConfig.image.digest -}}{{ printf "@%s" .Values.proxyConfig.image.digest}}{{- else -}}{{ printf "%s" $proxyTag }}{{- end }}
             - name: PROXY_TAGS
-              value: {{ .Values.proxyConfig.defaultTags }}
+              value: {{ join "," .Values.proxyConfig.defaultTags }}
             - name: APISERVER_PROXY
               value: "{{ .Values.apiServerProxyConfig.mode }}"
             - name: PROXY_FIREWALL_MODE
