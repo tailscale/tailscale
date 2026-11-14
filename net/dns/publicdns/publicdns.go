@@ -219,27 +219,6 @@ func populate() {
 	addDoH("2620:fe::10", "https://dns10.quad9.net/dns-query")
 	addDoH("2620:fe::fe:10", "https://dns10.quad9.net/dns-query")
 
-	// Mullvad
-	// See https://mullvad.net/en/help/dns-over-https-and-dns-over-tls/
-	// Mullvad (default)
-	addDoH("194.242.2.2", "https://dns.mullvad.net/dns-query")
-	addDoH("2a07:e340::2", "https://dns.mullvad.net/dns-query")
-	// Mullvad (adblock)
-	addDoH("194.242.2.3", "https://adblock.dns.mullvad.net/dns-query")
-	addDoH("2a07:e340::3", "https://adblock.dns.mullvad.net/dns-query")
-	// Mullvad (base)
-	addDoH("194.242.2.4", "https://base.dns.mullvad.net/dns-query")
-	addDoH("2a07:e340::4", "https://base.dns.mullvad.net/dns-query")
-	// Mullvad (extended)
-	addDoH("194.242.2.5", "https://extended.dns.mullvad.net/dns-query")
-	addDoH("2a07:e340::5", "https://extended.dns.mullvad.net/dns-query")
-	// Mullvad (family)
-	addDoH("194.242.2.6", "https://family.dns.mullvad.net/dns-query")
-	addDoH("2a07:e340::6", "https://family.dns.mullvad.net/dns-query")
-	// Mullvad (all)
-	addDoH("194.242.2.9", "https://all.dns.mullvad.net/dns-query")
-	addDoH("2a07:e340::9", "https://all.dns.mullvad.net/dns-query")
-
 	// Wikimedia
 	addDoH(wikimediaDNSv4, "https://wikimedia-dns.org/dns-query")
 	addDoH(wikimediaDNSv6, "https://wikimedia-dns.org/dns-query")
