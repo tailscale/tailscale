@@ -31,6 +31,7 @@ const (
 	EnvGitHub Environment = "github"
 	EnvAWS    Environment = "aws"
 	EnvGCP    Environment = "gcp"
+	EnvAzure  Environment = "azure"
 	EnvNone   Environment = "none"
 )
 
@@ -38,10 +39,13 @@ const (
 // and then tries to obtain an ID token for the audience that is passed as an argument
 // To detect the environment, we do it in the following intentional order:
 //  1. GitHub Actions (strongest env signals; may run atop any cloud)
-//  2. AWS via IMDSv2 token endpoint (does not require env vars)
-//  3. GCP via metadata header semantics
-//  4. AWS ECS via ECS token endpoint and env vars provided by ECS
-//  5. Azure via metadata endpoint
+//  2. Azure hosts that announce themselves via env vars (AKS workload identity,
+//     App Service / Container Apps identity endpoint); these must precede the
+//     metadata probes because AKS pods can reach the node's IMDS
+//  3. AWS via IMDSv2 token endpoint (does not require env vars)
+//  4. GCP via metadata header semantics
+//  5. Azure via IMDS (VMs, scale sets, container instances)
+//  6. AWS ECS via ECS token endpoint and env vars provided by ECS
 func ObtainProviderToken(ctx context.Context, audience string) (string, error) {
 	env := detectEnvironment(ctx)
 
@@ -52,6 +56,8 @@ func ObtainProviderToken(ctx context.Context, audience string) (string, error) {
 		return acquireAWSWebIdentityToken(ctx, audience)
 	case EnvGCP:
 		return acquireGCPMetadataIDToken(ctx, audience)
+	case EnvAzure:
+		return acquireAzureIDToken(ctx, audience)
 	default:
 		return "", errors.New("could not detect environment; provide --id-token explicitly")
 	}
@@ -62,6 +68,9 @@ func detectEnvironment(ctx context.Context) Environment {
 		os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN") != "" {
 		return EnvGitHub
 	}
+	if detectAzureEnv() {
+		return EnvAzure
+	}
 
 	client := httpClient()
 	if detectAWSIMDSv2(ctx, client) {
@@ -69,6 +78,9 @@ func detectEnvironment(ctx context.Context) Environment {
 	}
 	if detectGCPMetadata(ctx, client) {
 		return EnvGCP
+	}
+	if detectAzureIMDS(ctx, azureLocalHTTPClient()) {
+		return EnvAzure
 	}
 	if os.Getenv("ECS_CONTAINER_METADATA_URI_V4") != "" {
 		return EnvAWS
