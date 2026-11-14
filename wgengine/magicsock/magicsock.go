@@ -167,6 +167,9 @@ type Conn struct {
 	idleFunc               func() time.Duration // nil means unknown
 	testOnlyPacketListener nettype.PacketListener
 	onDERPRecv             func(tailcfg.DERPRegionID, key.NodePublic, []byte) bool // or nil, see Options.OnDERPRecv
+	kernelWGRecv           func(key.NodePublic, []byte)                            // or nil, see Options.KernelWGRecv
+	kernelSocketHook       atomic.Pointer[kernelSocketHookFunc]                    // see SetKernelSocketHook
+	kernelPathHook         atomic.Pointer[func(key.NodePublic)]                    // see SetKernelPathHook
 	netMon                 *netmon.Monitor                                         // must be non-nil
 	health                 *health.Tracker                                         // or nil
 	extraRootCAs           *x509.CertPool                                          // additional trusted root CAs; or nil
@@ -532,6 +535,15 @@ type Options struct {
 	// WireGuard. The pkt slice is borrowed and must be copied if
 	// the callee needs to retain it.
 	OnDERPRecv func(regionID tailcfg.DERPRegionID, src key.NodePublic, pkt []byte) bool
+
+	// KernelWGRecv, if non-nil, puts the Conn in kernel data plane mode
+	// (tswg): every WireGuard packet that would otherwise be passed up to
+	// wireguard-go (arriving via DERP or a peer relay, since direct UDP
+	// WireGuard packets are consumed by the kernel) is passed to
+	// KernelWGRecv instead, along with the sending peer's key if known
+	// (else the zero key). The pkt slice is borrowed and must be copied
+	// if the callee needs to retain it.
+	KernelWGRecv func(src key.NodePublic, pkt []byte)
 }
 
 func (o *Options) logf() logger.Logf {
@@ -673,6 +685,7 @@ func NewConn(opts Options) (*Conn, error) {
 	c.idleFunc = opts.IdleFunc
 	c.testOnlyPacketListener = opts.TestOnlyPacketListener
 	c.onDERPRecv = opts.OnDERPRecv
+	c.kernelWGRecv = opts.KernelWGRecv
 
 	// Set up publishers and subscribers. Subscribe calls must return before
 	// NewConn otherwise published events can be missed.
@@ -1942,6 +1955,11 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		c.mu.Lock()
 		de, ok := c.peerMap.endpointForEpAddr(src)
 		c.mu.Unlock()
+		if !ok && c.kernelWGRecv != nil {
+			// Let the kernel identify the peer from the packet.
+			c.kernelWGRecv(key.NodePublic{}, b)
+			return false, false
+		}
 		if !ok {
 			// TODO(jwhited): reuse [lazyEndpoint] across calls to receiveIP()
 			//  for the same batch & [epAddr] src.
@@ -1960,6 +1978,10 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		if update := c.connCounter.Load(); update != nil {
 			update(0, netip.AddrPortFrom(ep.nodeAddr, 0), ipp, 1, geneveInclusivePacketLen, true)
 		}
+	}
+	if c.kernelWGRecv != nil {
+		c.kernelWGRecv(ep.publicKey, b)
+		return false, false
 	}
 	if src.vni.IsSet() && (connNoted || looksLikeInitiationMsg(b)) {
 		// connNoted is periodic, but we also want to verify if the peer is who
@@ -3970,6 +3992,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 		if network == "udp4" {
 			c.health.SetUDP4Unbound(false)
 		}
+		c.runKernelSocketHookLocked(ruc, network)
 		return nil
 	}
 

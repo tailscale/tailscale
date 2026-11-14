@@ -28,6 +28,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -898,10 +899,19 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			}
 		}
 	} else {
-		dev, devName, err := tstunNew(logf, name)
-		if err != nil {
-			tstun.Diagnose(logf, name, err)
-			return false, fmt.Errorf("tstun.New(%q): %w", name, err)
+		var dev tun.Device
+		var devName string
+		if d, ok := newTSWGDevice(logf, name); ok {
+			dev, devName = d, name
+			conf.KernelWG = true
+		} else {
+			removeStaleTSWGDevice(logf, name)
+			var err error
+			dev, devName, err = tstunNew(logf, name)
+			if err != nil {
+				tstun.Diagnose(logf, name, err)
+				return false, fmt.Errorf("tstun.New(%q): %w", name, err)
+			}
 		}
 		conf.Tun = dev
 		if strings.HasPrefix(name, "tap:") {

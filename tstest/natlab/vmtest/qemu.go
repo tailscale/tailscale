@@ -131,6 +131,7 @@ func (e *Env) startGokrazyQEMU(n *Node, basePath string) error {
 	args := []string{
 		"-M", "microvm,isa-serial=off",
 		"-m", fmt.Sprintf("%dM", n.os.MemoryMB),
+		"-smp", n.qemuSMP(1),
 		"-nodefaults", "-no-user-config", "-nographic",
 		"-kernel", e.gokrazyKernel,
 		"-append", "console=hvc0 root=PARTUUID=60c24cc1-f3f9-427a-8199-76baa2d60001/PARTNROFF=1 ro init=/gokrazy/init panic=10 oops=panic pci=off nousb tsc=unstable clocksource=hpet gokrazy.remote_syslog.target=" + sysLogAddr + " tailscale-tta=1" + envBuf.String(),
@@ -183,7 +184,7 @@ func (e *Env) startCloudQEMU(n *Node) error {
 	args := []string{
 		"-machine", "q35",
 		"-m", fmt.Sprintf("%dM", n.os.MemoryMB),
-		"-smp", "2",
+		"-smp", n.qemuSMP(2),
 		"-display", "none",
 		"-drive", fmt.Sprintf("file=%s,if=virtio", disk),
 		"-drive", fmt.Sprintf("file=%s,if=virtio,media=cdrom,readonly=on", seedISO),

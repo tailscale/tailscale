@@ -472,6 +472,7 @@ type Node struct {
 	advertiseRoutes  string
 	snatSubnetRoutes *bool // nil means default (true)
 	webServerPort    int
+	cpus             int        // virtual CPUs; 0 means the default
 	sshPort          int        // host port for SSH debug access (cloud VMs only)
 	dnsMode          DNSMode    // desired DNS backend to provision; "" means the image default
 	qmpPath          string     // socket path for talking to the QEMU process for the node
@@ -514,6 +515,8 @@ func (e *Env) AddNode(name string, opts ...any) *Node {
 			n.snatSubnetRoutes = &v
 		case nodeOptWebServer:
 			n.webServerPort = int(o)
+		case nodeOptCPUs:
+			n.cpus = int(o)
 		case nodeOptDNSMode:
 			switch DNSMode(o) {
 			case DNSDefault, DNSDirect, DNSOpenresolv:
@@ -718,6 +721,22 @@ func SNATSubnetRoutes(v bool) nodeOptSNATSubnetRoutes { return nodeOptSNATSubnet
 // WebServer returns a NodeOption that starts a webserver on the given port.
 // The webserver responds with "Hello world I am <nodename> from <sourceIP>" on all requests.
 func WebServer(port int) nodeOptWebServer { return nodeOptWebServer(port) }
+
+type nodeOptCPUs int
+
+// CPUs returns a NodeOption that gives the node's VM n virtual CPUs,
+// instead of the default (1 for gokrazy, 2 for cloud images). It's for
+// benchmarks, where parallelism matters.
+func CPUs(n int) nodeOptCPUs { return nodeOptCPUs(n) }
+
+// qemuSMP returns the number of virtual CPUs for n's VM, def unless set
+// with [CPUs].
+func (n *Node) qemuSMP(def int) string {
+	if n.cpus > 0 {
+		return strconv.Itoa(n.cpus)
+	}
+	return strconv.Itoa(def)
+}
 
 // WithDNSMode returns a NodeOption that provisions the node so tailscaled
 // selects the given DNS backend. Only meaningful for Linux cloud images and
@@ -2437,6 +2456,22 @@ func findModRoot() (string, error) {
 		return "", fmt.Errorf("not in a Go module")
 	}
 	return filepath.Dir(gomod), nil
+}
+
+// GokrazyKernelPackageDir returns the module cache directory of the gokrazy
+// kernel package (github.com/gokrazy/kernel.amd64) that gokrazy VM images
+// boot, which holds the vmlinuz and its build metadata. It's for tests that
+// build out-of-tree kernel modules for gokrazy VMs.
+func GokrazyKernelPackageDir() (string, error) {
+	modRoot, err := findModRoot()
+	if err != nil {
+		return "", err
+	}
+	vmlinuz, err := findKernelPath(filepath.Join(modRoot, "go.mod"))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(vmlinuz), nil
 }
 
 // findKernelPath finds the gokrazy kernel vmlinuz path from go.mod.

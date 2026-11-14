@@ -346,6 +346,10 @@ var Features = map[FeatureTag]FeatureMeta{
 	"tailnetlock": {Sym: "TailnetLock", Desc: "Tailnet Lock support"},
 	"tap":         {Sym: "Tap", Desc: "Experimental Layer 2 (ethernet) support"},
 	"tpm":         {Sym: "TPM", Desc: "TPM support"},
+	"tswg": {
+		Sym:  "TSWG",
+		Desc: "Experimental tswg kernel WireGuard data plane (Linux only; TS_DEBUG_TSWG=1)",
+	},
 	"tundevstats": {Sym: "TUNDevStats", Desc: "Poll TUN device statistics (Linux only)"},
 	"udptransport": {
 		Sym:  "UDPTransport",

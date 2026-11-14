@@ -82,7 +82,11 @@ type endpoint struct {
 	// mu protects all following fields.
 	mu syncs.Mutex // Lock ordering: Conn.mu, then endpoint.mu
 
-	heartBeatTimer            *time.Timer    // nil when idle
+	heartBeatTimer *time.Timer // nil when idle
+
+	// For the tswg kernel data plane; see kernel.go.
+	kernelDirect              netip.AddrPort // last kernel path reported to the kernel path hook
+	kernelTrustTimer          *time.Timer    // fires at trustBestAddrUntil while kernelDirect is set
 	lastSendExt               mono.Time      // last time there were outgoing packets sent to this peer from an external trigger (e.g. wireguard-go or disco pingCLI)
 	lastSendAny               mono.Time      // last time there were outgoing packets sent this peer from any trigger, internal or external to magicsock
 	lastFullPing              mono.Time      // last time we pinged all disco or wireguard only endpoints
@@ -132,7 +136,7 @@ func (de *endpoint) udpRelayEndpointReady(maybeBest addrQuality) {
 		// TODO(jwhited): collapse path change logging with endpoint.handlePongConnLocked()
 		de.c.logf("magicsock: disco: node %v %v now using %v mtu=%v", de.publicKey.ShortString(), de.discoShort(), maybeBest.epAddr, maybeBest.wireMTU)
 		de.setBestAddrLocked(maybeBest)
-		de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
+		de.setTrustBestAddrUntilLocked(now.Add(trustUDPAddrDuration))
 	}
 }
 
@@ -155,6 +159,13 @@ func (de *endpoint) setBestAddrLocked(v addrQuality) {
 		}
 	}
 	de.bestAddr = v
+	de.noteKernelPathLocked()
+}
+
+// setTrustBestAddrUntilLocked sets trustBestAddrUntil.
+func (de *endpoint) setTrustBestAddrUntilLocked(t mono.Time) {
+	de.trustBestAddrUntil = t
+	de.noteKernelPathLocked()
 }
 
 const (
@@ -583,7 +594,7 @@ func (de *endpoint) noteRecvActivity(src epAddr, now mono.Time) bool {
 		de.mu.Lock()
 		de.bestAddr.ap = src.ap
 		de.bestAddrAt = now
-		de.trustBestAddrUntil = now.Add(5 * time.Second)
+		de.setTrustBestAddrUntilLocked(now.Add(5 * time.Second))
 		de.mu.Unlock()
 	} else {
 		// TODO(jwhited): subject to change as part of silent disco effort.
@@ -592,7 +603,7 @@ func (de *endpoint) noteRecvActivity(src epAddr, now mono.Time) bool {
 		// to DERP.
 		de.mu.Lock()
 		if de.heartbeatDisabled && de.bestAddr.epAddr == src {
-			de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
+			de.setTrustBestAddrUntilLocked(now.Add(trustUDPAddrDuration))
 		}
 		de.mu.Unlock()
 	}
@@ -704,7 +715,7 @@ func (de *endpoint) addrForWireGuardSendLocked(now mono.Time) (udpAddr epAddr, s
 	// second. We should receive a response due to a WireGuard handshake in
 	// less than one second in good cases, in which case this will be then
 	// extended to 15 seconds.
-	de.trustBestAddrUntil = now.Add(time.Second)
+	de.setTrustBestAddrUntilLocked(now.Add(time.Second))
 	return udpAddr, needPing
 }
 
@@ -1715,7 +1726,7 @@ func (de *endpoint) checkAndUpdateDiscoKey(key key.DiscoPublic) (*endpointDisco,
 //
 // de.mu must be held.
 func (de *endpoint) changedActiveDiscoLocked() {
-	de.trustBestAddrUntil = 0
+	de.setTrustBestAddrUntilLocked(0)
 	de.invalidateDiscoPathLocked()
 }
 
@@ -1874,7 +1885,7 @@ func (de *endpoint) addCandidateEndpoint(ep netip.AddrPort, forRxPingTxID stun.T
 func (de *endpoint) clearBestAddrLocked() {
 	de.setBestAddrLocked(addrQuality{})
 	de.bestAddrAt = 0
-	de.trustBestAddrUntil = 0
+	de.setTrustBestAddrUntilLocked(0)
 }
 
 // noteBadEndpoint marks udpAddr as a bad endpoint that would need to be
@@ -2039,7 +2050,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 			})
 			de.bestAddr.latency = latency
 			de.bestAddrAt = now
-			de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
+			de.setTrustBestAddrUntilLocked(now.Add(trustUDPAddrDuration))
 		}
 	}
 	return
@@ -2301,6 +2312,10 @@ func (de *endpoint) stopAndReset() {
 	if de.heartBeatTimer != nil {
 		de.heartBeatTimer.Stop()
 		de.heartBeatTimer = nil
+	}
+	if de.kernelTrustTimer != nil {
+		de.kernelTrustTimer.Stop()
+		de.kernelTrustTimer = nil
 	}
 }
 

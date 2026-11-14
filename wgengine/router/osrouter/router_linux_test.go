@@ -2112,3 +2112,26 @@ func TestCleanUpOnlyTouchesTunInterface(t *testing.T) {
 		t.Errorf("non-Tailscale CGNAT addr on eth0 was wrongly removed; ips=%q", fake.ips)
 	}
 }
+
+func TestRouteDevServiceTUN(t *testing.T) {
+	r := &linuxRouter{tunname: "tailscale0", svcTunName: "tailscale0-svc"}
+	for _, tt := range []struct {
+		cidr string
+		want string
+	}{
+		{"100.100.100.100/32", "tailscale0-svc"},
+		{"fd7a:115c:a1e0::53/128", "tailscale0-svc"},
+		{"100.64.0.0/10", "tailscale0"},
+		{"100.100.100.0/24", "tailscale0"},
+		{"fd7a:115c:a1e0::/48", "tailscale0"},
+		{"10.0.0.0/8", "tailscale0"},
+	} {
+		if got := r.routeDev(netip.MustParsePrefix(tt.cidr)); got != tt.want {
+			t.Errorf("routeDev(%s) = %q, want %q", tt.cidr, got, tt.want)
+		}
+	}
+	r.svcTunName = ""
+	if got := r.routeDev(netip.MustParsePrefix("100.100.100.100/32")); got != "tailscale0" {
+		t.Errorf("without a service TUN, routeDev(100.100.100.100/32) = %q, want tailscale0", got)
+	}
+}
