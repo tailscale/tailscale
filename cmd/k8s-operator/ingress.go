@@ -7,13 +7,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"slices"
 	"strings"
 	"sync"
 
-	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
