@@ -501,6 +501,9 @@ type LocalBackend struct {
 	// bind the node identity to this device.
 	hardwareAttested atomic.Bool
 
+	// filteredSplitDNSRoutes is the result of the most recent [filterUnreachableSplitDNS] call; nil when nothing was filtered.
+	filteredSplitDNSRoutes map[string][]*dnstype.Resolver
+
 	// existsPendingAuthReconfig tracks if a goroutine is waiting to
 	// acquire [LocalBackend]'s mutex inside of [LocalBackend.AuthReconfig].
 	// It is used to prevent goroutines from piling up to do the same
@@ -1576,6 +1579,10 @@ func (b *LocalBackend) updateStatusLocked(sb *ipnstate.StatusBuilder) {
 			s.CertDomains = append([]string(nil), nm.DNS.CertDomains...)
 			s.ExtraRecords = append([]tailcfg.DNSRecord(nil), nm.DNS.ExtraRecords...)
 			s.MagicDNSSuffix = nm.MagicDNSSuffix()
+			if len(b.filteredSplitDNSRoutes) > 0 {
+				// Shallow clone: resolver pointers are effectively immutable, but a caller mutating the map shouldn't be able to reach back into b.
+				s.FilteredSplitDNSRoutes = maps.Clone(b.filteredSplitDNSRoutes)
+			}
 			if s.CurrentTailnet == nil {
 				s.CurrentTailnet = &ipnstate.TailnetStatus{}
 			}
@@ -6522,6 +6529,12 @@ func (b *LocalBackend) authReconfigLocked() {
 	// commit, and before the Reconfig below, so packets flowing under
 	// the new config never see a stale peer table.
 	b.setDataPlanePeerRoutes()
+
+	// Opt-in client-side filter; see [filterUnreachableSplitDNS]. The cap is checked against the same nm snapshot we're filtering against, rather than via cn.SelfHasCap (which would re-lock the nodeBackend and could read a newer netmap).
+	b.filteredSplitDNSRoutes = nil
+	if nm.AllCaps.Contains(nodecap.FilterSplitDNSUnreachableTailscaleResolvers) {
+		b.filteredSplitDNSRoutes = filterUnreachableSplitDNS(dcfg, cn.routeMgr.Outbound(), nm)
+	}
 
 	err := b.e.Reconfig(cfg, rcfg, dcfg)
 	if err == wgengine.ErrNoChanges {

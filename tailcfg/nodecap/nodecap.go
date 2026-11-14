@@ -246,6 +246,9 @@ const (
 	// if needed.
 	DisableSplitDNSWhenNoCustomResolvers Cap = "disable-split-dns-when-no-custom-resolvers"
 
+	// FilterSplitDNSUnreachableTailscaleResolvers tells the client to drop a split-DNS resolver from a suffix's resolver list at reconfig time when its destination is in the Tailscale IP space with no covering peer route; a suffix with no surviving resolver is removed entirely so queries fall through to the OS's other resolvers. DefaultResolvers ("." suffix) is untouched. Dropped entries are surfaced as ipnstate.Status.FilteredSplitDNSRoutes (visible via `tailscale dns status`).
+	FilterSplitDNSUnreachableTailscaleResolvers Cap = "filter-split-dns-unreachable-tailscale-resolvers"
+
 	// ScopeQuad100OnMacOS lets sandboxed macOS scope quad-100 for simple DNS
 	// configs, so public queries can use the OS resolver (including DoH).
 	// Custom split resolvers or unrouted forward/PTR records still require
