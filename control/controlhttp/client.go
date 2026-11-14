@@ -20,6 +20,7 @@
 package controlhttp
 
 import (
+	"bufio"
 	"cmp"
 	"context"
 	"crypto/tls"
@@ -348,9 +349,22 @@ func (a *Dialer) dialURL(ctx context.Context, u *url.URL, optAddr netip.Addr, op
 	if err != nil {
 		return nil, err
 	}
-	netConn, err := a.tryURLUpgrade(ctx, u, optAddr, optACEHost, init)
-	if err != nil {
-		return nil, err
+	var netConn net.Conn
+	if u.Scheme == "https" && optACEHost == "" && !a.proxyApplies(u) {
+		netConn, err = a.tryALPNUpgrade(ctx, u, optAddr, init)
+		if err != nil {
+			// Maybe a middlebox didn't like our unusual ALPN protocol
+			// list. Retry below with the regular HTTP upgrade path on a
+			// fresh connection.
+			a.logf("controlhttp: ALPN upgrade to %v failed, falling back to HTTP upgrade: %v", u, err)
+			netConn = nil
+		}
+	}
+	if netConn == nil {
+		netConn, err = a.tryURLUpgrade(ctx, u, optAddr, optACEHost, init)
+		if err != nil {
+			return nil, err
+		}
 	}
 	cbConn, err := cont(ctx, netConn)
 	if err != nil {
@@ -360,6 +374,160 @@ func (a *Dialer) dialURL(ctx context.Context, u *url.URL, optAddr netip.Addr, op
 	return &ClientConn{
 		Conn: cbConn,
 	}, nil
+}
+
+// tlsClientConfig returns the TLS client configuration to use for
+// connections to the control server, extending base (which may be nil).
+//
+// The returned config demotes all cert verification errors to log messages.
+// We don't actually care about the TLS security (because we just do the
+// Noise crypto atop whatever connection we get, including HTTP port 80
+// plaintext) so this permits middleboxes to MITM their users. All they'll
+// see is some Noise.
+func (a *Dialer) tlsClientConfig(base *tls.Config) *tls.Config {
+	if base != nil && a.ExtraRootCAs != nil {
+		base.RootCAs = a.ExtraRootCAs
+	}
+	conf := tlsdial.Config(a.HealthTracker, base)
+	if !conf.InsecureSkipVerify {
+		panic("unexpected") // should be set by tlsdial.Config
+	}
+	verify := conf.VerifyConnection
+	if verify == nil {
+		panic("unexpected") // should be set by tlsdial.Config
+	}
+	conf.VerifyConnection = func(cs tls.ConnectionState) error {
+		if err := verify(cs); err != nil && a.Logf != nil && !a.omitCertErrorLogging {
+			a.Logf("warning: TLS cert verificication for %q failed: %v", a.Hostname, err)
+		}
+		return nil // regardless
+	}
+	return conf
+}
+
+// proxyApplies reports whether an HTTP proxy would be used for a request to u.
+func (a *Dialer) proxyApplies(u *url.URL) bool {
+	if !buildfeatures.HasUseProxy {
+		return false
+	}
+	proxyFunc := a.getProxyFunc()
+	if proxyFunc == nil {
+		return false
+	}
+	proxyURL, err := proxyFunc(&http.Request{URL: u})
+	if err != nil {
+		// Assume a proxy is needed; the HTTP upgrade path will surface
+		// the error properly.
+		return true
+	}
+	return proxyURL != nil
+}
+
+// tryALPNUpgrade dials a TLS connection to u (an https URL) and tries to
+// negotiate speaking ts2021 directly over the TLS stream by smuggling the
+// Noise handshake initiation message in the ALPN protocol list of the
+// ClientHello (see controlhttpcommon.ALPNHandshakePrefix).
+//
+// If the server takes the offer, the returned conn carries the Noise
+// protocol directly, with no HTTP layer, and the first bytes the server
+// sends are its Noise handshake response. If the server instead negotiates
+// http/1.1 (or nothing), tryALPNUpgrade falls back to the regular HTTP
+// upgrade request over the same TLS connection.
+//
+// This exists to save a round trip: a server-side TLS stack capable of
+// sending application data in its first flight (0.5-RTT data) can complete
+// the Noise handshake in the same round trip as the TLS handshake, matching
+// the latency of the plaintext port 80 path.
+//
+// If optAddr is valid, then no DNS is used and the connection will be made
+// to the provided address.
+func (a *Dialer) tryALPNUpgrade(ctx context.Context, u *url.URL, optAddr netip.Addr, init []byte) (_ net.Conn, retErr error) {
+	var dns *dnscache.Resolver
+	if optAddr.IsValid() {
+		dns = &dnscache.Resolver{
+			SingleHostStaticResult: []netip.Addr{optAddr},
+			SingleHost:             u.Hostname(),
+			Logf:                   a.Logf, // not a.logf method; we want to propagate nil-ness
+		}
+	} else {
+		dns = a.resolver()
+	}
+	var dialer netx.DialFunc
+	if a.Dialer != nil {
+		dialer = a.Dialer
+	} else {
+		dialer = stdDialer.DialContext
+	}
+
+	tcpConn, err := dnscache.Dialer(dialer, dns)(ctx, "tcp", u.Host)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if retErr != nil {
+			tcpConn.Close()
+		}
+	}()
+
+	tlsConf := a.tlsClientConfig(nil)
+	tlsConf.ServerName = u.Hostname()
+	// Offer to speak ts2021 directly over TLS, smuggling our handshake
+	// initiation in a pseudo protocol entry. Also offer http/1.1 so that
+	// servers unaware of the smuggled handshake negotiate that rather than
+	// failing the TLS handshake with no_application_protocol upon finding
+	// no mutual protocol.
+	tlsConf.NextProtos = []string{
+		controlhttpcommon.UpgradeHeaderValue,
+		controlhttpcommon.EncodeALPNHandshake(init),
+		"http/1.1",
+	}
+
+	tlsConn := tls.Client(tcpConn, tlsConf)
+	stop := context.AfterFunc(ctx, func() { tlsConn.Close() })
+	defer stop()
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		return nil, err
+	}
+	if tlsConn.ConnectionState().NegotiatedProtocol == controlhttpcommon.UpgradeHeaderValue {
+		// The server read our handshake initiation out of the ClientHello.
+		// The TLS stream now carries Noise directly, starting with the
+		// server's handshake response.
+		return tlsConn, nil
+	}
+
+	// The server didn't take the ALPN offer (presumably an older server).
+	// Fall back to the HTTP/1.1 upgrade over this same connection.
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := tlsConn.SetDeadline(deadline); err != nil {
+			return nil, err
+		}
+		defer tlsConn.SetDeadline(time.Time{})
+	}
+	req := &http.Request{
+		Method: "POST",
+		URL:    u,
+		Header: http.Header{
+			"Upgrade":                             []string{controlhttpcommon.UpgradeHeaderValue},
+			"Connection":                          []string{"upgrade"},
+			controlhttpcommon.HandshakeHeaderName: []string{base64.StdEncoding.EncodeToString(init)},
+		},
+	}
+	if err := req.Write(tlsConn); err != nil {
+		return nil, err
+	}
+	br := bufio.NewReader(tlsConn)
+	resp, err := http.ReadResponse(br, req)
+	if err != nil {
+		return nil, err
+	}
+	resp.Body.Close() // a 101 response has no body
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		return nil, fmt.Errorf("unexpected HTTP response: %s", resp.Status)
+	}
+	if next := resp.Header.Get("Upgrade"); next != controlhttpcommon.UpgradeHeaderValue {
+		return nil, fmt.Errorf("server switched to unexpected protocol %q", next)
+	}
+	return netutil.NewDrainBufConn(tlsConn, br), nil
 }
 
 // resolver returns a.DNSCache if non-nil or a new *dnscache.Resolver
@@ -479,27 +647,7 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Ad
 	// Disable HTTP2, since h2 can't do protocol switching.
 	tr.TLSClientConfig.NextProtos = []string{}
 	tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
-	if a.ExtraRootCAs != nil {
-		tr.TLSClientConfig.RootCAs = a.ExtraRootCAs
-	}
-	tr.TLSClientConfig = tlsdial.Config(a.HealthTracker, tr.TLSClientConfig)
-	if !tr.TLSClientConfig.InsecureSkipVerify {
-		panic("unexpected") // should be set by tlsdial.Config
-	}
-	verify := tr.TLSClientConfig.VerifyConnection
-	if verify == nil {
-		panic("unexpected") // should be set by tlsdial.Config
-	}
-	// Demote all cert verification errors to log messages. We don't actually
-	// care about the TLS security (because we just do the Noise crypto atop whatever
-	// connection we get, including HTTP port 80 plaintext) so this permits
-	// middleboxes to MITM their users. All they'll see is some Noise.
-	tr.TLSClientConfig.VerifyConnection = func(cs tls.ConnectionState) error {
-		if err := verify(cs); err != nil && a.Logf != nil && !a.omitCertErrorLogging {
-			a.Logf("warning: TLS cert verificication for %q failed: %v", a.Hostname, err)
-		}
-		return nil // regardless
-	}
+	tr.TLSClientConfig = a.tlsClientConfig(tr.TLSClientConfig)
 
 	tr.DialTLSContext = dnscache.TLSDialer(dialer, dns, tr.TLSClientConfig)
 	tr.DisableCompression = true
