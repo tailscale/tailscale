@@ -532,7 +532,7 @@ func (menu *Menu) watchIPNBus() {
 }
 
 func (menu *Menu) watchIPNBusInner() error {
-	watcher, err := menu.lc.WatchIPNBus(menu.bgCtx, 0)
+	watcher, err := menu.lc.WatchIPNBus(menu.bgCtx, ipn.NotifyInitialState|ipn.NotifyInitialPrefs)
 	if err != nil {
 		return fmt.Errorf("watching ipn bus: %w", err)
 	}
