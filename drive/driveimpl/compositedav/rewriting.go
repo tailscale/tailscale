@@ -39,6 +39,10 @@ func (h *Handler) handleLOCK(w http.ResponseWriter, r *http.Request, pathCompone
 	if shouldDelegateToChild(r, pathComponents, mpl) {
 		// Delegate to a Child.
 		status, result := h.delegateRewriting(w, r, pathComponents, mpl)
+		// A LOCK on a missing path creates an empty file (RFC 4918, section
+		// 7.3), which can make a cached "not found" for it, or a cached
+		// listing of its parent, stale.
+		h.StatCache.invalidate()
 		respondRewritten(w, status, result)
 		return
 	}
