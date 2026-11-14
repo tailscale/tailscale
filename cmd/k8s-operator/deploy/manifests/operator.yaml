@@ -6941,6 +6941,8 @@ spec:
                       value: null
                     - name: OPERATOR_INGRESS_CLASS_NAME
                       value: tailscale
+                    - name: OPERATOR_AUTO_SIGN_NODE_KEYS
+                      value: "false"
                     - name: CLIENT_ID_FILE
                       value: /oauth/client_id
                     - name: CLIENT_SECRET_FILE

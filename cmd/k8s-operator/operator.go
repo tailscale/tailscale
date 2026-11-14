@@ -55,6 +55,7 @@ import (
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler/dnsrecords"
 	"tailscale.com/k8s-operator/reconciler/nameserver"
+	"tailscale.com/k8s-operator/reconciler/nodekey"
 	"tailscale.com/k8s-operator/reconciler/peerrelay"
 	"tailscale.com/k8s-operator/reconciler/proxyclass"
 	"tailscale.com/k8s-operator/reconciler/proxygrouppolicy"
@@ -103,6 +104,7 @@ func main() {
 		loginServer           = strings.TrimSuffix(defaultEnv("OPERATOR_LOGIN_SERVER", ""), "/")
 		ingressClassName      = defaultEnv("OPERATOR_INGRESS_CLASS_NAME", "tailscale")
 		operatorSAName        = defaultEnv("OPERATOR_SERVICE_ACCOUNT_NAME", "operator")
+		autoSignNodeKeys      = defaultBool("OPERATOR_AUTO_SIGN_NODE_KEYS", false)
 	)
 
 	var opts []kzap.Opts
@@ -179,6 +181,7 @@ func main() {
 		loginServer:                   loginServer,
 		ingressClassName:              ingressClassName,
 		sharedACMEAccountKey:          sharedACMEAccountKey,
+		autoSignNodeKeys:              autoSignNodeKeys,
 	})
 }
 
@@ -390,6 +393,26 @@ func runReconcilers(opts reconcilerOpts) {
 
 	if err = peerrelay.NewReconciler(peerRelayOptions).Register(mgr); err != nil {
 		startlog.Fatalf("could not register peerrelay reconciler: %v", err)
+	}
+
+	// NodeKey reconciler.
+	// Only start the NodeKey reconciler if autoSignNodeKeys is set to true.
+	if opts.autoSignNodeKeys {
+		localClient, err := opts.tsServer.LocalClient()
+		if err != nil {
+			startlog.Fatalf("getting local tailscale client: %v", err)
+		}
+
+		nodeKeyOptions := nodekey.ReconcilerOptions{
+			Client:             mgr.GetClient(),
+			TailscaleNamespace: opts.tailscaleNamespace,
+			LocalClient:        localClient,
+			Logger:             opts.log,
+		}
+
+		if err = nodekey.NewReconciler(nodeKeyOptions).Register(mgr); err != nil {
+			startlog.Fatalf("could not register nodekey reconciler: %v", err)
+		}
 	}
 
 	svcFilter := handler.EnqueueRequestsFromMapFunc(serviceHandler)
@@ -822,6 +845,9 @@ type reconcilerOpts struct {
 	// ServiceAccount when minting tokens via the Kubernetes TokenRequest API for Tailnets that authenticate using
 	// workload identity federation.
 	operatorSAName string
+	// autoSignNodeKeys determines whether the operator should sign node keys
+	// for the Tailscale nodes when the tailnet is locked.
+	autoSignNodeKeys bool
 }
 
 func isManagedResource(o client.Object) bool {
