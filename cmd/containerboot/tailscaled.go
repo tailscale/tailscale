@@ -197,13 +197,18 @@ func tailscaleSet(ctx context.Context, cfg *settings) error {
 	return nil
 }
 
-func watchTailscaledConfigChanges(ctx context.Context, path string, lc *local.Client, errCh chan<- error) {
+// watchTailscaledConfigChanges reloads tailscaled's config whenever the file
+// at path changes. initialCfg is the content of the file as read before
+// tailscaled was started (nil if that read failed); it is the baseline the
+// first comparison is made against, so an update made after tailscaled read the
+// file but before this watcher started is not mistaken for the baseline.
+func watchTailscaledConfigChanges(ctx context.Context, path string, lc *local.Client, initialCfg []byte, errCh chan<- error) {
 	var (
 		tickChan          <-chan time.Time
 		eventChan         <-chan fsnotify.Event
 		errChan           <-chan error
 		tailscaledCfgDir  = filepath.Dir(path)
-		prevTailscaledCfg []byte
+		prevTailscaledCfg = initialCfg
 	)
 	if w, err := fsnotify.NewWatcher(); err != nil {
 		// Creating a new fsnotify watcher would fail for example if inotify was not able to create a new file descriptor.
@@ -221,31 +226,31 @@ func watchTailscaledConfigChanges(ctx context.Context, path string, lc *local.Cl
 		eventChan = w.Events
 		errChan = w.Errors
 	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		errCh <- fmt.Errorf("error reading configfile: %w", err)
-		return
-	}
-	prevTailscaledCfg = b
 	// kubelet mounts Secrets to Pods using a series of symlinks, one of
 	// which is <mount-dir>/..data that Kubernetes recommends consumers to
 	// use if they need to monitor changes
 	// https://github.com/kubernetes/kubernetes/blob/v1.28.1/pkg/volume/util/atomic_writer.go#L39-L61
 	const kubeletMountedCfg = "..data"
 	toWatch := filepath.Join(tailscaledCfgDir, kubeletMountedCfg)
+	// Compare once right away, without waiting for an event, to catch an
+	// update that landed before the watch was set up.
+	first := true
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		case err := <-errChan:
-			errCh <- fmt.Errorf("watcher error: %w", err)
-			return
-		case <-tickChan:
-		case event := <-eventChan:
-			if event.Name != toWatch {
-				continue
+		if !first {
+			select {
+			case <-ctx.Done():
+				return
+			case err := <-errChan:
+				errCh <- fmt.Errorf("watcher error: %w", err)
+				return
+			case <-tickChan:
+			case event := <-eventChan:
+				if event.Name != toWatch {
+					continue
+				}
 			}
 		}
+		first = false
 		b, err := os.ReadFile(path)
 		if err != nil {
 			errCh <- fmt.Errorf("error reading configfile: %w", err)

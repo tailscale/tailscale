@@ -476,6 +476,16 @@ func run() error {
 		}
 	}
 
+	// Read the config file before tailscaled starts, so that the config
+	// watcher compares against what tailscaled started with and not against
+	// an update that was made while tailscaled was starting.
+	var initialTailscaledCfg []byte
+	if cfg.TailscaledConfigFilePath != "" {
+		if b, err := os.ReadFile(cfg.TailscaledConfigFilePath); err == nil {
+			initialTailscaledCfg = b
+		}
+	}
+
 	client, daemonProcess, err := startTailscaled(bootCtx, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to bring up tailscale: %w", err)
@@ -705,7 +715,7 @@ authLoop:
 	cfgWatchCtx, cfgWatchCancel := context.WithCancel(ctx)
 	defer cfgWatchCancel()
 	if cfg.TailscaledConfigFilePath != "" {
-		go watchTailscaledConfigChanges(cfgWatchCtx, cfg.TailscaledConfigFilePath, client, cfgWatchErrChan)
+		go watchTailscaledConfigChanges(cfgWatchCtx, cfg.TailscaledConfigFilePath, client, initialTailscaledCfg, cfgWatchErrChan)
 	}
 
 	var (
