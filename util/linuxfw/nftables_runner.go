@@ -1815,6 +1815,33 @@ func cleanupChain(logf logger.Logf, conn *nftables.Conn, table *nftables.Table, 
 	}
 }
 
+// cleanupConnmarkRules removes the rules added by AddConnmarkSaveRule from
+// table. Errors are logged.
+func cleanupConnmarkRules(logf logger.Logf, conn *nftables.Conn, table *nftables.Table) {
+	for chainName, tag := range map[string]string{
+		"PREROUTING": "ts-connmark-restore",
+		"OUTPUT":     "ts-connmark-save",
+	} {
+		chain, err := getChainFromTable(conn, table, chainName)
+		if err != nil {
+			continue
+		}
+		rules, err := conn.GetRules(table, chain)
+		if err != nil {
+			logf("cleanup: list rules of chain %s: %s", chainName, err)
+			continue
+		}
+		for _, rule := range rules {
+			if string(rule.UserData) == tag {
+				conn.DelRule(rule)
+			}
+		}
+	}
+	if err := conn.Flush(); err != nil {
+		logf("cleanup: flush delete connmark rules: %s", err)
+	}
+}
+
 // NfTablesCleanUp removes all Tailscale added nftables rules.
 // Any errors that occur are logged to the provided logf.
 func NfTablesCleanUp(logf logger.Logf) {
@@ -1843,6 +1870,9 @@ func NfTablesCleanUp(logf logger.Logf) {
 		}
 		if table.Name == "nat" {
 			cleanupChain(logf, conn, table, "POSTROUTING", chainNamePostrouting)
+		}
+		if table.Name == "mangle" {
+			cleanupConnmarkRules(logf, conn, table)
 		}
 	}
 }
