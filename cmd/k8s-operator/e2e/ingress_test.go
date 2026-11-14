@@ -187,41 +187,28 @@ func TestL3HAIngress(t *testing.T) {
 			createAndCleanup(t, kubeClient, svc)
 
 			var svcIPs []string
-			forceReconcile := triggerReconcile(t,
-				client.ObjectKey{Namespace: ns, Name: svc.Name},
-				&corev1.Service{}, 30*time.Second)
-
-			// Wait for Service to be ready
-			if err := tstest.WaitFor(5*time.Minute, func() error {
-				maybeReadySvc := &corev1.Service{ObjectMeta: objectMeta(ns, svc.Name)}
-				forceReconcile()
-				if err := get(t.Context(), kubeClient, maybeReadySvc); err != nil {
+			waitForL3HAIngressReady(t, svc.Name)
+			if err := tstest.WaitFor(2*time.Minute, func() error {
+				readySvc := &corev1.Service{ObjectMeta: objectMeta(ns, svc.Name)}
+				if err := get(t.Context(), kubeClient, readySvc); err != nil {
 					return err
 				}
-				for _, cond := range maybeReadySvc.Status.Conditions {
-					if cond.Type == string(tsapi.IngressSvcConfigured) && cond.Status == metav1.ConditionTrue {
-						if len(maybeReadySvc.Status.LoadBalancer.Ingress) == 0 {
-							return fmt.Errorf("Service does not have an IP assigned yet")
-						}
-						tsSvc, err := tsClient.VIPServices().Get(t.Context(), "svc:default-"+svc.Name)
-						if err != nil {
-							return fmt.Errorf("getting Tailscale Service: %w", err)
-						}
-						ips := make([]string, 0, len(maybeReadySvc.Spec.ClusterIPs))
-						for _, clusterIP := range maybeReadySvc.Spec.ClusterIPs {
-							ip := ipMatchingFamily(tsSvc.Addrs, clusterIP)
-							if ip == "" {
-								return fmt.Errorf("Tailscale Service has no IP matching Kubernetes ClusterIP %s family", clusterIP)
-							}
-							ips = append(ips, ip)
-						}
-						svcIPs = ips
-						return nil
-					}
+				tsSvc, err := tsClient.VIPServices().Get(t.Context(), "svc:default-"+svc.Name)
+				if err != nil {
+					return fmt.Errorf("getting Tailscale Service: %w", err)
 				}
-				return fmt.Errorf("Service is not ready yet")
+				ips := make([]string, 0, len(readySvc.Spec.ClusterIPs))
+				for _, clusterIP := range readySvc.Spec.ClusterIPs {
+					ip := ipMatchingFamily(tsSvc.Addrs, clusterIP)
+					if ip == "" {
+						return fmt.Errorf("Tailscale Service has no IP matching Kubernetes ClusterIP %s family", clusterIP)
+					}
+					ips = append(ips, ip)
+				}
+				svcIPs = ips
+				return nil
 			}); err != nil {
-				t.Fatalf("error waiting for the Service to become ready: %v", err)
+				t.Fatalf("error resolving Tailscale Service IPs: %v", err)
 			}
 
 			for _, svcIP := range svcIPs {
@@ -279,10 +266,10 @@ func TestL7Ingress(t *testing.T) {
 			createAndCleanup(t, kubeClient, ingress)
 			hostname, err := waitForIngressHostname(t, ns, ingress.Name)
 			if err != nil {
-				t.Fatalf("error waiting for Ingress hostname: %v", err)
+				t.Fatalf("waiting for Ingress %s hostname: %v", ingress.Name, err)
 			}
 			if err := testIngressIsReachable(t, newHTTPClient(tnClient), fmt.Sprintf("https://%s:443", hostname)); err != nil {
-				t.Fatal(err)
+				t.Fatalf("Ingress %s not reachable: %v", ingress.Name, err)
 			}
 		})
 	}
@@ -383,10 +370,10 @@ func TestL7HAIngress(t *testing.T) {
 
 			hostname, err := waitForIngressHostname(t, ns, ingress.Name)
 			if err != nil {
-				t.Fatalf("error waiting for Ingress hostname: %v", err)
+				t.Fatalf("waiting for Ingress %s hostname: %v", ingress.Name, err)
 			}
 			if err := testIngressIsReachable(t, newHTTPClient(tnClient), fmt.Sprintf("https://%s:443", hostname)); err != nil {
-				t.Fatal(err)
+				t.Fatalf("Ingress %s not reachable: %v", ingress.Name, err)
 			}
 		})
 	}
@@ -466,10 +453,10 @@ func TestL7HAIngressMultiTailnet(t *testing.T) {
 	}
 	hostname, err := waitForIngressHostname(t, ns, ingress.Name)
 	if err != nil {
-		t.Fatalf("error waiting for Ingress hostname: %v", err)
+		t.Fatalf("waiting for Ingress %s hostname: %v", ingress.Name, err)
 	}
 	if err := testIngressIsReachable(t, newHTTPClient(secondTNClient), fmt.Sprintf("https://%s:443", hostname)); err != nil {
-		t.Fatal(err)
+		t.Fatalf("Ingress %s not reachable: %v", ingress.Name, err)
 	}
 }
 
