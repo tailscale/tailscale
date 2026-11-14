@@ -55,10 +55,18 @@ func TestHTTPBandwidth(t *testing.T) {
 	const size = 1 << 20 // 1 MiB
 
 	mux := http.NewServeMux()
-	// /download writes exactly `size` zero bytes.
+	// /download writes exactly `size` zero bytes, pausing halfway so the
+	// transfer spans more than one clock tick. A 1 MiB loopback transfer
+	// takes well under a millisecond, which is below the monotonic clock's
+	// granularity on the Windows CI runner, so the probe would measure a
+	// transfer time of exactly 0 there.
+	// See https://github.com/tailscale/tailscale/issues/21620.
 	mux.HandleFunc("/download", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		io.CopyN(w, zeroReader{}, size)
+		io.CopyN(w, zeroReader{}, size/2)
+		w.(http.Flusher).Flush()
+		time.Sleep(50 * time.Millisecond)
+		io.CopyN(w, zeroReader{}, size/2)
 	})
 	// /bad returns a non-200 status.
 	mux.HandleFunc("/bad", func(w http.ResponseWriter, r *http.Request) {
@@ -135,28 +143,13 @@ func TestHTTPBandwidth(t *testing.T) {
 			}
 
 			// On a successful transfer the recorded byte count should equal the
-			// full payload size, and the transfer should take a positive,
-			// finite amount of time.
+			// full payload size, and the transfer should take a positive
+			// amount of time.
 			if got := metricValue(t, metrics, "http_bw_bytes_total"); got != float64(tc.size) {
 				t.Errorf("http_bw_bytes_total = %v, want %v", got, tc.size)
 			}
-			// The transfer time counter accumulates across Probe calls.
-			// At 1 MiB over loopback a zero reading means the timing logic
-			// is broken, but retry a few times.
-			if transferTime() <= 0 {
-				const retries = 3
-				for range retries {
-					if err := pc.Probe(ctx); err != nil {
-						t.Fatalf("Probe() = %v, want nil", err)
-					}
-					metrics = pc.Metrics(prometheus.Labels{})
-					if transferTime() > 0 {
-						break
-					}
-				}
-				if transferTime() <= 0 {
-					t.Fatalf("http_bw_transfer_time_seconds_total = 0 after %d attempts, want > 0", retries+1)
-				}
+			if got := transferTime(); got <= 0 {
+				t.Errorf("http_bw_transfer_time_seconds_total = %v, want > 0", got)
 			}
 		})
 	}
