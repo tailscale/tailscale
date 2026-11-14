@@ -72,6 +72,6 @@ func verSetConditionMask(condMask verCondMask, typ verTypeMask, cond verCond) (r
 
 func verifyVersionInfo(verInfo *osVersionInfoEx, typ verTypeMask, cond verCondMask) (res bool) {
 	r0, _, _ := syscall.SyscallN(procVerifyVersionInfoW.Addr(), uintptr(unsafe.Pointer(verInfo)), uintptr(typ), uintptr(cond))
-	res = r0 != 0
+	res = uint32(r0) != 0
 	return
 }
