@@ -2,7 +2,3 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
 
 @import "xterm/css/xterm.css";
-
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
