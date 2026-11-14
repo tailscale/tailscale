@@ -356,6 +356,13 @@ main() {
 				echo "https://linux.kde.org/docs/more-software/#tailscale"
 				exit 1
 				;;
+			bianbu)
+				OS="ubuntu"
+				VERSION="$UBUNTU_CODENAME"
+				PACKAGETYPE="apt"
+				# The first Bianbu release was based on Ubuntu 23.10
+				APT_KEY_TYPE="keyring"
+				;;
 
 			# TODO: wsl?
 			# TODO: synology? qnap?
