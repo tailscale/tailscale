@@ -8673,6 +8673,7 @@ func (b *LocalBackend) updateNoSNATExitNodeWarning(prefs ipn.PrefsView) {
 func (b *LocalBackend) handleSSHConn(c net.Conn) (err error) {
 	s, err := b.sshServerOrInit()
 	if err != nil {
+		c.Close()
 		return err
 	}
 	b.updateSELinuxHealthWarning()
