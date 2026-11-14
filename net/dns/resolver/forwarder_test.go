@@ -727,14 +727,102 @@ func TestEDNSBufferSizeTruncation(t *testing.T) {
 		t.Errorf("TC flag not set in response (response size=%d, EDNS=%d)", len(resp), ednsBufferSize)
 	}
 
-	// Verify response size is preserved (not truncated by buffer)
-	if len(resp) != len(response) {
-		t.Errorf("response size = %d, want %d (response should not be truncated by buffer)", len(resp), len(response))
+	// The oversized response must have been replaced by a minimal
+	// truncated one that fits the requestor's buffer and keeps the OPT RR.
+	checkMinimalTruncatedResponse(t, resp, response, int(ednsBufferSize), true)
+}
+
+// checkMinimalTruncatedResponse verifies that got is the minimal truncated
+// form of orig: same header (except for TC and the section counts), same
+// question section, no answer or authority records, at most the OPT RR in the
+// additional section (present iff wantOPT), and no larger than maxSize.
+func checkMinimalTruncatedResponse(tb testing.TB, got, orig []byte, maxSize int, wantOPT bool) {
+	tb.Helper()
+	if len(got) > maxSize {
+		tb.Errorf("truncated response is %d bytes, want <= %d", len(got), maxSize)
 	}
 
-	// Verify response size exceeds EDNS buffer
-	if len(resp) <= int(ednsBufferSize) {
-		t.Errorf("response size = %d, should exceed EDNS buffer size %d", len(resp), ednsBufferSize)
+	var gp, op dns.Parser
+	gh, err := gp.Start(got)
+	if err != nil {
+		tb.Fatalf("parsing truncated response: %v", err)
+	}
+	oh, err := op.Start(orig)
+	if err != nil {
+		tb.Fatalf("parsing original response: %v", err)
+	}
+	if !gh.Truncated {
+		tb.Errorf("TC flag not set in truncated response")
+	}
+	oh.Truncated = true
+	if gh != oh {
+		tb.Errorf("header = %+v, want %+v", gh, oh)
+	}
+
+	gq, err := gp.AllQuestions()
+	if err != nil {
+		tb.Fatalf("parsing questions of truncated response: %v", err)
+	}
+	oq, err := op.AllQuestions()
+	if err != nil {
+		tb.Fatalf("parsing questions of original response: %v", err)
+	}
+	if !reflect.DeepEqual(gq, oq) {
+		tb.Errorf("questions = %+v, want %+v", gq, oq)
+	}
+
+	if ans, err := gp.AllAnswers(); err != nil || len(ans) != 0 {
+		tb.Errorf("answers = %v (err %v), want none", ans, err)
+	}
+	if auth, err := gp.AllAuthorities(); err != nil || len(auth) != 0 {
+		tb.Errorf("authorities = %v (err %v), want none", auth, err)
+	}
+	add, err := gp.AllAdditionals()
+	if err != nil {
+		tb.Fatalf("parsing additionals of truncated response: %v", err)
+	}
+	if !wantOPT {
+		if len(add) != 0 {
+			tb.Errorf("additionals = %v, want none", add)
+		}
+		return
+	}
+	if len(add) != 1 || add[0].Header.Type != dns.TypeOPT {
+		tb.Fatalf("additionals = %v, want exactly one OPT RR", add)
+	}
+	// The OPT RR (UDP size, extended RCODE, version, DO bit, options) must
+	// be carried over unchanged from the original response.
+	if err := op.SkipAllAnswers(); err != nil {
+		tb.Fatal(err)
+	}
+	if err := op.SkipAllAuthorities(); err != nil {
+		tb.Fatal(err)
+	}
+	for {
+		h, err := op.AdditionalHeader()
+		if err != nil {
+			tb.Fatalf("original response has no OPT RR: %v", err)
+		}
+		if h.Type != dns.TypeOPT {
+			if err := op.SkipAdditional(); err != nil {
+				tb.Fatal(err)
+			}
+			continue
+		}
+		body, err := op.OPTResource()
+		if err != nil {
+			tb.Fatal(err)
+		}
+		// The forwarder clamps the advertised UDP size of responses
+		// it receives over UDP to maxResponseBytes (see clampEDNSSize).
+		h.Class = min(h.Class, dns.Class(maxResponseBytes))
+		if add[0].Header != h {
+			tb.Errorf("OPT header = %+v, want %+v", add[0].Header, h)
+		}
+		if !reflect.DeepEqual(add[0].Body, &body) {
+			tb.Errorf("OPT body = %+v, want %+v", add[0].Body, &body)
+		}
+		return
 	}
 }
 
@@ -1000,13 +1088,19 @@ func TestCheckResponseSizeAndSetTC(t *testing.T) {
 			}
 			request := makeTestRequest(t, domain, dns.TypeTXT, ednsSize)
 
+			orig := bytes.Clone(response)
+
 			// Call the function
 			result := checkResponseSizeAndSetTC(response, request, tt.family, logf)
 
-			// Verify response size is preserved (function should not truncate, only set flag)
-			if len(result) != len(response) {
-				t.Errorf("response size changed: got %d, want %d", len(result), len(response))
+			// Responses to UDP queries that exceed the limit must be
+			// replaced by a minimal truncated response; everything
+			// else must be returned unchanged.
+			maxSize := 512
+			if tt.requestHasEDNS {
+				maxSize = max(int(tt.ednsSize), 512)
 			}
+			wantTruncated := tt.family == "udp" && len(response) >= headerBytes && len(response) > maxSize
 
 			// Verify TC flag state
 			if len(result) >= headerBytes {
@@ -1019,12 +1113,171 @@ func TestCheckResponseSizeAndSetTC(t *testing.T) {
 				t.Errorf("response too small (%d bytes) but expected valid response", len(result))
 			}
 
-			// Verify response pointer is same (should be in-place modification)
-			if &result[0] != &response[0] {
-				t.Errorf("function should modify response in place, but got new slice")
+			if wantTruncated {
+				checkMinimalTruncatedResponse(t, result, orig, maxSize, false)
+			} else if !bytes.Equal(result, orig) {
+				t.Errorf("response changed although it fits:\ngot:  %x\nwant: %x", result, orig)
 			}
 		})
 	}
+}
+
+// makeDNSKEYResponse returns a DNSSEC-style response to a DNSKEY query for
+// domain: a header with RD, RA and AD set, n DNSKEY records with keyLen bytes
+// of RDATA each, and (if withOPT) an OPT RR advertising udpSize with the DO bit
+// set. This mirrors real-world responses for TLDs with large DNSKEY RRsets
+// that exceed the common EDNS buffer size of 1232 bytes.
+func makeDNSKEYResponse(tb testing.TB, domain string, n, keyLen int, withOPT bool, udpSize uint16) []byte {
+	tb.Helper()
+	name := dns.MustNewName(domain)
+	const typeDNSKEY = dns.Type(48)
+	b := dns.NewBuilder(nil, dns.Header{
+		ID:                 0x1234,
+		Response:           true,
+		RecursionDesired:   true,
+		RecursionAvailable: true,
+		AuthenticData:      true,
+	})
+	b.StartQuestions()
+	b.Question(dns.Question{Name: name, Type: typeDNSKEY, Class: dns.ClassINET})
+	b.StartAnswers()
+	for i := range n {
+		data := bytes.Repeat([]byte{byte(i)}, keyLen)
+		if err := b.UnknownResource(dns.ResourceHeader{
+			Name:  name,
+			Type:  typeDNSKEY,
+			Class: dns.ClassINET,
+			TTL:   3600,
+		}, dns.UnknownResource{Type: typeDNSKEY, Data: data}); err != nil {
+			tb.Fatal(err)
+		}
+	}
+	if withOPT {
+		b.StartAdditionals()
+		if err := b.OPTResource(dns.ResourceHeader{
+			Name:  dns.MustNewName("."),
+			Type:  dns.TypeOPT,
+			Class: dns.Class(udpSize),
+			TTL:   0x8000, // DO bit
+		}, dns.OPTResource{}); err != nil {
+			tb.Fatal(err)
+		}
+	}
+	out, err := b.Finish()
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return out
+}
+
+// TestCheckResponseSizeTruncates checks that responses to UDP queries that do
+// not fit into the requestor's payload size are truncated to a minimal
+// response rather than being sent in full with only the TC flag set.
+func TestCheckResponseSizeTruncates(t *testing.T) {
+	const domain = "example."
+	logf := t.Logf
+	const typeDNSKEY = dns.Type(48)
+
+	t.Run("DNSSEC_DNSKEY_over_EDNS_1232", func(t *testing.T) {
+		// Six DNSKEYs of ~200 bytes: about 1.3 KB, just over 1232.
+		response := makeDNSKEYResponse(t, domain, 6, 200, true, 1232)
+		if len(response) <= 1232 {
+			t.Fatalf("test response is %d bytes, want > 1232", len(response))
+		}
+		request := makeTestRequest(t, domain, typeDNSKEY, 1232)
+		got := checkResponseSizeAndSetTC(bytes.Clone(response), request, "udp", logf)
+		checkMinimalTruncatedResponse(t, got, response, 1232, true)
+	})
+
+	t.Run("fits_EDNS_1232_unchanged", func(t *testing.T) {
+		response := makeDNSKEYResponse(t, domain, 4, 200, true, 1232)
+		if len(response) > 1232 {
+			t.Fatalf("test response is %d bytes, want <= 1232", len(response))
+		}
+		request := makeTestRequest(t, domain, typeDNSKEY, 1232)
+		got := checkResponseSizeAndSetTC(bytes.Clone(response), request, "udp", logf)
+		if !bytes.Equal(got, response) {
+			t.Errorf("response changed although it fits")
+		}
+	})
+
+	t.Run("no_EDNS_in_request_drops_OPT", func(t *testing.T) {
+		// RFC 6891, section 7: no OPT RR in the response if the
+		// request had none.
+		response := makeDNSKEYResponse(t, domain, 3, 200, true, 1232)
+		request := makeTestRequest(t, domain, typeDNSKEY, 0)
+		got := checkResponseSizeAndSetTC(bytes.Clone(response), request, "udp", logf)
+		checkMinimalTruncatedResponse(t, got, response, 512, false)
+	})
+
+	t.Run("EDNS_below_512_treated_as_512", func(t *testing.T) {
+		// RFC 6891, section 6.2.3: "Values lower than 512 MUST be
+		// treated as equal to 512."
+		response := makeDNSKEYResponse(t, domain, 2, 150, true, 1232)
+		if len(response) <= 100 || len(response) > 512 {
+			t.Fatalf("test response is %d bytes, want in (100, 512]", len(response))
+		}
+		request := makeTestRequest(t, domain, typeDNSKEY, 100)
+		got := checkResponseSizeAndSetTC(bytes.Clone(response), request, "udp", logf)
+		if !bytes.Equal(got, response) {
+			t.Errorf("response changed although it fits into 512 bytes")
+		}
+	})
+
+	t.Run("TC_already_set_but_oversized", func(t *testing.T) {
+		// An upstream response that already has TC set must still be
+		// cut down if it does not fit the client.
+		response := makeDNSKEYResponse(t, domain, 6, 200, true, 1232)
+		setTCFlagInPacket(response)
+		request := makeTestRequest(t, domain, typeDNSKEY, 1232)
+		got := checkResponseSizeAndSetTC(bytes.Clone(response), request, "udp", logf)
+		checkMinimalTruncatedResponse(t, got, response, 1232, true)
+	})
+
+	t.Run("cut_mid_record", func(t *testing.T) {
+		// A response that was cut in the middle of a record (as
+		// sendUDP does for responses larger than maxResponseBytes):
+		// the OPT RR is unreachable, so only header and question
+		// are kept.
+		full := makeDNSKEYResponse(t, domain, 8, 200, true, 1232)
+		response := full[:len(full)-50]
+		request := makeTestRequest(t, domain, typeDNSKEY, 1232)
+		got := checkResponseSizeAndSetTC(bytes.Clone(response), request, "udp", logf)
+		checkMinimalTruncatedResponse(t, got, full, 1232, false)
+	})
+
+	t.Run("unparseable_question", func(t *testing.T) {
+		response := makeDNSKEYResponse(t, domain, 6, 200, true, 1232)
+		// Replace everything after the header with a question name
+		// that is a compression pointer to itself, plus padding so
+		// that the message exceeds 512 bytes.
+		response = response[:headerBytes]
+		response = append(response, 0xc0, headerBytes)
+		response = append(response, make([]byte, 600)...)
+		request := makeTestRequest(t, domain, typeDNSKEY, 0)
+		got := checkResponseSizeAndSetTC(bytes.Clone(response), request, "udp", logf)
+		if len(got) != headerBytes {
+			t.Fatalf("got %d bytes, want header only (%d bytes)", len(got), headerBytes)
+		}
+		if !truncatedFlagSet(got) {
+			t.Errorf("TC flag not set")
+		}
+		if !bytes.Equal(got[:2], response[:2]) {
+			t.Errorf("transaction ID changed")
+		}
+		if !bytes.Equal(got[4:headerBytes], make([]byte, 8)) {
+			t.Errorf("section counts = %x, want all zero", got[4:headerBytes])
+		}
+	})
+
+	t.Run("TCP_unchanged", func(t *testing.T) {
+		response := makeDNSKEYResponse(t, domain, 6, 200, true, 1232)
+		request := makeTestRequest(t, domain, typeDNSKEY, 1232)
+		got := checkResponseSizeAndSetTC(bytes.Clone(response), request, "tcp", logf)
+		if !bytes.Equal(got, response) {
+			t.Errorf("TCP response changed")
+		}
+	})
 }
 
 func TestForwarderTCPFallback(t *testing.T) {
@@ -1086,10 +1339,10 @@ func TestForwarderTCPFallbackTimeout(t *testing.T) {
 		}
 	})
 
+	// The request is a UDP query without EDNS, so the large response that
+	// came back over TCP must be truncated to fit into 512 bytes.
 	resp := mustRunTestQuery(t, request, beVerbose, port)
-	if !bytes.Equal(resp, largeResponse) {
-		t.Errorf("invalid response\ngot: %+v\nwant: %+v", resp, largeResponse)
-	}
+	checkMinimalTruncatedResponse(t, resp, largeResponse, 512, false)
 	if !sawTCPRequest.Load() {
 		t.Errorf("DNS server never saw TCP request")
 	}
@@ -1120,14 +1373,10 @@ func TestForwarderTCPFallbackDisabled(t *testing.T) {
 		setupForwarderWithTCPRetriesDisabled()(fwd)
 	}, port)
 
-	wantResp := append([]byte(nil), largeResponse[:maxResponseBytes]...)
-
-	// Set the truncated flag on the expected response, since that's what we expect.
-	setTCFlagInPacket(wantResp)
-
-	if !bytes.Equal(resp, wantResp) {
-		t.Errorf("invalid response\ngot (%d): %+v\nwant (%d): %+v", len(resp), resp, len(wantResp), wantResp)
-	}
+	// The request is a UDP query without EDNS, so the client must get a
+	// minimal truncated response that fits into 512 bytes, not the first
+	// maxResponseBytes of the upstream response.
+	checkMinimalTruncatedResponse(t, resp, largeResponse, 512, false)
 	if !sawUDPRequest.Load() {
 		t.Errorf("DNS server never saw UDP request")
 	}
