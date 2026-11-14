@@ -3669,6 +3669,87 @@ func TestNetworkSendErrors(t *testing.T) {
 	})
 }
 
+func TestPeersConnectedMetric(t *testing.T) {
+	conn, reg := newTestConnAndRegistry(t)
+
+	vni := packet.VirtualNetworkID{}
+	vni.Set(1)
+	derpAddr := netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, 1)
+
+	type peerSpec struct {
+		id    tailcfg.NodeID
+		seed  byte
+		apply func(de *endpoint, now mono.Time)
+	}
+	peers := []peerSpec{
+		{id: 1, seed: 1, apply: func(de *endpoint, now mono.Time) {
+			de.bestAddr = addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("192.0.2.1:40000")}}
+			de.trustBestAddrUntil = now.Add(time.Hour)
+		}},
+		{id: 2, seed: 2, apply: func(de *endpoint, now mono.Time) {
+			de.bestAddr = addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("[2001:db8::1]:40000")}}
+			de.trustBestAddrUntil = now.Add(time.Hour)
+		}},
+		{id: 3, seed: 3, apply: func(de *endpoint, now mono.Time) {
+			de.bestAddr = addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("192.0.2.2:40000"), vni: vni}}
+			de.trustBestAddrUntil = now.Add(time.Hour)
+		}},
+		{id: 4, seed: 4, apply: func(de *endpoint, now mono.Time) {
+			// No trusted UDP path: falls back to DERP.
+		}},
+		{id: 5, seed: 5, apply: func(de *endpoint, now mono.Time) {
+			// Never sent to: must not be counted on any path.
+			de.lastSendExt = 0
+		}},
+	}
+
+	nodes := make([]*tailcfg.Node, 0, len(peers))
+	keys := make([]key.NodePublic, 0, len(peers))
+	for _, p := range peers {
+		nk := key.NodePublicFromRaw32(mem.B([]byte{0: p.seed, 31: 0}))
+		keys = append(keys, nk)
+		nodes = append(nodes, &tailcfg.Node{
+			ID:       p.id,
+			Key:      nk,
+			DiscoKey: key.DiscoPublicFromRaw32(mem.B([]byte{0: p.seed, 31: 1})),
+			HomeDERP: 1,
+		})
+	}
+	conn.SetNetworkMap(tailcfg.NodeView{}, nodeViews(nodes))
+
+	now := mono.Now()
+	conn.mu.Lock()
+	for i, p := range peers {
+		de, ok := conn.peerMap.endpointForNodeKey(keys[i])
+		if !ok {
+			conn.mu.Unlock()
+			t.Fatalf("no endpoint for peer %d", p.id)
+		}
+		de.mu.Lock()
+		de.lastSendExt = now
+		de.derpAddr = derpAddr
+		p.apply(de, now)
+		de.mu.Unlock()
+	}
+	conn.mu.Unlock()
+
+	resp := httptest.NewRecorder()
+	reg.Handler(resp, new(http.Request))
+	body := resp.Body.String()
+	for _, want := range []string{
+		`# TYPE tailscaled_peers_connected gauge`,
+		`tailscaled_peers_connected{path="direct_ipv4"} 1`,
+		`tailscaled_peers_connected{path="direct_ipv6"} 1`,
+		`tailscaled_peers_connected{path="derp"} 1`,
+		`tailscaled_peers_connected{path="peer_relay_ipv4"} 1`,
+		`tailscaled_peers_connected{path="peer_relay_ipv6"} 0`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("metrics missing %q; got:\n%s", want, body)
+		}
+	}
+}
+
 func Test_packetLooksLike(t *testing.T) {
 	discoPub := key.DiscoPublicFromRaw32(mem.B([]byte{1: 1, 30: 30, 31: 31}))
 	nakedDisco := make([]byte, 0, 512)
