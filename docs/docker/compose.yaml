@@ -1,0 +1,27 @@
+# Tailscale in Docker Compose, with the auth key supplied as a Compose secret.
+#
+# Put the key in ./ts_authkey (one line, nothing else) and lock it down:
+#   chmod 600 ts_authkey
+# then start the container with:
+#   docker compose up -d
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    hostname: my-container
+    environment:
+      # "file:" tells containerboot to read the key from a file instead of
+      # using the value directly. Compose mounts secrets under /run/secrets.
+      TS_AUTHKEY: file:/run/secrets/ts_authkey
+      TS_STATE_DIR: /var/lib/tailscale
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+    secrets:
+      - ts_authkey
+    restart: unless-stopped
+
+secrets:
+  ts_authkey:
+    file: ./ts_authkey
+
+volumes:
+  tailscale-state:
