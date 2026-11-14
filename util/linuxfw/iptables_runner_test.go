@@ -590,3 +590,28 @@ func TestDelLoopbackRuleMissing(t *testing.T) {
 		t.Error("loopback rule still present after DelLoopbackRule")
 	}
 }
+
+func TestAddTCPResetRule(t *testing.T) {
+	iptr := newFakeIPTablesRunner()
+	if err := iptr.AddChains(); err != nil {
+		t.Fatal(err)
+	}
+	// AddHooks leaves a jump to ts-forward at the head of filter/FORWARD; the
+	// reset rules have to land in front of it.
+	if err := iptr.AddHooks(); err != nil {
+		t.Fatal(err)
+	}
+	if err := iptr.AddTCPResetRule("testTunn"); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Join([]string{
+		"-i testTunn -p tcp -j REJECT --reject-with tcp-reset",
+		"-o testTunn -p tcp -j REJECT --reject-with tcp-reset",
+		"-j ts-forward",
+	}, "\n")
+	for name, ipt := range map[string]iptablesInterface{"v4": iptr.ipt4, "v6": iptr.ipt6} {
+		if got := strings.Join(ipt.(*fakeIPTables).n["filter/FORWARD"], "\n"); got != want {
+			t.Errorf("%s filter/FORWARD:\n%s\nwant:\n%s", name, got, want)
+		}
+	}
+}

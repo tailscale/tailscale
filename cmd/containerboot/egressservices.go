@@ -75,6 +75,10 @@ type egressProxy struct {
 	// proxies on all nodes have updated their routing configuration. It can be configured to 0 in
 	// tests.
 	longSleep time.Duration
+	// resetHold is how long to keep the Pod alive after its forwarded TCP connections have been made to
+	// reset, so that peers which are mid-request or retransmitting receive the RST before the network
+	// namespace goes away. It can be configured to 0 in tests.
+	resetHold time.Duration
 	// client is a client that can send HTTP requests.
 	client httpClient
 }
@@ -162,6 +166,7 @@ func (ep *egressProxy) configure(opts egressProxyRunOpts) {
 	}
 	ep.shortSleep = sleepDuration
 	ep.longSleep = sleepDuration * 10
+	ep.resetHold = sleepDuration * 3
 }
 
 // sync triggers an egress proxy config resync. The resync calculates the diff between config and status to determine if
@@ -632,14 +637,15 @@ func servicesStatusIsEqual(st, st1 *egressservices.Status) bool {
 }
 
 // registerHandlers adds a new handler to the provided ServeMux that can be called as a Kubernetes prestop hook to
-// delay shutdown till it's safe to do so.
+// delay shutdown till it's safe to do so and, once it is, to reset the connections still forwarded via this Pod.
 func (ep *egressProxy) registerHandlers(mux *http.ServeMux) {
 	mux.Handle(fmt.Sprintf("GET %s", kubetypes.EgessServicesPreshutdownEP), ep)
 }
 
 // ServeHTTP serves /internal-egress-services-preshutdown endpoint, when it receives a request, it periodically polls
 // the configured health check endpoint for each egress service till it the health check endpoint no longer hits this
-// proxy Pod. It uses the Pod-IPv4 header to verify if health check response is received from this Pod.
+// proxy Pod. It uses the Pod-IPv4 header to verify if health check response is received from this Pod. Once no new
+// cluster traffic reaches this Pod, it resets the connections that still do.
 func (ep *egressProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cfgs, err := ep.getConfigs()
 	if err != nil {
@@ -658,6 +664,24 @@ func (ep *egressProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ep.waitTillSafeToShutdown(r.Context(), cfgs, hp)
+	ep.resetForwardedConnections()
+}
+
+// resetForwardedConnections makes the kernel answer every TCP segment still forwarded via this Pod with a RST, then
+// holds for resetHold so that peers which are mid-request or retransmitting receive it before the Pod's network
+// namespace goes away. The proxy forwards in-kernel and owns no socket for these connections, so nothing else closes
+// them: without the reset, a client that pools connections keeps writing into a dead one until its retransmission
+// timer gives up, about 15 minutes on a default Linux kernel, and a client with an idle pooled connection finds out
+// only on its next request. Peers that stay silent for the whole hold cannot be reset from here; those depend on the
+// client's own keepalive. This runs after waitTillSafeToShutdown on purpose: by then new connections are routed to
+// other replicas, so only connections already pinned to this Pod are affected.
+func (ep *egressProxy) resetForwardedConnections() {
+	log.Printf("Resetting TCP connections still forwarded via this Pod...")
+	if err := ep.nfr.AddTCPResetRule(tailscaleTunInterface); err != nil {
+		log.Printf("error adding TCP reset rule, connections still forwarded via this Pod will time out on the client side instead: %v", err)
+		return
+	}
+	time.Sleep(ep.resetHold)
 }
 
 // waitTillSafeToShutdown looks up all egress targets configured to be proxied via this instance and, for each target

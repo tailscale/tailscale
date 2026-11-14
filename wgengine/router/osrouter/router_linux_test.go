@@ -720,6 +720,8 @@ func (n *fakeIPTablesRunner) ClampMSSToPMTU(tun string, addr netip.Addr) error {
 	return errors.New("not implemented")
 }
 
+func (n *fakeIPTablesRunner) AddTCPResetRule(tun string) error { return nil }
+
 func (n *fakeIPTablesRunner) EnsureDNATRuleForSvc(svcName string, origDst, dst netip.Addr) error {
 	return errors.New("not implemented")
 }
