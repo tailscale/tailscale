@@ -668,6 +668,9 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 
 	if sys.InitialConfig != nil {
 		if err := b.initPrefsFromConfig(sys.InitialConfig); err != nil {
+			b.em.close()
+			nb.shutdown(err)
+			cancel(err)
 			return nil, err
 		}
 	}
@@ -1086,14 +1089,32 @@ func (b *LocalBackend) initPrefsFromConfig(conf *conffile.Config) error {
 	if err != nil {
 		return fmt.Errorf("error parsing config to prefs: %w", err)
 	}
+	servers, err := requiredSTUNServersFromConfig(conf)
+	if err != nil {
+		return err
+	}
 	p.ApplyEdits(&mp)
 	if err := b.pm.SetPrefs(p.View(), ipn.NetworkProfile{}); err != nil {
 		return err
 	}
 	b.updateWarnSync(p.View())
 	b.setStaticEndpointsFromConfigLocked(conf)
+	b.MagicConn().SetRequiredSTUNServers(servers)
 	b.conf = conf
 	return nil
+}
+
+// requiredSTUNServersFromConfig parses the required STUN destinations in conf.
+func requiredSTUNServersFromConfig(conf *conffile.Config) (views.Slice[netcheck.STUNServer], error) {
+	var servers []netcheck.STUNServer
+	for i, target := range conf.Parsed.RequiredSTUNServers {
+		server, err := netcheck.ParseSTUNServer(target)
+		if err != nil {
+			return views.Slice[netcheck.STUNServer]{}, fmt.Errorf("requiredSTUNServers[%d]: %w", i, err)
+		}
+		servers = append(servers, server)
+	}
+	return views.SliceOf(servers), nil
 }
 
 func (b *LocalBackend) setStaticEndpointsFromConfigLocked(conf *conffile.Config) {
@@ -1105,7 +1126,7 @@ func (b *LocalBackend) setStaticEndpointsFromConfigLocked(conf *conffile.Config)
 	// Ensure that magicsock conn has the up to date static wireguard
 	// endpoints. Setting the endpoints here triggers an asynchronous update
 	// of the node's advertised endpoints.
-	if b.conf == nil && len(conf.Parsed.StaticEndpoints) != 0 || !reflect.DeepEqual(conf.Parsed.StaticEndpoints, b.conf.Parsed.StaticEndpoints) {
+	if b.conf == nil || !reflect.DeepEqual(conf.Parsed.StaticEndpoints, b.conf.Parsed.StaticEndpoints) {
 		ms, ok := b.sys.MagicSock.GetOK()
 		if !ok {
 			b.logf("[unexpected] ReloadConfig: MagicSock not set")
@@ -1141,8 +1162,13 @@ func (b *LocalBackend) setConfigLocked(conf *conffile.Config) error {
 	if err != nil {
 		return fmt.Errorf("error parsing config to prefs: %w", err)
 	}
+	servers, err := requiredSTUNServersFromConfig(conf)
+	if err != nil {
+		return err
+	}
 	p.ApplyEdits(&mp)
 	b.setStaticEndpointsFromConfigLocked(conf)
+	b.MagicConn().SetRequiredSTUNServers(servers)
 	b.setPrefsLocked(p)
 
 	b.conf = conf

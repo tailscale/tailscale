@@ -405,6 +405,9 @@ type Conn struct {
 	appliedDisableUDPGRO bool
 	appliedDisableUDPGSO bool
 
+	// requiredSTUNServers are additional STUN destinations for endpoint discovery.
+	requiredSTUNServers views.Slice[netcheck.STUNServer]
+
 	// staticEndpoints are user set endpoints that this node should
 	// advertise amongst its wireguard endpoints. It is user's
 	// responsibility to ensure that traffic from these endpoints is routed
@@ -1003,6 +1006,19 @@ func (c *Conn) setEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 	return true
 }
 
+// SetRequiredSTUNServers sets additional STUN servers for endpoint discovery and
+// triggers an asynchronous update. See [netcheck.GetReportOpts.RequiredSTUNServers].
+func (c *Conn) SetRequiredSTUNServers(servers views.Slice[netcheck.STUNServer]) {
+	c.mu.Lock()
+	if views.SliceEqual(c.requiredSTUNServers, servers) {
+		c.mu.Unlock()
+		return
+	}
+	c.requiredSTUNServers = servers
+	c.mu.Unlock()
+	c.ReSTUN("required-stun-servers-change")
+}
+
 // SetStaticEndpoints sets static endpoints to the provided value and triggers
 // an asynchronous update of the endpoints that this node advertises.
 // Static endpoints are endpoints explicitly configured by user.
@@ -1040,6 +1056,10 @@ func (c *Conn) setNetInfoHavePortMap() {
 func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 	c.mu.Lock()
 	dm := c.derpMap
+	var servers views.Slice[netcheck.STUNServer]
+	if hasUDPTransport {
+		servers = c.requiredSTUNServers
+	}
 	c.mu.Unlock()
 
 	if dm == nil || c.networkDown() {
@@ -1056,6 +1076,7 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 		// health package here, but I'd rather do that and not store
 		// the exact same state in two different places.
 		GetLastDERPActivity: c.health.GetDERPRegionReceivedTime,
+		RequiredSTUNServers: servers,
 		OnlyTCP443:          c.onlyTCP443.Load(),
 	})
 	if err != nil {
@@ -1414,7 +1435,10 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 		eps = c.endpointTracker.update(time.Now(), eps)
 	}
 
-	for _, ep := range c.staticEndpoints.All() {
+	c.mu.Lock()
+	staticEndpoints := c.staticEndpoints
+	c.mu.Unlock()
+	for _, ep := range staticEndpoints.All() {
 		addAddr(ep, tailcfg.EndpointExplicitConf)
 	}
 
@@ -2852,6 +2876,7 @@ func (c *Conn) SetPrivateKey(privateKey key.NodePrivate) error {
 		c.logf("magicsock: SetPrivateKey called (zeroed)")
 		c.closeAllDerpLocked("zero-private-key")
 		c.stopPeriodicReSTUNTimerLocked()
+		c.wantEndpointsUpdate = ""
 		c.onEndpointRefreshed = nil
 	} else {
 		c.logf("magicsock: SetPrivateKey called (changed)")
@@ -3785,9 +3810,16 @@ func (c *Conn) shouldDoPeriodicReSTUNLocked() bool {
 	if c.networkDown() || c.homeless {
 		return false
 	}
-	if len(c.peersByID) == 0 || c.privateKey.IsZero() {
-		// If no peers, not worth doing.
-		// Also don't if there's no key (not running).
+	if c.privateKey.IsZero() {
+		// Don't probe if there's no key (not running).
+		return false
+	}
+	if hasUDPTransport && c.requiredSTUNServers.Len() > 0 && !c.onlyTCP443.Load() {
+		// Explicitly requested mappings must stay fresh even while idle or
+		// without peers. Reuse the normal timer and connection lifecycle.
+		return true
+	}
+	if len(c.peersByID) == 0 {
 		return false
 	}
 	if f := c.idleFunc; f != nil {
