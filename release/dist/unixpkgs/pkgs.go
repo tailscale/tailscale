@@ -261,7 +261,7 @@ func (t *debTarget) Build(b *dist.Build) ([]string, error) {
 		Platform:    "linux",
 		Version:     b.Version.Short,
 		Maintainer:  "Tailscale Inc <info@tailscale.com>",
-		Description: "The easiest, most secure, cross platform way to use WireGuard + oauth2 + 2FA/SSO",
+		Description: "Tailscale - WireGuard based mesh VPN",
 		Homepage:    "https://www.tailscale.com",
 		License:     "MIT",
 		Section:     "net",
@@ -420,7 +420,7 @@ func (t *rpmTarget) Build(b *dist.Build) ([]string, error) {
 		Platform:    "linux",
 		Version:     b.Version.Short,
 		Maintainer:  "Tailscale Inc <info@tailscale.com>",
-		Description: "The easiest, most secure, cross platform way to use WireGuard + oauth2 + 2FA/SSO",
+		Description: "Tailscale - WireGuard based mesh VPN",
 		Homepage:    "https://www.tailscale.com",
 		License:     "MIT",
 		Overridables: nfpm.Overridables{
