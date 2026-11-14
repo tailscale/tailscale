@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
@@ -36,6 +37,98 @@ const (
 )
 
 var epoch = time.Unix(0, 0)
+
+func TestProberContinuousWaitForSlot(t *testing.T) {
+	for _, cancelWhileWaiting := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancel=%v", cancelWhileWaiting), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				called := false
+				probe := newProbe(&Prober{now: time.Now}, "continuous", -time.Second, nil,
+					FuncProbe(func(ctx context.Context) error {
+						called = true
+						return ctx.Err()
+					}))
+				defer probe.cancel()
+				probe.runSema.Acquire()
+				releaseSlot := sync.OnceFunc(probe.runSema.Release)
+				defer releaseSlot()
+
+				done := make(chan error, 1)
+				go func() {
+					_, err := probe.run()
+					done <- err
+				}()
+				synctest.Wait()
+				// The negative interval is a retry delay, not a deadline
+				// for waiting on the slot.
+				time.Sleep(2 * time.Second)
+				synctest.Wait()
+				select {
+				case err := <-done:
+					t.Fatalf("run returned while the concurrency slot was held: %v", err)
+				default:
+				}
+
+				if cancelWhileWaiting {
+					probe.cancel()
+				} else {
+					releaseSlot()
+				}
+				err := <-done
+				if cancelWhileWaiting {
+					if err == nil || called {
+						t.Fatalf("canceled run: err=%v, called=%v; want error without calling probe", err, called)
+					}
+				} else if err != nil || !called {
+					t.Fatalf("released run: err=%v, called=%v; want successful probe", err, called)
+				}
+			})
+		})
+	}
+}
+
+func TestProberContinuousRetry(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const retryInterval = time.Second
+		// Buffer a duplicate attempt so it can be detected once the loop blocks.
+		starts := make(chan time.Time, 2)
+		probe := newProbe(&Prober{now: time.Now}, "continuous", -retryInterval, nil,
+			FuncProbe(func(ctx context.Context) error {
+				select {
+				case starts <- time.Now():
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				return errors.New("probe failed")
+			}))
+		defer func() {
+			probe.cancel()
+			<-probe.stopped
+		}()
+
+		start := time.Now()
+		go probe.loop()
+		for i := range 3 {
+			synctest.Wait()
+			if got := len(starts); got != 1 {
+				t.Fatalf("after %v: got %d new probe calls, want 1", time.Since(start), got)
+			}
+			if got := (<-starts).Sub(start); got != time.Duration(i)*retryInterval {
+				t.Fatalf("probe %d started after %v, want %v", i, got, time.Duration(i)*retryInterval)
+			}
+			if i < 2 {
+				time.Sleep(retryInterval)
+			}
+		}
+
+		beforeCancel := time.Now()
+		probe.cancel()
+		<-probe.stopped
+		if elapsed := time.Since(beforeCancel); elapsed != 0 {
+			t.Fatalf("canceling the retry wait advanced time by %v", elapsed)
+		}
+	})
+}
 
 func TestProberTiming(t *testing.T) {
 	clk := newFakeTime()
