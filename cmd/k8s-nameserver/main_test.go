@@ -80,6 +80,23 @@ func TestNameserver(t *testing.T) {
 				}},
 		},
 		{
+			name: "A-query-AAAA-record-exists",
+			ip6:  map[dnsname.FQDN][]net.IP{dnsname.FQDN("foo.bar.com."): {net.ParseIP("2001:db8::1")}},
+			query: &dns.Msg{
+				Question: []dns.Question{{Name: "foo.bar.com", Qtype: dns.TypeA}},
+				MsgHdr:   dns.MsgHdr{Id: 1},
+			},
+			wantResp: &dns.Msg{
+				Question: []dns.Question{{Name: "foo.bar.com", Qtype: dns.TypeA}},
+				MsgHdr: dns.MsgHdr{
+					Id:            1,
+					Rcode:         dns.RcodeSuccess,
+					Response:      true,
+					Opcode:        dns.OpcodeQuery,
+					Authoritative: true,
+				}},
+		},
+		{
 			name: "AAAA-query-A-record-exists",
 			ip4:  map[dnsname.FQDN][]net.IP{dnsname.FQDN("foo.bar.com."): {{1, 2, 3, 4}}},
 			query: &dns.Msg{
