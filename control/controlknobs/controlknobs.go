@@ -42,6 +42,9 @@ type Knobs struct {
 	// PeerMTUEnable is whether the node should do peer path MTU discovery.
 	PeerMTUEnable atomic.Bool
 
+	// DiscoFullSizeProbe is whether a direct UDP path must carry a full-size packet before magicsock uses it.
+	DiscoFullSizeProbe atomic.Bool
+
 	// DisableDNSForwarderTCPRetries is whether the DNS forwarder should
 	// skip retrying truncated queries over TCP.
 	DisableDNSForwarderTCPRetries atomic.Bool
@@ -164,6 +167,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		oneCGNAT                             opt.Bool
 		forceBackgroundSTUN                  = has(nodecap.DebugForceBackgroundSTUN)
 		peerMTUEnable                        = has(nodecap.PeerMTUEnable)
+		discoFullSizeProbe                   = has(nodecap.DiscoFullSizeProbe)
 		dnsForwarderDisableTCPRetries        = has(nodecap.DNSForwarderDisableTCPRetries)
 		silentDisco                          = has(nodecap.SilentDisco)
 		forceIPTables                        = has(nodecap.LinuxMustUseIPTables)
@@ -199,6 +203,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.ForceBackgroundSTUN.Store(forceBackgroundSTUN)
 	k.DisableDeltaUpdates.Store(disableDeltaUpdates)
 	k.PeerMTUEnable.Store(peerMTUEnable)
+	k.DiscoFullSizeProbe.Store(discoFullSizeProbe)
 	k.DisableDNSForwarderTCPRetries.Store(dnsForwarderDisableTCPRetries)
 	k.SilentDisco.Store(silentDisco)
 	k.LinuxForceIPTables.Store(forceIPTables)

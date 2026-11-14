@@ -66,6 +66,8 @@ var (
 	// suppressing/dropping inbound/outbound [disco.Ping] messages, forcing
 	// all peer communication over DERP or peer relay.
 	debugNeverDirectUDP = envknob.RegisterBool("TS_DEBUG_NEVER_DIRECT_UDP")
+	// debugFullSizeProbe overrides [controlknobs.Knobs.DiscoFullSizeProbe].
+	debugFullSizeProbe = envknob.RegisterOptBool("TS_DEBUG_DISCO_FULL_SIZE_PROBE")
 	// Hey you! Adding a new debugknob? Make sure to stub it out in the
 	// debugknobs_stubs.go file too.
 )

@@ -17,6 +17,7 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -475,7 +476,38 @@ type endpointState struct {
 	recentPongs []pongReply // ring buffer up to pongHistoryCount entries
 	recentPong  uint16      // index into recentPongs of most recent; older before, wrapped
 
+	fullSize fullSizeProbe // see [endpoint.fullSizeOKLocked]
+
 	index int16 // index in nodecfg.Node.Endpoints; meaningless if lastGotPing non-zero
+}
+
+// fullSizeProbe tracks full-size probes of one path, see [endpoint.fullSizeOKLocked].
+type fullSizeProbe struct {
+	sentAt   mono.Time // last probe sent
+	tries    int       // probes sent in the current round
+	verified bool      // a probe was answered
+}
+
+func (p *fullSizeProbe) sent(now mono.Time) {
+	if p.tries >= fullSizeProbeTries {
+		p.tries = 0 // a new round
+	}
+	p.sentAt, p.tries = now, p.tries+1
+}
+
+// due reports whether to send another probe.
+// A verified path isn't probed again. Otherwise a new path is probed at once, an unanswered probe is retried every [discoPingInterval] up to [fullSizeProbeTries] times, and then a new round starts every [fullSizeProbeInterval].
+func (p *fullSizeProbe) due(now mono.Time) bool {
+	switch {
+	case p.verified:
+		return false
+	case p.sentAt.IsZero():
+		return true
+	case p.tries < fullSizeProbeTries:
+		return now.Sub(p.sentAt) >= discoPingInterval
+	default:
+		return now.Sub(p.sentAt) >= fullSizeProbeInterval
+	}
 }
 
 // clear removes all derived / probed state from an endpointState.
@@ -591,7 +623,7 @@ func (de *endpoint) noteRecvActivity(src epAddr, now mono.Time) bool {
 		// kick off discovery disco pings every trustUDPAddrDuration and mirror
 		// to DERP.
 		de.mu.Lock()
-		if de.heartbeatDisabled && de.bestAddr.epAddr == src {
+		if de.heartbeatDisabled && de.bestAddr.epAddr == src && de.fullSizeOKLocked(src) {
 			de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
 		}
 		de.mu.Unlock()
@@ -1253,6 +1285,7 @@ func (de *endpoint) discoPingTimeout(txid stun.TxID) {
 	if !ok {
 		return
 	}
+	de.noteFullSizeProbeLostLocked(sp)
 	bestUntrusted := mono.Now().After(de.trustBestAddrUntil)
 	if sp.to == de.bestAddr.epAddr && bestUntrusted {
 		de.clearBestAddrLocked()
@@ -1268,7 +1301,21 @@ func (de *endpoint) forgetDiscoPing(txid stun.TxID) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 	if sp, ok := de.sentPing[txid]; ok {
+		// A probe that couldn't be sent, for example refused with EMSGSIZE when DF is set, is lost too.
+		de.noteFullSizeProbeLostLocked(sp)
 		de.removeSentDiscoPingLocked(txid, sp, discoPingFailed)
+	}
+}
+
+// noteFullSizeProbeLostLocked counts sp if it's a full-size probe that timed out or couldn't be sent, and logs when a path loses a whole round.
+func (de *endpoint) noteFullSizeProbeLostLocked(sp sentPing) {
+	st, ok := de.endpointState[sp.to.ap]
+	if !ok || !sp.isFullSizeProbe() {
+		return
+	}
+	metricDiscoFullSizeProbeLost.Add(1)
+	if sp.at == st.fullSize.sentAt && st.fullSize.tries >= fullSizeProbeTries && !st.fullSize.verified {
+		de.c.logf("magicsock: disco: node %v %v: %v lost %d full-size pings in a row, not using it", de.publicKey.ShortString(), de.discoShort(), sp.to, fullSizeProbeTries)
 	}
 }
 
@@ -1311,7 +1358,7 @@ const discoPingSize = len(disco.Magic) + key.DiscoPublicRawLen + disco.NonceLen 
 //
 // The caller should use de.discoKey as the discoKey argument.
 // It is passed in so that sendDiscoPing doesn't need to lock de.mu.
-func (de *endpoint) sendDiscoPing(ep epAddr, discoKey key.DiscoPublic, txid stun.TxID, size int, logLevel discoLogLevel) {
+func (de *endpoint) sendDiscoPing(ep epAddr, discoKey key.DiscoPublic, txid stun.TxID, size int, logLevel discoLogLevel, mtuProbe bool) {
 	size = min(size, MaxDiscoPingSize)
 	padding := max(size-discoPingSize, 0)
 
@@ -1325,7 +1372,7 @@ func (de *endpoint) sendDiscoPing(ep epAddr, discoKey key.DiscoPublic, txid stun
 		return
 	}
 
-	if size != 0 {
+	if size != 0 && mtuProbe {
 		metricSentDiscoPeerMTUProbes.Add(1)
 		metricSentDiscoPeerMTUProbeBytes.Add(int64(pingSizeToPktLen(size, ep)))
 	}
@@ -1408,7 +1455,7 @@ func (de *endpoint) startDiscoPingLocked(ep epAddr, now mono.Time, purpose disco
 	de.lastSendAny = now
 	for _, s := range sizes {
 		txid := stun.NewTxID()
-		de.sentPing[txid] = sentPing{
+		sp := sentPing{
 			to:      ep,
 			at:      now,
 			timer:   time.AfterFunc(pingTimeoutDuration, func() { de.discoPingTimeout(txid) }),
@@ -1416,10 +1463,11 @@ func (de *endpoint) startDiscoPingLocked(ep epAddr, now mono.Time, purpose disco
 			resCB:   resCB,
 			size:    s,
 		}
+		de.sentPing[txid] = sp
 		if purpose == pingHeartbeatForUDPLifetime && de.probeUDPLifetime != nil {
 			de.probeUDPLifetime.lastTxID = txid
 		}
-		go de.sendDiscoPing(ep, epDisco.key(), txid, s, logLevel)
+		go de.sendDiscoPing(ep, epDisco.key(), txid, s, logLevel, !sp.isFullSizeProbe())
 	}
 }
 
@@ -1717,6 +1765,9 @@ func (de *endpoint) checkAndUpdateDiscoKey(key key.DiscoPublic) (*endpointDisco,
 func (de *endpoint) changedActiveDiscoLocked() {
 	de.trustBestAddrUntil = 0
 	de.invalidateDiscoPathLocked()
+	for _, st := range de.endpointState {
+		st.fullSize.verified = false // re-probe, so restarting the peer recovers a path that stopped carrying full-size packets, while failing paths keep their backoff
+	}
 }
 
 // updateFromNode updates the endpoint based on a tailcfg.Node from a NetMap
@@ -1907,6 +1958,27 @@ func (de *endpoint) noteConnectivityChange() {
 	}
 }
 
+// fullSizeOKLocked reports whether ep may be used as de.bestAddr.
+//
+// A pong to a small disco ping shows that a path is up, not that it carries full-size WireGuard packets. Paths that drop large packets (a 1280-byte IPv6 link that drops fragments, a tunnel inside another tunnel, filtered ICMP) answer small pings and black-hole everything else, see https://github.com/tailscale/tailscale/issues/21951. When [Conn.fullSizeProbeEnabled], a direct path is only usable once it has answered a ping of [fullSizePingSize], which holds until [endpointState.clear] (for example on a network change) or the peer's disco key changes. Small pongs on an unverified path neither promote it nor extend its trust.
+func (de *endpoint) fullSizeOKLocked(ep epAddr) bool {
+	if !ep.isDirect() || !de.c.fullSizeProbeEnabled() {
+		return true
+	}
+	st, ok := de.endpointState[ep.ap]
+	return ok && st.fullSize.verified
+}
+
+// isFullSizeProbe reports whether sp is a [fullSizeProbe] ping, which are the only heartbeats with padding.
+func (sp sentPing) isFullSizeProbe() bool {
+	return sp.purpose == pingHeartbeat && sp.size == fullSizePingSize()
+}
+
+// fullSizePingSize is the disco ping size whose UDP payload matches a WireGuard packet carrying a full-size TUN packet, for either address family.
+var fullSizePingSize = sync.OnceValue(func() int {
+	return min(pktLenToPingSize(tstun.DefaultWireMTU(), true), MaxDiscoPingSize)
+})
+
 // pingSizeToPktLen calculates the minimum path MTU that would permit
 // a disco ping message of length size to reach its target at
 // udpAddr. size is the length of the entire disco message including
@@ -1964,7 +2036,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 	de.removeSentDiscoPingLocked(m.TxID, sp, discoPongReceived)
 
 	pktLen := int(pingSizeToPktLen(sp.size, src))
-	if sp.size != 0 {
+	if sp.size != 0 && !sp.isFullSizeProbe() {
 		m := getPeerMTUsProbedMetric(tstun.WireMTU(pktLen))
 		m.Add(1)
 		if metricMaxPeerMTUProbed.Value() < int64(pktLen) {
@@ -1993,6 +2065,14 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 			from:    src.ap,
 			pongSrc: m.Src,
 		})
+		if sp.size >= fullSizePingSize() {
+			st.fullSize = fullSizeProbe{verified: true} // a later re-probe starts a fresh round
+		} else if de.c.fullSizeProbeEnabled() && st.fullSize.due(now) {
+			// The path is up, so check that it also carries full-size packets.
+			// pingHeartbeat keeps peer MTU discovery from expanding this into its probe set, see [sentPing.isFullSizeProbe].
+			st.fullSize.sent(now)
+			de.startDiscoPingLocked(sp.to, now, pingHeartbeat, fullSizePingSize(), nil)
+		}
 	}
 
 	if sp.purpose != pingHeartbeat && sp.purpose != pingHeartbeatForUDPLifetime {
@@ -2011,13 +2091,23 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 		go sp.resCB.cb(sp.resCB.res)
 	}
 
+	if hasUDPTransport && !isDerp && !de.fullSizeOKLocked(sp.to) {
+		// Neither promote nor extend trust.
+		return
+	}
+
 	// Promote this pong response to our current best address if it's lower latency.
 	// TODO(bradfitz): decide how latency vs. preference order affects decision
 	if hasUDPTransport && !isDerp {
+		size := sp.size
+		if sp.isFullSizeProbe() {
+			// Record what a small pong assumes, so the next one isn't treated as an upgrade on IPv4.
+			size = 0
+		}
 		thisPong := addrQuality{
 			epAddr:  sp.to,
 			latency: latency,
-			wireMTU: pingSizeToPktLen(sp.size, sp.to),
+			wireMTU: pingSizeToPktLen(size, sp.to),
 		}
 		bestUntrusted := now.After(de.trustBestAddrUntil)
 		if betterAddr(thisPong, de.bestAddr) || bestUntrusted {
