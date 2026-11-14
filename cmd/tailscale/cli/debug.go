@@ -520,7 +520,7 @@ func runLocalCreds(ctx context.Context, args []string) error {
 		runLocalAPIProxy()
 		return nil
 	}
-	printf("curl --unix-socket %s http://local-tailscaled.sock/localapi/v0/status\n", paths.DefaultTailscaledSocket())
+	printf("curl --unix-socket %s http://local-tailscaled.sock/localapi/v0/status\n", cmp.Or(localClient.Socket, paths.DefaultTailscaledSocket()))
 	return nil
 }
 
