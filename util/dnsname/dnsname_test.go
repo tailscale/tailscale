@@ -126,6 +126,11 @@ func TestFQDNContains(t *testing.T) {
 		{"www.tailscale.com", "tailscale.com", false},
 		{"scale.com", "tailscale.com", false},
 		{"foo.com", "foo.com", true},
+		{"tailscale.com", "WWW.TAILSCALE.COM", true},
+		{"TAILSCALE.COM", "www.tailscale.com", true},
+		{"foo.com", "FOO.COM", true},
+		{"FOO.COM", "foo.com", true},
+		{"scale.com", "WWW.TAILSCALE.COM", false},
 	}
 
 	for _, test := range tests {
@@ -215,6 +220,10 @@ func TestTrimCommonSuffixes(t *testing.T) {
 		{"computer.localdomain", "computer"},
 		{"computer.lan", "computer"},
 		{"computer.mynetwork", "computer.mynetwork"},
+		{"computer.LOCAL", "computer"},
+		{"computer.LocalDomain", "computer"},
+		{"computer.LAN", "computer"},
+		{"COMPUTER.LAN", "COMPUTER"},
 	}
 	for _, tt := range tests {
 		got := TrimCommonSuffixes(tt.hostname)
@@ -233,10 +242,18 @@ func TestHasSuffix(t *testing.T) {
 		{"foo.com.", "com", true},
 		{"foo.com.", "com.", true},
 		{"foo.com", ".com", true},
+		{"foo.com", "COM", true},
+		{"foo.COM", "com", true},
+		{"foo.COM.", "com", true},
+		{"foo.com.", "COM.", true},
+		{"FOO.BAR.COM", "bar.com", true},
+		{"foo.bar.com", "BAR.COM", true},
 
 		{"", "", false},
 		{"foo.com.", "", false},
 		{"foo.com.", "o.com", false},
+		{"foo.com.", "O.COM", false},
+		{"foo.COM.", "o.com", false},
 	}
 	for _, tt := range tests {
 		got := HasSuffix(tt.name, tt.suffix)
@@ -259,6 +276,13 @@ func TestTrimSuffix(t *testing.T) {
 		{"foo.anothersuffix.", "magicdnssuffix", "foo.anothersuffix"},
 		{"a.b.c.d", "c.d", "a.b"},
 		{"name.", "foo", "name"},
+		{"foo.magicdnssuffix.", "MAGICDNSSUFFIX", "foo"},
+		{"foo.MAGICDNSSUFFIX.", "magicdnssuffix", "foo"},
+		{"FOO.magicdnssuffix", "MAGICDNSSUFFIX", "FOO"},
+		{"FOO.MAGICDNSSUFFIX", ".magicdnssuffix", "FOO"},
+		{"foo.ANOTHERSUFFIX", "magicdnssuffix", "foo.ANOTHERSUFFIX"},
+		{"A.B.C.D", "c.d", "A.B"},
+		{"a.b.c.d", "C.D", "a.b"},
 	}
 	for _, tt := range tests {
 		got := TrimSuffix(tt.name, tt.suffix)
