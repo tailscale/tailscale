@@ -83,56 +83,56 @@ func registerApplicationRestart(cmdLineExclExeName *uint16, flags uint32) (ret w
 
 func dsGetDcName(computerName *uint16, domainName *uint16, domainGuid *windows.GUID, siteName *uint16, flags dsGetDcNameFlag, dcInfo **_DOMAIN_CONTROLLER_INFO) (ret error) {
 	r0, _, _ := syscall.SyscallN(procDsGetDcNameW.Addr(), uintptr(unsafe.Pointer(computerName)), uintptr(unsafe.Pointer(domainName)), uintptr(unsafe.Pointer(domainGuid)), uintptr(unsafe.Pointer(siteName)), uintptr(flags), uintptr(unsafe.Pointer(dcInfo)))
-	if r0 != 0 {
-		ret = syscall.Errno(r0)
+	if uint32(r0) != 0 {
+		ret = syscall.Errno(uint32(r0))
 	}
 	return
 }
 
 func netValidateName(server *uint16, name *uint16, account *uint16, password *uint16, nameType _NETSETUP_NAME_TYPE) (ret error) {
 	r0, _, _ := syscall.SyscallN(procNetValidateName.Addr(), uintptr(unsafe.Pointer(server)), uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(account)), uintptr(unsafe.Pointer(password)), uintptr(nameType))
-	if r0 != 0 {
-		ret = syscall.Errno(r0)
+	if uint32(r0) != 0 {
+		ret = syscall.Errno(uint32(r0))
 	}
 	return
 }
 
 func rmEndSession(session _RMHANDLE) (ret error) {
 	r0, _, _ := syscall.SyscallN(procRmEndSession.Addr(), uintptr(session))
-	if r0 != 0 {
-		ret = syscall.Errno(r0)
+	if uint32(r0) != 0 {
+		ret = syscall.Errno(uint32(r0))
 	}
 	return
 }
 
 func rmGetList(session _RMHANDLE, nProcInfoNeeded *uint32, nProcInfo *uint32, rgAffectedApps *_RM_PROCESS_INFO, pRebootReasons *uint32) (ret error) {
 	r0, _, _ := syscall.SyscallN(procRmGetList.Addr(), uintptr(session), uintptr(unsafe.Pointer(nProcInfoNeeded)), uintptr(unsafe.Pointer(nProcInfo)), uintptr(unsafe.Pointer(rgAffectedApps)), uintptr(unsafe.Pointer(pRebootReasons)))
-	if r0 != 0 {
-		ret = syscall.Errno(r0)
+	if uint32(r0) != 0 {
+		ret = syscall.Errno(uint32(r0))
 	}
 	return
 }
 
 func rmJoinSession(pSession *_RMHANDLE, sessionKey *uint16) (ret error) {
 	r0, _, _ := syscall.SyscallN(procRmJoinSession.Addr(), uintptr(unsafe.Pointer(pSession)), uintptr(unsafe.Pointer(sessionKey)))
-	if r0 != 0 {
-		ret = syscall.Errno(r0)
+	if uint32(r0) != 0 {
+		ret = syscall.Errno(uint32(r0))
 	}
 	return
 }
 
 func rmRegisterResources(session _RMHANDLE, nFiles uint32, rgsFileNames **uint16, nApplications uint32, rgApplications *_RM_UNIQUE_PROCESS, nServices uint32, rgsServiceNames **uint16) (ret error) {
 	r0, _, _ := syscall.SyscallN(procRmRegisterResources.Addr(), uintptr(session), uintptr(nFiles), uintptr(unsafe.Pointer(rgsFileNames)), uintptr(nApplications), uintptr(unsafe.Pointer(rgApplications)), uintptr(nServices), uintptr(unsafe.Pointer(rgsServiceNames)))
-	if r0 != 0 {
-		ret = syscall.Errno(r0)
+	if uint32(r0) != 0 {
+		ret = syscall.Errno(uint32(r0))
 	}
 	return
 }
 
 func rmStartSession(pSession *_RMHANDLE, flags uint32, sessionKey *uint16) (ret error) {
 	r0, _, _ := syscall.SyscallN(procRmStartSession.Addr(), uintptr(unsafe.Pointer(pSession)), uintptr(flags), uintptr(unsafe.Pointer(sessionKey)))
-	if r0 != 0 {
-		ret = syscall.Errno(r0)
+	if uint32(r0) != 0 {
+		ret = syscall.Errno(uint32(r0))
 	}
 	return
 }

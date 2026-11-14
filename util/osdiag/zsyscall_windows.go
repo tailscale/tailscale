@@ -52,8 +52,8 @@ var (
 
 func regEnumValue(key registry.Key, index uint32, valueName *uint16, valueNameLen *uint32, reserved *uint32, valueType *uint32, pData *byte, cbData *uint32) (ret error) {
 	r0, _, _ := syscall.SyscallN(procRegEnumValueW.Addr(), uintptr(key), uintptr(index), uintptr(unsafe.Pointer(valueName)), uintptr(unsafe.Pointer(valueNameLen)), uintptr(unsafe.Pointer(reserved)), uintptr(unsafe.Pointer(valueType)), uintptr(unsafe.Pointer(pData)), uintptr(unsafe.Pointer(cbData)))
-	if r0 != 0 {
-		ret = syscall.Errno(r0)
+	if uint32(r0) != 0 {
+		ret = syscall.Errno(uint32(r0))
 	}
 	return
 }
