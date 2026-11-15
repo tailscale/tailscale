@@ -169,7 +169,7 @@ func (a *Authority) ValidateDeeplink(urlString string) DeeplinkValidationResult 
 	}
 
 	osName := parsedUrl.Query().Get("os")
-	if len(deviceName) == 0 {
+	if len(osName) == 0 {
 		return DeeplinkValidationResult{
 			IsValid: false,
 			Error:   "missing os (OSName) query parameter",
