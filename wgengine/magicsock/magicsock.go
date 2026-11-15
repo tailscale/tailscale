@@ -356,9 +356,14 @@ type Conn struct {
 	// magicsock could do with any complexity reduction it can get.
 	netInfoLast *tailcfg.NetInfo
 
-	derpMap   *tailcfg.DERPMap                    // nil (or zero regions/nodes) means DERP is disabled
-	self      tailcfg.NodeView                    // from last SetNetworkMap
-	peersByID map[tailcfg.NodeID]tailcfg.NodeView // current peer set, keyed by NodeID. Maintained by SetNetworkMap/UpsertPeer/RemovePeer. Note: per-field NodeMutation patches received in UpdateNetmapDelta are never applied to these snapshots.
+	derpMap *tailcfg.DERPMap // nil (or zero regions/nodes) means DERP is disabled
+	self    tailcfg.NodeView // from last SetNetworkMap
+
+	// peersByID is the current peer set. It is maintained by
+	// [Conn.SetNetworkMap], [Conn.UpsertPeer], and [Conn.RemovePeer],
+	// and [Conn.UpdateNetmapDelta] applies DERP home and endpoints
+	// patches to it. Online and LastSeen patches are not applied.
+	peersByID map[tailcfg.NodeID]tailcfg.NodeView
 
 	filt               *filter.Filter                      // from last SetFilter
 	relayClientEnabled bool                                // whether we can allocate UDP relay endpoints on UDP relay servers or receive CallMeMaybeVia messages from peers
@@ -4098,13 +4103,39 @@ func simpleDur(d time.Duration) time.Duration {
 // UpdateNetmapDelta applies the given node mutations to the connection's peer
 // state. It must be called synchronously from the caller's goroutine to ensure
 // magicsock has the current state before subsequent operations proceed.
-// Note: It does not apply these mutations to c.peers.
+//
+// DERP home and endpoints mutations are also applied to the c.peersByID
+// snapshots, so that a later full netmap carrying the pre-delta value isn't
+// skipped by the fast path in [Conn.updateNodes] (tailscale/tailscale#22379).
+// Online and LastSeen mutations are not applied, as magicsock doesn't use
+// those fields; leaving them stale only makes that fast path less likely to
+// skip, never wrongly.
 func (c *Conn) UpdateNetmapDelta(muts []netmap.NodeMutation) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// patched holds the peers cloned from c.peersByID by this call, so a
+	// peer with multiple mutations is only cloned once.
+	var patched map[tailcfg.NodeID]*tailcfg.Node
+
 	for _, m := range muts {
+		switch m.(type) {
+		case netmap.NodeMutationDERPHome, netmap.NodeMutationEndpoints:
+		default:
+			continue
+		}
 		nodeID := m.NodeIDBeingMutated()
+		n, ok := patched[nodeID]
+		if !ok {
+			if nv, ok := c.peersByID[nodeID]; ok {
+				n = nv.AsStruct()
+				mak.Set(&patched, nodeID, n)
+			}
+		}
+		if n != nil {
+			m.Apply(n)
+		}
+
 		ep, ok := c.peerMap.endpointForNodeID(nodeID)
 		if !ok {
 			continue
@@ -4120,6 +4151,9 @@ func (c *Conn) UpdateNetmapDelta(muts []netmap.NodeMutation) {
 			ep.setEndpointsLocked(views.SliceOf(m.Endpoints))
 			ep.mu.Unlock()
 		}
+	}
+	for nodeID, n := range patched {
+		c.peersByID[nodeID] = n.View()
 	}
 
 	// As of 2026-06-11 we will only get deltas from the control plane, so upon
