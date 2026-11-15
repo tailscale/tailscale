@@ -1158,8 +1158,11 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (res netmap
 		if !ok {
 			nv, ok := nb.peers[nid]
 			if !ok {
-				// TODO(bradfitz): unexpected metric?
-				return res, false
+				// The peer may have been filtered out by tailnet lock,
+				// which control doesn't know about, so it keeps sending
+				// patches for it. Skip it rather than abandoning the rest
+				// of the batch.
+				continue
 			}
 			n = nv.AsStruct()
 			mak.Set(&mutableNodes, nv.ID(), n)
