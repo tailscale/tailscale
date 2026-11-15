@@ -2460,6 +2460,71 @@ func TestSetNetworkMapWithNoPeers(t *testing.T) {
 	}
 }
 
+// Tests that a full netmap restoring a peer's DERP home and endpoints to
+// their values from before a delta isn't skipped by the updateNodes fast
+// path. See https://github.com/tailscale/tailscale/issues/22379.
+func TestDeltaThenFullNetmapRevert(t *testing.T) {
+	c := newTestConn(t)
+	defer c.Close()
+	c.SetPrivateKey(key.NewNode())
+
+	nodeKey := randNodeKey()
+	peerA := nodeViews([]*tailcfg.Node{{
+		ID: 1, Key: nodeKey, DiscoKey: randDiscoKey(), HomeDERP: 4,
+		Endpoints: eps("192.0.2.1:41641"),
+	}})
+
+	// state returns the peer endpoint's DERP region and endpoints.
+	state := func() string {
+		de, ok := c.peerMap.endpointForNodeKey(nodeKey)
+		if !ok {
+			t.Fatal("no endpoint")
+		}
+		de.mu.Lock()
+		defer de.mu.Unlock()
+		var addrs []string
+		for ap := range de.endpointState {
+			addrs = append(addrs, ap.String())
+		}
+		slices.Sort(addrs)
+		return fmt.Sprintf("derp-%d %v", de.derpAddr.Port(), addrs)
+	}
+
+	c.SetNetworkMap(tailcfg.NodeView{}, peerA)
+	want := "derp-4 [192.0.2.1:41641]"
+	if got := state(); got != want {
+		t.Fatalf("after first netmap: got %q; want %q", got, want)
+	}
+
+	muts, ok := netmap.NodeMutationsFromPatch(&tailcfg.PeerChange{
+		NodeID:     1,
+		DERPRegion: 26,
+		Endpoints:  eps("192.0.2.2:41641"),
+		Online:     new(true),
+	})
+	if !ok {
+		t.Fatal("NodeMutationsFromPatch failed")
+	}
+	c.UpdateNetmapDelta(muts)
+	if got, want := state(), "derp-26 [192.0.2.2:41641]"; got != want {
+		t.Fatalf("after delta: got %q; want %q", got, want)
+	}
+	if peerA[0].HomeDERP() != 4 {
+		t.Fatal("delta mutated the original NodeView")
+	}
+	c.mu.Lock()
+	snap := c.peersByID[1]
+	c.mu.Unlock()
+	if snap.Online().Valid() {
+		t.Error("Online mutation unexpectedly applied to snapshot")
+	}
+
+	c.SetNetworkMap(tailcfg.NodeView{}, peerA)
+	if got := state(); got != want {
+		t.Fatalf("after reverting netmap: got %q; want %q", got, want)
+	}
+}
+
 // Tests that the full-set peer update path (SetNetworkMap) and the
 // incremental per-peer paths (UpsertPeer, RemovePeer) maintain the
 // node-key-keyed DERP state (derpRoute and peerLastDerp) identically
