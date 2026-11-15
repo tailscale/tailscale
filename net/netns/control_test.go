@@ -109,10 +109,10 @@ func TestFromDialerControlContext(t *testing.T) {
 						}
 					}
 					got := FromDialer(t.Logf, netmon.NewStatic(), d)
-					if want := proxy && !disable; wrapped != want {
-						t.Errorf("proxy wrapped = %v; want %v", wrapped, want)
+					if wrapped != proxy {
+						t.Errorf("proxy wrapped = %v; want %v", wrapped, proxy)
 					}
-					if disable && got != d {
+					if disable && !proxy && got != d {
 						t.Error("disabled FromDialer did not return the original dialer")
 					}
 					if d.Control != nil {
