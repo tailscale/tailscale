@@ -2934,12 +2934,11 @@ func mutationsAreWorthyOfRecalculatingSuggestedExitNode(muts []netmap.NodeMutati
 			continue
 		}
 
-		// Some exit node is being mutated.  We care about it if it's online
-		// or offline state has changed.  We *might* eventually care about it for other reasons
-		// but for the sake of finding a "better" suggested exit node, this is probably
-		// sufficient.
+		// Some exit node is being mutated.  We care about it if its online
+		// or offline state has changed, or its DERP home, which
+		// [suggestExitNode] uses to group candidates by region.
 		switch m.(type) {
-		case netmap.NodeMutationOnline:
+		case netmap.NodeMutationOnline, netmap.NodeMutationDERPHome:
 			return true
 		}
 	}
