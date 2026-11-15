@@ -119,7 +119,8 @@ func NewDialer(logf logger.Logf, netMon *netmon.Monitor) Dialer {
 //
 // FromDialer modifies d and may wrap it to use SOCKS if configured by ALL_PROXY.
 // The hooks apply to the underlying socket (to the proxy when using SOCKS).
-// When netns is disabled, d is returned unchanged and without proxy wrapping.
+// When netns is disabled, d gets no namespace setup but may still be wrapped
+// to use SOCKS.
 func FromDialer(logf logger.Logf, netMon *netmon.Monitor, d *net.Dialer) Dialer {
 	if netMon == nil {
 		panic("netns.FromDialer called with nil netMon")
@@ -127,10 +128,12 @@ func FromDialer(logf logger.Logf, netMon *netmon.Monitor, d *net.Dialer) Dialer 
 	if d.Control != nil {
 		panic("netns.FromDialer: use ControlContext instead of Control")
 	}
-	if disabled.Load() {
-		return d
+	// Disabling netns only turns off the namespace setup. Processes that
+	// disable it, such as userspace-only clients that never route traffic
+	// back into themselves, may still need to honor ALL_PROXY.
+	if !disabled.Load() {
+		setNamespaceControl(d, control(logf, netMon))
 	}
-	setNamespaceControl(d, control(logf, netMon))
 	if wrapDialer != nil {
 		return wrapDialer(d)
 	}
