@@ -2587,7 +2587,12 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	muts = b.tkaFilterDeltaMutsLocked(muts)
 	needsAuthReconfig := netmapDeltaNeedsAuthReconfig(cn, muts)
 
-	deltaRes, _ := cn.UpdateNetmapDelta(muts)
+	deltaRes, ok := cn.UpdateNetmapDelta(muts)
+	if !ok {
+		// Returning false makes controlclient deliver a full netmap
+		// instead.
+		return false
+	}
 	b.notifyPeerUpdateLocked()
 	b.checkCachedDNSLocked()
 	if buildfeatures.HasDrive {

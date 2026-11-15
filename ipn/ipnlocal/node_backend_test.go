@@ -457,6 +457,43 @@ func TestNodeBackendDiscoChangedDelta(t *testing.T) {
 	}
 }
 
+// Tests that a per-field patch for a peer missing from nodeBackend (such as
+// one filtered out by tailnet lock) doesn't stop the rest of the batch from
+// being applied.
+func TestNodeBackendDeltaUnknownPeer(t *testing.T) {
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+	mkNode := func(id tailcfg.NodeID) tailcfg.NodeView {
+		return (&tailcfg.Node{ID: id, Key: key.NewNode().Public(), HomeDERP: 1}).View()
+	}
+	nb.SetNetMap(&netmap.NetworkMap{Peers: []tailcfg.NodeView{mkNode(1), mkNode(3)}})
+
+	muts, ok := netmap.MutationsFromMapResponse(&tailcfg.MapResponse{
+		PeersChangedPatch: []*tailcfg.PeerChange{
+			{NodeID: 1, DERPRegion: 2},
+			{NodeID: 2, DERPRegion: 2},
+			{NodeID: 3, DERPRegion: 2},
+		},
+	}, time.Now())
+	if !ok {
+		t.Fatal("MutationsFromMapResponse failed")
+	}
+	if _, handled := nb.UpdateNetmapDelta(muts); !handled {
+		t.Fatal("UpdateNetmapDelta not handled")
+	}
+	for _, id := range []tailcfg.NodeID{1, 3} {
+		n, ok := nb.NodeByID(id)
+		if !ok {
+			t.Fatalf("peer %d missing", id)
+		}
+		if got := n.HomeDERP(); got != 2 {
+			t.Errorf("peer %d HomeDERP = %d; want 2", id, got)
+		}
+	}
+	if _, ok := nb.NodeByID(2); ok {
+		t.Error("patch for unknown peer 2 added it")
+	}
+}
+
 func TestNodeBackendRouteManagerExtras(t *testing.T) {
 	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
 
