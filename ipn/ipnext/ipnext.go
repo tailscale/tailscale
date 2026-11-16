@@ -22,7 +22,6 @@ import (
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
 	"tailscale.com/types/dnstype"
-	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/mapx"
 	"tailscale.com/types/netmap"
@@ -466,9 +465,10 @@ type Hooks struct {
 	// See [filter.Filter] for details on how these hooks are invoked.
 	Filter FilterHooks
 
-	// ExtraWireGuardAllowedIPs is called with a sequence of peers whose
-	// extra AllowedIPs the caller wants (re)computed, and returns
-	// prefixes to append to those peers' AllowedIPs, keyed by node ID.
+	// ExtraWireGuardAllowedIPs is called with a sequence of the node IDs
+	// of peers whose extra AllowedIPs the caller wants (re)computed, and
+	// returns prefixes to append to those peers' AllowedIPs, keyed by
+	// node ID.
 	//
 	// The sequence is not necessarily all peers: callers may pass any
 	// subset (such as only the peers changed by a netmap delta), and
@@ -500,7 +500,7 @@ type Hooks struct {
 	// TODO(#17858): This hook may not be needed and can possibly be replaced by
 	// new hooks that fit into the new architecture that make use of new
 	// WireGuard APIs.
-	ExtraWireGuardAllowedIPs feature.Hook[func(peers iter.Seq2[tailcfg.NodeID, key.NodePublic]) map[tailcfg.NodeID][]netip.Prefix]
+	ExtraWireGuardAllowedIPs feature.Hook[func(peers iter.Seq[tailcfg.NodeID]) map[tailcfg.NodeID][]netip.Prefix]
 
 	// ExtraRouterConfigRoutes returns a view of prefixes to append to [router.Config.Routes].
 	//

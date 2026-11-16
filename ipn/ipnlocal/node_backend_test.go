@@ -652,10 +652,10 @@ func TestNodeBackendRouteManagerExtras(t *testing.T) {
 	nb.SetNetMap(&netmap.NetworkMap{Peers: []tailcfg.NodeView{p1}})
 
 	transit := netip.MustParsePrefix("fe80::1234/128")
-	extrasFor := func(peers iter.Seq2[tailcfg.NodeID, key.NodePublic]) map[tailcfg.NodeID][]netip.Prefix {
+	extrasFor := func(peers iter.Seq[tailcfg.NodeID]) map[tailcfg.NodeID][]netip.Prefix {
 		var extras map[tailcfg.NodeID][]netip.Prefix
-		for id, k := range peers {
-			if k == p1.Key() {
+		for id := range peers {
+			if id == p1.ID() {
 				mak.Set(&extras, id, []netip.Prefix{transit})
 			}
 		}
@@ -681,7 +681,7 @@ func TestNodeBackendRouteManagerExtras(t *testing.T) {
 	}
 
 	// A hook that no longer returns extras removes them.
-	changed = nb.updateRouteManagerExtras(func(iter.Seq2[tailcfg.NodeID, key.NodePublic]) map[tailcfg.NodeID][]netip.Prefix {
+	changed = nb.updateRouteManagerExtras(func(iter.Seq[tailcfg.NodeID]) map[tailcfg.NodeID][]netip.Prefix {
 		return nil
 	})
 	if len(changed) != 1 {
