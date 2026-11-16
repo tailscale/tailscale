@@ -27,17 +27,16 @@ func getMemoryOptions() []device.Option {
 	//
 	// Small queues park I/O goroutines and hurt throughput; large queues allow
 	// more packet batches and their associated memory to remain outstanding. We
-	// have to find a balance. Crypto goroutines are sized to [runtime.NumCPU]
-	// in wireguard-go, so we start there, and apply a benchmark-backed scaling
-	// factor to reduce head I/O goroutines parking around bursts.
+	// have to find a balance. Crypto goroutines are sized to cgroup-aware
+	// [runtime.GOMAXPROCS] in wireguard-go, so we start there, and apply a
+	// benchmark-backed scaling factor to reduce head I/O goroutines parking
+	// around bursts.
 	const cpuScalingFactor = 4
 	// maxQueueSize was the previous static default, prior to creation of the
 	// [device.Option].
 	const maxQueueSize = 1024
 	return []device.Option{
-		// TODO: make cgroup-aware with runtime.GOMAXPROCS(0).
-		// See tailscale/corp#47966.
-		device.WithQueueInboundSize(min(maxQueueSize, runtime.NumCPU()*cpuScalingFactor)),
-		device.WithQueueOutboundSize(min(maxQueueSize, runtime.NumCPU()*cpuScalingFactor)),
+		device.WithQueueInboundSize(min(maxQueueSize, runtime.GOMAXPROCS(0)*cpuScalingFactor)),
+		device.WithQueueOutboundSize(min(maxQueueSize, runtime.GOMAXPROCS(0)*cpuScalingFactor)),
 	}
 }
