@@ -42,7 +42,7 @@ func resolveAuthKey(ctx context.Context, args tailscale.ResolveAuthKeyWIFArgs) (
 		}
 		providerIdToken, err := wif.ObtainProviderToken(ctx, args.Audience)
 		if err != nil {
-			return "", errors.New("federated identity authkeys require --id-token")
+			return "", fmt.Errorf("could not obtain an ID token for audience %q from the environment: %w; pass --id-token explicitly", args.Audience, err)
 		}
 		args.IDToken = providerIdToken
 	}
