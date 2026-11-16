@@ -26,6 +26,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/studio-b12/gowebdav"
 	"tailscale.com/drive"
+	"tailscale.com/drive/driveimpl/compositedav"
 	"tailscale.com/drive/driveimpl/shared"
 	"tailscale.com/tstest"
 )
@@ -428,6 +429,53 @@ func TestUNLOCK(t *testing.T) {
 	}
 }
 
+// TestLOCKCreateInvalidatesStatCache verifies that a LOCK that creates a
+// missing file is visible to the next PROPFIND, even though the earlier
+// PROPFIND cached a 404 for the same path.
+func TestLOCKCreateInvalidatesStatCache(t *testing.T) {
+	s := newSystemWithStatCache(t, &compositedav.StatCache{TTL: time.Hour})
+
+	s.addRemote(remote1)
+	s.addShare(remote1, share11, drive.PermissionReadWrite)
+
+	client := &http.Client{
+		Transport: &http.Transport{DisableKeepAlives: true},
+	}
+
+	u := fmt.Sprintf("http://%s/%s/%s/%s/%s",
+		s.local.ln.Addr(),
+		url.PathEscape(domain),
+		url.PathEscape(remote1),
+		url.PathEscape(share11),
+		url.PathEscape(file112))
+
+	do := func(method string, body io.Reader) int {
+		t.Helper()
+		req, err := http.NewRequest(method, u, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Depth", "0")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		io.Copy(io.Discard, resp.Body)
+		return resp.StatusCode
+	}
+
+	if got := do("PROPFIND", nil); got != http.StatusNotFound {
+		t.Fatalf("PROPFIND before LOCK: got status %d, want %d", got, http.StatusNotFound)
+	}
+	if got := do("LOCK", strings.NewReader(lockBody)); got != http.StatusCreated {
+		t.Fatalf("LOCK: got status %d, want %d", got, http.StatusCreated)
+	}
+	if got := do("PROPFIND", nil); got != http.StatusMultiStatus {
+		t.Fatalf("PROPFIND after LOCK: got status %d, want %d", got, http.StatusMultiStatus)
+	}
+}
+
 type local struct {
 	ln net.Listener
 	fs *FileSystemForLocal
@@ -502,10 +550,14 @@ func (s *system) Generation() uint64 {
 }
 
 func newSystem(t *testing.T) *system {
+	return newSystemWithStatCache(t, nil)
+}
+
+func newSystemWithStatCache(t *testing.T, statCache *compositedav.StatCache) *system {
 	// Make sure we don't leak goroutines
 	tstest.ResourceCheck(t)
 
-	fs := newFileSystemForLocal(log.Printf, nil)
+	fs := newFileSystemForLocal(log.Printf, statCache)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to Listen: %s", err)
