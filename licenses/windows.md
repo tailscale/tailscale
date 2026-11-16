@@ -70,5 +70,17 @@ Windows][].  See also the dependencies in the [Tailscale CLI][].
 
 ## Additional Dependencies
 
+ - [.NET](https://github.com/dotnet/runtime) ([MIT](https://github.com/dotnet/runtime/blob/main/LICENSE.TXT))
+ - [.NET Community Toolkit](https://github.com/CommunityToolkit/dotnet) ([MIT](https://github.com/CommunityToolkit/dotnet/blob/main/License.md))
+ - [C#/WinRT](https://github.com/microsoft/CsWinRT) ([MIT](https://github.com/microsoft/CsWinRT/blob/master/LICENSE))
+ - [CsWin32](https://github.com/microsoft/CsWin32) ([MIT](https://github.com/microsoft/CsWin32/blob/main/LICENSE))
+ - [DynamicData](https://github.com/reactivemarbles/DynamicData) ([MIT](https://github.com/reactivemarbles/DynamicData/blob/main/LICENSE))
+ - [MessageFormat.NET](https://github.com/jeffijoe/messageformat.net) ([MIT](https://github.com/jeffijoe/messageformat.net/blob/master/LICENSE))
+ - [Reactive Extensions for .NET](https://github.com/dotnet/reactive) ([MIT](https://github.com/dotnet/reactive/blob/main/LICENSE))
+ - [System.CommandLine](https://github.com/dotnet/command-line-api) ([MIT](https://github.com/dotnet/command-line-api/blob/main/LICENSE.md))
+ - [Twemoji Mozilla](https://github.com/mozilla/twemoji-colr) ([Apache-2.0, CC-BY-4.0](https://github.com/mozilla/twemoji-colr/blob/master/LICENSE.md))
+ - [Win2D](https://github.com/microsoft/Win2D) ([MIT](https://github.com/microsoft/Win2D/blob/winappsdk/main/LICENSE.txt))
+ - [Windows Community Toolkit](https://github.com/CommunityToolkit/Windows) ([MIT](https://github.com/CommunityToolkit/Windows/blob/main/License.md))
  - [Wintun](https://www.wintun.net/) ([Prebuilt Binaries License](https://git.zx2c4.com/wintun/tree/prebuilt-binaries-license.txt))
  - [wireguard-windows](https://git.zx2c4.com/wireguard-windows/) ([MIT](https://git.zx2c4.com/wireguard-windows/tree/COPYING))
+ - [XAML Behaviors](https://github.com/microsoft/XamlBehaviors) ([MIT](https://github.com/microsoft/XamlBehaviors/blob/main/LICENSE))
