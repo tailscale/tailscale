@@ -465,6 +465,10 @@ type LocalBackend struct {
 	// avoid unnecessary churn between multiple equally-good options.
 	lastSuggestedExitNode tailcfg.StableNodeID
 
+	// suggestedExitNodePending is set when lastSuggestedExitNode changed and
+	// no broadcast [ipn.Notify] has carried the new value yet.
+	suggestedExitNodePending bool
+
 	// allowedSuggestedExitNodes is a set of exit nodes permitted by the most recent
 	// [pkey.AllowedSuggestedExitNodes] value. The allowedSuggestedExitNodesMu
 	// mutex guards access to this set.
@@ -1989,6 +1993,11 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		}
 	}
 
+	// notify collects the login, prefs, netmap, and exit node changes from
+	// this status. It is sent once, below, before the state machine runs.
+	var notify ipn.Notify
+	notifyPending := false // true once notify must be sent
+
 	wasBlocked := b.blocked
 	authWasInProgress := b.authURL != ""
 	keyExpiryExtended := false
@@ -2013,7 +2022,8 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 			b.blockEngineUpdatesLocked(false)
 		}
 		b.authReconfigLocked()
-		b.sendLocked(ipn.Notify{LoginFinished: &empty.Message{}})
+		notify.LoginFinished = &empty.Message{}
+		notifyPending = true
 	}
 
 	prefsChanged := false
@@ -2087,8 +2097,6 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		}); err != nil {
 			b.logf("Failed to save new controlclient state: %v", err)
 		}
-
-		b.sendToLocked(ipn.Notify{Prefs: new(prefs.View())}, allClients)
 	}
 
 	// initTKALocked is dependent on CurrentProfile.ID, which is initialized
@@ -2098,7 +2106,6 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 	}
 
 	// Perform all reconfiguration based on the netmap here.
-	var oldPeers []tailcfg.NodeView // set below only if hasPeerChangeWatcherLocked
 	if st.NetMap != nil {
 		b.capTailnetLock = st.NetMap.HasCap(nodecap.TailnetLock)
 		b.setWebClientAtomicBoolLocked(st.NetMap.AllCaps)
@@ -2110,6 +2117,8 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		b.mu.Lock()
 		if b.cc != c {
 			// The client was replaced (e.g. by Logout) while b.mu was released.
+			// The Notify built so far is dropped. The replacing path has
+			// already sent its own prefs.
 			b.logf("Ignoring SetControlClientStatus from old client")
 			return
 		}
@@ -2132,30 +2141,30 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		}
 		// Snapshot the live peer set (last full netmap plus deltas) so the
 		// peer-change Notify below can report the peers this netmap drops.
+		var oldPeers []tailcfg.NodeView
 		if b.hasPeerChangeWatcherLocked() {
 			oldPeers = cn.Peers()
 		}
 		b.setNetMapLocked(st.NetMap)
 		b.updateFilterLocked(prefs.View())
-	}
 
-	// Now complete the lock-free parts of what we started while locked.
-	if st.NetMap != nil {
 		if envknob.NoLogsNoSupport() && st.NetMap.HasCap(nodecap.DataPlaneAuditLogs) {
 			msg := "tailnet requires logging to be enabled. Remove --no-logs-no-support from tailscaled command line."
 			b.health.SetLocalLogConfigHealth(errors.New(msg))
 			// Get the current prefs again, since we unlocked above.
 			prefs := b.pm.CurrentPrefs().AsStruct()
 			prefs.WantRunning = false
-			p := prefs.View()
-			if err := b.pm.SetPrefs(p, ipn.NetworkProfile{
+			if err := b.pm.SetPrefs(prefs.View(), ipn.NetworkProfile{
 				MagicDNSName: st.NetMap.MagicDNSSuffix(),
 				DomainName:   st.NetMap.DomainName(),
 				DisplayName:  st.NetMap.TailnetDisplayName(),
 			}); err != nil {
 				b.logf("Failed to save new controlclient state: %v", err)
 			}
-			b.sendLocked(ipn.Notify{ErrMessage: &msg, Prefs: &p})
+			notify.ErrMessage = &msg
+			notify.Prefs = new(b.pm.CurrentPrefs())
+			b.addSuggestedExitNodeLocked(&notify)
+			b.sendLocked(notify)
 			return
 		}
 		if oldNetMap != nil {
@@ -2198,11 +2207,10 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		// consumers (containerboot, kube agents, sniproxy, etc.) listen on
 		// this signal and re-fetch peers/DNS via other LocalAPI methods if
 		// they need more than self info.
-		var selfChange *tailcfg.Node
 		if st.NetMap.SelfNode.Valid() {
-			selfChange = st.NetMap.SelfNode.AsStruct()
+			notify.SelfChange = st.NetMap.SelfNode.AsStruct()
 		}
-		notify := ipn.Notify{SelfChange: selfChange}
+		notifyPending = true
 		if b.hasPeerChangeWatcherLocked() {
 			notify.UserProfiles = st.NetMap.UserProfiles
 			notify.PeersChanged = make([]*tailcfg.Node, 0, len(st.NetMap.Peers))
@@ -2219,24 +2227,32 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 				}
 			}
 		}
-		b.sendLocked(notify)
 
-		// The error here is unimportant as is the result.  This will recalculate the suggested exit node
-		// cache the value and push any changes to the IPN bus.
+		// Recalculate the suggested exit node against the new netmap. A
+		// changed suggestion is added to notify below.
 		b.suggestExitNodeLocked()
 
-		// Check and update the exit node if needed, now that we have a new netmap.
-		//
-		// This must happen after the netmap change is sent via [ipn.Notify],
-		// so the GUI can correctly display the exit node if it has changed
-		// since the last netmap was sent.
-		//
-		// Otherwise, it might briefly show the exit node as offline and display a warning,
-		// if the node wasn't online or wasn't advertising default routes in the previous netmap.
+		// Re-resolve the exit node against the new netmap. The resolved
+		// prefs ride in the same Notify as the peers they select.
 		if b.refreshExitNodeLocked() {
-			b.sendLocked(ipn.Notify{Prefs: new(b.pm.CurrentPrefs())})
+			prefsChanged = true
 		}
 	}
+
+	// The prefs in effect are in b.pm, not in the local copy. They may have
+	// changed since the copy was made, by the exit node resolution above or
+	// by an edit made while b.mu was released for tkaSyncIfNeeded.
+	if prefsChanged {
+		notify.Prefs = new(b.pm.CurrentPrefs())
+		notifyPending = true
+	}
+	if b.addSuggestedExitNodeLocked(&notify) {
+		notifyPending = true
+	}
+	if notifyPending {
+		b.sendLocked(notify)
+	}
+
 	if st.URL != "" {
 		b.logf("Received auth URL: %.20v...", st.URL)
 		b.setAuthURLLocked(st.URL)
@@ -2572,7 +2588,11 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	defer func() {
 		// Sent while b.mu is still held, so it reflects the state this
 		// delta produced and nothing newer.
+		if b.suggestedExitNodePending && notify == nil {
+			notify = &ipn.Notify{}
+		}
 		if notify != nil {
+			b.addSuggestedExitNodeLocked(notify)
 			b.sendLocked(*notify)
 		}
 	}()
@@ -3500,7 +3520,9 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 
 	blid := b.backendLogID.String()
 	b.logf("Backend: logs: be:%v fe:%v", blid, opts.FrontendLogID)
-	b.sendToLocked(ipn.Notify{Prefs: &prefs}, allClients)
+	notify := ipn.Notify{Prefs: &prefs}
+	b.addSuggestedExitNodeLocked(&notify)
+	b.sendToLocked(notify, allClients)
 
 	// initialize Taildrive shares from saved state
 	if fs, ok := b.sys.DriveForRemote.GetOK(); ok {
@@ -4130,6 +4152,9 @@ func (b *LocalBackend) buildInitialNotifyLocked(sb *ipnstate.StatusBuilder, sess
 		if en, err := b.suggestExitNodeLocked(); err == nil {
 			ini.SuggestedExitNode = &en.ID
 		}
+		// Existing sessions do not receive the initial Notify. Broadcast
+		// a changed suggestion to them.
+		b.sendSuggestedExitNodeLocked()
 	}
 	if mask&ipn.NotifyInitialClientVersion != 0 {
 		if prefs := b.pm.CurrentPrefs(); prefs.Valid() && prefs.AutoUpdate().Check {
@@ -5959,7 +5984,9 @@ func (b *LocalBackend) setPrefsLocked(newp *ipn.Prefs) ipn.PrefsView {
 		}
 	}
 
-	b.sendLocked(ipn.Notify{Prefs: &prefs})
+	notify := ipn.Notify{Prefs: &prefs}
+	b.addSuggestedExitNodeLocked(&notify)
+	b.sendLocked(notify)
 	return prefs
 }
 
@@ -7605,8 +7632,17 @@ func (b *LocalBackend) RefreshExitNode() {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	var notify ipn.Notify
+	send := false
 	if b.refreshExitNodeLocked() {
-		b.sendLocked(ipn.Notify{Prefs: new(b.pm.CurrentPrefs())})
+		notify.Prefs = new(b.pm.CurrentPrefs())
+		send = true
+	}
+	if b.addSuggestedExitNodeLocked(&notify) {
+		send = true
+	}
+	if send {
+		b.sendLocked(notify)
 	}
 }
 
@@ -8882,6 +8918,7 @@ func (b *LocalBackend) resetForProfileChangeLocked() error {
 	b.lastServeConfJSON = mem.B(nil)
 	b.serveConfig = ipn.ServeConfigView{}
 	b.lastSuggestedExitNode = ""
+	b.suggestedExitNodePending = false
 	b.keyExpired = false
 	b.setNodeRemovedLocked(false)
 	b.resetAlwaysOnOverrideLocked()
@@ -9201,6 +9238,11 @@ var ErrNoPreferredDERP = errors.New("no preferred DERP, try again later")
 // When the client has [tailcfg.NodeAttrClientSideReachabilityRouteCheck] in its CapMap,
 // it will use [HookRouteCheckReport] to get the latest cached routecheck report.
 //
+// It does not notify clients of a changed suggestion. A caller that goes on
+// to broadcast an [ipn.Notify] must call [LocalBackend.addSuggestedExitNodeLocked]
+// on it first. A caller that broadcasts nothing else must call
+// [LocalBackend.sendSuggestedExitNodeLocked] instead.
+//
 // b.mu must be held.
 func (b *LocalBackend) suggestExitNodeLocked() (response apitype.ExitNodeSuggestionResponse, err error) {
 	if !buildfeatures.HasUseExitNode {
@@ -9229,12 +9271,37 @@ func (b *LocalBackend) suggestExitNodeLocked() (response apitype.ExitNodeSuggest
 		return res, err
 	}
 	if prevSuggestion != res.ID {
-		// Notify the clients via the IPN bus if the exit node suggestion has changed.
-		b.sendToLocked(ipn.Notify{SuggestedExitNode: &res.ID}, allClients)
+		b.suggestedExitNodePending = true
 	}
 	b.lastSuggestedExitNode = res.ID
 
 	return res, err
+}
+
+// addSuggestedExitNodeLocked sets n.SuggestedExitNode to the current
+// suggestion if it changed since the last broadcast, marks it as sent, and
+// reports whether it set the field. The caller must then send n to all
+// clients.
+//
+// b.mu must be held.
+func (b *LocalBackend) addSuggestedExitNodeLocked(n *ipn.Notify) (added bool) {
+	if !b.suggestedExitNodePending {
+		return false
+	}
+	n.SuggestedExitNode = new(b.lastSuggestedExitNode)
+	b.suggestedExitNodePending = false
+	return true
+}
+
+// sendSuggestedExitNodeLocked broadcasts the current exit node suggestion
+// if it changed since the last broadcast.
+//
+// b.mu must be held.
+func (b *LocalBackend) sendSuggestedExitNodeLocked() {
+	var n ipn.Notify
+	if b.addSuggestedExitNodeLocked(&n) {
+		b.sendLocked(n)
+	}
 }
 
 // SuggestExitNode computes an exit-node suggestion based on the current netmap and
@@ -9247,7 +9314,9 @@ func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionRes
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.suggestExitNodeLocked()
+	response, err = b.suggestExitNodeLocked()
+	b.sendSuggestedExitNodeLocked()
+	return response, err
 }
 
 // getAllowedSuggestions returns a set of exit nodes permitted by the most recent

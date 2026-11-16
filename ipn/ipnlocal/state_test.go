@@ -609,15 +609,16 @@ func TestStateMachine(t *testing.T) {
 	// Pretend that the interactive login actually happened.
 	// Controlclient always sends the netmap and LoginFinished at the
 	// same time.
-	// The backend should propagate this upward for the UI.
+	// The backend reports LoginFinished and the updated prefs to the UI
+	// in one notification.
 	t.Logf("\n\nLoginFinished")
-	notifies.expect(3)
+	notifies.expect(2)
 	cc.persist.UserProfile.LoginName = "user1"
 	cc.persist.NodeID = "node1"
 
 	cc.send(sendOpt{loginFinished: true, nm: &netmap.NetworkMap{}})
 	{
-		nn := notifies.drain(3)
+		nn := notifies.drain(2)
 		// Arguably it makes sense to unpause now, since the machine
 		// authorization status is part of the netmap.
 		//
@@ -628,9 +629,9 @@ func TestStateMachine(t *testing.T) {
 		// it's visible in the logs)
 		cc.assertCalls()
 		c.Assert(nn[0].LoginFinished, qt.IsNotNil)
-		c.Assert(nn[1].Prefs, qt.IsNotNil)
-		c.Assert(nn[1].Prefs.Persist().UserProfile().LoginName(), qt.Equals, "user1")
-		// nn[2] is a state notification after login
+		c.Assert(nn[0].Prefs, qt.IsNotNil)
+		c.Assert(nn[0].Prefs.Persist().UserProfile().LoginName(), qt.Equals, "user1")
+		// nn[1] is a state notification after login
 		// Verify login finished but need machine auth using backend state
 		c.Assert(isFullyAuthenticated(b), qt.IsTrue)
 		c.Assert(needsMachineAuth(b), qt.IsTrue)
@@ -829,7 +830,7 @@ func TestStateMachine(t *testing.T) {
 		c.Assert(*nn[1].BrowseToURL, qt.Equals, url3)
 	}
 	t.Logf("%q visited", url3)
-	notifies.expect(3)
+	notifies.expect(2)
 	cc.persist.UserProfile.LoginName = "user2"
 	cc.persist.NodeID = "node2"
 	cc.send(sendOpt{loginFinished: true, nm: &netmap.NetworkMap{
@@ -837,16 +838,17 @@ func TestStateMachine(t *testing.T) {
 	}})
 	t.Logf("\n\nLoginFinished3")
 	{
-		nn := notifies.drain(3)
+		nn := notifies.drain(2)
 		c.Assert(nn[0].LoginFinished, qt.IsNotNil)
-		c.Assert(nn[1].Prefs, qt.IsNotNil)
-		c.Assert(nn[1].Prefs.Persist(), qt.IsNotNil)
+		c.Assert(nn[0].Prefs, qt.IsNotNil)
+		c.Assert(nn[0].Prefs.Persist(), qt.IsNotNil)
 		// Prefs after finishing the login, so LoginName updated.
-		c.Assert(nn[1].Prefs.Persist().UserProfile().LoginName(), qt.Equals, "user2")
-		c.Assert(nn[1].Prefs.LoggedOut(), qt.IsFalse)
+		c.Assert(nn[0].Prefs.Persist().UserProfile().LoginName(), qt.Equals, "user2")
+		c.Assert(nn[0].Prefs.LoggedOut(), qt.IsFalse)
 		// If a user initiates an interactive login, they also expect WantRunning to become true.
-		c.Assert(nn[1].Prefs.WantRunning(), qt.IsTrue)
-		// nn[2] is state notification (Starting) - verify using backend state
+		c.Assert(nn[0].Prefs.WantRunning(), qt.IsTrue)
+		// nn[1] is the Starting state notification. The asserts below
+		// check the backend state instead.
 		c.Assert(isWantRunning(b), qt.IsTrue)
 		c.Assert(isLoggedIn(b), qt.IsTrue)
 	}
@@ -972,14 +974,14 @@ func TestStateMachine(t *testing.T) {
 	// user account than before. WantRunning changes to true after an
 	// interactive login, so we end up unpaused.
 	t.Logf("\n\nLoginDifferent URL visited")
-	notifies.expect(3)
+	notifies.expect(2)
 	cc.persist.UserProfile.LoginName = "user3"
 	cc.persist.NodeID = "node3"
 	cc.send(sendOpt{loginFinished: true, nm: &netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
 	}})
 	{
-		nn := notifies.drain(3)
+		nn := notifies.drain(2)
 		// BUG: pause() being called here is a bad sign.
 		//  It means that either the state machine ran at least once
 		//  with the old netmap, or it ran with the new login+netmap
@@ -988,12 +990,13 @@ func TestStateMachine(t *testing.T) {
 		//  reason to pause().
 		cc.assertCalls("unpause")
 		c.Assert(nn[0].LoginFinished, qt.IsNotNil)
-		c.Assert(nn[1].Prefs, qt.IsNotNil)
+		c.Assert(nn[0].Prefs, qt.IsNotNil)
 		// Prefs after finishing the login, so LoginName updated.
-		c.Assert(nn[1].Prefs.Persist().UserProfile().LoginName(), qt.Equals, "user3")
-		c.Assert(nn[1].Prefs.LoggedOut(), qt.IsFalse)
-		c.Assert(nn[1].Prefs.WantRunning(), qt.IsTrue)
-		// nn[2] is state notification (Starting) - verify using backend state
+		c.Assert(nn[0].Prefs.Persist().UserProfile().LoginName(), qt.Equals, "user3")
+		c.Assert(nn[0].Prefs.LoggedOut(), qt.IsFalse)
+		c.Assert(nn[0].Prefs.WantRunning(), qt.IsTrue)
+		// nn[1] is the Starting state notification. The asserts below
+		// check the backend state instead.
 		c.Assert(isWantRunning(b), qt.IsTrue)
 		c.Assert(isLoggedIn(b), qt.IsTrue)
 	}
