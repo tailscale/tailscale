@@ -8,3 +8,7 @@ package expvar
 type Int int64
 
 func (*Int) Add(int64) {}
+
+type Func func() any
+
+func (f Func) String() string { return "0" }

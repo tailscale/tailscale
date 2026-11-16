@@ -731,7 +731,7 @@ func NewConn(opts Options) (*Conn, error) {
 		UseDNSCache:         true,
 	}
 
-	c.metrics = registerMetrics(opts.Metrics)
+	c.metrics = registerMetrics(opts.Metrics, c)
 	if opts.Metrics != nil {
 		c.homeDERPGauge = opts.Metrics.NewGauge("tailscaled_home_derp_region_id", "DERP region ID of this node's home relay server")
 	}
@@ -758,7 +758,7 @@ func NewConn(opts Options) (*Conn, error) {
 // registerMetrics wires up the metrics for wgengine, instead of
 // registering the label metric directly, the underlying expvar is exposed.
 // See metrics for more info.
-func registerMetrics(reg *usermetric.Registry) *metrics {
+func registerMetrics(reg *usermetric.Registry, c *Conn) *metrics {
 	pathDirectV4 := pathLabel{Path: PathDirectIPv4}
 	pathDirectV6 := pathLabel{Path: PathDirectIPv6}
 	pathDERP := pathLabel{Path: PathDERP}
@@ -775,6 +775,12 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 		"tailscaled_inbound_bytes_total",
 		"counter",
 		"Counts the number of bytes received from other peers",
+	)
+	peersConnected := usermetric.NewMultiLabelMapWithRegistry[pathLabel](
+		reg,
+		"tailscaled_peers_connected",
+		"gauge",
+		"Number of active peers by the path the next packet to them would take",
 	)
 	outboundPacketsTotal := usermetric.NewMultiLabelMapWithRegistry[pathLabel](
 		reg,
@@ -845,7 +851,42 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 
 	outboundPacketsDroppedErrors.Set(usermetric.DropLabels{Reason: usermetric.ReasonError}, &m.outboundPacketsDroppedErrors)
 
+	// All five paths are Set unconditionally so every series
+	// exists (at 0) even with no peers. Values are computed at
+	// scrape time; each label walks the peers independently, so
+	// counts within one scrape are not a consistent snapshot.
+	for _, pl := range []pathLabel{pathDirectV4, pathDirectV6, pathDERP, pathPeerRelayV4, pathPeerRelayV6} {
+		peersConnected.Set(pl, expvar.Func(func() any {
+			return c.peerPathCount(pl.Path)
+		}))
+	}
+
 	return m
+}
+
+// peerPathCount returns the number of active peers whose current
+// path is p. See endpoint.currentPathLocked for the definition of
+// active and the path classification.
+func (c *Conn) peerPathCount(p Path) int64 {
+	now := mono.Now()
+
+	c.mu.Lock()
+	eps := make([]*endpoint, 0, c.peerMap.nodeCount())
+	c.peerMap.forEachEndpoint(func(ep *endpoint) {
+		eps = append(eps, ep)
+	})
+	c.mu.Unlock()
+
+	var n int64
+	for _, de := range eps {
+		de.mu.Lock()
+		path, ok := de.currentPathLocked(now)
+		de.mu.Unlock()
+		if ok && path == p {
+			n++
+		}
+	}
+	return n
 }
 
 // deregisterMetrics unregisters the underlying usermetrics expvar counters
