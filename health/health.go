@@ -269,10 +269,9 @@ type Warnable struct {
 	// the Args of the unhappy state, just like we do in the Text function.
 	Severity Severity
 	// DependsOn is a set of Warnables that this Warnable depends on and need to be healthy
-	// before this Warnable is relevant. The GUI can use this information to ignore
-	// this Warnable if one of its dependencies is unhealthy.
-	// That is, if any of these Warnables are unhealthy, then this Warnable is not relevant
-	// and should be considered healthy to bother the user about.
+	// before this Warnable is relevant. If any of these Warnables are unhealthy, the [Tracker]
+	// treats this Warnable as healthy and omits it from [State] and [Tracker.Strings],
+	// so clients do not need to check the dependencies themselves.
 	DependsOn []*Warnable
 
 	// MapDebugFlag is a MapRequest.DebugFlag that is sent to control when this Warnable is unhealthy

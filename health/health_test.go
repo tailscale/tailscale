@@ -449,6 +449,44 @@ func TestCheckDependsOnAppearsInUnhealthyState(t *testing.T) {
 	}
 }
 
+// TestWarmingUpHidesOtherWarnables asserts that unhealthy Warnables are omitted from
+// [Tracker.CurrentState] and [Tracker.Strings] while the backend is warming up.
+func TestWarmingUpHidesOtherWarnables(t *testing.T) {
+	ht := NewTracker(eventbustest.NewBus(t))
+	w := Register(&Warnable{
+		Code: "w",
+		Text: StaticMessage("W Text"),
+	})
+	defer unregister(w)
+
+	ht.SetIPNState("Starting", true)
+	ht.SetUnhealthy(w, nil)
+
+	warnings := ht.CurrentState().Warnings
+	if _, ok := warnings[warmingUpWarnable.Code]; !ok {
+		t.Fatalf("warming-up warnable is not unhealthy; want unhealthy")
+	}
+	if _, ok := warnings[w.Code]; ok {
+		t.Errorf("w is unhealthy while warming up; want it hidden")
+	}
+	if got := ht.Strings(); slices.Contains(got, "W Text") {
+		t.Errorf("Strings() = %q while warming up; want w hidden", got)
+	}
+
+	ht.SetIPNState("Running", true)
+
+	warnings = ht.CurrentState().Warnings
+	if _, ok := warnings[warmingUpWarnable.Code]; ok {
+		t.Errorf("warming-up warnable is unhealthy in Running state; want healthy")
+	}
+	if _, ok := warnings[w.Code]; !ok {
+		t.Errorf("w is not unhealthy after warming up; want unhealthy")
+	}
+	if got := ht.Strings(); !slices.Contains(got, "W Text") {
+		t.Errorf("Strings() = %q after warming up; want w included", got)
+	}
+}
+
 func TestShowUpdateWarnable(t *testing.T) {
 	tests := []struct {
 		desc         string
@@ -1003,7 +1041,7 @@ func TestCurrentStateETagWarnable(t *testing.T) {
 	newTracker := func(clock tstime.Clock) *Tracker {
 		ht := NewTracker(eventbustest.NewBus(t))
 		ht.testClock = clock
-		ht.SetIPNState("NeedsLogin", true)
+		ht.SetIPNState("Running", true)
 		ht.GotStreamedMapResponse()
 		return ht
 	}
