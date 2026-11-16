@@ -52,9 +52,10 @@ type ServerEndpoint struct {
 	// associated with this endpoint.
 	VNI uint32
 
-	// BindLifetime is amount of time post-allocation the Server will consider
-	// the endpoint active while it has yet to be bound via 3-way bind handshake
-	// from both client parties.
+	// BindLifetime is the time remaining for both clients to complete the
+	// 3-way bind handshake, excluding transit time for this description.
+	// For bound endpoints it is the server's normal bind lifetime;
+	// SteadyStateLifetime governs expiration instead.
 	BindLifetime tstime.GoDuration
 
 	// SteadyStateLifetime is the amount of time post 3-way bind handshake from

@@ -12,10 +12,8 @@ import (
 // ServerStatus contains the listening UDP port and active sessions (if any) for
 // this node's peer relay server at a point in time.
 type ServerStatus struct {
-	// UDPPort is the UDP port number that the peer relay server forwards over,
-	// as configured by the user with 'tailscale set --relay-server-port=<PORT>'.
-	// If the port has not been configured, UDPPort will be nil. A non-nil zero
-	// value signifies the user has opted for a random unused port.
+	// UDPPort is the server's bound IPv4 UDP port, or nil if it is not running.
+	// If the configured port is zero, UDPPort reports the chosen port.
 	UDPPort *uint16
 	// Sessions is a slice of detailed status information about each peer
 	// relay session that this node's peer relay server is involved with. It
