@@ -69,6 +69,16 @@ type Config struct {
 	// hasHostsWithoutSplitDNSRoutes reports true, keeping quad-100
 	// in the OS resolver path so the names still resolve.
 	MagicDNSHostsUnrouted bool
+	// DefaultResolversLocalOnly, if true, means DefaultResolvers are for
+	// quad-100's own forwarding only. The OS keeps its own default
+	// resolver: instead of installing the resolvers, or quad-100 as
+	// their proxy, as the OS's primary resolver, any resolver the OS
+	// gets is scoped to the tailnet's match domains. It comes from the
+	// "tailscale set --override-dns=false" preference. It does not
+	// apply to exit node DNS or fallback resolvers, and quad-100 still
+	// becomes the OS's primary resolver when names would otherwise
+	// stop resolving.
+	DefaultResolversLocalOnly bool
 }
 
 var magicDNSDualStack = envknob.RegisterBool("TS_DEBUG_MAGIC_DNS_DUAL_STACK")
