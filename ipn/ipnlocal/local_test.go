@@ -3316,6 +3316,41 @@ func TestNotifyForSessionUserProfilesDedupResetsOnSelfChange(t *testing.T) {
 	}
 }
 
+// TestNotifyForSessionUserProfilesDedupResetsOnProfileChange tests that
+// user profiles are resent after switching to a profile that never gets
+// a self node, such as a logged out one, and back.
+func TestNotifyForSessionUserProfilesDedupResetsOnProfileChange(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	sess := &watchSession{
+		sessionID: "test-session",
+		ctx:       t.Context(),
+		mask:      ipn.NotifyPeerChanges,
+		ch:        make(chan *ipn.Notify, 100),
+	}
+	self := &tailcfg.Node{ID: 1, StableID: "self", User: 10}
+	profiles := map[tailcfg.UserID]tailcfg.UserProfileView{
+		10: (&tailcfg.UserProfile{ID: 10, LoginName: "alice@example.com", DisplayName: "Alice"}).View(),
+		11: (&tailcfg.UserProfile{ID: 11, LoginName: "tagged-devices", DisplayName: "Tagged Devices"}).View(),
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	mak.Set(&b.notifyWatchers, sess.sessionID, sess)
+
+	n := b.notifyForSessionLocked(sess, &ipn.Notify{SelfChange: self, UserProfiles: profiles})
+	if got, want := len(n.UserProfiles), len(profiles); got != want {
+		t.Fatalf("initial UserProfiles len = %d; want %d", got, want)
+	}
+	if err := b.resetForProfileChangeLocked(); err != nil {
+		t.Fatal(err)
+	}
+	n = b.notifyForSessionLocked(sess, &ipn.Notify{SelfChange: self, UserProfiles: profiles})
+	if got, want := len(n.UserProfiles), len(profiles); got != want {
+		t.Fatalf("UserProfiles len after profile change = %d; want %d", got, want)
+	}
+}
+
 // tests LocalBackend.updateNetmapDeltaLocked
 func TestUpdateNetmapDelta(t *testing.T) {
 	b := newTestLocalBackend(t)

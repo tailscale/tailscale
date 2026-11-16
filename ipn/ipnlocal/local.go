@@ -207,6 +207,8 @@ type watchSession struct {
 	// this session via [Notify.SelfChange]. A change to self is a profile
 	// boundary for implicit bus state, so per-session dedup state such as
 	// lastSentUserProfile must be reset when this identity changes.
+	// It is itself reset on a profile change, as the new profile may
+	// have no self node.
 	lastSentSelf tailcfg.NodeView
 
 	// policyUID is the user ID used for policy snapshot scoping.
@@ -8824,6 +8826,14 @@ func (b *LocalBackend) resetForProfileChangeLocked() error {
 		return nil
 	}
 	b.closeDiskCacheLocked()
+	// IPN bus watchers may drop the old node's implicit bus state
+	// on a profile switch, and the new profile may never deliver
+	// a self node to mark the boundary, such as when the new profile's
+	// node key has expired.
+	for _, sess := range b.notifyWatchers {
+		sess.lastSentUserProfile = nil
+		sess.lastSentSelf = tailcfg.NodeView{}
+	}
 	if buildfeatures.HasDNS {
 		if dm, ok := b.sys.DNSManager.GetOK(); ok {
 			dm.Resolver().ClearNegativeCache()
