@@ -1014,16 +1014,16 @@ func (nb *nodeBackend) updateRouteManagerPrefs(p routePrefs) routemanager.PeersW
 // updateRouteManagerExtras pushes extra WireGuard-only allowed IPs
 // into the route manager, obtained by calling fn (the
 // [ipnext.Hooks.ExtraWireGuardAllowedIPs] hook) with a sequence of
-// the current peers.
+// the current peers' node IDs.
 //
 // It returns the peers whose allowed source prefixes changed as a
 // result.
-func (nb *nodeBackend) updateRouteManagerExtras(fn func(peers iter.Seq2[tailcfg.NodeID, key.NodePublic]) map[tailcfg.NodeID][]netip.Prefix) routemanager.PeersWithRouteChanges {
+func (nb *nodeBackend) updateRouteManagerExtras(fn func(peers iter.Seq[tailcfg.NodeID]) map[tailcfg.NodeID][]netip.Prefix) routemanager.PeersWithRouteChanges {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
-	extras := fn(func(yield func(tailcfg.NodeID, key.NodePublic) bool) {
-		for id, p := range nb.peers {
-			if !yield(id, p.Key()) {
+	extras := fn(func(yield func(tailcfg.NodeID) bool) {
+		for id := range nb.peers {
+			if !yield(id) {
 				return
 			}
 		}

@@ -42,7 +42,6 @@ import (
 	"tailscale.com/tstime"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/dnstype"
-	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
@@ -287,7 +286,7 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 	})
 
 	// Tell WireGuard what Transit IPs belong to which connector peers.
-	e.host.Hooks().ExtraWireGuardAllowedIPs.Set(func(peers iter.Seq2[tailcfg.NodeID, key.NodePublic]) map[tailcfg.NodeID][]netip.Prefix {
+	e.host.Hooks().ExtraWireGuardAllowedIPs.Set(func(peers iter.Seq[tailcfg.NodeID]) map[tailcfg.NodeID][]netip.Prefix {
 		if !e.conn25.isConfigured() {
 			return nil
 		}
