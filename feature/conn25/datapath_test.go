@@ -25,20 +25,22 @@ import (
 )
 
 type testConn25 struct {
-	clientTransitIPForMagicIPFn             func(netip.Addr) (netip.Addr, error)
+	clientPrepareNewFlowForMagicIPFn        func(netip.Addr) (netip.Addr, error)
 	connectorRealIPForTransitIPConnectionFn func(netip.Addr, netip.Addr) (netip.Addr, error)
 }
 
-func (tc *testConn25) ClientTransitIPForMagicIP(magicIP netip.Addr) (netip.Addr, error) {
-	return tc.clientTransitIPForMagicIPFn(magicIP)
+// ClientPrepareNewFlowForMagicIP counts a flow, and so reports ok, exactly when
+// clientPrepareNewFlowForMagicIPFn resolves magicIP to a Transit IP.
+func (tc *testConn25) ClientPrepareNewFlowForMagicIP(magicIP netip.Addr) (ClientFlowRef, bool, error) {
+	transitIP, err := tc.clientPrepareNewFlowForMagicIPFn(magicIP)
+	if err != nil || !transitIP.IsValid() {
+		return ClientFlowRef{}, false, err
+	}
+	return ClientFlowRef{transit: transitIP}, true, nil
 }
 
 func (tc *testConn25) ConnectorRealIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, error) {
 	return tc.connectorRealIPForTransitIPConnectionFn(srcIP, transitIP)
-}
-
-func (tc *testConn25) ClientFlowCreated(transitIP netip.Addr) func() {
-	return func() {}
 }
 
 // testNet is the cast of addresses the datapath tests run against: a client,
@@ -159,7 +161,7 @@ func (tn testNet) newClientDatapath(t *testing.T, throwMappingErr bool) *datapat
 	t.Helper()
 
 	mock := &testConn25{}
-	mock.clientTransitIPForMagicIPFn = func(mip netip.Addr) (netip.Addr, error) {
+	mock.clientPrepareNewFlowForMagicIPFn = func(mip netip.Addr) (netip.Addr, error) {
 		if throwMappingErr {
 			return netip.Addr{}, errors.New("synthetic mapping error")
 		}
@@ -411,9 +413,9 @@ func TestClientFlowCache(t *testing.T) {
 			getTransitIPCalled := false
 
 			mock := &testConn25{}
-			mock.clientTransitIPForMagicIPFn = func(mip netip.Addr) (netip.Addr, error) {
+			mock.clientPrepareNewFlowForMagicIPFn = func(mip netip.Addr) (netip.Addr, error) {
 				if getTransitIPCalled {
-					t.Errorf("ClientGetTransitIPForMagicIP unexpectedly called more than once")
+					t.Errorf("ClientPrepareNewFlowForMagicIP unexpectedly called more than once")
 				}
 				getTransitIPCalled = true
 				return tn.transitIP, nil
@@ -597,14 +599,16 @@ func TestUnmappedTransitIPRejectWithFullInjectionQueue(t *testing.T) {
 				tun := newFakeTUN(t)
 				p := tn.udpPacket(
 					netip.AddrPortFrom(tn.unknownSrcIP, clientPort),
-					netip.AddrPortFrom(tn.transitIP, serverPort))
+					netip.AddrPortFrom(tn.transitIP, serverPort),
+				)
 
 				// Fill the injection queue (depth 1) and leave it unread,
 				// as its reader may be blocked behind wireguard-go's
 				// device.peers lock held by RemovePeer.
 				if err := tun.TryInjectOutbound(tn.udpPacket(
 					netip.AddrPortFrom(tn.clientSrcIP, clientPort),
-					netip.AddrPortFrom(tn.magicIP, serverPort)).Buffer()); err != nil {
+					netip.AddrPortFrom(tn.magicIP, serverPort),
+				).Buffer()); err != nil {
 					t.Fatal(err)
 				}
 
