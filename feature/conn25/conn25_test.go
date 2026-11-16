@@ -5,6 +5,7 @@ package conn25
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -4633,4 +4635,212 @@ func TestMakeServFail(t *testing.T) {
 			t.Error("expected an error to be logged")
 		}
 	})
+}
+
+func mintTokenLines(t *testing.T, c *Conn25, peerCap tailcfg.PeerCapMap, appParam string, raw []byte) []string {
+	t.Helper()
+	fph := fakePeerAPIHandler{peerCaps: peerCap}
+	requestURL := "http://peerapi:1234/dns-query"
+	if appParam != "" {
+		requestURL = fmt.Sprintf("%s?app=%s", requestURL, url.QueryEscape(appParam))
+	}
+	r := must.Get(http.NewRequest("POST", requestURL, nil))
+	pr := &ipnlocal.PeerAPIDNSResponse{Raw: raw, Header: http.Header{}}
+	c.mintTokensForDNSResponse(fph, r, pr)
+	return pr.Header.Values(TokenHeader)
+}
+
+func decodeTokenLine(t *testing.T, line string) (netip.Addr, []byte) {
+	t.Helper()
+	addrStr, tokenStr, ok := strings.Cut(line, " ")
+	if !ok {
+		t.Fatalf("malformed token line %q", line)
+	}
+	addr, err := netip.ParseAddr(addrStr)
+	if err != nil {
+		t.Fatalf("parsing address in token line %q: %v", line, err)
+	}
+	token, err := base64.StdEncoding.DecodeString(tokenStr)
+	if err != nil {
+		t.Fatalf("decoding token in line %q: %v", line, err)
+	}
+	return addr, token
+}
+
+// assertMintedFor checks that lines contains exactly one verifiable TokenHeader
+// per address in wantAddrs (order-independent), each binding to app.
+func assertMintedFor(t *testing.T, c *Conn25, app string, lines []string, wantAddrs ...netip.Addr) {
+	t.Helper()
+	if len(lines) != len(wantAddrs) {
+		t.Fatalf("got %d token lines, want %d: %v", len(lines), len(wantAddrs), lines)
+	}
+	got := map[netip.Addr]bool{}
+	for _, line := range lines {
+		addr, token := decodeTokenLine(t, line)
+		if !c.connector.verifyToken(token, app, addr) {
+			t.Errorf("verifyToken(token, %q, %v) = false, want true", app, addr)
+		}
+		got[addr] = true
+	}
+	for _, want := range wantAddrs {
+		if !got[want] {
+			t.Errorf("no token minted for %v", want)
+		}
+	}
+}
+
+func TestMintTokensForDNSResponse(t *testing.T) {
+	const app = "app1"
+	app1 := appctype.AppConnectorAttr{
+		Name:       app,
+		Connectors: []string{"tag:woo"},
+		Domains:    []string{"example.com", "*.example.com"},
+		Mode:       appctype.MagicIP,
+	}
+	appCap := tailcfg.PeerCapMap{
+		peercap.Conn25Prefix.ToAttribute(app): []tailcfg.RawMessage{`"*"`},
+	}
+	aQuestion := []dnsmessage.Question{{Name: dnsmessage.MustNewName("example.com."), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}}
+
+	newConfiguredConnector := func(t *testing.T) *Conn25 {
+		t.Helper()
+		c := newConn25(logger.Discard)
+		sn := makeSelfNode(t, []appctype.AppConnectorAttr{app1}, arbitraryPools, []string{"tag:woo"})
+		c.reconfig(mustConfig(t, sn))
+		c.prefsAdvertiseConnector.Store(true)
+		return c
+	}
+
+	v4 := netip.MustParseAddr("1.2.3.4")
+	v4b := netip.MustParseAddr("5.6.7.8")
+	v6 := netip.MustParseAddr("2606:4700::6812:1a78")
+
+	for _, tt := range []struct {
+		name      string
+		raw       []byte
+		wantAddrs []netip.Addr
+	}{
+		{
+			name:      "single-a",
+			raw:       makeDNSResponse(t, "example.com.", []*dnsmessage.AResource{{A: v4.As4()}}).Bs,
+			wantAddrs: []netip.Addr{v4},
+		},
+		{
+			name:      "multiple-a-one-token-each",
+			raw:       makeDNSResponse(t, "example.com.", []*dnsmessage.AResource{{A: v4.As4()}, {A: v4b.As4()}}).Bs,
+			wantAddrs: []netip.Addr{v4, v4b},
+		},
+		{
+			name:      "aaaa",
+			raw:       makeV6DNSResponse(t, "example.com.", []*dnsmessage.AAAAResource{{AAAA: v6.As16()}}).Bs,
+			wantAddrs: []netip.Addr{v6},
+		},
+		{
+			name: "cname-chain-mints-for-resolved-ip",
+			raw: makeDNSResponseForSections(t, aQuestion, []dnsmessage.Resource{
+				cnameResource(t, "example.com.", "a.example.com."),
+				aResource(t, "a.example.com.", v4.String(), 300),
+			}, nil).Bs,
+			wantAddrs: []netip.Addr{v4},
+		},
+		{
+			// The 4-in-6 answer is dropped; only the real v6 address gets a token.
+			name: "aaaa-4in6-skipped",
+			raw: makeV6DNSResponse(t, "example.com.", []*dnsmessage.AAAAResource{
+				{AAAA: netip.MustParseAddr("::ffff:1.2.3.4").As16()},
+				{AAAA: v6.As16()},
+			}).Bs,
+			wantAddrs: []netip.Addr{v6},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newConfiguredConnector(t)
+			lines := mintTokenLines(t, c, appCap, app, tt.raw)
+			assertMintedFor(t, c, app, lines, tt.wantAddrs...)
+		})
+	}
+
+	t.Run("token-binds-to-requested-app", func(t *testing.T) {
+		c := newConfiguredConnector(t)
+		raw := makeDNSResponse(t, "example.com.", []*dnsmessage.AResource{{A: v4.As4()}}).Bs
+		lines := mintTokenLines(t, c, appCap, app, raw)
+		if len(lines) != 1 {
+			t.Fatalf("got %d token lines, want 1: %v", len(lines), lines)
+		}
+		_, token := decodeTokenLine(t, lines[0])
+		if c.connector.verifyToken(token, "other-app", v4) {
+			t.Error("verifyToken with a different app = true, want false")
+		}
+	})
+
+	// Cases that must mint nothing. mutate, if set, is applied to the otherwise
+	// configured connector; peerCap and appParam default to the valid values.
+	validRaw := makeDNSResponse(t, "example.com.", []*dnsmessage.AResource{{A: v4.As4()}}).Bs
+	for _, tt := range []struct {
+		name     string
+		mutate   func(*Conn25)
+		peerCap  tailcfg.PeerCapMap
+		appParam string
+		raw      []byte
+	}{
+		{
+			name:     "source-not-allowed-when-not-connector",
+			mutate:   func(c *Conn25) { c.prefsAdvertiseConnector.Store(false) },
+			peerCap:  appCap,
+			appParam: app,
+			raw:      validRaw,
+		},
+		{
+			name:     "peer-lacks-app-capability",
+			peerCap:  tailcfg.PeerCapMap{},
+			appParam: app,
+			raw:      validRaw,
+		},
+		{
+			// Source is allowed (valid app + cap), but the queried domain is not
+			// one of the app's domains, so no token should be minted for it.
+			name:     "name-not-allowed",
+			peerCap:  appCap,
+			appParam: app,
+			raw:      makeDNSResponse(t, "notours.example.net.", []*dnsmessage.AResource{{A: v4.As4()}}).Bs,
+		},
+		{
+			// No app query param: handleHookReplyToDNSQueries rejects the source.
+			name:     "missing-app-param",
+			peerCap:  appCap,
+			appParam: "",
+			raw:      validRaw,
+		},
+		{
+			name:     "unparseable-response",
+			peerCap:  appCap,
+			appParam: app,
+			raw:      []byte{1, 2, 3, 4},
+		},
+		{
+			name:     "pass-through-question-type",
+			peerCap:  appCap,
+			appParam: app,
+			raw: makeDNSResponseForSections(t, []dnsmessage.Question{
+				{Name: dnsmessage.MustNewName("example.com."), Type: dnsmessage.TypeMX, Class: dnsmessage.ClassINET},
+			}, nil, nil).Bs,
+		},
+		{
+			// An A question with no answers resolves to nothing, so no tokens.
+			name:     "no-address-answers",
+			peerCap:  appCap,
+			appParam: app,
+			raw:      makeDNSResponseForSections(t, aQuestion, nil, nil).Bs,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newConfiguredConnector(t)
+			if tt.mutate != nil {
+				tt.mutate(c)
+			}
+			if lines := mintTokenLines(t, c, tt.peerCap, tt.appParam, tt.raw); len(lines) != 0 {
+				t.Errorf("got %d token lines, want 0: %v", len(lines), lines)
+			}
+		})
+	}
 }

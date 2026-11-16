@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"container/list"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -91,6 +92,7 @@ func init() {
 	ipnlocal.HookReplyToDNSQueries.Add(handleHookReplyToDNSQueries)
 	localapi.Register("conn25/state", serveLocalAPIStateGet)
 	ipnlocal.RegisterC2N("GET /conn25/state", serveC2NStateGet)
+	ipnlocal.HookPeerAPIDNSResponse.Add(handleHookPeerAPIDNSResponse)
 }
 
 func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
@@ -1505,4 +1507,52 @@ func tokensFromHeader(hdr http.Header) map[netip.Addr]string {
 		mak.Set(&tokens, addr, token)
 	}
 	return tokens
+}
+
+func handleHookPeerAPIDNSResponse(h ipnlocal.PeerAPIHandler, r *http.Request, pr *ipnlocal.PeerAPIDNSResponse) {
+	e, ok := ipnlocal.GetExt[*extension](h.LocalBackend())
+	if !ok {
+		return
+	}
+	if !e.conn25.isConfigured() {
+		return
+	}
+	e.conn25.mintTokensForDNSResponse(h, r, pr)
+}
+
+// mintTokensForDNSResponse mints a destination IP token for each A/AAAA answer
+// in the DoH response pr, and writes them as [TokenHeader] header lines.
+func (c *Conn25) mintTokensForDNSResponse(h ipnlocal.PeerAPIHandler, r *http.Request, pr *ipnlocal.PeerAPIDNSResponse) {
+	// handleHookReplyToDNSQueries is called by connectors before forwarding the
+	// DNS request upstream. But it's possible for a connector to forward a DNS
+	// request upstream for other reasons also, so we must call it again here and
+	// check this DNS request is something we should route for conn25 (we are a
+	// connector for the requested app, the netmap says the peer may use the app,
+	// and that the app named in the HTTP query parameter contains the domain in
+	// the DNS query.)
+	sourceAllowed, nameAllowed := c.handleHookReplyToDNSQueries(h, r)
+	if !sourceAllowed {
+		return
+	}
+	parser, ok := parseQuestion(pr.Raw)
+	if !ok {
+		return
+	}
+	if !nameAllowed(parser.queriedDomain.WithTrailingDot()) {
+		return
+	}
+	answers, err := parser.resolveAnswers()
+	if err != nil {
+		return
+	}
+	// checked to have len == 1 in handleHookReplyToDNSQueries
+	appName := r.URL.Query()["app"][0]
+	for _, answer := range answers {
+		token, err := c.connector.mintToken(appName, answer.a)
+		if err != nil {
+			c.logf("error minting destination IP token: %v", err)
+			continue
+		}
+		pr.Header.Add(TokenHeader, answer.a.String()+" "+base64.StdEncoding.EncodeToString(token))
+	}
 }
