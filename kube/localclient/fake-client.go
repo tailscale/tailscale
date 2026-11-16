@@ -12,10 +12,18 @@ import (
 
 type FakeLocalClient struct {
 	FakeIPNBusWatcher
-	SetServeCalled    bool
-	EditPrefsCalls    []*ipn.MaskedPrefs
-	GetPrefsResult    *ipn.Prefs
-	CertDomainsResult []string
+	SetServeCalled       bool
+	GetServeConfigResult *ipn.ServeConfig
+	EditPrefsCalls       []*ipn.MaskedPrefs
+	GetPrefsResult       *ipn.Prefs
+	CertDomainsResult    []string
+}
+
+func (m *FakeLocalClient) GetServeConfig(ctx context.Context) (*ipn.ServeConfig, error) {
+	if m.GetServeConfigResult == nil {
+		return &ipn.ServeConfig{}, nil
+	}
+	return m.GetServeConfigResult, nil
 }
 
 func (m *FakeLocalClient) SetServeConfig(ctx context.Context, cfg *ipn.ServeConfig) error {

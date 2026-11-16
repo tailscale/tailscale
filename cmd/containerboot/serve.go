@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/certs"
 	"tailscale.com/kube/kubetypes"
@@ -32,7 +31,7 @@ import (
 // is written to when the certDomain changes, causing the serve config to be
 // re-read and applied. prevServeConfig is the serve config that was fetched
 // during startup. This will be refreshed by the goroutine when serve config changes.
-func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDomainAtomic *atomic.Pointer[string], lc *local.Client, kc *kubeClient, cfg *settings, prevServeConfig *ipn.ServeConfig) {
+func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDomainAtomic *atomic.Pointer[string], lc klc.LocalClient, kc *kubeClient, cfg *settings, prevServeConfig *ipn.ServeConfig) {
 	if certDomainAtomic == nil {
 		panic("certDomainAtomic must not be nil")
 	}
@@ -54,10 +53,14 @@ func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDom
 		eventChan = w.Events
 	}
 
+	watchServeConfigChangesLoop(ctx, cdChanged, certDomainAtomic, lc, kc, cfg, prevServeConfig, tickChan, eventChan)
+}
+
+func watchServeConfigChangesLoop(ctx context.Context, cdChanged <-chan bool, certDomainAtomic *atomic.Pointer[string], lc klc.LocalClient, kc *kubeClient, cfg *settings, prevServeConfig *ipn.ServeConfig, tickChan <-chan time.Time, eventChan <-chan fsnotify.Event) {
 	var certDomain string
 	var cm *certs.CertManager
 	if cfg.CertShareMode == "rw" {
-		cm = certs.NewCertManager(klc.New(lc), log.Printf)
+		cm = certs.NewCertManager(lc, log.Printf)
 	}
 
 	var err error
@@ -82,7 +85,7 @@ func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDom
 
 		var sc *ipn.ServeConfig
 		if cfg.ServeConfigPath != "" {
-			sc, err := readServeConfig(cfg.ServeConfigPath, certDomain)
+			sc, err = readServeConfig(cfg.ServeConfigPath, certDomain)
 			if err != nil {
 				log.Fatalf("serve proxy: failed to read serve config: %v", err)
 			}
@@ -93,8 +96,12 @@ func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDom
 			if prevServeConfig != nil && reflect.DeepEqual(sc, prevServeConfig) {
 				continue
 			}
-			if err := updateServeConfig(ctx, sc, certDomain, klc.New(lc)); err != nil {
+			applied, err := updateServeConfig(ctx, sc, certDomain, lc)
+			if err != nil {
 				log.Fatalf("serve proxy: error updating serve config: %v", err)
+			}
+			if !applied {
+				continue
 			}
 			if kc != nil && kc.canPatch {
 				if err := kc.storeHTTPSEndpoint(ctx, certDomain); err != nil {
@@ -102,11 +109,10 @@ func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDom
 				}
 			}
 			prevServeConfig = sc
-			if cfg.CertShareMode != "rw" {
-				continue
-			}
-			if err := cm.EnsureCertLoops(ctx, sc); err != nil {
-				log.Fatalf("serve proxy: error ensuring cert loops: %v", err)
+			if cfg.CertShareMode == "rw" {
+				if err := cm.EnsureCertLoops(ctx, sc); err != nil {
+					log.Fatalf("serve proxy: error ensuring cert loops: %v", err)
+				}
 			}
 		} else {
 			log.Printf("serve config path not provided.")
@@ -116,7 +122,7 @@ func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDom
 		// if we are running in kubernetes, we want to leave advertisement to the operator
 		// to do (by updating the serve config)
 		if getAutoAdvertiseBool() {
-			if err := refreshAdvertiseServices(ctx, sc, klc.New(lc)); err != nil {
+			if err := refreshAdvertiseServices(ctx, sc, lc); err != nil {
 				log.Fatalf("error refreshing advertised services: %v", err)
 			}
 		}
@@ -141,12 +147,14 @@ func refreshAdvertiseServices(ctx context.Context, sc *ipn.ServeConfig, lc klc.L
 	return nil
 }
 
-func updateServeConfig(ctx context.Context, sc *ipn.ServeConfig, certDomain string, lc klc.LocalClient) error {
+// updateServeConfig reports whether the configuration was applied.
+func updateServeConfig(ctx context.Context, sc *ipn.ServeConfig, certDomain string, lc klc.LocalClient) (bool, error) {
 	if !isValidHTTPSConfig(certDomain, sc) {
-		return nil
+		return false, nil
 	}
 	log.Printf("serve proxy: applying serve config")
-	return lc.SetServeConfig(ctx, sc)
+	err := lc.SetServeConfig(ctx, sc)
+	return err == nil, err
 }
 
 func isValidHTTPSConfig(certDomain string, sc *ipn.ServeConfig) bool {
@@ -167,6 +175,13 @@ func hasHTTPSEndpoint(cfg *ipn.ServeConfig) bool {
 	for _, tcpCfg := range cfg.TCP {
 		if tcpCfg.HTTPS {
 			return true
+		}
+	}
+	for _, service := range cfg.Services {
+		for _, tcpCfg := range service.TCP {
+			if tcpCfg.HTTPS {
+				return true
+			}
 		}
 	}
 	return false

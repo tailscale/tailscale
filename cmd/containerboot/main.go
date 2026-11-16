@@ -1004,7 +1004,7 @@ runLoop:
 
 			if cfg.ServeConfigPath != "" {
 				triggerWatchServeConfigChanges.Do(func() {
-					go watchServeConfigChanges(ctx, certDomainChanged, certDomain, client, kc, cfg, prevServeConfig)
+					go watchServeConfigChanges(ctx, certDomainChanged, certDomain, localClient, kc, cfg, prevServeConfig)
 				})
 			}
 
