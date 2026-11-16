@@ -400,7 +400,7 @@ func TestResetDropsInFlightAssignment(t *testing.T) {
 	if !errors.Is(err, errStaleGeneration) {
 		t.Errorf("applying an assignment from before the reset: got error %v, want %v", err, errStaleGeneration)
 	}
-	if tips, ok := c.lookupTransitIPsByConnKey(oldConnector.Key()); ok {
+	if tips, ok := c.lookupTransitIPsByConnID(oldConnector.ID()); ok {
 		t.Errorf("connector from before the reset got transit IPs registered: %v", tips)
 	}
 }
@@ -449,7 +449,7 @@ func TestTransitIPConnMapping(t *testing.T) {
 			ID:       tailcfg.NodeID(0),
 			Tags:     []string{"tag:woo"},
 			Hostinfo: (&tailcfg.Hostinfo{AppConnector: opt.NewBool(true)}).View(),
-			Key:      key.NodePublic{},
+			Key:      key.NodePublicFromRaw32(mem.B([]byte{0: 0xff, 31: 0x01})),
 		}).View(),
 		(&tailcfg.Node{
 			ID:       tailcfg.NodeID(2),
@@ -467,9 +467,9 @@ func TestTransitIPConnMapping(t *testing.T) {
 	// Insert the address assignments
 	conn25.client.assignments.insert(as)
 
-	// Adding a transit IP for a node with an unset key should fail
+	// Adding a transit IP for a node with an unset node ID should fail
 	if err := conn25.client.addTransitIPForConnector(forConnector(connectorPeers[0])); err == nil {
-		t.Error("adding an transit IP mapping for a connector with a zero key should fail")
+		t.Error("adding an transit IP mapping for a connector with a zero node ID should fail")
 	}
 	// Adding a transit IP that is known should succeed
 	if err := conn25.client.addTransitIPForConnector(forConnector(connectorPeers[1])); err != nil {

@@ -13,7 +13,6 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/net/packet"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
@@ -39,7 +38,7 @@ type client struct {
 	v6MagicIPPool   *ippool
 	v6TransitIPPool *ippool
 	assignments     addrAssignments
-	byConnKey       map[key.NodePublic]set.Set[netip.Prefix]
+	byConnID        map[tailcfg.NodeID]set.Set[netip.Prefix]
 }
 
 // errNoMagicIPAssignment is returned by [client.PrepareNewFlowForMagicIP] when
@@ -58,7 +57,7 @@ func (c *client) transitIPRoutableLocked(as *addrs) bool {
 		return false
 	}
 	tip := as.connectorAddr.transit
-	return c.byConnKey[conn.Key()].Contains(netip.PrefixFrom(tip, tip.BitLen()))
+	return c.byConnID[conn.ID()].Contains(netip.PrefixFrom(tip, tip.BitLen()))
 }
 
 // linkLocalAllow returns true if the provided packet with a link-local Dst address has a
@@ -106,7 +105,7 @@ func (c *client) reset() {
 	c.v6MagicIPPool = newIPPool(ipSets.v6Magic)
 	c.v6TransitIPPool = newIPPool(ipSets.v6Transit)
 	c.assignments = addrAssignments{clock: c.assignments.clock}
-	c.byConnKey = nil
+	c.byConnID = nil
 
 	// Drop any assignments still waiting to be sent. They describe the state
 	// we just cleared, so delivering them would register transit IPs with
@@ -256,11 +255,10 @@ func (c *client) addTransitIPForConnector(as addrs) error {
 	if !conn.Valid() {
 		return fmt.Errorf("unexpectedly received invalid connector node")
 	}
-	if conn.Key().IsZero() {
-		return fmt.Errorf("node with stable ID %q does not have a key", conn.StableID())
+	if conn.ID() == 0 {
+		return fmt.Errorf("node with stable ID %q does not have a node ID", conn.StableID())
 	}
-	conn.ID()
-	return c.insertTransitConnMapping(as, conn.Key())
+	return c.insertTransitConnMapping(as, conn.ID())
 }
 
 // errQueueFull is returned when the address assignment send queue is full and
@@ -349,8 +347,8 @@ func (c *client) prepareNewFlowForMagicIP(magicIP netip.Addr) (ClientFlowRef, er
 	}}, nil
 }
 
-func (c *client) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
-	tips, ok := c.lookupTransitIPsByConnKey(k)
+func (c *client) extraWireGuardAllowedIPs(id tailcfg.NodeID) views.Slice[netip.Prefix] {
+	tips, ok := c.lookupTransitIPsByConnID(id)
 	if !ok {
 		return views.Slice[netip.Prefix]{}
 	}
@@ -443,11 +441,11 @@ func (c *client) assignmentIsCurrent(as addrs) bool {
 	return as.generation == c.generation
 }
 
-// insertTransitConnMapping adds an entry to the byConnKey map
+// insertTransitConnMapping adds an entry to the byConnID map
 // for the provided transitIP (as a prefix).
 // The provided assignment must already be present in the byTransitIP map, and
 // must be from the current generation.
-func (c *client) insertTransitConnMapping(as addrs, connKey key.NodePublic) error {
+func (c *client) insertTransitConnMapping(as addrs, connID tailcfg.NodeID) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if as.generation != c.generation {
@@ -458,23 +456,23 @@ func (c *client) insertTransitConnMapping(as addrs, connKey key.NodePublic) erro
 		return errors.New("transit IP is not already known")
 	}
 
-	ctips, ok := c.byConnKey[connKey]
+	ctips, ok := c.byConnID[connID]
 	tipp := netip.PrefixFrom(tip, tip.BitLen())
 	if !ok {
 		ctips.Make()
-		mak.Set(&c.byConnKey, connKey, ctips)
+		mak.Set(&c.byConnID, connID, ctips)
 	}
 	ctips.Add(tipp)
 	return nil
 }
 
-// lookupTransitIPsByConnKey returns a slice containing the transit IPs (as netipPrefix)
-// associated with the given connector (identified by node key), or (nil, false) if there is no entry
-// for the given key.
-func (c *client) lookupTransitIPsByConnKey(k key.NodePublic) ([]netip.Prefix, bool) {
+// lookupTransitIPsByConnID returns a slice containing the transit IPs (as netipPrefix)
+// associated with the given connector (identified by node ID), or (nil, false) if there is no entry
+// for the given ID.
+func (c *client) lookupTransitIPsByConnID(id tailcfg.NodeID) ([]netip.Prefix, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	s, ok := c.byConnKey[k]
+	s, ok := c.byConnID[id]
 	if !ok {
 		return nil, false
 	}

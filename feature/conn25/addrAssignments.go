@@ -23,7 +23,7 @@ type domainDst struct {
 
 // addrAssignments is the collection of addrs assigned by this client
 // supporting lookup by magic IP, transit IP or domain+dst, or to lookup all
-// transit IPs associated with a given connector (identified by its node key).
+// transit IPs associated with a given connector (identified by its node ID).
 type addrAssignments struct {
 	byMagicIP   map[netip.Addr]*addrs
 	byTransitIP map[netip.Addr]*addrs

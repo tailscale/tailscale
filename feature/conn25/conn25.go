@@ -292,8 +292,8 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 			return nil
 		}
 		var extras map[tailcfg.NodeID][]netip.Prefix
-		for id, k := range peers {
-			if pfxs := e.extraWireGuardAllowedIPs(k); pfxs.Len() > 0 {
+		for id := range peers {
+			if pfxs := e.extraWireGuardAllowedIPs(id); pfxs.Len() > 0 {
 				mak.Set(&extras, id, pfxs.AsSlice())
 			}
 		}
@@ -497,8 +497,8 @@ func (e *extension) profileStateChange(loginProfile ipn.LoginProfileView, prefs 
 	}
 }
 
-func (e *extension) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
-	return e.conn25.client.extraWireGuardAllowedIPs(k)
+func (e *extension) extraWireGuardAllowedIPs(id tailcfg.NodeID) views.Slice[netip.Prefix] {
+	return e.conn25.client.extraWireGuardAllowedIPs(id)
 }
 
 // Conn25 holds state for routing traffic for a domain via a connector.
