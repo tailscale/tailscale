@@ -85,6 +85,22 @@ func (m *manager) PutFile(id clientID, baseName string, r io.Reader, offset, len
 		return 0, err
 	}
 
+	// Reserve the transfer before opening its partial file: OpenWriter may
+	// truncate it, so a duplicate must be rejected before touching the file.
+	inFileKey := incomingFileKey{id, baseName}
+	inFile, loaded := m.incomingFiles.LoadOrInit(inFileKey, func() *incomingFile {
+		return &incomingFile{
+			clock:          m.opts.Clock,
+			started:        m.opts.Clock.Now(),
+			size:           length,
+			sendFileNotify: m.opts.SendFileNotify,
+		}
+	})
+	if loaded {
+		return 0, ErrFileExists
+	}
+	defer m.incomingFiles.Delete(inFileKey)
+
 	// and make sure we don't delete it while uploading:
 	m.deleter.Remove(baseName)
 
@@ -101,27 +117,12 @@ func (m *manager) PutFile(id clientID, baseName string, r io.Reader, offset, len
 		}
 	}()
 
-	// Check whether there is an in-progress transfer for the file.
-	inFileKey := incomingFileKey{id, baseName}
-	inFile, loaded := m.incomingFiles.LoadOrInit(inFileKey, func() *incomingFile {
-		inFile := &incomingFile{
-			clock:          m.opts.Clock,
-			started:        m.opts.Clock.Now(),
-			size:           length,
-			sendFileNotify: m.opts.SendFileNotify,
-		}
-		if m.opts.DirectFileMode {
-			inFile.partialPath = partialPath
-		}
-		return inFile
-	})
-
 	inFile.w = wc
-
-	if loaded {
-		return 0, ErrFileExists
+	if m.opts.DirectFileMode {
+		inFile.mu.Lock()
+		inFile.partialPath = partialPath
+		inFile.mu.Unlock()
 	}
-	defer m.incomingFiles.Delete(inFileKey)
 
 	// Record that we have started to receive at least one file.
 	// This is used by the deleter upon a cold-start to scan the directory
