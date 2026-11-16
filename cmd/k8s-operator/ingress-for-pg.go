@@ -461,9 +461,12 @@ func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, logger
 	// iteration.
 	var orphans []tailcfg.ServiceName
 	for tsSvcName := range cfg.Services {
-		// ...check if there is currently an Ingress with this hostname
+		// ...check if there is currently an Ingress on this ProxyGroup with this hostname
 		found := false
 		for _, i := range ingList.Items {
+			if !r.shouldExpose(&i) || i.Annotations[AnnotationProxyGroup] != pg.Name {
+				continue
+			}
 			ingressHostname := hostnameForIngress(&i)
 			if ingressHostname == tsSvcName.WithoutPrefix() {
 				found = true
@@ -504,6 +507,15 @@ func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, logger
 		// 2. Unadvertise the Tailscale Service in tailscaled config.
 		if err := r.maybeUpdateAdvertiseServicesConfig(ctx, tsSvcName, serviceAdvertisementOff, pg); err != nil {
 			return svcsChanged, fmt.Errorf("failed to update tailscaled config services: %w", err)
+		}
+
+		// If an Ingress on another ProxyGroup in the same tailnet now serves
+		// this hostname (for example after a move), the Tailscale Service and
+		// its cert resources are still in use. Only this ProxyGroup's serve
+		// config and advertisement are cleaned up.
+		if r.hostnameServedByOtherProxyGroup(ctx, ingList, pg, tsSvcName.WithoutPrefix()) {
+			logger.Infof("Tailscale Service %q is still in use by another ProxyGroup, keeping it", tsSvcName)
+			continue
 		}
 
 		// 3. Delete the Tailscale Service from the control plane.
@@ -669,6 +681,24 @@ func (r *HAIngressReconciler) shouldExpose(ing *networkingv1.Ingress) bool {
 	return isTSIngress && pgAnnot != ""
 }
 
+// hostnameServedByOtherProxyGroup reports whether an exposed Ingress on a
+// ProxyGroup other than pg, in the same tailnet, uses the given hostname. If
+// the other ProxyGroup cannot be looked up, it returns true so the Tailscale
+// Service is kept.
+func (r *HAIngressReconciler) hostnameServedByOtherProxyGroup(ctx context.Context, ingList *networkingv1.IngressList, pg *tsapi.ProxyGroup, hostname string) bool {
+	for _, i := range ingList.Items {
+		otherPGName := i.Annotations[AnnotationProxyGroup]
+		if !r.shouldExpose(&i) || otherPGName == pg.Name || hostnameForIngress(&i) != hostname {
+			continue
+		}
+		otherPG := &tsapi.ProxyGroup{}
+		if err := r.Get(ctx, client.ObjectKey{Name: otherPGName}, otherPG); err != nil || otherPG.Spec.Tailnet == pg.Spec.Tailnet {
+			return true
+		}
+	}
+	return false
+}
+
 // validateIngress validates that the Ingress is properly configured.
 // Currently validates:
 // - Any tags provided via tailscale.com/tags annotation are valid Tailscale ACL tags
@@ -714,9 +744,20 @@ func (r *HAIngressReconciler) validateIngress(ctx context.Context, ing *networki
 	}
 
 	for _, i := range ingList.Items {
-		if r.shouldExpose(&i) && hostnameForIngress(&i) == hostname && i.UID != ing.UID {
-			errs = append(errs, fmt.Errorf("found duplicate Ingress %q for hostname %q - multiple Ingresses for the same hostname in the same cluster are not allowed", client.ObjectKeyFromObject(&i), hostname))
+		if !r.shouldExpose(&i) || hostnameForIngress(&i) != hostname || i.UID == ing.UID {
+			continue
 		}
+		// Two ProxyGroups joined to different tailnets have separate DNS
+		// namespaces, so a hostname collision across them is not a conflict.
+		// If the other ProxyGroup cannot be looked up, flag the collision.
+		otherPGName := i.Annotations[AnnotationProxyGroup]
+		if otherPGName != pg.Name {
+			otherPG := &tsapi.ProxyGroup{}
+			if err := r.Get(ctx, client.ObjectKey{Name: otherPGName}, otherPG); err == nil && otherPG.Spec.Tailnet != pg.Spec.Tailnet {
+				continue
+			}
+		}
+		errs = append(errs, fmt.Errorf("found duplicate Ingress %q for hostname %q - multiple Ingresses for the same hostname in the same cluster are not allowed", client.ObjectKeyFromObject(&i), hostname))
 	}
 	return errors.Join(errs...)
 }
