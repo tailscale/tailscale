@@ -1638,7 +1638,11 @@ func TestPrefsChangeDisablesExitNode(t *testing.T) {
 	}
 }
 
-func TestExitNodeNotifyOrder(t *testing.T) {
+// TestFullNetmapNotifyCombined checks that a full netmap produces one
+// notification carrying the self node, the peers, the prefs that select the
+// auto exit node, and the exit node suggestion. No other notification may
+// carry any of those fields.
+func TestFullNetmapNotifyCombined(t *testing.T) {
 	const controlURL = "https://localhost:1/"
 
 	report := &netcheck.Report{
@@ -1662,34 +1666,67 @@ func TestExitNodeNotifyOrder(t *testing.T) {
 	})
 
 	nw := newNotificationWatcher(t, lb, ipnauth.Self)
-
-	// Updating the netmap should trigger both a netmap notification
-	// and an exit node ID notification (since an exit node is selected).
-	// The netmap notification should be sent first.
-	nw.watch(0, []wantedNotification{
-		wantSelfChangeNotify(selfNode),
-		wantExitNodeIDNotify(exitNode1.StableID()),
+	nw.watch(ipn.NotifyPeerChanges|ipn.NotifyNoNetMap, []wantedNotification{{
+		name: "self, peers, prefs and suggestion in one notification",
+		cond: func(_ testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+			hasSelf := n.SelfChange != nil && n.SelfChange.StableID == selfNode.StableID()
+			hasPeer := slices.ContainsFunc(n.PeersChanged, func(p *tailcfg.Node) bool { return p.ID == exitNode1.ID() })
+			hasPrefs := n.Prefs != nil && n.Prefs.Valid() && n.Prefs.ExitNodeID() == exitNode1.StableID()
+			hasSuggestion := n.SuggestedExitNode != nil && *n.SuggestedExitNode == exitNode1.StableID()
+			return hasSelf && hasPeer && hasPrefs && hasSuggestion
+		},
+	}}, func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+		if n.LoginFinished != nil || n.Prefs != nil || n.SelfChange != nil || len(n.PeersChanged) > 0 || n.SuggestedExitNode != nil {
+			t.Errorf("netmap fields sent outside the combined notification: %v", n)
+		}
+		return false
 	})
 	lb.SetControlClientStatus(lb.cc, controlclient.Status{NetMap: clientNetmap})
 	nw.check()
 }
 
-func wantSelfChangeNotify(want tailcfg.NodeView) wantedNotification {
-	return wantedNotification{
-		name: "SelfChange",
-		cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
-			return n.SelfChange != nil && want.Valid() && n.SelfChange.StableID == want.StableID()
+// TestSuggestExitNodeNotifies checks that SuggestExitNode broadcasts a changed
+// suggestion and stays silent when the suggestion is unchanged.
+func TestSuggestExitNodeNotifies(t *testing.T) {
+	report := &netcheck.Report{
+		RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
+			1: 5 * time.Millisecond,
+			2: 10 * time.Millisecond,
 		},
+		PreferredDERP: 1,
 	}
-}
+	exitNode1 := makeExitNode(1, withName("node-1"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.1/32")))
+	exitNode2 := makeExitNode(2, withName("node-2"), withDERP(2), withAddresses(netip.MustParsePrefix("100.64.1.2/32")))
+	selfNode := makeExitNode(3, withName("node-3"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.3/32")))
+	nm := buildNetmapWithPeers(selfNode, exitNode1, exitNode2)
 
-func wantExitNodeIDNotify(want tailcfg.StableNodeID) wantedNotification {
-	return wantedNotification{
-		name: fmt.Sprintf("ExitNodeID-%s", want),
+	lb := newTestLocalBackend(t)
+	lb.sys.MagicSock.Get().AddNetcheckReportForTest(nm.DERPMap, report, time.Now())
+	lb.currentNode().SetNetMap(nm)
+
+	nw := newNotificationWatcher(t, lb, ipnauth.Self)
+	nw.watch(0, []wantedNotification{{
+		name: "suggested exit node",
 		cond: func(_ testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
-			return n.Prefs != nil && n.Prefs.Valid() && n.Prefs.ExitNodeID() == want
+			return n.SuggestedExitNode != nil && *n.SuggestedExitNode == exitNode1.StableID()
 		},
+	}})
+	if res, err := lb.SuggestExitNode(); err != nil || res.ID != exitNode1.StableID() {
+		t.Fatalf("SuggestExitNode = %q, %v; want %q", res.ID, err, exitNode1.StableID())
 	}
+	nw.check()
+
+	// The same suggestion again is not announced.
+	nw.watch(0, nil, func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+		if n.SuggestedExitNode != nil {
+			t.Errorf("unchanged suggestion was announced: %v", n)
+		}
+		return false
+	})
+	if _, err := lb.SuggestExitNode(); err != nil {
+		t.Fatal(err)
+	}
+	nw.check()
 }
 
 func TestInternalAndExternalInterfaces(t *testing.T) {
@@ -2792,9 +2829,22 @@ func TestAutoExitNodeResolvedOnDeltaUpsert(t *testing.T) {
 		t.Fatalf("after unrelated upsert: ExitNodeID=%q; want %q", p.ExitNodeID(), ipn.UnresolvedExitNodeID)
 	}
 
+	// The exit node arrives by delta. The peer, the prefs that select it,
+	// and the new suggestion all ride in the same notification.
+	nw := newNotificationWatcher(t, b, ipnauth.Self)
+	nw.watch(ipn.NotifyPeerChanges|ipn.NotifyNoNetMap, []wantedNotification{{
+		name: "exit node peer change with prefs and suggestion",
+		cond: func(_ testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+			hasPeer := slices.ContainsFunc(n.PeersChanged, func(p *tailcfg.Node) bool { return p.ID == exitNode.ID() })
+			hasPrefs := n.Prefs != nil && n.Prefs.Valid() && n.Prefs.ExitNodeID() == exitNode.StableID()
+			hasSuggestion := n.SuggestedExitNode != nil && *n.SuggestedExitNode == exitNode.StableID()
+			return hasPeer && hasPrefs && hasSuggestion
+		},
+	}})
 	if !b.UpdateNetmapDelta([]netmap.NodeMutation{netmap.NodeMutationUpsert{Node: exitNode}}) {
 		t.Fatal("UpdateNetmapDelta returned false")
 	}
+	nw.check()
 	if p := b.Prefs(); p.ExitNodeID() != exitNode.StableID() {
 		t.Errorf("after delta upsert: ExitNodeID = %q, want %q", p.ExitNodeID(), exitNode.StableID())
 	}
