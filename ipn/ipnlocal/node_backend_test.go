@@ -6,6 +6,7 @@ package ipnlocal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"iter"
 	"maps"
 	"net/netip"
@@ -372,8 +373,7 @@ func TestNodeBackendRouteManager(t *testing.T) {
 
 // TestNodeBackendDiscoChanged exercises the full-netmap disco change
 // detection: a peer whose disco key changes has restarted and needs its
-// WireGuard session reset, unless the new key was already learned over
-// TSMP (that is, over a working WireGuard session with the peer).
+// WireGuard session to send an opportunistic handshake.
 func TestNodeBackendDiscoChanged(t *testing.T) {
 	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
 
@@ -404,41 +404,6 @@ func TestNodeBackendDiscoChanged(t *testing.T) {
 	// An unchanged disco key does not.
 	if got, _ := nb.SetNetMap(mkNetMap(d2)); len(got) != 0 {
 		t.Errorf("SetNetMap(same disco) discoChanged = %v; want none", got)
-	}
-
-	// A change already learned via TSMP is suppressed...
-	d3 := newDisco()
-	nb.recordTSMPLearnedDisco(nk, d3)
-	if got, _ := nb.SetNetMap(mkNetMap(d3)); len(got) != 0 {
-		t.Errorf("SetNetMap(TSMP-learned disco) discoChanged = %v; want none", got)
-	}
-
-	// ...but the TSMP entry is consumed, so the next change resets again.
-	d4 := newDisco()
-	if got, _ := nb.SetNetMap(mkNetMap(d4)); !slices.Contains(got, nk) {
-		t.Errorf("SetNetMap(after TSMP entry consumed) discoChanged = %v; want %v", got, nk)
-	}
-
-	// A TSMP-learned key that doesn't match the netmap's new key still
-	// resets the session and bumps the mismatch metric.
-	before := metricTSMPLearnedKeyMismatch.Value()
-	nb.recordTSMPLearnedDisco(nk, newDisco())
-	d5 := newDisco()
-	if got, _ := nb.SetNetMap(mkNetMap(d5)); !slices.Contains(got, nk) {
-		t.Errorf("SetNetMap(TSMP mismatch) discoChanged = %v; want %v", got, nk)
-	}
-	if delta := metricTSMPLearnedKeyMismatch.Value() - before; delta != 1 {
-		t.Errorf("metricTSMPLearnedKeyMismatch delta = %d; want 1", delta)
-	}
-
-	// Removing the peer garbage-collects its TSMP entry: after the peer
-	// comes back, a change to the once-recorded key is a normal reset.
-	d6 := newDisco()
-	nb.recordTSMPLearnedDisco(nk, d6)
-	nb.SetNetMap(&netmap.NetworkMap{})
-	nb.SetNetMap(mkNetMap(d5))
-	if got, _ := nb.SetNetMap(mkNetMap(d6)); !slices.Contains(got, nk) {
-		t.Errorf("SetNetMap(after TSMP entry GC) discoChanged = %v; want %v", got, nk)
 	}
 
 	// Transitions to or from a zero disco key never reset.
@@ -484,28 +449,48 @@ func TestNodeBackendDiscoChangedDelta(t *testing.T) {
 		t.Errorf("upsert(same disco) discoChanged = %v; want none", got)
 	}
 
-	// A change already learned via TSMP is suppressed.
-	d3 := newDisco()
-	nb.recordTSMPLearnedDisco(nk, d3)
-	if got := apply(netmap.NodeMutationUpsert{Node: mkNode(nk, d3)}); len(got) != 0 {
-		t.Errorf("upsert(TSMP-learned disco) discoChanged = %v; want none", got)
-	}
-
 	// A node key rotation replaces the WireGuard peer outright, so no
 	// disco-based reset is reported.
 	nk2 := key.NewNode().Public()
 	if got := apply(netmap.NodeMutationUpsert{Node: mkNode(nk2, newDisco())}); len(got) != 0 {
 		t.Errorf("upsert(rotated node key) discoChanged = %v; want none", got)
 	}
+}
 
-	// Removing the peer garbage-collects its TSMP entry: after the peer
-	// comes back, a change to the once-recorded key is a normal reset.
-	d4 := newDisco()
-	nb.recordTSMPLearnedDisco(nk2, d4)
-	apply(netmap.MakeNodeMutationRemove(1))
-	apply(netmap.NodeMutationUpsert{Node: mkNode(nk2, newDisco())})
-	if got := apply(netmap.NodeMutationUpsert{Node: mkNode(nk2, d4)}); !got.Contains(nk2) {
-		t.Errorf("upsert(after TSMP entry GC) discoChanged = %v; want %v", got, nk2)
+// Tests that a per-field patch for a peer missing from nodeBackend (such as
+// one filtered out by tailnet lock) doesn't stop the rest of the batch from
+// being applied.
+func TestNodeBackendDeltaUnknownPeer(t *testing.T) {
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+	mkNode := func(id tailcfg.NodeID) tailcfg.NodeView {
+		return (&tailcfg.Node{ID: id, Key: key.NewNode().Public(), HomeDERP: 1}).View()
+	}
+	nb.SetNetMap(&netmap.NetworkMap{Peers: []tailcfg.NodeView{mkNode(1), mkNode(3)}})
+
+	muts, ok := netmap.MutationsFromMapResponse(&tailcfg.MapResponse{
+		PeersChangedPatch: []*tailcfg.PeerChange{
+			{NodeID: 1, DERPRegion: 2},
+			{NodeID: 2, DERPRegion: 2},
+			{NodeID: 3, DERPRegion: 2},
+		},
+	}, time.Now())
+	if !ok {
+		t.Fatal("MutationsFromMapResponse failed")
+	}
+	if _, handled := nb.UpdateNetmapDelta(muts); !handled {
+		t.Fatal("UpdateNetmapDelta not handled")
+	}
+	for _, id := range []tailcfg.NodeID{1, 3} {
+		n, ok := nb.NodeByID(id)
+		if !ok {
+			t.Fatalf("peer %d missing", id)
+		}
+		if got := n.HomeDERP(); got != 2 {
+			t.Errorf("peer %d HomeDERP = %d; want 2", id, got)
+		}
+	}
+	if _, ok := nb.NodeByID(2); ok {
+		t.Error("patch for unknown peer 2 added it")
 	}
 }
 
@@ -618,13 +603,20 @@ func testNodeBackendMagicDNSHosts(t *testing.T, magicDNSEnabled bool) {
 	wantHost("self.example.ts.net.", netip.MustParseAddr("100.64.0.1"))
 	wantHost("unknown.example.ts.net.")
 
-	// Short names are only resolved if MagicDNS is enabled.
-	// Otherwise, the resolver should not serve any short names.
-	var shortNameAddr []netip.Addr
-	if magicDNSEnabled {
-		shortNameAddr = []netip.Addr{netip.MustParseAddr("100.64.0.2")}
+	// Single-label FQDNs are not tailnet names, whether or not
+	// MagicDNS is enabled.
+	wantHost("p1.")
+	if nb.magicDNSSubdomainHost("p1.") {
+		t.Errorf("magicDNSSubdomainHost(%q) = true; want false", "p1.")
 	}
-	wantHost("p1.", shortNameAddr...)
+	wantHost("self.")
+	if nb.magicDNSSubdomainHost("self.") {
+		t.Errorf("magicDNSSubdomainHost(%q) = true; want false", "self.")
+	}
+	// But in-process dials (tsdial's UserDial) still resolve short names.
+	if nid, ok := nb.NodeByName("p1"); !ok || nid != p1.ID {
+		t.Errorf("NodeByName(%q) = %v, %v; want %v", "p1", nid, ok, p1.ID)
+	}
 
 	if fqdn, ok := nb.magicDNSPTR(netip.MustParseAddr("100.64.0.2")); !ok || fqdn != "p1.example.ts.net." {
 		t.Errorf("magicDNSPTR(100.64.0.2) = %q, %v; want p1's name", fqdn, ok)
@@ -670,4 +662,99 @@ func testNodeBackendMagicDNSHosts(t *testing.T, magicDNSEnabled bool) {
 	if fqdn, ok := nb.magicDNSPTR(netip.MustParseAddr("100.64.0.3")); !ok || fqdn != "p3-renamed.example.ts.net." {
 		t.Errorf("magicDNSPTR(100.64.0.3) after rename = %q, %v; want p3's new name", fqdn, ok)
 	}
+}
+
+// TestNodeBackendIndexReuseEviction exercises netmap delta orderings in
+// which one peer's address, name, or key index entry is claimed by a
+// second peer before the first peer's entries are evicted. The eviction
+// must keep the second peer's entries, or lookups by IP (WhoIs, and thus
+// PeerAPI and App Connector DNS) would fail until the next full netmap,
+// even though the peers map and the WireGuard config remain correct.
+func TestNodeBackendIndexReuseEviction(t *testing.T) {
+	addr := netip.MustParseAddr("100.64.0.1")
+	mkPeer := func(id tailcfg.NodeID, a netip.Addr) tailcfg.NodeView {
+		return (&tailcfg.Node{
+			ID:        id,
+			StableID:  tailcfg.StableNodeID(fmt.Sprintf("stable%d", id)),
+			Key:       makeNodeKeyFromID(id),
+			Name:      "runner.example.ts.net.",
+			HomeDERP:  1,
+			Addresses: []netip.Prefix{netip.PrefixFrom(a, a.BitLen())},
+		}).View()
+	}
+	newBackend := func(t *testing.T, initial ...tailcfg.NodeView) *nodeBackend {
+		nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+		nb.SetNetMap(&netmap.NetworkMap{Peers: initial})
+		return nb
+	}
+	apply := func(t *testing.T, nb *nodeBackend, muts ...netmap.NodeMutation) {
+		t.Helper()
+		if _, handled := nb.UpdateNetmapDelta(muts); !handled {
+			t.Fatal("UpdateNetmapDelta not handled")
+		}
+	}
+	wantAddr := func(t *testing.T, nb *nodeBackend, a netip.Addr, want tailcfg.NodeID) {
+		t.Helper()
+		got, ok := nb.NodeByAddr(a)
+		if want == 0 {
+			if ok {
+				t.Errorf("NodeByAddr(%v) = %v; want no match", a, got)
+			}
+			return
+		}
+		if !ok || got != want {
+			t.Errorf("NodeByAddr(%v) = %v, %v; want %v", a, got, ok, want)
+		}
+	}
+
+	t.Run("remove-after-reuse", func(t *testing.T) {
+		// Peer 1 owns the address. Control reassigns it (and the
+		// MagicDNS name) to new peer 2 in one delta batch and removes
+		// peer 1 in a later batch, as happens with churning ephemeral
+		// peers. The removal of peer 1 must not evict peer 2's claims.
+		nb := newBackend(t, mkPeer(1, addr))
+		apply(t, nb, netmap.NodeMutationUpsert{Node: mkPeer(2, addr)})
+		apply(t, nb, netmap.MakeNodeMutationRemove(1))
+		wantAddr(t, nb, addr, 2)
+		if nid, ok := nb.NodeByName("runner.example.ts.net"); !ok || nid != 2 {
+			t.Errorf("NodeByName = %v, %v; want 2", nid, ok)
+		}
+		if nid, ok := nb.NodeByKey(makeNodeKeyFromID(2)); !ok || nid != 2 {
+			t.Errorf("NodeByKey(peer 2) = %v, %v; want 2", nid, ok)
+		}
+		if nid, ok := nb.NodeByKey(makeNodeKeyFromID(1)); ok {
+			t.Errorf("NodeByKey(peer 1) = %v; want no match after removal", nid)
+		}
+		// Removing the current owner still evicts.
+		apply(t, nb, netmap.MakeNodeMutationRemove(2))
+		wantAddr(t, nb, addr, 0)
+	})
+
+	t.Run("single-response-sort-order", func(t *testing.T) {
+		// Within one MapResponse, MutationsFromMapResponse sorts by
+		// NodeID, which can order the upsert of the address's new
+		// owner before the removal of its old owner.
+		nb := newBackend(t, mkPeer(10, addr))
+		muts, ok := netmap.MutationsFromMapResponse(&tailcfg.MapResponse{
+			PeersRemoved: []tailcfg.NodeID{10},
+			PeersChanged: []*tailcfg.Node{mkPeer(2, addr).AsStruct()},
+		}, time.Unix(123, 0))
+		if !ok {
+			t.Fatal("MutationsFromMapResponse failed")
+		}
+		apply(t, nb, muts...)
+		wantAddr(t, nb, addr, 2)
+	})
+
+	t.Run("upsert-eviction", func(t *testing.T) {
+		// Peer 2 claims peer 1's address. A later upsert of peer 1
+		// with a new address evicts entries derived from peer 1's old
+		// value, which must not include peer 2's claim.
+		nb := newBackend(t, mkPeer(1, addr))
+		apply(t, nb, netmap.NodeMutationUpsert{Node: mkPeer(2, addr)})
+		addr2 := netip.MustParseAddr("100.64.0.9")
+		apply(t, nb, netmap.NodeMutationUpsert{Node: mkPeer(1, addr2)})
+		wantAddr(t, nb, addr, 2)
+		wantAddr(t, nb, addr2, 1)
+	})
 }

@@ -66,12 +66,12 @@ func (a *addrAssignments) insertWithExpiry(as *addrs, d time.Duration) error {
 	if _, ok := a.byDomainDst[ddst]; ok {
 		return errors.New("byDomainDst key exists")
 	}
-	if _, ok := a.byTransitIP[as.transit]; ok {
+	if _, ok := a.byTransitIP[as.connectorAddr.transit]; ok {
 		return errors.New("byTransitIP key exists")
 	}
 	as.expiresAt = now.Add(d)
 	mak.Set(&a.byMagicIP, as.magic, as)
-	mak.Set(&a.byTransitIP, as.transit, as)
+	mak.Set(&a.byTransitIP, as.connectorAddr.transit, as)
 	mak.Set(&a.byDomainDst, ddst, as)
 	heap.Push(&a.byExpiresAt, as)
 	return nil
@@ -145,11 +145,27 @@ func (a *addrAssignments) popExpired(now time.Time) *addrs {
 		// TODO(mzb/fran): This is an expensive operation we could consider optimizing.
 		heap.Push(&a.byExpiresAt, candidate)
 	}
-	delete(a.byMagicIP, v.magic)
-	delete(a.byTransitIP, v.transit)
-	dd := domainDst{domain: v.domain, dst: v.dst}
-	delete(a.byDomainDst, dd)
+	a.deleteFromNonHeapIndexes(v)
 	return v
+}
+
+// remove removes the provided address assignment from all the indexes.
+func (a *addrAssignments) remove(as *addrs) {
+	a.deleteFromNonHeapIndexes(as)
+	for i, v := range a.byExpiresAt {
+		if v == as {
+			heap.Remove(&a.byExpiresAt, i)
+			break
+		}
+	}
+}
+
+// deleteFromNonHeapIndexes removes as from every index except byExpiresAt,
+// which the caller is responsible for.
+func (a *addrAssignments) deleteFromNonHeapIndexes(as *addrs) {
+	delete(a.byMagicIP, as.magic)
+	delete(a.byTransitIP, as.connectorAddr.transit)
+	delete(a.byDomainDst, domainDst{domain: as.domain, dst: as.dst})
 }
 
 func (a *addrAssignments) updateExpiry(as *addrs, expiresIn time.Duration) {

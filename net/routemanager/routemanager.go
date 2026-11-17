@@ -946,6 +946,13 @@ func (rm *RouteManager) applyDirty(dirty set.Set[netip.Prefix], res *Result) {
 			}
 			cgnatDirty = append(cgnatDirty, pfx)
 		case osPlain:
+			if pfx == tsaddr.CGNATRange() || pfx == tsaddr.TailscaleULARange() {
+				// A peer can advertise the CGNAT /10 or the ULA /48
+				// as a subnet route. Those prefixes double as the
+				// coarse routes, so they are set below from both
+				// inputs rather than from the advertised route alone.
+				continue
+			}
 			var ch bool
 			osr, ch = tableSet(osr, pfx, wantOS)
 			osChanged = osChanged || ch
@@ -953,7 +960,8 @@ func (rm *RouteManager) applyDirty(dirty set.Set[netip.Prefix], res *Result) {
 	}
 
 	var ch bool
-	osr, ch = tableSet(osr, tsaddr.TailscaleULARange(), len(rm.ulaPfxs) > 0)
+	_, advULA := rm.desiredFor(tsaddr.TailscaleULARange())
+	osr, ch = tableSet(osr, tsaddr.TailscaleULARange(), advULA || len(rm.ulaPfxs) > 0)
 	osChanged = osChanged || ch
 
 	wantCoarse := len(rm.cgnatPfxs) > rm.cgnatThreshold()
@@ -963,9 +971,10 @@ func (rm *RouteManager) applyDirty(dirty set.Set[netip.Prefix], res *Result) {
 			osr, ch = tableSet(osr, pfx, !wantCoarse)
 			osChanged = osChanged || ch
 		}
-		osr, ch = tableSet(osr, tsaddr.CGNATRange(), wantCoarse)
-		osChanged = osChanged || ch
 	}
+	_, advCGNAT := rm.desiredFor(tsaddr.CGNATRange())
+	osr, ch = tableSet(osr, tsaddr.CGNATRange(), advCGNAT || rm.coarseCGNAT)
+	osChanged = osChanged || ch
 	for _, pfx := range cgnatDirty {
 		osr, ch = tableSet(osr, pfx, !rm.coarseCGNAT && rm.cgnatPfxs.Contains(pfx))
 		osChanged = osChanged || ch

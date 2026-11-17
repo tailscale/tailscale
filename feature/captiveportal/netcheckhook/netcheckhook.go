@@ -25,7 +25,7 @@ func init() {
 // the probe if it's unnecessary. Chosen semi-arbitrarily.
 const captivePortalDelay = 200 * time.Millisecond
 
-func startCaptivePortalDetection(ctx context.Context, c *netcheck.Client, dm *tailcfg.DERPMap, preferredDERP int, setCaptivePortal func(bool)) (done <-chan struct{}, stop func()) {
+func startCaptivePortalDetection(ctx context.Context, c *netcheck.Client, dm *tailcfg.DERPMap, preferredDERP tailcfg.DERPRegionID, setCaptivePortal func(bool)) (done <-chan struct{}, stop func()) {
 	logf := c.Logf
 	if logf == nil {
 		logf = log.Printf

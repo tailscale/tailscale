@@ -128,6 +128,8 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 		upf.BoolVar(&upArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
 		upf.BoolVar(&upArgs.statefulFiltering, "stateful-filtering", false, "apply stateful filtering to forwarded packets (subnet routers, exit nodes, and so on)")
 		upf.StringVar(&upArgs.netfilterMode, "netfilter-mode", defaultNetfilterMode(), "netfilter mode (one of on, nodivert, off)")
+	case "freebsd":
+		upf.BoolVar(&upArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
 	case "windows":
 		upf.BoolVar(&upArgs.forceDaemon, "unattended", false, "run in \"Unattended Mode\" where Tailscale keeps running even after the current GUI user logs out (Windows-only)")
 	}
@@ -361,14 +363,15 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	prefs.AppConnector.Advertise = upArgs.advertiseConnector
 	prefs.PostureChecking = upArgs.postureChecking
 
-	if goos == "linux" {
+	if goos == "linux" || goos == "freebsd" {
 		prefs.NoSNAT = !upArgs.snat
 		// We want to make sure user is aware setting --snat-subnet-routes=false with --advertise-exit-node would break exitnode,
 		// but we won't prevent them from doing it since there are current dependencies on that combination. (as of 2026-03-25)
 		if prefs.NoSNAT && prefs.AdvertisesExitNode() {
 			warnf("--snat-subnet-routes=false is set with --advertise-exit-node; internet traffic through this exit node may not work as expected")
 		}
-
+	}
+	if goos == "linux" {
 		// Backfills for NoStatefulFiltering occur when loading a profile; just set it explicitly here.
 		prefs.NoStatefulFiltering.Set(!upArgs.statefulFiltering)
 		v, warning, err := netfilterModeFromFlag(upArgs.netfilterMode)
@@ -460,7 +463,7 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 		}
 	}
 
-	tagsChanged := !reflect.DeepEqual(curPrefs.AdvertiseTags, prefs.AdvertiseTags)
+	tagsChanged := !simpleUp && !reflect.DeepEqual(curPrefs.AdvertiseTags, prefs.AdvertiseTags)
 
 	justEdit := env.backendState == ipn.Running.String() &&
 		!env.upArgs.forceReauth &&
@@ -605,21 +608,36 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		}
 	}()
 
-	if !buildfeatures.HasIPNBus {
-		fmt.Fprintln(Stderr, "binary built with ts_omit_ipnbus; not waiting for completion")
-		return nil
-	}
-
 	// Start watching the IPN bus before we call Start() or StartLoginInteractive(),
 	// or we could miss IPN notifications.
 	//
 	// In particular, if we're doing a force-reauth, we could miss the
 	// notification with the auth URL we should print for the user.
-	watcher, err := localClient.WatchIPNBus(watchCtx, 0)
-	if err != nil {
-		return err
+	//
+	// Binaries built without the IPN bus instead poll tailscaled's status
+	// once the loop below starts reading.
+	var nextNotify func() (ipn.Notify, error)
+	if buildfeatures.HasIPNBus {
+		watcher, err := localClient.WatchIPNBus(watchCtx, 0)
+		if err != nil {
+			return err
+		}
+		defer watcher.Close()
+		nextNotify = watcher.Next
+	} else {
+		var polled bool
+		nextNotify = func() (ipn.Notify, error) {
+			if polled {
+				select {
+				case <-watchCtx.Done():
+					return ipn.Notify{}, watchCtx.Err()
+				case <-time.After(250 * time.Millisecond):
+				}
+			}
+			polled = true
+			return statusNotify(watchCtx)
+		}
 	}
-	defer watcher.Close()
 
 	// Special case: bare "tailscale up" means to just start
 	// running, if there's ever been a login.
@@ -725,7 +743,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		}
 
 		for {
-			n, err := watcher.Next()
+			n, err := nextNotify()
 			if err != nil {
 				watchErr <- err
 				return
@@ -828,6 +846,28 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	case <-timeoutCh:
 		return errors.New(`timeout waiting for Tailscale service to enter a Running state; check health with "tailscale status"`)
 	}
+}
+
+// statusNotify returns an IPN notification synthesized from tailscaled's
+// current status, with the fields that runUp's wait loop reads: the
+// backend state, the auth URL, and the node key. It's how "tailscale up"
+// waits in binaries built without the IPN bus.
+func statusNotify(ctx context.Context) (ipn.Notify, error) {
+	st, err := localClient.StatusWithoutPeers(ctx)
+	if err != nil {
+		return ipn.Notify{}, err
+	}
+	var n ipn.Notify
+	if state, ok := ipn.StateFromString(st.BackendState); ok {
+		n.State = &state
+	}
+	if st.AuthURL != "" {
+		n.BrowseToURL = &st.AuthURL
+	}
+	if st.Self != nil {
+		n.SelfChange = &tailcfg.Node{Key: st.Self.PublicKey}
+	}
+	return n, nil
 }
 
 func printDeviceApprovalInfo(printJson bool, prefs *ipn.Prefs, lastURLPrinted *string) {
@@ -1122,8 +1162,10 @@ func applyImplicitPrefs(prefs, oldPrefs *ipn.Prefs, env upCheckEnv) {
 
 func flagAppliesToOS(flag, goos string) bool {
 	switch flag {
-	case "netfilter-mode", "snat-subnet-routes", "stateful-filtering":
+	case "netfilter-mode", "stateful-filtering":
 		return goos == "linux"
+	case "snat-subnet-routes":
+		return goos == "linux" || goos == "freebsd"
 	case "unattended":
 		return goos == "windows"
 	}

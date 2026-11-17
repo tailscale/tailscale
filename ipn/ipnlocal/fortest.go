@@ -14,6 +14,7 @@ import (
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/persist"
 	"tailscale.com/util/testenv"
 	"tailscale.com/wgengine/filter"
 )
@@ -126,6 +127,13 @@ func (f forTest) SetServeConfig(sc ipn.ServeConfigView) {
 	b.serveConfig = sc
 }
 
+// InitExtensions initializes the extensions without starting a control client.
+func (f forTest) InitExtensions() {
+	f.b.mu.Lock()
+	defer f.b.mu.Unlock()
+	f.b.startOnce.Do(f.b.initOnce)
+}
+
 // SetNetMap installs nm as the backend's current netmap without going
 // through control-plane plumbing. It is intended for tests that need a
 // specific netmap (e.g. CertDomains, capabilities).
@@ -149,4 +157,32 @@ func (f forTest) SetPrefs(newp *ipn.Prefs) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.setPrefsLocked(newp)
+}
+
+// AuthReconfig applies the current network map and preferences to the engine.
+func (f forTest) AuthReconfig() { f.b.authReconfig() }
+
+// SetPersist seeds the current profile's persisted identity without running
+// the control client or backend state machine.
+func (f forTest) SetPersist(p *persist.Persist) error {
+	b := f.b
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	prefs := b.pm.CurrentPrefs().AsStruct()
+	prefs.Persist = p.Clone()
+	return b.pm.SetPrefs(prefs.View(), ipn.NetworkProfile{})
+}
+
+// SetState changes the backend state and dispatches its state change hooks.
+func (f forTest) SetState(state ipn.State) {
+	f.b.mu.Lock()
+	defer f.b.mu.Unlock()
+	f.b.setStateLocked(state)
+}
+
+// ApplyNetMap installs a map through the production path, including feature hooks.
+func (f forTest) ApplyNetMap(nm *netmap.NetworkMap) {
+	f.b.mu.Lock()
+	defer f.b.mu.Unlock()
+	f.b.setNetMapLocked(nm)
 }

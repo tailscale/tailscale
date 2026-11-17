@@ -19,7 +19,9 @@ import (
 )
 
 func init() {
-	feature.Register("netlog")
+	if !feature.Register("netlog") {
+		return
+	}
 	wgengine.HookNewNetLogger.Set(newNetLogger)
 }
 

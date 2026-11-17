@@ -94,7 +94,7 @@ func (v PersistView) UserProfile() tailcfg.UserProfileView { return v.ж.UserPro
 
 // NetworkLockKey is the node's Tailnet Lock private key.
 // "Network Lock" was the pre-release name for Tailnet Lock.
-func (v PersistView) NetworkLockKey() key.NLPrivate        { return v.ж.NetworkLockKey }
+func (v PersistView) NetworkLockKey() key.TLPrivate        { return v.ж.NetworkLockKey }
 func (v PersistView) NodeID() tailcfg.StableNodeID         { return v.ж.NodeID }
 func (v PersistView) AttestationKey() tailcfg.StableNodeID { panic("unsupported") }
 
@@ -112,7 +112,7 @@ var _PersistViewNeedsRegeneration = Persist(struct {
 	PrivateNodeKey        key.NodePrivate
 	OldPrivateNodeKey     key.NodePrivate
 	UserProfile           tailcfg.UserProfile
-	NetworkLockKey        key.NLPrivate
+	NetworkLockKey        key.TLPrivate
 	NodeID                tailcfg.StableNodeID
 	AttestationKey        key.HardwareAttestationKey
 	DisallowedTKAStateIDs []string

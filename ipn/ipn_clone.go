@@ -104,6 +104,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	AppConnector               AppConnectorPrefs
 	PostureChecking            bool
 	NetfilterKind              string
+	Tailnet                    string
 	RemoteConfig               bool
 	DriveShares                []*drive.Share
 	RelayServerPort            *uint16

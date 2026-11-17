@@ -24,7 +24,7 @@ import (
 
 func TestDerpProber(t *testing.T) {
 	dm := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 			0: {
 				RegionID:   0,
 				RegionCode: "zero",

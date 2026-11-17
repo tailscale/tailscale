@@ -11,6 +11,7 @@ const (
 	HealthWarnableWantRunningFalse          = "wantrunning-false"
 	HealthWarnableLocalLogConfigError       = "local-log-config-error"
 	HealthWarnableLoginState                = "login-state"
+	HealthWarnableNodeRemoved               = "node-removed"
 	HealthWarnableNotInMapPoll              = "not-in-map-poll"
 	HealthWarnableNoDERPHome                = "no-derp-home"
 	HealthWarnableNoDERPConnection          = "no-derp-connection"
@@ -24,4 +25,6 @@ const (
 	HealthWarnableApplyDiskConfig           = "apply-disk-config"
 	HealthWarnableWarmingUp                 = "warming-up"
 	HealthWarnableTLSCertPending            = "tls-cert-pending"
+	HealthWarnableExitNodeUnavailable       = "exit-node-unavailable"
+	HealthWarnableExitNodeUnresponsive      = "exit-node-unresponsive"
 )

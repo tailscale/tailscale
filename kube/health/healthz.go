@@ -60,7 +60,7 @@ func (h *Healthz) Update(healthy bool) {
 }
 
 func (h *Healthz) MonitorHealth(ctx context.Context, lc *local.Client) error {
-	w, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialNetMap)
+	w, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialStatus)
 	if err != nil {
 		return fmt.Errorf("failed to watch IPN bus: %w", err)
 	}
@@ -73,6 +73,8 @@ func (h *Healthz) MonitorHealth(ctx context.Context, lc *local.Client) error {
 
 		if self := n.SelfChange; self != nil {
 			h.Update(len(self.Addresses) != 0)
+		} else if st := n.InitialStatus; st != nil && st.Self != nil {
+			h.Update(len(st.Self.TailscaleIPs) != 0)
 		}
 	}
 }

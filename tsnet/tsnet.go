@@ -116,6 +116,29 @@
 //	})
 //	log.Printf("Listening on https://%s", ln.FQDN)
 //
+// # Using an exit node
+//
+// A tsnet node can route its [Server.Dial] traffic to non-tailnet
+// addresses through an [exit node]. Select the exit node by setting the
+// ExitNodeID pref via [Server.LocalClient]:
+//
+//	lc, _ := srv.LocalClient()
+//	_, err := lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+//		Prefs:         ipn.Prefs{ExitNodeID: "nodeid"},
+//		ExitNodeIDSet: true,
+//	})
+//
+// Dials of addresses outside the tailnet then go through the exit node.
+// Dials within the tailnet are unaffected.
+//
+// # DNS resolution
+//
+// [Server.Dial] and [Server.HTTPClient] resolve names using the tailnet's DNS
+// configuration first, falling back to the host resolver for names without a
+// configured upstream or local answer. [Server.LookupIP] provides direct lookups:
+//
+//	ips, err := srv.LookupIP(ctx, "ip", "db")
+//
 // # Running multiple nodes in one process
 //
 // Each [Server] instance is an independent node. Give each a unique
@@ -132,6 +155,7 @@
 //	}
 //
 // [Tailscale identity]: https://tailscale.com/docs/concepts/tailscale-identity
+// [exit node]: https://tailscale.com/docs/features/exit-nodes
 // [Tailscale Funnel]: https://tailscale.com/docs/features/tailscale-funnel
 // [Tailscale Service]: https://tailscale.com/docs/features/tailscale-services
 package tsnet
@@ -162,6 +186,8 @@ import (
 	"tailscale.com/client/local"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	_ "tailscale.com/feature/c2n"
 	_ "tailscale.com/feature/condregister/netlog"
 	_ "tailscale.com/feature/condregister/oauthkey"
@@ -182,6 +208,7 @@ import (
 	"tailscale.com/logtail/filch"
 	"tailscale.com/net/memnet"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netx"
 	"tailscale.com/net/proxymux"
 	"tailscale.com/net/socks5"
 	"tailscale.com/net/tsdial"
@@ -189,6 +216,7 @@ import (
 	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tsd"
 	"tailscale.com/types/bools"
+	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/nettype"
@@ -252,6 +280,15 @@ type Server struct {
 	// used.
 	AuthKey string
 
+	// SSHAuthCallback is called for each new SSH session on listeners
+	// from [Server.ListenSSH]. It receives the peer's Tailscale
+	// identity, the same values as Session.Peer and
+	// Session.UserProfile. A session that it rejects is refused and is
+	// never yielded to Accept. If it is nil, every session from a peer
+	// that the tailnet ACL's TCP rules allow is accepted. See
+	// [SSHAuthCallback].
+	SSHAuthCallback SSHAuthCallback
+
 	// ClientSecret, if non-empty, is the OAuth client secret
 	// that will be used to generate authkeys via OAuth. It
 	// will be preferred over the TS_CLIENT_SECRET environment
@@ -289,6 +326,17 @@ type Server struct {
 	// If that is also empty, the Tailscale default is used.
 	ControlURL string
 
+	// SystemDial, if non-nil, replaces the default dialer for
+	// connections that go over the host network rather than the
+	// tailnet, such as those to the control server. It is not used for
+	// DERP or WireGuard traffic. Hostnames may already be resolved to
+	// IP addresses before SystemDial is called.
+	//
+	// This field must be set before calling Start. If it is not set,
+	// host network dials use a [netns.Dialer] constructed from the server's
+	// network monitor, if available; otherwise host network dials fail.
+	SystemDial netx.DialFunc
+
 	// RunWebClient, if true, runs a client for managing this node over
 	// its Tailscale interface on port 5252.
 	RunWebClient bool
@@ -315,7 +363,8 @@ type Server struct {
 	sys                 *tsd.System
 	netstack            *netstack.Impl
 	netMon              *netmon.Monitor
-	rootPath            string // the state directory
+	dnsRes              lazy.SyncValue[*dnsResolver] // lazily created by dnsResolver
+	rootPath            string                       // the state directory
 	hostname            string
 	shutdownCtx         context.Context
 	shutdownCancel      context.CancelFunc
@@ -397,12 +446,24 @@ func (s *Server) awaitRunning(ctx context.Context) error {
 //
 // This is useful if you need to have your tsnet services connect to other devices on
 // your tailnet.
+//
+// The returned client's transport has the same settings as
+// [http.DefaultTransport], except its DialContext dials over Tailscale
+// and it has no Proxy set, as HTTP proxies from the environment are
+// unlikely to be reachable over the tailnet.
 func (s *Server) HTTPClient() *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			DialContext: s.Dial,
-		},
+	// Keep this in sync with http.DefaultTransport. Do not clone
+	// http.DefaultTransport here: applications are permitted to replace or
+	// modify that package-level variable.
+	tr := &http.Transport{
+		DialContext:           s.Dial,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
 	}
+	return &http.Client{Transport: tr}
 }
 
 // LocalClient returns a LocalClient that speaks to s.
@@ -569,8 +630,10 @@ func (s *Server) Up(ctx context.Context) (*ipnstate.Status, error) {
 				var srvCfgErr error
 				var svcAdErr error
 				s.resetServeStateOnce.Do(func() {
-					if err := lc.SetServeConfig(ctx, new(ipn.ServeConfig)); err != nil {
-						srvCfgErr = fmt.Errorf("clearing serve config: %w", err)
+					if buildfeatures.HasServe {
+						if err := lc.SetServeConfig(ctx, new(ipn.ServeConfig)); err != nil {
+							srvCfgErr = fmt.Errorf("clearing serve config: %w", err)
+						}
 					}
 					_, err := s.lb.EditPrefs(&ipn.MaskedPrefs{
 						AdvertiseServicesSet: true,
@@ -666,7 +729,16 @@ func (s *Server) close() {
 	}
 
 	wg.Wait()
-	s.sys.Bus.Get().Close()
+	// s.sys is only assigned partway through doInit, so it is still nil if
+	// Start failed before that point. Close is reachable in that state --
+	// Start is idempotent via initOnce and returns the stored initErr, so
+	// callers that `defer Close()` before checking the error land here.
+	// Use GetOK rather than Get so an unset Bus cannot panic either.
+	if s.sys != nil {
+		if bus, ok := s.sys.Bus.GetOK(); ok && bus != nil {
+			bus.Close()
+		}
+	}
 }
 
 func (s *Server) doInit() {
@@ -847,6 +919,11 @@ func (s *Server) start() (reterr error) {
 
 	s.dialer = &tsdial.Dialer{Logf: tsLogf} // mutated below (before used)
 	s.dialer.SetBus(sys.Bus.Get())
+	s.dialer.SetSystemDialer(s.SystemDial)
+	// LookupIP handles names not resolved by the MagicDNS hook.
+	if buildfeatures.HasDNS {
+		s.dialer.SetUserDialResolver(s.userDialResolve)
+	}
 	eng, err := wgengine.NewUserspaceEngine(tsLogf, wgengine.Config{
 		Tun:           s.Tun,
 		EventBus:      sys.Bus.Get(),
@@ -871,6 +948,7 @@ func (s *Server) start() (reterr error) {
 	if err != nil {
 		return fmt.Errorf("netstack.Create: %w", err)
 	}
+	ns.SetMetricsRegistry(sys.UserMetricsRegistry())
 	sys.Tun.Get().Start()
 	sys.Set(ns)
 	if s.Tun == nil {
@@ -936,6 +1014,10 @@ func (s *Server) start() (reterr error) {
 	}
 	lb.SetTCPHandlerForFunnelFlow(s.getTCPHandlerForFunnelFlow)
 	lb.SetVarRoot(s.rootPath)
+	if s.logtail != nil {
+		lb.SetLogUploader(s.logtail)
+		lb.SetLogFlusher(s.logtail.StartFlush)
+	}
 	s.logf("tsnet starting with hostname %q, varRoot %q", s.hostname, s.rootPath)
 	s.lb = lb
 	if err := ns.Start(lb); err != nil {
@@ -1052,7 +1134,7 @@ func (s *Server) resolveAuthKey() (string, error) {
 }
 
 func (s *Server) startLogger(closePool *closeOnErrorPool, health *health.Tracker, tsLogf logger.Logf) error {
-	if testenv.InTest() {
+	if !buildfeatures.HasLogTail || testenv.InTest() {
 		return nil
 	}
 	cfgPath := filepath.Join(s.rootPath, "tailscaled.log.conf")
@@ -1276,14 +1358,54 @@ func (s *Server) Listen(network, addr string) (net.Listener, error) {
 	return s.listen(network, addr, listenOnTailnet)
 }
 
+// SSHAuthCallback reports whether to accept a new SSH session from a
+// tailscale peer, on listeners from [Server.ListenSSH]. It is an
+// alias for ipnlocal.SSHAuthCallback, the type of
+// [Server.SSHAuthCallback].
+type SSHAuthCallback = ipnlocal.SSHAuthCallback
+
 // ListenSSH listens on the Tailscale network for SSH connections at the given
 // addr (e.g. ":2222"). The returned listener's Accept method yields net.Conn
 // values that are actually *tailssh.Session, providing access to the
 // connecting peer's Tailscale identity, PTY information, signals, and more.
 //
-// Basic applications can use the returned connections as plain net.Conn
-// (Read/Write/Close). Applications that need richer SSH semantics should
-// type-assert to *tailssh.Session.
+// # Trust model
+//
+// The server enforces only the tailnet ACL's TCP rules. For any
+// further authorization, the application must use s.SSHAuthCallback, or
+// check each accepted session and close the unwanted ones.
+// SSHAuthCallback enables applications to reject sessions before they
+// are started.
+//
+// Each session is yielded as a net.Conn, with the peer's Tailscale
+// identity available as Session.Peer and Session.UserProfile. The
+// application decides what each session may do, including which local
+// user to run as, if any.
+//
+// # Timeouts and limits
+//
+// The server runs session channels only; it does not forward ports.
+//
+// TS_SSH_LOGIN_GRACE_TIME bounds the time between accepting a
+// connection and completing the handshake. The default is 120
+// seconds, matching sshd's LoginGraceTime.
+//
+// TS_SSH_IDLE_TIMEOUT bounds connections with no SSH traffic. Any
+// traffic on the connection resets the timer. Zero, the default,
+// applies no bound.
+//
+// Sessions accepted by the server wait for Accept in a bounded queue.
+// When the queue is full, the server refuses new sessions, so an
+// application that stops calling Accept parks only a bounded number of
+// sessions.
+//
+// # Basic usage
+//
+// Applications that need only a data stream can use the connections
+// as plain net.Conn (Read, Write, and Close). Applications that need
+// peer identity, PTY configuration, or signals should type-assert to
+// *tailssh.Session. On PTY sessions the server does not translate
+// "\n" to "\r\n", so Read and Write are binary safe.
 //
 // SSH support must be linked into the binary by importing
 // _ "tailscale.com/feature/ssh". Without that import, ListenSSH returns an
@@ -1295,7 +1417,7 @@ func (s *Server) ListenSSH(addr string) (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	sshLn, err := s.lb.ListenSSH(rawLn, s.logf)
+	sshLn, err := s.lb.ListenSSH(rawLn, s.SSHAuthCallback, s.logf)
 	if err != nil {
 		rawLn.Close()
 		return nil, err
@@ -1412,18 +1534,6 @@ func (s *Server) RegisterFallbackTCPHandler(cb FallbackTCPHandler) func() {
 	}
 }
 
-// getCert is the GetCertificate function used by ListenTLS.
-//
-// It calls GetCertificate on the localClient, passing in the ClientHelloInfo.
-// For testing, if s.getCertForTesting is set, it will call that instead.
-func (s *Server) getCert(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-	lc, err := s.LocalClient()
-	if err != nil {
-		return nil, err
-	}
-	return lc.GetCertificate(hi)
-}
-
 // FunnelOption is an option passed to ListenFunnel to configure the listener.
 type FunnelOption interface {
 	funnelOption()
@@ -1473,6 +1583,9 @@ func FunnelTLSConfig(conf *tls.Config) FunnelOption {
 //
 // It will start the server if it has not been started yet.
 func (s *Server) ListenFunnel(network, addr string, opts ...FunnelOption) (net.Listener, error) {
+	if !buildfeatures.HasServe {
+		return nil, feature.ErrUnavailable
+	}
 	if network != "tcp" {
 		return nil, fmt.Errorf("ListenFunnel(%q, %q): only tcp is supported", network, addr)
 	}
@@ -1834,6 +1947,9 @@ func (s *Server) decrementServiceAdvertisementLocked(name tailcfg.ServiceName) e
 //
 // This function will start the server if it is not already started.
 func (s *Server) ListenService(name string, mode ServiceMode) (*ServiceListener, error) {
+	if !buildfeatures.HasServe {
+		return nil, feature.ErrUnavailable
+	}
 	svcName := tailcfg.ServiceName(name)
 	if err := svcName.Validate(); err != nil {
 		return nil, err

@@ -35,6 +35,7 @@ import (
 	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
@@ -52,6 +53,9 @@ func handlerForTest(t testing.TB, h *Handler) *Handler {
 	}
 	if h.logf == nil {
 		h.logf = logger.TestLogger(t)
+	}
+	if h.clock == nil {
+		h.clock = tstime.StdClock{}
 	}
 	return h
 }
@@ -657,9 +661,9 @@ func TestServeWatchIPNBus(t *testing.T) {
 			wantStatus:  http.StatusOK,
 		},
 		{
-			desc:       "invalid-rate-limit-mask",
+			desc:       "obsolete-rate-limit-mask",
 			permitRead: true,
-			mask:       ipn.NotifyRateLimit | ipn.NotifyPeerChanges,
+			mask:       ipn.ObsoleteNotifyRateLimit,
 			wantStatus: http.StatusBadRequest,
 		},
 		{

@@ -14,6 +14,7 @@ import (
 
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/set"
@@ -26,8 +27,8 @@ type localState struct {
 	varRoot      string // if empty, TailscaleVarRoot returns ""
 
 	// caps, if non-empty, are advertised via NetMap().AllCaps. Used to gate
-	// features like NodeAttrSSHEnvironmentVariables in tests.
-	caps []tailcfg.NodeCapability
+	// features like nodecap.SSHEnvironmentVariables in tests.
+	caps []nodecap.Cap
 
 	// serverActions is a map of the action name to the action.
 	// It is served for paths like https://unused/ssh-action/<action-name>.
@@ -70,11 +71,11 @@ func (ts *localState) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeVie
 	}
 
 	return (&tailcfg.Node{
-			ID:       2,
-			StableID: "peer-id",
-		}).View(), tailcfg.UserProfile{
-			LoginName: "peer",
-		}, true
+		ID:       2,
+		StableID: "peer-id",
+	}).View(), tailcfg.UserProfile{
+		LoginName: "peer",
+	}, true
 
 }
 

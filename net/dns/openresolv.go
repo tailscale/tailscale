@@ -7,10 +7,14 @@ package dns
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"net/netip"
 	"os/exec"
+	"slices"
 	"strings"
 
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 )
 
@@ -37,6 +41,57 @@ func (m openresolvManager) logCmdErr(cmd *exec.Cmd, err error) {
 	}
 
 	m.logf("error running command %s stderr=%q exitCode=%d: %v", commandStr, exerr.Stderr, exerr.ExitCode(), err)
+}
+
+// openresolvNoSnippetsExitCode is the exit status resolvconf returns when a
+// requested config snippet does not exist. openresolv 3.17 returns it for an
+// empty listing too, because it treats the empty result as a missing snippet
+// rather than as an empty list (tailscale/tailscale#20825). Earlier releases
+// print nothing on stdout or stderr for an empty listing. Before 3.13 they
+// exit 1. FreeBSD 13 through 15.0 ship 3.9.2 in the base system, so that is
+// the FreeBSD case (tailscale/tailscale#11907). From 3.13 on they exit 0.
+const openresolvNoSnippetsExitCode = 2
+
+// readSnippets runs resolvconf with the given arguments and returns its stdout.
+// An empty listing is not an error: it returns no output and a nil error. That
+// covers an exit status of openresolvNoSnippetsExitCode, and any other
+// non-zero exit status with nothing on stdout or stderr. Other failures,
+// including a resolvconf killed by a signal, are logged and returned.
+//
+// Silence is the signal rather than the snippet directory because the
+// directory is a build-time setting that differs by distribution and by
+// version: /var/run/resolvconf/interfaces on FreeBSD, /run/resolvconf/interfaces
+// on older Linux builds, and /run/resolvconf/keys from 3.17 on. openresolv's
+// own failure paths all report on stderr.
+//
+// Callers must pass either "-i" with no arguments or "-l" with explicit snippet
+// names. Only those forms produce empty stdout alongside
+// openresolvNoSnippetsExitCode; "-i" with snippet names prints the ones that do
+// exist and still exits 2, so its output would be silently dropped.
+//
+// Stderr is excluded from the returned bytes so that diagnostics like "No
+// resolv.conf for key foo" are never parsed as snippet names or resolv.conf
+// lines. logCmdErr still logs stderr when a command fails.
+func (m openresolvManager) readSnippets(args ...string) ([]byte, error) {
+	cmd := exec.Command("resolvconf", args...)
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := errors.AsType[*exec.ExitError](err); ok {
+			switch {
+			case ee.ExitCode() == openresolvNoSnippetsExitCode:
+				m.logf("[v1] resolvconf %q found no matching config snippets", args)
+				return nil, nil
+			case ee.ExitCode() > 0 && len(bytes.TrimSpace(out)) == 0 && len(bytes.TrimSpace(ee.Stderr)) == 0:
+				// A process killed by a signal has exit code -1 and so
+				// falls through to the error path below.
+				m.logf("[v1] resolvconf %q exited %d with no output, which openresolv before 3.13 does when no snippets are registered", args, ee.ExitCode())
+				return nil, nil
+			}
+		}
+		m.logCmdErr(cmd, err)
+		return nil, err
+	}
+	return out, nil
 }
 
 func (m openresolvManager) deleteTailscaleConfig() error {
@@ -75,18 +130,21 @@ func (m openresolvManager) GetBaseConfig() (OSConfig, error) {
 	// List the names of all config snippets openresolv is aware
 	// of. Snippets get listed in priority order (most to least),
 	// which we'll exploit later.
-	bs, err := exec.Command("resolvconf", "-i").CombinedOutput()
+	bs, err := m.readSnippets("-i")
 	if err != nil {
 		return OSConfig{}, err
 	}
 
-	// Remove the "tailscale" snippet from the list.
-	args := []string{"-l"}
-	for f := range strings.SplitSeq(strings.TrimSpace(string(bs)), " ") {
-		if f == "tailscale" {
-			continue
-		}
-		args = append(args, f)
+	others := slices.DeleteFunc(strings.Fields(string(bs)), func(f string) bool {
+		return f == "tailscale"
+	})
+	if len(others) == 0 {
+		// There are no other snippets, so there is no base config to read.
+		// Returning early is required, not merely an optimization: a
+		// "resolvconf -l" with no snippet names lists every snippet,
+		// including Tailscale's own, which would make quad-100 its own
+		// upstream. See tailscale/tailscale#20825.
+		return OSConfig{}, nil
 	}
 
 	// List all resolvconf snippets except our own, and parse that as
@@ -100,14 +158,30 @@ func (m openresolvManager) GetBaseConfig() (OSConfig, error) {
 	// practice, openresolv uses are generally quite limited, and boil
 	// down to 1-2 DHCP leases, for which the correct outcome is a
 	// blended config like the one we produce here.
-	var buf bytes.Buffer
-	cmd := exec.Command("resolvconf", args...)
-	cmd.Stdout = &buf
-	if err := cmd.Run(); err != nil {
-		m.logCmdErr(cmd, err)
+	out, err := m.readSnippets(append([]string{"-l"}, others...)...)
+	if err != nil {
 		return OSConfig{}, err
 	}
-	return readResolv(&buf)
+	cfg, err := readResolv(bytes.NewReader(out))
+	if err != nil {
+		return OSConfig{}, err
+	}
+
+	// Forwarding to the Tailscale service IPs would make quad-100 send
+	// queries to itself, in an infinite loop, so drop them if another
+	// snippet names them. See tailscale/tailscale#7816.
+	var removed bool
+	cfg.Nameservers = slices.DeleteFunc(cfg.Nameservers, func(ip netip.Addr) bool {
+		if ip == tsaddr.TailscaleServiceIP() || ip == tsaddr.TailscaleServiceIPv6() {
+			removed = true
+			return true
+		}
+		return false
+	})
+	if removed {
+		m.logf("[v1] dropped Tailscale service IP from openresolv base config")
+	}
+	return cfg, nil
 }
 
 func (m openresolvManager) Close() error {

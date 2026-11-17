@@ -131,9 +131,13 @@ func lookup(ctx context.Context, host string, logf logger.Logf, ht *health.Track
 // serverName and serverIP of are, say, "derpN.tailscale.com".
 // queryName is the name being sought (e.g. "controlplane.tailscale.com"), passed as hint.
 //
-// ht may be nil.
+// ht and netMon may be nil. If netMon is nil, a plain net.Dialer is used
+// instead of a netns-aware one.
 func bootstrapDNSMap(ctx context.Context, serverName string, serverIP netip.Addr, queryName string, logf logger.Logf, ht *health.Tracker, netMon *netmon.Monitor) (dnsMap, error) {
-	dialer := netns.NewDialer(logf, netMon)
+	var dialer netns.Dialer = new(net.Dialer)
+	if netMon != nil {
+		dialer = netns.NewDialer(logf, netMon)
+	}
 	tr := netutil.NewDefaultTransport()
 	tr.DisableKeepAlives = true // This transport is meant to be used once.
 	tr.Proxy = feature.HookProxyFromEnvironment.GetOrNil()

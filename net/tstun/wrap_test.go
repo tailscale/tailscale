@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_netstack
+
 package tstun
 
 import (
@@ -11,16 +13,19 @@ import (
 	"fmt"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unicode"
-	"unsafe"
 
 	"github.com/gaissmai/bart"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	wgtun "github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"go4.org/mem"
 	"go4.org/netipx"
@@ -32,7 +37,6 @@ import (
 	"tailscale.com/net/packet/checksum"
 	"tailscale.com/net/routemanager"
 	"tailscale.com/tstest"
-	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -199,6 +203,13 @@ func newFakeTUN(logf logger.Logf, bus *eventbus.Bus, secure bool) (*fakeTUN, *Wr
 	return ftun.(*fakeTUN), tun
 }
 
+// getSinglePacketReadArgs returns a slab and packets slice sized for passing to
+// [tun.Device.Read] where [tun.Device.BatchSize] returns 1.
+func getSinglePacketReadArgs() (slab []byte, packets []wgtun.ReadPacket) {
+	return make([]byte, MaxPacketSize+(2*wgtun.ReadPacketSpacing)),
+		make([]wgtun.ReadPacket, 1)
+}
+
 func TestReadAndInject(t *testing.T) {
 	bus := eventbustest.NewBus(t)
 	chtun, tun := newChannelTUN(t.Logf, bus, false)
@@ -215,49 +226,45 @@ func TestReadAndInject(t *testing.T) {
 		}
 	}()
 
-	for _, packet := range injected {
-		go func(packet string) {
+	go func() {
+		for _, packet := range injected {
 			payload := []byte(packet)
 			err := tun.InjectOutbound(payload)
 			if err != nil {
 				t.Errorf("%s: error: %v", packet, err)
 			}
-		}(packet)
+		}
+	}()
+
+	// The device's own packets and the injected ones arrive on separate queues.
+	readAll := func(what string, q wgtun.Queue, want int) []string {
+		t.Helper()
+		got := make([]string, 0, want)
+		slab, packets := getSinglePacketReadArgs()
+		for i := range want {
+			numPackets, err := q.Read(slab, packets)
+			if err != nil {
+				t.Errorf("%s read %d: error: %v", what, i, err)
+				return got
+			}
+			if numPackets != 1 {
+				t.Fatalf("%s read %d packets, expected %d", what, numPackets, 1)
+			}
+			packet := slab[packets[0].Offset : packets[0].Offset+packets[0].Size]
+			if packetLen := len(packet); packetLen != size {
+				t.Errorf("%s read %d: got size %d; want %d", what, i, packetLen, size)
+			}
+			t.Logf("%s read %d: got %s", what, i, packet)
+			got = append(got, string(packet))
+		}
+		return got
 	}
 
-	var buf [MaxPacketSize]byte
-	seen := make(map[string]bool)
-	sizes := make([]int, 1)
-	// We expect the same packets back, in no particular order.
-	for i := range len(written) + len(injected) {
-		packet := buf[:]
-		buffs := [][]byte{packet}
-		numPackets, err := tun.Read(buffs, sizes, 0)
-		if err != nil {
-			t.Errorf("read %d: error: %v", i, err)
-		}
-		if numPackets != 1 {
-			t.Fatalf("read %d packets, expected %d", numPackets, 1)
-		}
-		packet = packet[:sizes[0]]
-		packetLen := len(packet)
-		if packetLen != size {
-			t.Errorf("read %d: got size %d; want %d", i, packetLen, size)
-		}
-		got := string(packet)
-		t.Logf("read %d: got %s", i, got)
-		seen[got] = true
+	if got := readAll("device queue", tun.Queues()[0], len(written)); !slices.Equal(got, written) {
+		t.Errorf("device queue: got %q; want %q", got, written)
 	}
-
-	for _, packet := range written {
-		if !seen[packet] {
-			t.Errorf("%s not received", packet)
-		}
-	}
-	for _, packet := range injected {
-		if !seen[packet] {
-			t.Errorf("%s not received", packet)
-		}
+	if got := readAll("injection queue", tun.injectionQueue, len(injected)); !slices.Equal(got, injected) {
+		t.Errorf("injection queue: got %q; want %q", got, injected)
 	}
 }
 
@@ -373,15 +380,12 @@ func TestFilter(t *testing.T) {
 		}
 	}()
 
-	var buf [MaxPacketSize]byte
 	var stats netlogtype.CountsByConnection
 	tun.SetConnectionCounter(stats.Add)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var n int
 			var err error
 			var filtered bool
-			sizes := make([]int, 1)
 
 			tunStats := stats.Clone()
 			stats.Reset()
@@ -395,14 +399,21 @@ func TestFilter(t *testing.T) {
 				// data was actually filtered.
 				// If it stays zero, nothing made it through
 				// to the wrapped TUN.
-				tun.lastActivityAtomic.StoreAtomic(0)
+				tun.lastActivity.Store(0)
 				_, err = tun.Write([][]byte{tt.data}, 0)
-				filtered = tun.lastActivityAtomic.LoadAtomic() == 0
+				filtered = tun.lastActivity.Load() == 0
 			} else {
-				chtun.Outbound <- tt.data
-				n, err = tun.Read([][]byte{buf[:]}, sizes, 0)
+				// chtun.Outbound is unbuffered, and won't be drained until the
+				// first Read call.
+				go func() { chtun.Outbound <- tt.data }()
+				// Read every queue.
+				var pkts [][]byte
+				pkts, err = tun.ForTest().ReadN(t.Context(), 1)
 				// In the read direction, errors are fatal, so we return n = 0 instead.
-				filtered = (n == 0)
+				filtered = len(pkts) == 0
+				if !filtered && !bytes.Equal(pkts[0], tt.data) {
+					t.Errorf("read a packet other than the one sent:\nsent:\t% x\nread:\t% x", tt.data, pkts[0])
+				}
 			}
 
 			if err != nil {
@@ -477,7 +488,7 @@ func TestInjectOutboundRecordsUDPFlowState(t *testing.T) {
 	const localIP, peerIP = "1.2.3.4", "5.6.7.8"
 
 	// Inject a UDP packet outbound. Run in a goroutine since
-	// InjectOutbound blocks on the unbuffered vectorOutbound channel
+	// InjectOutbound blocks on the injection queue
 	// until Read drains it.
 	go func() {
 		if err := tun.InjectOutbound(udp4(localIP, peerIP, localPort, peerPort)); err != nil {
@@ -487,9 +498,7 @@ func TestInjectOutboundRecordsUDPFlowState(t *testing.T) {
 
 	// Drain the injected packet via Read. This drives injectedRead, which
 	// is what records the reverse-flow tuple in filter state.
-	var buf [MaxPacketSize]byte
-	sizes := make([]int, 1)
-	if n, err := tun.Read([][]byte{buf[:]}, sizes, 0); err != nil {
+	if n, err := tun.injectionQueue.Read(getSinglePacketReadArgs()); err != nil {
 		t.Fatalf("Read: %v", err)
 	} else if n != 1 {
 		t.Fatalf("Read returned %d packets, want 1", n)
@@ -580,16 +589,6 @@ func BenchmarkWrite(b *testing.B) {
 			b.Errorf("err = %v; want nil", err)
 		}
 	}
-}
-
-func TestAtomic64Alignment(t *testing.T) {
-	off := unsafe.Offsetof(Wrapper{}.lastActivityAtomic)
-	if off%8 != 0 {
-		t.Errorf("offset %v not 8-byte aligned", off)
-	}
-
-	c := new(Wrapper)
-	c.lastActivityAtomic.StoreAtomic(mono.Now())
 }
 
 func TestPeerAPIBypass(t *testing.T) {
@@ -970,14 +969,11 @@ func TestCaptureHook(t *testing.T) {
 	defer w.Close()
 
 	// Loop reading and discarding packets; this ensures that we don't have
-	// packets stuck in vectorOutbound
+	// packets stuck in the injection queue
 	go func() {
-		var (
-			buf   [MaxPacketSize]byte
-			sizes = make([]int, 1)
-		)
+		slab, packets := getSinglePacketReadArgs()
 		for {
-			_, err := w.Read([][]byte{buf[:]}, sizes, 0)
+			_, err := w.injectionQueue.Read(slab, packets)
 			if err != nil {
 				return
 			}
@@ -992,10 +988,10 @@ func TestCaptureHook(t *testing.T) {
 	packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		Payload: buffer.MakeWithData([]byte("InjectInboundPacketBuffer")),
 	})
-	buffs := make([][]byte, 1)
-	buffs[0] = make([]byte, PacketStartOffset+packetBuf.Size())
-	sizes := make([]int, 1)
-	w.InjectInboundPacketBuffer(packetBuf, buffs, sizes)
+	slab := make([]byte, packetBuf.Size()+(2*WritePacketStartOffset))
+	packets := make([]wgtun.ReadPacket, 1)
+	writeBufs := make([][]byte, 1)
+	w.InjectInboundPacketBuffer(packetBuf, slab, packets, writeBufs)
 
 	packetBuf = stack.NewPacketBuffer(stack.PacketBufferOptions{
 		Payload: buffer.MakeWithData([]byte("InjectOutboundPacketBuffer")),
@@ -1113,11 +1109,12 @@ func TestInterceptOrdering(t *testing.T) {
 	tun.PreFilterPacketOutboundToWireGuardAppConnectorIntercept = orderedFilterFn(3)
 	tun.PostFilterPacketOutboundToWireGuard = orderedFilterFn(4)
 
-	// Read the packet.
-	var buf [MaxPacketSize]byte
-	sizes := make([]int, 1)
-	chtun.Outbound <- udp4("1.2.3.4", "5.6.7.8", 98, 98) // Simulate tun device sending.
-	tun.Read([][]byte{buf[:]}, sizes, 0)
+	// Read the packet. chtun.Outbound is unbuffered, and won't be drained until
+	// first Read call.
+	go func() {
+		chtun.Outbound <- udp4("1.2.3.4", "5.6.7.8", 98, 98) // Simulate tun device sending.
+	}()
+	tun.ForTest().ReadN(t.Context(), 1)
 
 	if seq != numOutboundIntercepts {
 		t.Errorf("got number of intercepts run in Read(): %d; want: %d", seq, numOutboundIntercepts)
@@ -1142,16 +1139,15 @@ func TestInjectedReadCallsAppConnectorHook(t *testing.T) {
 		t.Fatalf("InjectOutbound error: %v", err)
 	}
 
-	var buf [MaxPacketSize]byte
-	sizes := make([]int, 1)
-	tun.Read([][]byte{buf[:]}, sizes, 0)
+	slab, packets := getSinglePacketReadArgs()
+	tun.injectionQueue.Read(slab, packets)
 
 	if !called {
 		t.Error("app connector hook was not called in InjectOutbound")
 	}
 
 	wantPkt := udp4("169.254.0.1", "100.25.63.57", 80, 12345)
-	gotPkt := buf[:sizes[0]]
+	gotPkt := slab[packets[0].Offset : packets[0].Offset+packets[0].Size]
 	if !bytes.Equal(wantPkt, gotPkt) {
 		t.Errorf("packet mismatch\nwant:\t% x\ngot:\t% x", wantPkt, gotPkt)
 	}
@@ -1268,4 +1264,318 @@ func TestFilterDropTSMP(t *testing.T) {
 		t.Errorf("expected metric\n got: %d\nwant: %d\n",
 			metricPacketOutDropTSMP.Value(), wantMetric)
 	}
+}
+
+func TestStackGSOToTunGSO(t *testing.T) {
+	tcpPacket := func(l3HdrLen, payloadLen int) []byte {
+		const tcpHdrLen = 20
+		pkt := make([]byte, l3HdrLen+tcpHdrLen+payloadLen)
+		pkt[l3HdrLen+12] = tcpHdrLen / 4 << 4
+		return pkt
+	}
+
+	tests := []struct {
+		name    string
+		pkt     []byte
+		gso     stack.GSO
+		want    wgtun.GSOOptions
+		wantErr bool
+	}{
+		{
+			name: "gso_none_does_not_parse_tcp_header",
+			pkt:  udp4("100.64.0.1", "100.64.0.2", 1234, 5678),
+		},
+		{
+			name: "tcpv4_zero_mss_without_payload",
+			pkt:  tcpPacket(20, 0),
+			gso: stack.GSO{
+				Type:       stack.GSOTCPv4,
+				NeedsCsum:  true,
+				CsumOffset: 16,
+				L3HdrLen:   20,
+			},
+			want: wgtun.GSOOptions{
+				GSOType:    wgtun.GSONone,
+				HdrLen:     40,
+				CsumStart:  20,
+				CsumOffset: 16,
+				NeedsCsum:  true,
+			},
+		},
+		{
+			name: "tcpv6_zero_mss_without_payload",
+			pkt:  tcpPacket(40, 0),
+			gso: stack.GSO{
+				Type:       stack.GSOTCPv6,
+				NeedsCsum:  true,
+				CsumOffset: 16,
+				L3HdrLen:   40,
+			},
+			want: wgtun.GSOOptions{
+				GSOType:    wgtun.GSONone,
+				HdrLen:     60,
+				CsumStart:  40,
+				CsumOffset: 16,
+				NeedsCsum:  true,
+			},
+		},
+		{
+			name: "tcpv4_zero_mss_with_payload",
+			pkt:  tcpPacket(20, 1),
+			gso: stack.GSO{
+				Type:       stack.GSOTCPv4,
+				CsumOffset: 16,
+				L3HdrLen:   20,
+			},
+			wantErr: true,
+		},
+		{
+			name: "tcpv4_nonzero_mss",
+			pkt:  tcpPacket(20, 1),
+			gso: stack.GSO{
+				Type:       stack.GSOTCPv4,
+				NeedsCsum:  true,
+				CsumOffset: 16,
+				MSS:        1200,
+				L3HdrLen:   20,
+			},
+			want: wgtun.GSOOptions{
+				GSOType:    wgtun.GSOTCPv4,
+				HdrLen:     40,
+				CsumStart:  20,
+				CsumOffset: 16,
+				GSOSize:    1200,
+				NeedsCsum:  true,
+			},
+		},
+		{
+			name: "unsupported_gso_type",
+			gso: stack.GSO{
+				Type: stack.GSOGvisor,
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := stackGSOToTunGSO(tt.pkt, tt.gso)
+			if tt.wantErr != (err != nil) {
+				t.Fatalf("error = %v != wantErr: %v", err, tt.wantErr)
+			}
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+type flowRecorder struct {
+	*fakeTUN
+	mu    sync.Mutex
+	flows []int
+}
+
+func (d *flowRecorder) WriteTo(flow int, bufs [][]byte, offset int) (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.flows = append(d.flows, flow)
+	return len(bufs), nil
+}
+
+func (d *flowRecorder) Write(bufs [][]byte, offset int) (int, error) {
+	return d.WriteTo(0, bufs, offset)
+}
+
+func (d *flowRecorder) recordedFlows() []int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Clone(d.flows)
+}
+
+func TestWrappedQueuesMatch(t *testing.T) {
+	for _, q := range []int{1, 4} {
+		t.Run(fmt.Sprintf("q=%d", q), func(t *testing.T) {
+			tdev := newFakeMQ(q)
+			bus := eventbustest.NewBus(t)
+			want := wgtun.QueuesOf(tdev)
+			if len(want) != q {
+				t.Fatalf("newFakeMQ(%d) returned %d queues", q, len(want))
+			}
+			w := Wrap(t.Logf, tdev, new(usermetric.Registry), bus)
+			defer w.Close()
+			got := w.Queues()
+			// One wrapper queue per device queue plus the injection queue.
+			if gotLen, wantLen := len(got), len(want)+1; gotLen != wantLen {
+				t.Fatalf("len(Queues()) = %d, want %d", gotLen, wantLen)
+			}
+			for i, q := range got[:len(want)] {
+				if got, ok := q.(*wrapperQueue); !ok || got.q != want[i] {
+					t.Errorf("Queues()[%d] wraps the wrong underlying queue", i)
+				}
+			}
+			last := got[len(got)-1]
+			if last != w.injectionQueue {
+				t.Errorf("Queues() does not end with the injection queue")
+			}
+			if f := last.File(); f != nil {
+				t.Errorf("injection queue File() = %v, want nil", f)
+			}
+		})
+	}
+}
+
+func TestWriteToForwardsFlow(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	tdev := &flowRecorder{fakeTUN: newFakeMQ(4)}
+	w := Wrap(t.Logf, tdev, new(usermetric.Registry), bus)
+	w.disableFilter = true
+	w.Start()
+	defer w.Close()
+	pkt := udp4("100.64.1.2", "100.64.1.3", 1234, 5678)
+	want := []int{3, 1, 2}
+	for _, flow := range want {
+		if _, err := w.WriteTo(flow, [][]byte{pkt}, 0); err != nil {
+			t.Fatalf("WriteTo(%d): %v", flow, err)
+		}
+	}
+	// Write is WriteTo with a zero flow.
+	want = append(want, 0)
+	if _, err := w.Write([][]byte{pkt}, 0); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if got := tdev.recordedFlows(); !slices.Equal(got, want) {
+		t.Errorf("flows reaching the device = %v, want %v", got, want)
+	}
+}
+
+func startedWrapper(t *testing.T, queues int) *Wrapper {
+	t.Helper()
+	bus := eventbustest.NewBus(t)
+	w := Wrap(t.Logf, newFakeMQ(queues), new(usermetric.Registry), bus)
+	w.disableFilter = true
+	w.Start()
+	return w
+}
+
+func TestCloseDuringInject(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		w := startedWrapper(t, 1)
+
+		const injectors, readers = 8, 4
+		var wg sync.WaitGroup
+		for range injectors {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for range 50 {
+					if err := w.InjectOutbound(udp4("1.2.3.4", "5.6.7.8", 1, 2)); err != nil {
+						return
+					}
+				}
+			}()
+		}
+		for range readers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				slab, packets := getSinglePacketReadArgs()
+				for {
+					if _, err := w.injectionQueue.Read(slab, packets); err != nil {
+						return
+					}
+				}
+			}()
+		}
+
+		synctest.Wait()
+		if err := w.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+		wg.Wait()
+	})
+}
+
+func TestCloseReturnsAllQueueReads(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		newDev func() wgtun.Device
+	}{
+		{"fake", func() wgtun.Device { return NewFake() }},
+		{"fakeMQ4", func() wgtun.Device { return newFakeMQ(4) }},
+		{"channelTUN", func() wgtun.Device { return tuntest.NewChannelTUN().TUN() }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				bus := eventbustest.NewBus(t)
+				w := Wrap(t.Logf, tt.newDev(), new(usermetric.Registry), bus)
+				w.disableFilter = true
+				w.Start()
+
+				var wg sync.WaitGroup
+				for i, q := range w.Queues() {
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						slab, packets := getSinglePacketReadArgs()
+						if _, err := q.Read(slab, packets); err == nil {
+							t.Errorf("queue %d: Read returned a nil error at close", i)
+						}
+					}()
+				}
+				synctest.Wait()
+				w.Close()
+				wg.Wait()
+			})
+		})
+	}
+}
+
+func TestCloseBeforeStart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		bus := eventbustest.NewBus(t)
+		w := Wrap(t.Logf, NewFake(), new(usermetric.Registry), bus)
+		w.disableFilter = true
+		// Deliberately no Start.
+
+		returned := make(chan struct{})
+		go func() {
+			defer close(returned)
+			slab, packets := getSinglePacketReadArgs()
+			w.injectionQueue.Read(slab, packets)
+		}()
+
+		synctest.Wait()
+		w.Close()
+		<-returned
+	})
+}
+
+func TestInjectAfterClose(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		w := startedWrapper(t, 1)
+		w.Close()
+
+		if err := w.InjectOutbound(udp4("1.2.3.4", "5.6.7.8", 1, 2)); err != ErrClosed {
+			t.Errorf("InjectOutbound after Close = %v, want ErrClosed", err)
+		}
+		pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
+			Payload: buffer.MakeWithData(udp4("1.2.3.4", "5.6.7.8", 1, 2)),
+		})
+		if err := w.InjectOutboundPacketBuffer(pkt); err != ErrClosed {
+			t.Errorf("InjectOutboundPacketBuffer after Close = %v, want ErrClosed", err)
+		}
+	})
+}
+
+func TestCloseIdempotent(t *testing.T) {
+	w := startedWrapper(t, 1)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() { defer wg.Done(); w.Close() }()
+	}
+	wg.Wait()
+	w.Close() // and once more, serially
 }

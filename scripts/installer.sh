@@ -276,7 +276,7 @@ main() {
 				VERSION="leap/15.4"
 				PACKAGETYPE="zypper"
 				;;
-			arch|archarm|endeavouros|blendos|garuda|archcraft|cachyos)
+			arch|archarm|endeavouros|blendos|garuda|archcraft|cachyos|omarchy)
 				OS="arch"
 				VERSION="" # rolling release
 				PACKAGETYPE="pacman"

@@ -60,6 +60,11 @@ type Session struct {
 	// peer is the Tailscale identity of the remote peer.
 	peer peerIdentity
 
+	// pty and winCh are set by newSession when the client requested
+	// a PTY. Pty returns them.
+	pty   *Pty
+	winCh chan Window
+
 	// done is closed when the session handler should return,
 	// unblocking the gliderlabs handler goroutine.
 	doneOnce sync.Once // guards close(done)
@@ -70,11 +75,55 @@ type Session struct {
 // peer identity. The done channel is closed by the session consumer to signal
 // that the handler goroutine may return.
 func newSession(sess gliderssh.Session, peer peerIdentity, done chan struct{}) *Session {
-	return &Session{
+	s := &Session{
 		sess: sess,
 		peer: peer,
 		done: done,
 	}
+	// Start draining window changes now, even when the application
+	// never calls Pty. gliderssh writes window changes from the session
+	// request loop, so an undrained channel blocks the session's
+	// requests. Pty returns winCh, which retains the latest size
+	// when the application is not reading it.
+	if gPty, gWinCh, ok := sess.Pty(); ok {
+		s.pty = &Pty{
+			Term: gPty.Term,
+			Window: Window{
+				Width:        gPty.Window.Width,
+				Height:       gPty.Window.Height,
+				WidthPixels:  gPty.Window.WidthPixels,
+				HeightPixels: gPty.Window.HeightPixels,
+			},
+		}
+		if gPty.Modes != nil {
+			s.pty.Modes = make(map[uint8]uint32, len(gPty.Modes))
+			maps.Copy(s.pty.Modes, gPty.Modes)
+		}
+		s.winCh = make(chan Window, 1)
+		go func() {
+			defer close(s.winCh)
+			for gw := range gWinCh {
+				w := Window{
+					Width:        gw.Width,
+					Height:       gw.Height,
+					WidthPixels:  gw.WidthPixels,
+					HeightPixels: gw.HeightPixels,
+				}
+				// Replace any stale size. This is the only sender to the
+				// one-slot channel, so draining leaves room for the latest
+				// size even if the consumer races with the receive.
+				select {
+				case <-s.winCh:
+				default:
+				}
+				select {
+				case s.winCh <- w:
+				default:
+				}
+			}
+		}()
+	}
+	return s
 }
 
 // Read reads from the SSH channel (stdin from the client).
@@ -147,42 +196,14 @@ func (s *Session) Subsystem() string {
 	return s.sess.Subsystem()
 }
 
-// Pty returns PTY information, a channel of window size changes, and whether a
-// PTY was requested.
+// Pty returns PTY information, a channel of window size changes, and
+// whether a PTY was requested. When the returned channel is not being
+// read, it retains the latest window size.
 func (s *Session) Pty() (_ Pty, _ <-chan Window, ok bool) {
-	gPty, gWinCh, ok := s.sess.Pty()
-	if !ok {
+	if s.pty == nil {
 		return Pty{}, nil, false
 	}
-	p := Pty{
-		Term: gPty.Term,
-		Window: Window{
-			Width:        gPty.Window.Width,
-			Height:       gPty.Window.Height,
-			WidthPixels:  gPty.Window.WidthPixels,
-			HeightPixels: gPty.Window.HeightPixels,
-		},
-	}
-	if gPty.Modes != nil {
-		p.Modes = make(map[uint8]uint32, len(gPty.Modes))
-		maps.Copy(p.Modes, gPty.Modes)
-	}
-
-	// Convert the gliderlabs Window channel to our Window type.
-	winCh := make(chan Window, 1)
-	go func() {
-		defer close(winCh)
-		for gw := range gWinCh {
-			winCh <- Window{
-				Width:        gw.Width,
-				Height:       gw.Height,
-				WidthPixels:  gw.WidthPixels,
-				HeightPixels: gw.HeightPixels,
-			}
-		}
-	}()
-
-	return p, winCh, true
+	return *s.pty, s.winCh, true
 }
 
 // Signals registers a channel to receive signals from the client.

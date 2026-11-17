@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -500,8 +501,45 @@ func IsSELinuxEnforcing() bool {
 	if runtime.GOOS != "linux" {
 		return false
 	}
-	out, _ := exec.Command("getenforce").Output()
+	cmd := exec.Command("getenforce")
+	cmd.Env = EnvironWithoutSystemdServiceVars(nil)
+	out, _ := cmd.Output()
 	return string(bytes.TrimSpace(out)) == "Enforcing"
+}
+
+// systemdServiceEnvKeys are the environment variables systemd sets for
+// a service instance. See systemd.exec(5), sd_notify(3),
+// sd_listen_fds(3). They describe the daemon's main process, not a
+// child. With NOTIFY_SOCKET inherited, libsystemd-linked helpers such
+// as loginctl notify the tailscaled unit from a foreign PID. The other
+// variables give children the service's watchdog or listening fds.
+var systemdServiceEnvKeys = []string{
+	"NOTIFY_SOCKET",
+	"WATCHDOG_PID",
+	"WATCHDOG_USEC",
+	"LISTEN_FDS",
+	"LISTEN_PID",
+	"LISTEN_FDNAMES",
+	"INVOCATION_ID",
+	"JOURNAL_STREAM",
+}
+
+// EnvironWithoutSystemdServiceVars returns env, or the current
+// environment when nil, without the systemd service-instance
+// variables. Assign it to cmd.Env when tailscaled execs a helper
+// binary.
+func EnvironWithoutSystemdServiceVars(env []string) []string {
+	if env == nil {
+		env = os.Environ()
+	}
+	ret := make([]string, 0, len(env))
+	for _, kv := range env {
+		if k, _, ok := strings.Cut(kv, "="); ok && slices.Contains(systemdServiceEnvKeys, k) {
+			continue
+		}
+		ret = append(ret, kv)
+	}
+	return ret
 }
 
 // IsNATLabGuestVM reports whether the current host is a NAT Lab guest VM.

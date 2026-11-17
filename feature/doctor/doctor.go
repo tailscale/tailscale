@@ -16,12 +16,16 @@ import (
 	"tailscale.com/doctor/ethtool"
 	"tailscale.com/doctor/permissions"
 	"tailscale.com/doctor/routetable"
+	"tailscale.com/feature"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 )
 
 func init() {
+	if !feature.Register("doctor") {
+		return
+	}
 	ipnlocal.HookDoctor.Set(visitDoctor)
 	ipnlocal.RegisterPeerAPIHandler("/v0/doctor", handleServeDoctor)
 }

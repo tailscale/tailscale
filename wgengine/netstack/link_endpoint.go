@@ -5,7 +5,10 @@ package netstack
 
 import (
 	"context"
+	"expvar"
+	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -14,6 +17,7 @@ import (
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/netstack/gro"
 )
 
@@ -72,6 +76,12 @@ func (q *queue) Write(pkt *stack.PacketBuffer) tcpip.Error {
 	case <-q.closedCh:
 		pkt.DecRef()
 		return &tcpip.ErrClosedForSend{}
+	default:
+		// Packet processing can synchronously generate a reply on the TUN
+		// reader or loopback consumer. Neither may wait for queue space:
+		// draining the queue can depend on that same goroutine.
+		pkt.DecRef() // balance the IncRef evaluated before selecting a case
+		return &tcpip.ErrNoBufferSpace{}
 	}
 }
 
@@ -98,31 +108,83 @@ const (
 	tcpGROSupported
 )
 
-// linkEndpoint implements stack.LinkEndpoint and stack.GSOEndpoint. Outbound
-// packets written by gVisor towards Tailscale are stored in a channel.
-// Inbound is fed to gVisor via injectInbound or gro. This is loosely
-// modeled after gvisor.dev/pkg/tcpip/link/channel.Endpoint.
+// outboundQueueRouter is a function that takes an input packet and returns an
+// associated [outboundQueue] decision.
+type outboundQueueRouter func(*stack.PacketBuffer) outboundQueue
+
+// outboundQueue describes outbound [queue]'s attached to [linkEndpoint].
+type outboundQueue int
+
+const (
+	// outboundDrop indicates that the packet should be discarded. It does not
+	// correspond to a real queue.
+	outboundDrop outboundQueue = iota
+	// outboundToWireGuard is the outboundQueue for packets that should be
+	// delivered to WireGuard for potential transmission to a remote peer.
+	outboundToWireGuard
+	// outboundToHost is the outboundQueue for packets that should be delivered
+	// to the local host networking stack.
+	outboundToHost
+	// outboundLoopback is the outboundQueue for packets that should be looped
+	// back into gVisor.
+	outboundLoopback
+	// outboundQueueLimit is the exclusive upper bound of outboundQueue values.
+	outboundQueueLimit
+)
+
+// linkEndpoint implements [stack.LinkEndpoint] and [stack.GSOEndpoint]. Outbound
+// packets written by gVisor towards Tailscale are stored in one of several
+// outbound [queue]'s. Inbound is fed to gVisor via [linkEndpoint.injectInbound]
+// or [linkEndpoint.gro]. linkEndpoint is loosely modeled after
+// [gvisor.dev/pkg/tcpip/link/channel.Endpoint].
 type linkEndpoint struct {
-	SupportedGSOKind stack.SupportedGSO
-	supportedGRO     supportedGRO
+	SupportedGSOKind    stack.SupportedGSO
+	supportedGRO        supportedGRO
+	outboundQueueRouter outboundQueueRouter
 
 	mu         sync.RWMutex // mu guards the following fields
 	dispatcher stack.NetworkDispatcher
 	linkAddr   tcpip.LinkAddress
 	mtu        uint32
 
-	q *queue // outbound
+	outboundQueues [outboundQueueLimit]*queue // outbound
+
+	// queueFullDropped counts, per [outboundQueue], packets dropped by
+	// WritePackets because that queue was full. A GSO packet counts as one.
+	queueFullDropped [outboundQueueLimit]expvar.Int
+
+	// outboundDropped, if set, is the user metric for packets dropped while
+	// being sent to peers. It is shared with tstun, so it is added to rather
+	// than replaced with queueFullDropped.
+	outboundDropped atomic.Pointer[usermetric.MultiLabelMap[usermetric.DropLabels]]
 }
 
-func newLinkEndpoint(size int, mtu uint32, linkAddr tcpip.LinkAddress, supportedGRO supportedGRO) *linkEndpoint {
+// queueFullDroppedTotal returns the sum of queueFullDropped.
+func (ep *linkEndpoint) queueFullDroppedTotal() int64 {
+	var total int64
+	for i := range ep.queueFullDropped {
+		total += ep.queueFullDropped[i].Value()
+	}
+	return total
+}
+
+// newLinkEndpoint constructs a [*linkEndpoint]. size is applied independently
+// to each outbound [queue], so total size = num outbound queues * size.
+func newLinkEndpoint(size int, mtu uint32, linkAddr tcpip.LinkAddress, supportedGRO supportedGRO, outboundQueueRouter outboundQueueRouter) *linkEndpoint {
 	le := &linkEndpoint{
-		supportedGRO: supportedGRO,
-		q: &queue{
+		supportedGRO:        supportedGRO,
+		outboundQueueRouter: outboundQueueRouter,
+		mtu:                 mtu,
+		linkAddr:            linkAddr,
+	}
+	for n := range le.outboundQueues {
+		if n == int(outboundDrop) {
+			continue
+		}
+		le.outboundQueues[n] = &queue{
 			c:        make(chan *stack.PacketBuffer, size),
 			closedCh: make(chan struct{}),
-		},
-		mtu:      mtu,
-		linkAddr: linkAddr,
+		}
 	}
 	return le
 }
@@ -152,36 +214,52 @@ func (ep *linkEndpoint) gro(p *packet.Parsed, g *gro.GRO) *gro.GRO {
 	return g
 }
 
-// Close closes l. Further packet injections will return an error, and all
+// Close closes ep. Further packet injections will return an error, and all
 // pending packets are discarded. Close may be called concurrently with
 // WritePackets.
 func (ep *linkEndpoint) Close() {
 	ep.mu.Lock()
 	ep.dispatcher = nil
 	ep.mu.Unlock()
-	ep.q.Close()
+	for _, q := range ep.outboundQueues {
+		if q != nil {
+			q.Close()
+		}
+	}
 	ep.Drain()
 }
 
-// Read does non-blocking read one packet from the outbound packet queue.
-func (ep *linkEndpoint) Read() *stack.PacketBuffer {
-	return ep.q.Read()
+// Read reads from the provided [outboundQueue] in non-blocking fashion.
+func (ep *linkEndpoint) Read(queue outboundQueue) *stack.PacketBuffer {
+	return ep.outboundQueues[queue].Read()
 }
 
-// ReadContext does blocking read for one packet from the outbound packet queue.
-// It can be cancelled by ctx, and in this case, it returns nil.
-func (ep *linkEndpoint) ReadContext(ctx context.Context) *stack.PacketBuffer {
-	return ep.q.ReadContext(ctx)
+// ReadContext reads from the provided [outboundQueue] in blocking fashion. It
+// can be canceled by ctx, in which case it will return nil.
+func (ep *linkEndpoint) ReadContext(ctx context.Context, queue outboundQueue) *stack.PacketBuffer {
+	return ep.outboundQueues[queue].ReadContext(ctx)
 }
 
-// Drain removes all outbound packets from the channel and counts them.
+// Drain drains all packets from outbound queues and returns the number drained.
 func (ep *linkEndpoint) Drain() int {
-	return ep.q.Drain()
+	var total int
+	for _, q := range ep.outboundQueues {
+		if q != nil {
+			total += q.Drain()
+		}
+	}
+	return total
 }
 
 // NumQueued returns the number of packets queued for outbound.
 func (ep *linkEndpoint) NumQueued() int {
-	return ep.q.Num()
+	var total int
+	for _, q := range ep.outboundQueues {
+		if q != nil {
+			total += q.Num()
+		}
+	}
+	return total
 }
 
 func (ep *linkEndpoint) injectInbound(p *packet.Parsed) {
@@ -304,10 +382,13 @@ func (ep *linkEndpoint) SetLinkAddress(addr tcpip.LinkAddress) {
 	ep.linkAddr = addr
 }
 
-// WritePackets stores outbound packets into the channel.
-// Multiple concurrent calls are permitted.
+// WritePackets routes outbound packets into the appropriate outbound [queue].
+// Multiple concurrent calls are permitted. Packets whose queue is full are
+// dropped and excluded from the returned count; if any were dropped, the error
+// is [tcpip.ErrNoBufferSpace].
 func (ep *linkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpip.Error) {
 	n := 0
+	var full bool
 	// TODO(jwhited): evaluate writing a stack.PacketBufferList instead of a
 	//  single packet. We can split 2 x 64K GSO across
 	//  wireguard-go/conn.IdealBatchSize (128 slots) @ 1280 MTU, and non-GSO we
@@ -316,15 +397,37 @@ func (ep *linkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpip.Er
 	//  control MTU (and by effect TCP MSS in gVisor) we *shouldn't* expect to
 	//  ever overflow 128 slots (see wireguard-go/tun.ErrTooManySegments usage).
 	for _, pkt := range pkts.AsSlice() {
-		if err := ep.q.Write(pkt); err != nil {
-			if _, ok := err.(*tcpip.ErrNoBufferSpace); !ok && n == 0 {
+		q := ep.outboundQueueRouter(pkt)
+		if q == outboundDrop {
+			n++
+			continue
+		}
+		if q < 0 || q >= outboundQueueLimit {
+			panic(fmt.Sprintf("linkEndpoint.outboundQueueRouter returned %v which is outside outboundQueueLimit(%v)", q, outboundQueueLimit))
+		}
+		if err := ep.outboundQueues[q].Write(pkt); err != nil {
+			if _, ok := err.(*tcpip.ErrNoBufferSpace); ok {
+				// Drop only this packet. Later packets may be routed to
+				// queues that have space.
+				ep.queueFullDropped[q].Add(1)
+				if q == outboundToWireGuard {
+					if m := ep.outboundDropped.Load(); m != nil {
+						m.Add(usermetric.DropLabels{Reason: usermetric.ReasonQueueFull}, 1)
+					}
+				}
+				full = true
+				continue
+			}
+			if n == 0 {
 				return 0, err
 			}
 			break
 		}
 		n++
 	}
-
+	if full {
+		return n, &tcpip.ErrNoBufferSpace{}
+	}
 	return n, nil
 }
 

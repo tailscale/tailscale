@@ -10,7 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
+	"os"
 	"sync"
 	"time"
 
@@ -20,6 +22,23 @@ import (
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
+)
+
+var (
+	// Counts messages returned by Recv, including pongs consumed by derphttp's
+	// Ping helper. These are process-wide across all DERP clients, including
+	// mesh clients and probers, not per-connection or purpose-specific.
+	metricClientRecvKeepAlive = clientmetric.NewCounter("derp_client_recv_keepalive")
+	metricClientRecvPing      = clientmetric.NewCounter("derp_client_recv_ping")
+	metricClientRecvPong      = clientmetric.NewCounter("derp_client_recv_pong")
+	metricClientSendPing      = clientmetric.NewCounter("derp_client_send_ping")
+	metricClientSendPong      = clientmetric.NewCounter("derp_client_send_pong")
+
+	// Counts read-deadline expirations once per dead client, not subsequent
+	// Recv calls returning the sticky error. This includes incomplete frames,
+	// not just connections on which no bytes were received.
+	metricClientRecvReadTimeout = clientmetric.NewCounter("derp_client_recv_read_timeout")
 )
 
 // Client is a DERP client.
@@ -38,6 +57,10 @@ type Client struct {
 	wmu  sync.Mutex // hold while writing to bw
 	bw   *bufio.Writer
 	rate *rate.Limiter // if non-nil, rate limiter to use
+
+	// fwd buffers forward packet frames and writes them through
+	// Client.flush; see [Client.ForwardPacket].
+	fwd forwardBuffers
 
 	// Owned by Recv:
 	peeked  int                      // bytes to discard on next Recv
@@ -88,9 +111,27 @@ func CanAckPings(v bool) ClientOpt {
 
 // AppName returns a ClientOpt to set an opaque app name string to
 // advertise to the DERP server for stats purposes. It is sent to the
-// server in the ClientInfo.
+// server in the ClientInfo. The name must be valid per [ValidAppName]
+// or NewClient returns an error.
 func AppName(name string) ClientOpt {
 	return clientOptFunc(func(o *clientOpt) { o.AppName = name })
+}
+
+// MaxAppNameLen is the maximum length in bytes of a [ClientInfo.AppName].
+const MaxAppNameLen = 32
+
+// ValidAppName reports whether name is a valid app name: at most
+// [MaxAppNameLen] bytes of printable ASCII. The empty string is valid.
+func ValidAppName(name string) bool {
+	if len(name) > MaxAppNameLen {
+		return false
+	}
+	for i := range len(name) {
+		if b := name[i]; b < ' ' || b > '~' {
+			return false
+		}
+	}
+	return true
 }
 
 func NewClient(privateKey key.NodePrivate, nc Conn, brw *bufio.ReadWriter, logf logger.Logf, opts ...ClientOpt) (*Client, error) {
@@ -100,6 +141,9 @@ func NewClient(privateKey key.NodePrivate, nc Conn, brw *bufio.ReadWriter, logf 
 			return nil, errors.New("nil ClientOpt")
 		}
 		o.update(&opt)
+	}
+	if !ValidAppName(opt.AppName) {
+		return nil, fmt.Errorf("invalid AppName %.40q", opt.AppName)
 	}
 	return newClient(privateKey, nc, brw, logf, opt)
 }
@@ -191,7 +235,9 @@ type ClientInfo struct {
 	IsProber bool `json:",omitempty"`
 
 	// AppName is an optional opaque app name string the client
-	// advertises to the server for stats purposes.
+	// advertises to the server for stats purposes. It must be
+	// valid per [ValidAppName] or the server rejects the
+	// connection.
 	AppName string `json:",omitempty"`
 }
 
@@ -264,36 +310,68 @@ func (c *Client) send(dstKey key.NodePublic, pkt []byte) (ret error) {
 	return c.bw.Flush()
 }
 
-func (c *Client) ForwardPacket(srcKey, dstKey key.NodePublic, pkt []byte) (err error) {
-	defer func() {
-		if err != nil {
-			err = fmt.Errorf("derp.ForwardPacket: %w", err)
-		}
-	}()
+// forwardWriteTimeout is how long a write of forwarded packets may
+// take before the connection is closed as stuck.
+const forwardWriteTimeout = 5 * time.Second
 
-	if len(pkt) > MaxPacketSize {
-		return fmt.Errorf("packet too big: %d", len(pkt))
+// ForwardPacket sends a forward packet frame carrying pkt from srcKey
+// to dstKey. It does not retain pkt: the frame is copied to a buffer
+// before it returns. A flusher goroutine, started if none is running,
+// writes the buffer shortly afterwards, so frames forwarded by many
+// goroutines at once share a write. The buffer is swapped for a spare
+// before being written, so callers go on filling the spare meanwhile
+// and wait only when that fills before the write completes, which is
+// how a slow connection applies backpressure. See [forwardBuffers].
+//
+// If a write fails, the connection is closed and the error is
+// returned by every subsequent call, so the owner reconnects as it
+// would for a synchronous write error. Frames buffered behind the
+// failed write are lost; [ForwardDroppedFrames] counts them.
+func (c *Client) ForwardPacket(srcKey, dstKey key.NodePublic, pkt LoanedBytes) error {
+	if pkt.Len() > MaxPacketSize {
+		return fmt.Errorf("derp.ForwardPacket: packet too big: %d", pkt.Len())
 	}
+	if err := c.fwd.push(c, srcKey, dstKey, pkt.bs); err != nil {
+		return fmt.Errorf("derp.ForwardPacket: %w", err)
+	}
+	return nil
+}
 
+// flush implements [forwardFlusher] by writing a buffer of forward
+// packet frames to the connection. It holds wmu like every other
+// write, so forwarded frames never interleave with the client's other
+// frames and no two writes to nc overlap. A buffer bigger than bw's
+// own goes straight through it as a single write.
+//
+// The watchdog that closes a stuck connection is armed before taking
+// wmu, so it also bounds waiting for another sender that is stuck in
+// a write of its own, which the client's other send methods don't
+// time out. Callers waiting for buffer room in ForwardPacket are
+// released only by this write completing or failing, so this is what
+// bounds their wait too.
+func (c *Client) flush(buf []byte) error {
+	timer := c.clock.AfterFunc(forwardWriteTimeout, c.writeTimeoutFired)
+	defer timer.Stop()
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
-
-	timer := c.clock.AfterFunc(5*time.Second, c.writeTimeoutFired)
-	defer timer.Stop()
-
-	if err := WriteFrameHeader(c.bw, FrameForwardPacket, uint32(KeyLen*2+len(pkt))); err != nil {
-		return err
-	}
-	if _, err := c.bw.Write(srcKey.AppendTo(nil)); err != nil {
-		return err
-	}
-	if _, err := c.bw.Write(dstKey.AppendTo(nil)); err != nil {
-		return err
-	}
-	if _, err := c.bw.Write(pkt); err != nil {
+	if _, err := c.bw.Write(buf); err != nil {
 		return err
 	}
 	return c.bw.Flush()
+}
+
+// flushFailed implements [forwardFlusher]. The ForwardPacket calls
+// that buffered the lost frames have already returned nil, so there
+// is nobody to return err to; it is logged, unless the owner closed
+// the connection itself, which is routine on shutdown and reconnect
+// and loses whatever was in flight by design. The connection is
+// closed so the reader fails too. Either way the owner
+// (derphttp.Client) reconnects.
+func (c *Client) flushFailed(err error, lostFrames, lostBytes int) {
+	if !errors.Is(err, net.ErrClosed) {
+		c.logf("derp.ForwardPacket: write failed, dropping %d frames (%d bytes): %v", lostFrames, lostBytes, err)
+	}
+	c.nc.Close()
 }
 
 func (c *Client) writeTimeoutFired() { c.nc.Close() }
@@ -315,7 +393,16 @@ func (c *Client) sendPingOrPong(typ FrameType, data [8]byte) error {
 	if _, err := c.bw.Write(data[:]); err != nil {
 		return err
 	}
-	return c.bw.Flush()
+	if err := c.bw.Flush(); err != nil {
+		return err
+	}
+	// Count completed writes, not attempts or acknowledgements by the peer.
+	if typ == FramePing {
+		metricClientSendPing.Add(1)
+	} else {
+		metricClientSendPong.Add(1)
+	}
+	return nil
 }
 
 // NotePreferred sends a packet that tells the server whether this
@@ -409,6 +496,10 @@ type PeerPresentMessage struct {
 	IPPort netip.AddrPort
 	// Flags is a bitmask of info about the client.
 	Flags PeerPresentFlags
+	// AppName is the optional app name the client advertised in
+	// its ClientInfo, if any. It's empty if the client didn't
+	// send one or the server is too old to relay it.
+	AppName string
 }
 
 func (PeerPresentMessage) msg() {}
@@ -503,6 +594,9 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 	}
 	defer func() {
 		if err != nil {
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				metricClientRecvReadTimeout.Add(1)
+			}
 			err = fmt.Errorf("derp.Recv: %w", err)
 			c.readErr.Store(err)
 		}
@@ -570,6 +664,7 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 		case FrameKeepAlive:
 			// A one-way keep-alive message that doesn't require an acknowledgement.
 			// This predated FramePing/FramePong.
+			metricClientRecvKeepAlive.Add(1)
 			return KeepAliveMessage{}, nil
 		case FramePeerGone:
 			if n < KeyLen {
@@ -609,12 +704,27 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 				binary.BigEndian.Uint16(chunk[ipLen:]),
 			)
 
-			chunk, _, ok = cutLeadingN(remain, 1)
+			chunk, remain, ok = cutLeadingN(remain, 1)
 			if !ok {
 				// Older server which doesn't send PeerPresentFlags.
 				return msg, nil
 			}
 			msg.Flags = PeerPresentFlags(chunk[0])
+
+			chunk, remain, ok = cutLeadingN(remain, 1)
+			if !ok {
+				// Older server which doesn't send the app name.
+				return msg, nil
+			}
+			nameLen := int(chunk[0])
+			chunk, _, ok = cutLeadingN(remain, nameLen)
+			if !ok {
+				c.logf("[unexpected] short peerPresent app name from DERP server")
+				return msg, nil
+			}
+			if name := string(chunk); ValidAppName(name) {
+				msg.AppName = name
+			}
 			return msg, nil
 
 		case FrameRecvPacket:
@@ -634,6 +744,7 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 				continue
 			}
 			copy(pm[:], b[:])
+			metricClientRecvPing.Add(1)
 			return pm, nil
 
 		case FramePong:
@@ -643,6 +754,7 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 				continue
 			}
 			copy(pm[:], b[:])
+			metricClientRecvPong.Add(1)
 			return pm, nil
 
 		case FrameHealth:

@@ -100,7 +100,7 @@ func (c *client) getActiveState() appctype.Conn25ClientState {
 			ActiveFlowCount: assignment.activeFlowCount,
 			DestinationIP:   assignment.dst.String(),
 			MagicIP:         assignment.magic.String(),
-			TransitIP:       assignment.transit.String(),
+			TransitIP:       assignment.connectorAddr.transit.String(),
 			ExpiresAt:       assignment.expiresAt,
 		})
 

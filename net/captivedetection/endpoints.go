@@ -77,7 +77,7 @@ func (e Endpoint) Equal(other Endpoint) bool {
 // availableEndpoints returns a set of Endpoints which can be used for captive portal detection by performing
 // one or more HTTP requests and looking at the response. The returned Endpoints are ordered by preference,
 // with the most preferred Endpoint being the first in the slice.
-func availableEndpoints(derpMap *tailcfg.DERPMap, preferredDERPRegionID int, logf logger.Logf, goos string) []Endpoint {
+func availableEndpoints(derpMap *tailcfg.DERPMap, preferredDERPRegionID tailcfg.DERPRegionID, logf logger.Logf, goos string) []Endpoint {
 	endpoints := []Endpoint{}
 
 	if derpMap == nil || len(derpMap.Regions) == 0 {

@@ -93,11 +93,7 @@ func TestValidateNotifyWatchOpt(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "legacy-rate-limit-only",
-			mask: NotifyRateLimit,
-		},
-		{
-			name: "peer-changes-without-rate-limit",
+			name: "peer-changes",
 			mask: NotifyPeerChanges | NotifyPeerPatches | NotifyNoNetMap | NotifyInitialStatus,
 		},
 		{
@@ -105,23 +101,32 @@ func TestValidateNotifyWatchOpt(t *testing.T) {
 			mask: NotifyInProcessNoDisconnect | NotifyPeerChanges,
 		},
 		{
-			name:    "rate-limit-with-peer-changes",
-			mask:    NotifyRateLimit | NotifyPeerChanges,
+			name: "suspend-when-behind",
+			mask: NotifySuspendWhenBehind | NotifyInitialState | NotifyPeerChanges,
+		},
+		{
+			name:    "suspend-when-behind-without-initial-state",
+			mask:    NotifySuspendWhenBehind | NotifyPeerChanges,
 			wantErr: true,
 		},
 		{
-			name:    "rate-limit-with-peer-patches",
-			mask:    NotifyRateLimit | NotifyPeerPatches,
+			name:    "suspend-when-behind-with-in-process-no-disconnect",
+			mask:    NotifySuspendWhenBehind | NotifyInitialState | NotifyInProcessNoDisconnect,
 			wantErr: true,
 		},
 		{
-			name:    "rate-limit-with-no-netmap",
-			mask:    NotifyRateLimit | NotifyNoNetMap,
+			name:    "obsolete-rate-limit-only",
+			mask:    ObsoleteNotifyRateLimit,
 			wantErr: true,
 		},
 		{
-			name:    "rate-limit-with-initial-status",
-			mask:    NotifyRateLimit | NotifyInitialStatus,
+			name:    "obsolete-rate-limit-with-peer-changes",
+			mask:    ObsoleteNotifyRateLimit | NotifyPeerChanges,
+			wantErr: true,
+		},
+		{
+			name:    "obsolete-initial-netmap",
+			mask:    ObsoleteNotifyInitialNetMap,
 			wantErr: true,
 		},
 	}

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -113,8 +114,57 @@ func Info() VersionInfo {
 	return v
 }
 
+// Environment variables that let the caller supply the complete version
+// instead of having it derived from git history. See [InfoFrom].
+const (
+	envVersionLong     = "TS_VERSION_LONG"
+	envGitHash         = "TS_VERSION_GIT_HASH"
+	envExtraGitHash    = "TS_VERSION_EXTRA_GIT_HASH"
+	envGitDate         = "TS_VERSION_GIT_DATE"
+	envExtraGitDate    = "TS_VERSION_EXTRA_GIT_DATE"
+	envVersionOverride = "TS_VERSION_OVERRIDE"
+)
+
 // InfoFrom constructs a VersionInfo from dir and returns it, or an error.
+//
+// By default the version is derived from the git history of the checkout
+// containing dir, which needs the full history back to the most recent
+// VERSION.txt change. If dir is a tailscale.com tree without a .git
+// directory, only VERSION.txt is consulted and the patch number is set to a
+// visible sentinel. In this mode, TS_VERSION_OVERRIDE, if set to
+// "major.minor.patch", replaces the version number read from VERSION.txt.
+//
+// If TS_VERSION_LONG is non-empty, the version instead comes entirely from
+// the environment: dir is ignored, no git commands are run, and neither
+// VERSION.txt nor go.mod is read. This is for building from a shallow clone
+// or a tree with no .git directory when the caller already knows the
+// version. The variables are:
+//
+//   - TS_VERSION_LONG (required): the complete version in [version.Long]
+//     format, e.g. "1.99.5-t8895cec85" or "1.98.2-3-t8895cec85-g15581c318".
+//   - TS_VERSION_GIT_HASH (required): the full 40-hex-digit hash of the
+//     tailscale.com commit. Its first 9 digits must match the "-t" part of
+//     TS_VERSION_LONG.
+//   - TS_VERSION_EXTRA_GIT_HASH: the full hash of the supplemental
+//     repository's commit. Required if and only if TS_VERSION_LONG has a
+//     "-g" part, which its first 9 digits must match.
+//   - TS_VERSION_GIT_DATE (optional): the tailscale.com commit's date in
+//     Unix seconds, for [VersionInfo.GitDate].
+//   - TS_VERSION_EXTRA_GIT_DATE (optional): the supplemental commit's date
+//     in Unix seconds, for [VersionInfo.OtherDate] and hence
+//     [VersionInfo.XcodeMacOS].
+//
+// The remaining fields are derived from those by the same code as the git
+// path, and the resulting [VersionInfo.Long] must reproduce TS_VERSION_LONG
+// exactly or InfoFrom returns an error. TS_VERSION_OVERRIDE may not be set
+// together with TS_VERSION_LONG.
+//
+// [version.Long]: https://pkg.go.dev/tailscale.com/version#Long
 func InfoFrom(dir string) (VersionInfo, error) {
+	if os.Getenv(envVersionLong) != "" {
+		return infoFromEnv()
+	}
+
 	runner := dirRunner(dir)
 
 	gitRoot, err := runner.output("git", "rev-parse", "--show-toplevel")
@@ -198,12 +248,116 @@ func tailscaleModuleRef(modBs []byte) (string, error) {
 	return "", fmt.Errorf("no require tailscale.com line in go.mod")
 }
 
+// longRE matches the version.Long grammar as produced by [mkOutput]:
+// major.minor.patch, an optional "-N" change count (stable builds only),
+// the "-t" tailscale.com short hash, and an optional "-g" supplemental repo
+// short hash.
+var longRE = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)(?:-(\d+))?-t([0-9a-f]{9})(?:-g([0-9a-f]{9}))?$`)
+
+// fullHashRE matches a complete lowercase hex SHA-1 git object name.
+var fullHashRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// infoFromEnv constructs a VersionInfo from the TS_VERSION_* environment
+// variables documented on [InfoFrom], without consulting git or the
+// filesystem.
+func infoFromEnv() (VersionInfo, error) {
+	long := os.Getenv(envVersionLong)
+	if os.Getenv(envVersionOverride) != "" {
+		return VersionInfo{}, fmt.Errorf("%s may not be set together with %s", envVersionOverride, envVersionLong)
+	}
+	m := longRE.FindStringSubmatch(long)
+	if m == nil {
+		return VersionInfo{}, fmt.Errorf("%s=%q is not of the form major.minor.patch[-N]-t<hash>[-g<hash>]", envVersionLong, long)
+	}
+	var v verInfo
+	var err error
+	if v.major, err = strconv.Atoi(m[1]); err != nil {
+		return VersionInfo{}, fmt.Errorf("%s=%q: bad major version: %w", envVersionLong, long, err)
+	}
+	if v.minor, err = strconv.Atoi(m[2]); err != nil {
+		return VersionInfo{}, fmt.Errorf("%s=%q: bad minor version: %w", envVersionLong, long, err)
+	}
+	if v.patch, err = strconv.Atoi(m[3]); err != nil {
+		return VersionInfo{}, fmt.Errorf("%s=%q: bad patch version: %w", envVersionLong, long, err)
+	}
+	if v.minor%2 == 1 {
+		// Unstable builds put the change count in the patch position and
+		// never carry a "-N" suffix. mkOutput requires patch == 0 for them
+		// and fills it in from changeCount.
+		if m[4] != "" {
+			return VersionInfo{}, fmt.Errorf("%s=%q: unstable versions do not have a change count suffix", envVersionLong, long)
+		}
+		v.changeCount, v.patch = v.patch, 0
+	} else if m[4] != "" {
+		if v.changeCount, err = strconv.Atoi(m[4]); err != nil {
+			return VersionInfo{}, fmt.Errorf("%s=%q: bad change count: %w", envVersionLong, long, err)
+		}
+	}
+
+	v.hash = os.Getenv(envGitHash)
+	switch {
+	case v.hash == "":
+		return VersionInfo{}, fmt.Errorf("%s is required when %s is set", envGitHash, envVersionLong)
+	case !fullHashRE.MatchString(v.hash):
+		return VersionInfo{}, fmt.Errorf("%s=%q is not a full 40-digit lowercase hex git hash", envGitHash, v.hash)
+	case shortHash(v.hash) != m[5]:
+		return VersionInfo{}, fmt.Errorf("%s=%q does not match the -t%s in %s=%q", envGitHash, v.hash, m[5], envVersionLong, long)
+	}
+
+	v.otherHash = os.Getenv(envExtraGitHash)
+	switch {
+	case m[6] == "" && v.otherHash != "":
+		return VersionInfo{}, fmt.Errorf("%s is set but %s=%q has no -g part", envExtraGitHash, envVersionLong, long)
+	case m[6] != "" && v.otherHash == "":
+		return VersionInfo{}, fmt.Errorf("%s is required because %s=%q has a -g part", envExtraGitHash, envVersionLong, long)
+	case m[6] != "" && !fullHashRE.MatchString(v.otherHash):
+		return VersionInfo{}, fmt.Errorf("%s=%q is not a full 40-digit lowercase hex git hash", envExtraGitHash, v.otherHash)
+	case m[6] != "" && shortHash(v.otherHash) != m[6]:
+		return VersionInfo{}, fmt.Errorf("%s=%q does not match the -g%s in %s=%q", envExtraGitHash, v.otherHash, m[6], envVersionLong, long)
+	}
+
+	if v.date, err = dateFromEnv(envGitDate); err != nil {
+		return VersionInfo{}, err
+	}
+	if v.otherDate, err = dateFromEnv(envExtraGitDate); err != nil {
+		return VersionInfo{}, err
+	}
+	if v.otherDate != "" && v.otherHash == "" {
+		return VersionInfo{}, fmt.Errorf("%s is set but %s=%q has no -g part", envExtraGitDate, envVersionLong, long)
+	}
+
+	ret, err := mkOutput(v)
+	if err != nil {
+		return VersionInfo{}, err
+	}
+	if ret.Long != long {
+		// The input was well-formed but not something mkOutput can produce,
+		// such as a "-0" change count or a number with leading zeros.
+		return VersionInfo{}, fmt.Errorf("%s=%q does not round-trip; derived version is %q", envVersionLong, long, ret.Long)
+	}
+	return ret, nil
+}
+
+// dateFromEnv returns the value of the named environment variable, which
+// must be empty or a non-negative integer of Unix seconds.
+func dateFromEnv(name string) (string, error) {
+	s := os.Getenv(name)
+	if s == "" {
+		return "", nil
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || n < 0 {
+		return "", fmt.Errorf("%s=%q is not a non-negative integer of Unix seconds", name, s)
+	}
+	return s, nil
+}
+
 func mkOutput(v verInfo) (VersionInfo, error) {
-	if override := os.Getenv("TS_VERSION_OVERRIDE"); override != "" {
+	if override := os.Getenv(envVersionOverride); override != "" {
 		var err error
 		v.major, v.minor, v.patch, err = parseVersion(override)
 		if err != nil {
-			return VersionInfo{}, fmt.Errorf("failed to parse TS_VERSION_OVERRIDE: %w", err)
+			return VersionInfo{}, fmt.Errorf("failed to parse %s: %w", envVersionOverride, err)
 		}
 	}
 	var changeSuffix string
@@ -419,7 +573,7 @@ func infoFromDir(dir string) (verInfo, error) {
 	if err != nil {
 		return verInfo{}, err
 	}
-	date, err := r.output("git", "log", "-n1", "--format=%%ct", "HEAD")
+	date, err := r.output("git", "log", "-n1", "--format=%ct", "HEAD")
 	if err != nil {
 		return verInfo{}, err
 	}

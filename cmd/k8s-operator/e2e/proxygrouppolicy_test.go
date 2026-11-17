@@ -146,6 +146,63 @@ func TestProxyGroupPolicy(t *testing.T) {
 		t.Fatal("expected error when creating ingress")
 	}
 
+	// Ordinary resources without annotations must remain admissible while the
+	// deny-all policy rejects unauthorized proxy-group annotations.
+	annotationlessService := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "annotationless-service",
+			Namespace: pgPolicyNs.Name,
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeClusterIP,
+			Ports: []corev1.ServicePort{
+				{
+					Port:     80,
+					Protocol: corev1.ProtocolTCP,
+					Name:     "http",
+				},
+			},
+		},
+	}
+	createAndCleanup(t, kubeClient, annotationlessService)
+
+	annotationlessTSService := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "annotationless-ts-service",
+			Namespace: pgPolicyNs.Name,
+		},
+		Spec: corev1.ServiceSpec{
+			Type:              corev1.ServiceTypeLoadBalancer,
+			LoadBalancerClass: new("tailscale"),
+			Ports: []corev1.ServicePort{
+				{
+					Port:     80,
+					Protocol: corev1.ProtocolTCP,
+					Name:     "http",
+				},
+			},
+		},
+	}
+	createAndCleanup(t, kubeClient, annotationlessTSService)
+
+	annotationlessIngress := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "annotationless-ingress",
+			Namespace: pgPolicyNs.Name,
+		},
+		Spec: networkingv1.IngressSpec{
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "nginx",
+					Port: networkingv1.ServiceBackendPort{
+						Number: 80,
+					},
+				},
+			},
+		},
+	}
+	createAndCleanup(t, kubeClient, annotationlessIngress)
+
 	// Add policy to allow ingress/egress using the "test" proxy-group. This should be merged with the deny-all
 	// policy so they do not conflict.
 	allowTestPolicy := &tsapi.ProxyGroupPolicy{

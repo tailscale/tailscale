@@ -8,9 +8,9 @@ import (
 	"encoding/json"
 	"net/netip"
 	"reflect"
+	"strings"
 	"testing"
 
-	"tailscale.com/appc"
 	"tailscale.com/ipn"
 	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
@@ -59,8 +59,11 @@ func TestDNSConfigForNetmap(t *testing.T) {
 		os      string // version.OS value; empty means linux
 		cloud   cloudenv.Cloud
 		prefs   *ipn.Prefs
-		want    *dns.Config
-		wantLog string
+		// extraRoutes are extension-supplied split DNS routes,
+		// as returned by [ipnext.Hooks.ExtraDNSRoutes].
+		extraRoutes map[string][]*dnstype.Resolver
+		want        *dns.Config
+		wantLog     string
 	}{
 		{
 			name:  "empty",
@@ -392,18 +395,17 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			want:  &dns.Config{},
 		},
 		{
-			name: "conn25-split-dns",
+			name: "extension-split-dns",
 			nm: &netmap.NetworkMap{
 				SelfNode: (&tailcfg.Node{
 					Name:      "a",
 					Addresses: ipps("100.101.101.101"),
-					CapMap: tailcfg.NodeCapMap{
-						nodecap.Cap(appc.AppConnectorsExperimentalAttrName): []tailcfg.RawMessage{
-							tailcfg.RawMessage(`{"name":"app1","connectors":["tag:woo"],"domains":["example.com"]}`),
-						},
-					},
 				}).View(),
-				AllCaps: set.Of(nodecap.Cap(appc.AppConnectorsExperimentalAttrName)),
+			},
+			extraRoutes: map[string][]*dnstype.Resolver{
+				"example.com": {
+					{Addr: "tailscale-app:app1", UseWithExitNode: true},
+				},
 			},
 			peers: nodeViews([]*tailcfg.Node{
 				{
@@ -437,18 +439,22 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			},
 		},
 		{
-			name: "conn25-split-dns-with-exit-node",
+			name: "extension-split-dns-with-exit-node",
 			nm: &netmap.NetworkMap{
 				SelfNode: (&tailcfg.Node{
 					Name:      "a",
 					Addresses: ipps("100.101.101.101"),
-					CapMap: tailcfg.NodeCapMap{
-						tailcfg.NodeCapability(appc.AppConnectorsExperimentalAttrName): []tailcfg.RawMessage{
-							tailcfg.RawMessage(`{"name":"app1","connectors":["tag:woo"],"domains":["example.com"]}`),
-						},
-					},
 				}).View(),
-				AllCaps: set.Of(tailcfg.NodeCapability(appc.AppConnectorsExperimentalAttrName)),
+			},
+			extraRoutes: map[string][]*dnstype.Resolver{
+				"example.com": {
+					{Addr: "tailscale-app:app1", UseWithExitNode: true},
+				},
+				// Routes without UseWithExitNode are dropped when an
+				// exit node proxies DNS, like the netmap's own routes.
+				"dropped.example.org": {
+					{Addr: "10.0.0.53"},
+				},
 			},
 			peers: nodeViews([]*tailcfg.Node{
 				{
@@ -486,12 +492,52 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				MagicDNSHostsUnrouted: true,
 			},
 		},
+		{
+			// Regression test for malicious control server DNS values:
+			// search domains and route suffixes that dnsname.ToFQDN
+			// rejects must be dropped, not appended as the empty FQDN,
+			// which panics in FQDN.WithoutTrailingDot when OS DNS config
+			// is written. The newline domain is the resolv.conf and
+			// hosts directive injection case.
+			name: "drop_invalid_search_domains_and_route_suffixes",
+			nm: &netmap.NetworkMap{
+				DNS: tailcfg.DNSConfig{
+					Domains: []string{
+						strings.Repeat("a", 64) + ".com", // label too long
+						"evil.com\nnameserver 6.6.6.6",
+						"good.example.com",
+					},
+					Routes: map[string][]*dnstype.Resolver{
+						strings.Repeat("a", 64) + ".com": {{Addr: "1.2.3.4"}},
+						"good.route.example.com":         {{Addr: "1.2.3.4"}},
+					},
+				},
+			},
+			prefs: &ipn.Prefs{
+				CorpDNS: true,
+			},
+			want: &dns.Config{
+				AcceptDNS: true,
+				Hosts:     map[dnsname.FQDN][]netip.Addr{},
+				Routes: map[dnsname.FQDN][]*dnstype.Resolver{
+					"good.route.example.com.": {{Addr: "1.2.3.4"}},
+				},
+				SearchDomains: []dnsname.FQDN{
+					"good.example.com.",
+				},
+			},
+			wantLog: strings.Join([]string{
+				`[unexpected] non-FQDN search domain "` + strings.Repeat("a", 64) + `.com"`,
+				`[unexpected] non-FQDN search domain "evil.com\nnameserver 6.6.6.6"`,
+				`[unexpected] non-FQDN route suffix "` + strings.Repeat("a", 64) + `.com"`,
+			}, "\n") + "\n",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			goos := cmp.Or(tt.os, "linux")
 			var log tstest.MemLogger
-			got := dnsConfigForNetmap(tt.nm, peersMap(tt.peers), tt.prefs.View(), tt.expired, log.Logf, goos)
+			got := dnsConfigForNetmap(tt.nm, peersMap(tt.peers), tt.prefs.View(), tt.expired, log.Logf, goos, tt.extraRoutes)
 			if !reflect.DeepEqual(got, tt.want) {
 				gotj, _ := json.MarshalIndent(got, "", "\t")
 				wantj, _ := json.MarshalIndent(tt.want, "", "\t")

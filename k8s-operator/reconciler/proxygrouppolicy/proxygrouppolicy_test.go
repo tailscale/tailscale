@@ -12,11 +12,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler/proxygrouppolicy"
+	"tailscale.com/k8s-operator/reconciler/reconcilertest"
 )
 
 func TestReconciler_Reconcile(t *testing.T) {
@@ -102,7 +102,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.Name, func(t *testing.T) {
-			bldr := fake.NewClientBuilder().WithScheme(tsapi.GlobalScheme)
+			bldr := reconcilertest.NewClientBuilder()
 			bldr = bldr.WithObjects(tc.ExistingResources...)
 
 			fc := bldr.Build()

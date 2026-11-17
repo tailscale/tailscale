@@ -65,6 +65,7 @@ import (
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest/acmetest"
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -78,7 +79,7 @@ const nicID = 1
 
 const (
 	stunPort = 3478
-	pcpPort  = 5351
+	pxpPort  = 5351
 	ssdpPort = 1900
 )
 
@@ -150,10 +151,11 @@ func (n *network) initStack() error {
 			icmp.NewProtocol4,
 		},
 	})
-	sackEnabledOpt := tcpip.TCPSACKEnabled(true) // TCP SACK is disabled by default
-	tcpipErr := n.ns.SetTransportProtocolOption(tcp.ProtocolNumber, &sackEnabledOpt)
-	if tcpipErr != nil {
-		return fmt.Errorf("SetTransportProtocolOption SACK: %v", tcpipErr)
+	// Cubic is the default congestion control on Linux and matches
+	// wgengine/netstack's configuration; gVisor defaults to reno.
+	cubicOpt := tcpip.CongestionControlOption("cubic")
+	if err := n.ns.SetTransportProtocolOption(tcp.ProtocolNumber, &cubicOpt); err != nil {
+		return fmt.Errorf("SetTransportProtocolOption cubic: %v", err)
 	}
 	// Raise the TCP buffer limits (defaults: 1 MB send, 1 MB receive)
 	// so that netstack-terminated connections (the fake control plane,
@@ -179,12 +181,6 @@ func (n *network) initStack() error {
 	rcvBufOpt := tcpip.TCPReceiveBufferSizeRangeOption{Min: 4 << 10, Default: 4 << 20, Max: 16 << 20}
 	if err := n.ns.SetTransportProtocolOption(tcp.ProtocolNumber, &rcvBufOpt); err != nil {
 		return fmt.Errorf("SetTransportProtocolOption recv buf: %v", err)
-	}
-	// Enable receive buffer moderation (auto-tuning) so idle
-	// connections don't hold the full 4 MB.
-	modRcvBufOpt := tcpip.TCPModerateReceiveBufferOption(true)
-	if err := n.ns.SetTransportProtocolOption(tcp.ProtocolNumber, &modRcvBufOpt); err != nil {
-		return fmt.Errorf("SetTransportProtocolOption moderate recv buf: %v", err)
 	}
 	// The queue is sized to hold a full TCP send buffer's worth of
 	// 1500-byte frames (see the send buffer sizing above) so that a
@@ -293,9 +289,12 @@ func (n *network) handleIPPacketFromGvisor(ipRaw []byte) {
 		n.logf("no node for netstack dest IP %v", flow.dst)
 		return
 	}
+	// Use the MAC address for this specific network (important for multi-NIC nodes
+	// where the primary MAC may be on a different network).
+	mac := node.macForNet(n)
 	eth := &layers.Ethernet{
 		SrcMAC: n.mac.HWAddr(),
-		DstMAC: node.mac.HWAddr(),
+		DstMAC: mac.HWAddr(),
 	}
 	sls := []gopacket.SerializableLayer{
 		eth,
@@ -313,9 +312,6 @@ func (n *network) handleIPPacketFromGvisor(ipRaw []byte) {
 		n.logf("gvisor: serialize error: %v", err)
 		return
 	}
-	// Use the MAC address for this specific network (important for multi-NIC nodes
-	// where the primary MAC may be on a different network).
-	mac := node.macForNet(n)
 	if nw, ok := n.writers.Load(mac); ok {
 		// conditionedWrite (rather than nw.write) so that the network's
 		// simulated latency and packet loss also apply to traffic
@@ -437,7 +433,7 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		}
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
-		ac := &agentConn{node, tc}
+		ac := &agentConn{node, tc, ep}
 		n.s.addIdleAgentConn(ac)
 		return
 	}
@@ -490,12 +486,12 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 			return
 		}
 	}
-	if destPort == 443 && fakeLogCatcher.Match(destIP) {
+	if (destPort == 443 || destPort == 80) && fakeLogCatcher.Match(destIP) {
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
 		context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
 		n.s.wg.Go(func() {
-			n.serveLogCatcherConn(clientRemoteIP, tc)
+			n.serveLogCatcherConn(clientRemoteIP, tc, destPort == 443)
 		})
 		return
 	}
@@ -536,6 +532,17 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 
+	if destPort == upnpHTTPPort && destIP == n.lanIP4.Addr() && n.svcs.Contains(UPnP) {
+		r.Complete(false)
+		tc := gonet.NewTCPConn(&wq, ep)
+		context.AfterFunc(n.s.shutdownCtx, func() { tc.Close() })
+		hs := &http.Server{Handler: n.upnpHandler()}
+		n.s.wg.Go(func() {
+			hs.Serve(netutil.NewOneConnListener(tc, nil))
+		})
+		return
+	}
+
 	var targetDial string
 	if n.s.derpIPs.Contains(destIP) {
 		targetDial = destIP.String() + ":" + strconv.Itoa(int(destPort))
@@ -562,15 +569,18 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 }
 
-// serveLogCatchConn serves a TCP connection to "log.tailscale.com", speaking the
-// logtail/logcatcher protocol.
+// serveLogCatcherConn serves a TCP connection to "log.tailscale.com", speaking
+// the logtail/logcatcher protocol.
 //
-// We terminate TLS with an arbitrary cert; the client is configured to not
-// validate TLS certs for this hostname when running under these integration
-// tests.
-func (n *network) serveLogCatcherConn(clientRemoteIP netip.Addr, c net.Conn) {
-	tlsConfig := n.s.derps[0].tlsConfig // self-signed (stealing DERP's); test client configure to not check
-	tlsConn := tls.Server(c, tlsConfig)
+// With useTLS, it terminates TLS with an arbitrary cert; gokrazy guests are
+// built to not validate TLS certs for this hostname. Other guests cannot
+// trust that cert, so they are pointed at the plain-HTTP port instead via
+// TS_LOG_TARGET.
+func (n *network) serveLogCatcherConn(clientRemoteIP netip.Addr, c net.Conn, useTLS bool) {
+	if useTLS {
+		tlsConfig := n.s.derps[0].tlsConfig // self-signed (stealing DERP's)
+		c = tls.Server(c, tlsConfig)
+	}
 	var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		all, _ := io.ReadAll(r.Body)
 		if r.Header.Get("Content-Encoding") == "zstd" {
@@ -599,12 +609,12 @@ func (n *network) serveLogCatcherConn(clientRemoteIP netip.Addr, c net.Conn) {
 			node.logCatcherWrites++
 			for _, lg := range logs {
 				tStr := lg.Logtail.Client_Time.Round(time.Millisecond).Format(time.RFC3339Nano)
-				fmt.Fprintf(&node.logBuf, "[%v] %s\n", tStr, lg.Text)
+				fmt.Fprintf(&node.logBuf, "[%v] %s\n", tStr, strings.TrimSuffix(lg.Text, "\n"))
 			}
 		}
 	})
 	hs := &http.Server{Handler: handler}
-	hs.Serve(netutil.NewOneConnListener(tlsConn, nil))
+	hs.Serve(netutil.NewOneConnListener(c, nil))
 }
 
 type EthernetPacket struct {
@@ -643,13 +653,9 @@ func (m MAC) HWAddr() net.HardwareAddr {
 	return net.HardwareAddr(m[:])
 }
 
+// String returns the mac address as "xx:xx:xx:xx:xx:xx".
 func (m MAC) String() string {
 	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", m[0], m[1], m[2], m[3], m[4], m[5])
-}
-
-type portMapping struct {
-	dst    netip.AddrPort // LAN IP:port
-	expiry time.Time
 }
 
 // writerFunc is a function that writes an Ethernet frame to a connected client.
@@ -672,9 +678,9 @@ func (nw networkWriter) write(b []byte) {
 
 type network struct {
 	s                *Server
-	num              int // 1-based
-	mac              MAC // of router
-	portmap          bool
+	num              int                     // 1-based
+	mac              MAC                     // of router
+	svcs             set.Set[NetworkService] // services the router offers (NAT-PMP, PCP, ...)
 	lanInterfaceID   int
 	wanInterfaceID   int
 	v4               bool                 // network supports IPv4
@@ -686,6 +692,7 @@ type network struct {
 	blackholeControl bool                 // blackhole control connectivity
 	latency          time.Duration        // latency applied to interface writes
 	lossRate         float64              // probability of dropping a packet (0.0 to 1.0)
+	portMapLifetime  time.Duration        // max NAT-PMP/PCP mapping lifetime, if non-zero
 	nodesByIP4       map[netip.Addr]*node // by LAN IPv4
 	nodesByMAC       map[MAC]*node
 	logf             func(format string, args ...any)
@@ -696,7 +703,7 @@ type network struct {
 	natStyle    syncs.AtomicValue[NAT]
 	natMu       sync.Mutex // held while using + changing natTable
 	natTable    NATTable
-	portMap     map[netip.AddrPort]portMapping    // WAN ip:port -> LAN ip:port
+	portMap     map[netip.AddrPort]PortMapping    // WAN ip:port -> LAN ip:port
 	portMapFlow map[portmapFlowKey]netip.AddrPort // (lanAP, peerWANAP) -> portmapped wanAP
 
 	macMu     sync.Mutex
@@ -933,7 +940,7 @@ type Server struct {
 	// the outer TLS); it exists only so the forced-443 dial path has a TLS peer.
 	controlTLS *tls.Config
 	derps      []*derpServer
-	fakeACME   *fakeACMEServer
+	fakeACME   *acmetest.Server
 	pcapWriter *pcapWriter
 
 	// vmWriteState holds per-VM-connection write state, serializing
@@ -987,7 +994,7 @@ var derpHostnames = []string{"derp1.tailscale", "derp2.tailscale"}
 const controlHostname = "control.tailscale"
 
 var derpMap = &tailcfg.DERPMap{
-	Regions: map[int]*tailcfg.DERPRegion{
+	Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 		1: {
 			RegionID:   1,
 			RegionCode: "atlantis",
@@ -1030,10 +1037,11 @@ func New(c *Config) (*Server, error) {
 		shutdownCancel: cancel,
 
 		control: &testcontrol.Server{
-			DERPMap:         derpMap,
-			ExplicitBaseURL: "http://" + controlHostname,
+			DERPMap:             derpMap,
+			ExplicitBaseURL:     "http://" + controlHostname,
+			OverrideDisableUPnP: true,
 		},
-		fakeACME: newFakeACMEServer("http://acme.example"),
+		fakeACME: acmetest.New("http://acme.example"),
 
 		blendReality: c.blendReality,
 		derpIPs:      set.Of[netip.Addr](),
@@ -1047,7 +1055,10 @@ func New(c *Config) (*Server, error) {
 		s.setDNSRecord(req.Name, req.Value)
 		return nil
 	}
-	s.fakeACME.lookupTXT = s.lookupTXT
+	s.fakeACME.LookupTXT = s.lookupTXT
+	// Keep issuance pending long enough for `tailscale cert` to print the
+	// cert-pending health warning the ACME vmtest watches for.
+	s.fakeACME.ValidationDelay = 3 * time.Second
 	s.controlTLS, _ = selfSignedCert(controlHostname)
 	for _, host := range derpHostnames {
 		s.derps = append(s.derps, newDERPServer(host))
@@ -1089,12 +1100,12 @@ func (s *Server) DERPCertSHA256Hex(idx int) string {
 
 // FakeACMEDirectoryURL returns the directory URL for vnet's in-process ACME CA.
 func (s *Server) FakeACMEDirectoryURL() string {
-	return s.fakeACME.directoryURL()
+	return s.fakeACME.DirectoryURL()
 }
 
 // FakeACMERootPEM returns the PEM-encoded root certificate for vnet's fake ACME CA.
 func (s *Server) FakeACMERootPEM() []byte {
-	return s.fakeACME.rootPEM()
+	return s.fakeACME.RootPEM()
 }
 
 func (s *Server) setDNSRecord(name, value string) {
@@ -1200,6 +1211,10 @@ func (s *Server) Close() {
 		s.pcapWriter.Close()
 	}
 	s.wg.Wait()
+
+	for n := range s.networks {
+		n.ns.Close()
+	}
 }
 
 // AwaitFirstPacket waits until the first ethernet frame is received from the
@@ -1881,8 +1896,8 @@ func (n *network) HandleEthernetPacketForRouter(ep EthernetPacket) {
 		return
 	}
 
-	if toForward && n.s.shouldInterceptTCP(packet) {
-		if (flow.dst.Is4() && n.breakWAN4) ||
+	if n.shouldInterceptTCP(packet) {
+		if (toForward && flow.dst.Is4() && n.breakWAN4) ||
 			(n.blackholeControl && fakeControl.Match(flow.dst)) {
 			// Blackhole the packet.
 			return
@@ -2040,8 +2055,8 @@ func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, t
 		return
 	}
 
-	if dstIP == n.lanIP4.Addr() && isNATPMP(udp) {
-		n.handleNATPMPRequest(UDPPacket{
+	if dstIP == n.lanIP4.Addr() && udp.DstPort == pxpPort && len(udp.Payload) >= 2 { // TODO(fmarier): support IPv6 PCP
+		n.handlePxPRequest(UDPPacket{
 			Src:     netip.AddrPortFrom(srcIP, uint16(udp.SrcPort)),
 			Dst:     netip.AddrPortFrom(dstIP, uint16(udp.DstPort)),
 			Payload: udp.Payload,
@@ -2100,10 +2115,12 @@ func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, t
 		return
 	}
 
-	if udp.DstPort == pcpPort || udp.DstPort == ssdpPort {
-		// We handle NAT-PMP, but not these yet.
-		// TODO(bradfitz): handle? marginal utility so far.
-		// Don't log about them being unknown.
+	if dstIP == n.lanIP4.Addr() && udp.DstPort == ssdpPort {
+		n.handleSSDPRequest(UDPPacket{
+			Src:     netip.AddrPortFrom(srcIP, uint16(udp.SrcPort)),
+			Dst:     netip.AddrPortFrom(dstIP, uint16(udp.DstPort)),
+			Payload: udp.Payload,
+		})
 		return
 	}
 
@@ -2431,7 +2448,7 @@ func isMDNSQuery(pkt gopacket.Packet) bool {
 	return ok && udp.SrcPort == 5353 && udp.DstPort == 5353
 }
 
-func (s *Server) shouldInterceptTCP(pkt gopacket.Packet) bool {
+func (n *network) shouldInterceptTCP(pkt gopacket.Packet) bool {
 	tcp, ok := pkt.Layer(layers.LayerTypeTCP).(*layers.TCP)
 	if !ok {
 		return false
@@ -2456,14 +2473,17 @@ func (s *Server) shouldInterceptTCP(pkt gopacket.Packet) bool {
 			}
 		}
 		if fakeProxyControlplane.Match(flow.dst) {
-			return s.blendReality
+			return n.s.blendReality
 		}
-		if s.derpIPs.Contains(flow.dst) {
+		if n.s.derpIPs.Contains(flow.dst) {
 			return true
 		}
 	}
 	if tcp.DstPort == TestDriverPort && fakeTestAgent.Match(flow.dst) {
 		// Connection from cmd/tta.
+		return true
+	}
+	if tcp.DstPort == upnpHTTPPort && flow.dst == n.lanIP4.Addr() {
 		return true
 	}
 	return false
@@ -2504,10 +2524,6 @@ func isDNSRequest(pkt gopacket.Packet) bool {
 	}
 	dns, ok := pkt.Layer(layers.LayerTypeDNS).(*layers.DNS)
 	return ok && dns.QR == false && len(dns.Questions) > 0
-}
-
-func isNATPMP(udp *layers.UDP) bool {
-	return udp.DstPort == 5351 && len(udp.Payload) > 0 && udp.Payload[0] == 0 // version 0, not 2 for PCP
 }
 
 func makeSTUNReply(req UDPPacket) (res UDPPacket, ok bool) {
@@ -2569,6 +2585,10 @@ func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
 		}
 
 		if toSplitDNS {
+			if string(q.Name) == SplitDNSRefusedName {
+				response.ResponseCode = layers.DNSResponseCodeRefused
+				continue
+			}
 			// The secondary server serves only its own zone, and only A records.
 			if addr, ok := splitDNSZone[string(q.Name)]; ok && q.Type == layers.DNSTypeA {
 				response.ANCount++
@@ -2689,7 +2709,7 @@ func (n *network) doNATIn(src, dst netip.AddrPort) (newDst netip.AddrPort) {
 
 	// First see if there's a port mapping, before doing NAT.
 	if lanAP, ok := n.portMap[dst]; ok {
-		if now.Before(lanAP.expiry) {
+		if now.Before(lanAP.ExpiresAt) {
 			mak.Set(&n.portMapFlow, portmapFlowKey{
 				peerWAN: src,
 				lanAP:   lanAP.dst,
@@ -2712,51 +2732,6 @@ func (n *network) doNATIn(src, dst netip.AddrPort) (newDst netip.AddrPort) {
 func (n *network) IsPublicPortUsed(ap netip.AddrPort) bool {
 	_, ok := n.portMap[ap]
 	return ok
-}
-
-func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec int) (gotPort uint16, ok bool) {
-	n.natMu.Lock()
-	defer n.natMu.Unlock()
-
-	if !n.portmap {
-		return 0, false
-	}
-
-	wanAP := netip.AddrPortFrom(n.wanIP4, wantExtPort)
-	dst := netip.AddrPortFrom(src, dstLANPort)
-
-	if sec == 0 {
-		lanAP, ok := n.portMap[wanAP]
-		if ok && lanAP.dst.Addr() == src {
-			delete(n.portMap, wanAP)
-		}
-		return 0, false
-	}
-
-	// See if they already have a mapping and extend expiry if so.
-	for k, v := range n.portMap {
-		if v.dst == dst {
-			n.portMap[k] = portMapping{
-				dst:    dst,
-				expiry: time.Now().Add(time.Duration(sec) * time.Second),
-			}
-			return k.Port(), true
-		}
-	}
-
-	for range 20_000 {
-		if wanAP.Port() > 0 && !n.natTable.IsPublicPortUsed(wanAP) {
-			mak.Set(&n.portMap, wanAP, portMapping{
-				dst:    dst,
-				expiry: time.Now().Add(time.Duration(sec) * time.Second),
-			})
-			n.logf("vnet: allocated NAT mapping from %v to %v", wanAP, dst)
-			return wanAP.Port(), true
-		}
-		wantExtPort = rand.N(uint16(32<<10)) + 32<<10
-		wanAP = netip.AddrPortFrom(n.wanIP4, wantExtPort)
-	}
-	return 0, false
 }
 
 func (n *network) createARPResponse(pkt gopacket.Packet) ([]byte, error) {
@@ -2808,69 +2783,6 @@ func (n *network) createARPResponse(pkt gopacket.Packet) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
-func (n *network) handleNATPMPRequest(req UDPPacket) {
-	if !n.portmap {
-		return
-	}
-	if string(req.Payload) == "\x00\x00" {
-		// https://www.rfc-editor.org/rfc/rfc6886#section-3.2
-
-		res := make([]byte, 0, 12)
-		res = append(res,
-			0,    // version 0 (NAT-PMP)
-			128,  // response to op 0 (128+0)
-			0, 0, // result code success
-		)
-		res = binary.BigEndian.AppendUint32(res, uint32(time.Now().Unix()))
-		wan4 := n.wanIP4.As4()
-		res = append(res, wan4[:]...)
-		n.WriteUDPPacketNoNAT(UDPPacket{
-			Src:     req.Dst,
-			Dst:     req.Src,
-			Payload: res,
-		})
-		return
-	}
-
-	// Map UDP request
-	if len(req.Payload) == 12 && req.Payload[0] == 0 && req.Payload[1] == 1 {
-		// https://www.rfc-editor.org/rfc/rfc6886#section-3.3
-		// "00 01 00 00 ed 40 00 00 00 00 1c 20" =>
-		//   00 ver
-		//   01 op=map UDP
-		//   00 00 reserved  (0 in request; in response, this is the result code)
-		//   ed 40 internal port 60736
-		//   00 00 suggested external port
-		//   00 00 1c 20 suggested lifetime in seconds (7200 sec = 2 hours)
-		internalPort := binary.BigEndian.Uint16(req.Payload[4:6])
-		wantExtPort := binary.BigEndian.Uint16(req.Payload[6:8])
-		lifetimeSec := binary.BigEndian.Uint32(req.Payload[8:12])
-		gotPort, ok := n.doPortMap(req.Src.Addr(), internalPort, wantExtPort, int(lifetimeSec))
-		if !ok {
-			n.logf("NAT-PMP map request for %v:%d failed", req.Src.Addr(), internalPort)
-			return
-		}
-		res := make([]byte, 0, 16)
-		res = append(res,
-			0,     // version 0 (NAT-PMP)
-			1+128, // response to op 1
-			0, 0,  // result code success
-		)
-		res = binary.BigEndian.AppendUint32(res, uint32(time.Now().Unix()))
-		res = binary.BigEndian.AppendUint16(res, internalPort)
-		res = binary.BigEndian.AppendUint16(res, gotPort)
-		res = binary.BigEndian.AppendUint32(res, lifetimeSec)
-		n.WriteUDPPacketNoNAT(UDPPacket{
-			Src:     req.Dst,
-			Dst:     req.Src,
-			Payload: res,
-		})
-		return
-	}
-
-	n.logf("TODO: handle NAT-PMP packet % 02x", req.Payload)
-}
-
 // UDPPacket is a UDP packet.
 //
 // For the purposes of this project, a UDP packet
@@ -2904,6 +2816,7 @@ func (s *Server) WriteStartingBanner(w io.Writer) {
 type agentConn struct {
 	node *node
 	tc   *gonet.TCPConn
+	ep   tcpip.Endpoint
 }
 
 func (s *Server) addIdleAgentConn(ac *agentConn) {
@@ -2922,7 +2835,7 @@ func (s *Server) addIdleAgentConn(ac *agentConn) {
 	}
 }
 
-func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok bool) {
+func (s *Server) takeAgentConn(ctx context.Context, n *node) (*agentConn, error) {
 	const debug = false
 	// stuckThreshold is how long we wait before deciding the agent is slow
 	// enough to warrant a log line. Below this we stay quiet because, in
@@ -2937,7 +2850,7 @@ func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok b
 			if debug {
 				log.Printf("takeAgentConn: got agent conn for %v", n.mac)
 			}
-			return ac, true
+			return ac, nil
 		}
 		if debug && miss > 0 {
 			log.Printf("takeAgentConnOne: missed %d times for %v", miss, n.mac)
@@ -2956,7 +2869,9 @@ func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok b
 		}
 		select {
 		case <-ctx.Done():
-			return nil, false
+			return nil, ctx.Err()
+		case <-s.shutdownCtx.Done():
+			return nil, errors.New("takeAgentConn: server shut down while waiting for agent conn")
 		case <-ready:
 		case <-time.After(time.Second):
 			// Try again regularly anyway, in case we have multiple clients
@@ -2974,18 +2889,25 @@ func (s *Server) takeAgentConnOne(n *node) (ac *agentConn, miss int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for ac := range s.agentConns {
-		if ac.node == n {
-			s.agentConns.Delete(ac)
-			return ac, 0
+		if ac.node != n {
+			miss++
+			continue
 		}
-		miss++
+		s.agentConns.Delete(ac)
+		if st := tcp.EndpointState(ac.ep.State()); st != tcp.StateEstablished {
+			log.Printf("takeAgentConn: discarding idle agent conn for %v that the agent already closed (state %v)", n.mac, st)
+			ac.tc.Close()
+			continue
+		}
+		return ac, 0
 	}
 	return nil, miss
 }
 
 type NodeAgentClient struct {
 	*local.Client
-	HTTPClient *http.Client
+	HTTPClient     *http.Client
+	localTransport *http.Transport // transport backing local.Client
 }
 
 func (s *Server) NodeAgentDialer(n *Node) netx.DialFunc {
@@ -2996,9 +2918,9 @@ func (s *Server) NodeAgentDialer(n *Node) netx.DialFunc {
 		return d
 	}
 	d := func(ctx context.Context, network, addr string) (net.Conn, error) {
-		ac, ok := s.takeAgentConn(ctx, n.n)
-		if !ok {
-			return nil, ctx.Err()
+		ac, err := s.takeAgentConn(ctx, n.n)
+		if err != nil {
+			return nil, err
 		}
 		return ac.tc, nil
 	}
@@ -3006,19 +2928,44 @@ func (s *Server) NodeAgentDialer(n *Node) netx.DialFunc {
 	return d
 }
 
+// NodeLogs returns the tailscaled log lines that node n has uploaded so far
+// to the fake log.tailscale.com log catcher, one line per entry, each
+// prefixed with the client's timestamp. It returns the empty string if the
+// node has not been started under this server or has uploaded nothing.
+func (s *Server) NodeLogs(n *Node) string {
+	if n == nil || n.n == nil {
+		return ""
+	}
+	n.n.logMu.Lock()
+	defer n.n.logMu.Unlock()
+	return n.n.logBuf.String()
+}
+
 func (s *Server) NodeAgentClient(n *Node) *NodeAgentClient {
 	d := s.NodeAgentDialer(n)
+	localTransport := &http.Transport{DialContext: d}
 	return &NodeAgentClient{
 		Client: &local.Client{
 			UseSocketOnly: true,
 			OmitAuth:      true,
 			Dial:          d,
+			Transport:     localTransport,
 		},
 		HTTPClient: &http.Client{
 			Transport: &http.Transport{
 				DialContext: d,
 			},
 		},
+		localTransport: localTransport,
+	}
+}
+
+// CloseIdleConnections closes idle connections in both the local.Client and
+// HTTPClient transports. This helps facilitate cases where a link has changed
+// in a test.
+func (c *NodeAgentClient) CloseIdleConnections() {
+	if c.localTransport != nil {
+		c.localTransport.CloseIdleConnections()
 	}
 }
 

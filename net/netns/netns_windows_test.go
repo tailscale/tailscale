@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
+	"tailscale.com/net/netmon"
 	"tailscale.com/tsconst"
 )
 
@@ -17,7 +18,8 @@ func TestGetInterfaceIndex(t *testing.T) {
 	t.Cleanup(func() { bindToInterfaceByRoute.Store(oldVal) })
 	bindToInterfaceByRoute.Store(true)
 
-	defIfaceIdxV4, err := defaultInterfaceIndex(windows.AF_INET)
+	netMon := netmon.NewStatic()
+	defIfaceIdxV4, err := netMon.WindowsDefaultInterfaceIndex(windows.AF_INET)
 	if err != nil {
 		t.Fatalf("defaultInterfaceIndex(AF_INET) failed: %v", err)
 	}
@@ -69,7 +71,7 @@ func TestGetInterfaceIndex(t *testing.T) {
 			t.Skip("no tailscale interface on this machine")
 		}
 
-		defaultIdx, err := defaultInterfaceIndex(windows.AF_INET)
+		defaultIdx, err := netMon.WindowsDefaultInterfaceIndex(windows.AF_INET)
 		if err != nil {
 			t.Fatalf("defaultInterfaceIndex(AF_INET) failed: %v", err)
 		}

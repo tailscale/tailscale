@@ -185,10 +185,10 @@ type Engine interface {
 	SetPeerByIPPacketFunc(func(netip.Addr) (_ key.NodePublic, ok bool))
 
 	// SetPeerConfigFunc installs the live source of per-peer WireGuard
-	// configuration: given a peer's public key, fn returns the prefixes
-	// the peer is currently allowed to originate traffic from, or
-	// ok=false if the peer is unknown (in which case it must not exist
-	// in the WireGuard device). The engine installs a single
+	// configuration: given a peer's public key, fn returns its current
+	// WireGuard configuration, including the prefixes it may originate and
+	// its optional pre-shared key. It returns ok=false if the peer is unknown,
+	// in which case it must not exist in the WireGuard device. The engine installs a single
 	// [device.PeerLookupFunc] wrapping fn, so lazily-created peers
 	// always see current state and the lookup func never needs to be
 	// reinstalled as peers come and go.
@@ -197,29 +197,28 @@ type Engine interface {
 	// before the first [Engine.Reconfig]. fn is called rarely (when
 	// wireguard-go first hears from a peer it doesn't have) and may
 	// acquire locks.
-	SetPeerConfigFunc(fn func(key.NodePublic) (allowedIPs []netip.Prefix, ok bool))
+	SetPeerConfigFunc(fn func(key.NodePublic) (config wgcfg.PeerConfig, ok bool))
 
 	// SyncDevicePeer synchronizes the WireGuard device's state for a
 	// single peer with the config source installed via
 	// [Engine.SetPeerConfigFunc]: if the source no longer knows the
 	// peer, it is removed from the device; if the peer is active in the
-	// device, its allowed IPs are updated. It does O(1) work (plus the
-	// config source lookup) and is intended to be called for each peer
+	// device, its allowed IPs and pre-shared key are updated. It does O(1)
+	// work (plus the config source lookup) and is intended to be called for
+	// each peer
 	// added, updated, or removed by an incremental netmap delta,
 	// avoiding a full [Engine.Reconfig].
 	//
 	// It is a no-op if no config source is installed.
 	SyncDevicePeer(key.NodePublic)
 
-	// ResetDevicePeer removes the peer from the WireGuard device,
-	// discarding any session key material and in-flight handshake
-	// state. If the peer is still known to the config source installed
-	// via [Engine.SetPeerConfigFunc], it is lazily re-created on demand
-	// with fresh state.
+	// MarkDevicePeerForHandshake marks the peer for an opportunistic handshake in the
+	// WireGuard device.
 	//
 	// LocalBackend calls it when a peer's disco key changes, which
-	// means the peer restarted and its old sessions are dead.
-	ResetDevicePeer(key.NodePublic)
+	// means the peer restarted and its old sessions are dead, or that control
+	// caught up to a key learned via TSMP previously.
+	MarkDevicePeerForHandshake(key.NodePublic)
 
 	// SetNetLogSource installs the [NetLogSource] consulted by the
 	// engine's network flow logger for node lookups and the current

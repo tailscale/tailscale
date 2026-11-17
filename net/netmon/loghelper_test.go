@@ -71,7 +71,7 @@ func syncTestLinkChangeLogLimiter(t *testing.T) {
 	if cd.RebindLikelyRequired != true {
 		t.Fatalf("expected RebindLikelyRequired to be true, got false")
 	}
-	eventbustest.Inject(injector, cd)
+	eventbustest.Inject(injector, *cd)
 	synctest.Wait()
 
 	logf("hello %s", "world")

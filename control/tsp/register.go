@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"tailscale.com/control/ts2021"
 	"tailscale.com/tailcfg"
@@ -36,6 +37,12 @@ type RegisterOpts struct {
 	// Tags is a list of ACL tags to request.
 	Tags []string
 
+	// Expiry optionally specifies the requested key expiry.
+	// The server policy may override.
+	// As a special case, if Expiry is in the past and NodeKey is
+	// the node's current key, the key is expired.
+	Expiry time.Time
+
 	// MaxResponseSize is the maximum size in bytes of the register
 	// response body. If zero, [DefaultMaxMessageSize] is used.
 	MaxResponseSize int64
@@ -55,6 +62,7 @@ func (c *Client) Register(ctx context.Context, opts RegisterOpts) (*tailcfg.Regi
 	regReq := tailcfg.RegisterRequest{
 		Version:   tailcfg.CurrentCapabilityVersion,
 		NodeKey:   opts.NodeKey.Public(),
+		Expiry:    opts.Expiry,
 		Hostinfo:  hi,
 		Ephemeral: opts.Ephemeral,
 	}

@@ -26,6 +26,7 @@ import (
 
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/tstime"
@@ -123,11 +124,11 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 	}
 
 	if err := a.maybeProvision(ctx, logger, svc); err != nil {
-		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
-			logger.Infof("optimistic lock error, retrying: %s", err)
-		} else {
-			return reconcile.Result{}, err
+		if reconciler.IsOptimisticLockError(err) {
+			logger.Debugf("update conflict, retrying: %v", err)
+			return reconcile.Result{RequeueAfter: shortRequeue}, nil
 		}
+		return reconcile.Result{}, err
 	}
 
 	return reconcile.Result{}, nil

@@ -14,7 +14,6 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 
 	"go.uber.org/zap"
@@ -25,8 +24,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tailscaleclient "tailscale.com/client/tailscale/v2"
@@ -34,7 +31,8 @@ import (
 	"tailscale.com/ipn"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler/peerrelay"
-	"tailscale.com/k8s-operator/tsclient"
+	"tailscale.com/k8s-operator/reconciler/reconcilertest"
+	"tailscale.com/types/key"
 )
 
 const (
@@ -51,6 +49,11 @@ func testResolver(_ context.Context, _ string, host string) ([]netip.Addr, error
 		"multi-az.elb.amazonaws.com": {
 			netip.MustParseAddr("203.0.113.30"),
 			netip.MustParseAddr("203.0.113.20"),
+		},
+		// A dualstack load balancer answers on both families.
+		"dualstack.elb.amazonaws.com": {
+			netip.MustParseAddr("2001:db8::10"),
+			netip.MustParseAddr("203.0.113.40"),
 		},
 	}
 
@@ -72,11 +75,19 @@ type expectedService struct {
 	Annotations       map[string]string
 	AbsentLabels      []string
 	AbsentAnnotations []string
+	IPFamilyPolicy    *corev1.IPFamilyPolicy // asserted only when non-nil
+	IPFamilies        []corev1.IPFamily      // asserted only when non-nil
 }
 
 type statefulSetSpec struct {
 	Replicas int32
 	Image    string
+}
+
+// expectedConfig holds the relay-specific fields asserted against a replica's generated tailscaled config.
+type expectedConfig struct {
+	RelayServerPort            uint16
+	RelayServerStaticEndpoints []netip.AddrPort
 }
 
 func TestReconciler_Reconcile(t *testing.T) {
@@ -95,10 +106,11 @@ func TestReconciler_Reconcile(t *testing.T) {
 		ExpectsError          bool
 		ExpectedServices      []expectedService
 		ExpectedEndpoints     []tsapi.PeerRelayEndpoint
-		ExpectedReadyStatus   metav1.ConditionStatus // asserted only when non-empty
-		ExpectedReadyReason   string                 // asserted only when non-empty
-		ExpectStatefulSetGone bool                   // assert the StatefulSet does not exist
-		ExpectStatefulSetSpec *statefulSetSpec       // asserted only when non-nil
+		ExpectedReadyStatus   metav1.ConditionStatus    // asserted only when non-empty
+		ExpectedReadyReason   string                    // asserted only when non-empty
+		ExpectedConfigs       map[string]expectedConfig // keyed by config Secret name, asserted only when non-nil
+		ExpectStatefulSetGone bool                      // assert the StatefulSet does not exist
+		ExpectStatefulSetSpec *statefulSetSpec          // asserted only when non-nil
 		ExpectFinalizer       bool
 		ExpectPRDeleted       bool
 	}{
@@ -260,6 +272,93 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 		},
 		{
+			// The AWS address type is a default rather than a forced value. On an IPv6 EKS cluster the pods are
+			// IPv6 and the AWS Load Balancer Controller refuses to put them behind an IPv4 load balancer, so the
+			// user must be able to ask for dualstack. A dualstack UDP load balancer also needs IPv6 source NAT
+			// or the controller rejects it, so that is defaulted on alongside.
+			Name:    "dualstack-address-type-is-honoured",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					Service: &tsapi.PeerRelayService{Annotations: map[string]string{
+						ipAddressTypeAnnotation: "dualstack",
+					}},
+				},
+			},
+			ExpectedServices: []expectedService{
+				{
+					Name: "peerrelay-test-0",
+					Annotations: map[string]string{
+						ipAddressTypeAnnotation: "dualstack",
+						ipv6SourceNATAnnotation: "on",
+					},
+				},
+			},
+		},
+		{
+			// A user who sets the source NAT annotation themselves keeps their value, even when it disagrees
+			// with what the operator would have chosen.
+			Name:    "dualstack-respects-user-source-nat",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					Service: &tsapi.PeerRelayService{Annotations: map[string]string{
+						ipAddressTypeAnnotation: "dualstack",
+						ipv6SourceNATAnnotation: "off",
+					}},
+				},
+			},
+			ExpectedServices: []expectedService{
+				{
+					Name: "peerrelay-test-0",
+					Annotations: map[string]string{
+						ipAddressTypeAnnotation: "dualstack",
+						ipv6SourceNATAnnotation: "off",
+					},
+				},
+			},
+		},
+		{
+			// Without a user value the address type defaults to ipv4 and source NAT is left alone, since an
+			// IPv4 load balancer has no use for it and the controller rejects it on one.
+			Name:    "ipv4-address-type-by-default",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+			},
+			ExpectedServices: []expectedService{
+				{
+					Name:              "peerrelay-test-0",
+					Annotations:       map[string]string{ipAddressTypeAnnotation: "ipv4"},
+					AbsentAnnotations: []string{ipv6SourceNATAnnotation},
+				},
+			},
+		},
+		{
+			// spec.service.ipFamilyPolicy and ipFamilies pass straight through to the Service so a dual-stack
+			// cluster can be asked for a load balancer that answers on both families.
+			Name:    "ip-families-pass-through",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					Service: &tsapi.PeerRelayService{
+						IPFamilyPolicy: new(corev1.IPFamilyPolicyRequireDualStack),
+						IPFamilies:     []corev1.IPFamily{corev1.IPv6Protocol, corev1.IPv4Protocol},
+					},
+				},
+			},
+			ExpectedServices: []expectedService{
+				{
+					Name:           "peerrelay-test-0",
+					IPFamilyPolicy: new(corev1.IPFamilyPolicyRequireDualStack),
+					IPFamilies:     []corev1.IPFamily{corev1.IPv6Protocol, corev1.IPv4Protocol},
+				},
+			},
+		},
+		{
 			// The reconciler applies via server-side apply, so a drifted Service (wrong Spec.Type, wrong Ports)
 			// is restored on reconcile. Kubernetes owns the merge with fields belonging to other managers
 			// (cloud LB controller annotations, kube-proxy's NodePort) and preserves them — that contract is
@@ -378,6 +477,40 @@ func TestReconciler_Reconcile(t *testing.T) {
 			ExpectedServices: []expectedService{{Name: "peerrelay-test-0"}},
 			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
 				{Replica: 0, Address: "203.0.113.10", Port: 41641},
+			},
+			ExpectedReadyStatus: metav1.ConditionTrue,
+			ExpectedReadyReason: peerrelay.ReasonReady,
+		},
+		{
+			// A dualstack load balancer's hostname resolves to addresses in both families, and every one of them
+			// is advertised so IPv6-only peers get a direct path while IPv4 peers keep theirs.
+			Name:    "dualstack-hostname-advertises-both-families",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					Service: &tsapi.PeerRelayService{
+						Annotations: map[string]string{ipAddressTypeAnnotation: "dualstack"},
+					},
+				},
+			},
+			ExistingResources: []client.Object{
+				managedServiceWithLB("test", 0, "", "dualstack.elb.amazonaws.com"),
+				managedStatefulSet("test", 1, 1),
+			},
+			ExpectedServices: []expectedService{{Name: "peerrelay-test-0"}},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "2001:db8::10", Port: 41641},
+				{Replica: 0, Address: "203.0.113.40", Port: 41641},
+			},
+			ExpectedConfigs: map[string]expectedConfig{
+				"peerrelay-test-0-config": {
+					RelayServerPort: 41641,
+					RelayServerStaticEndpoints: []netip.AddrPort{
+						netip.MustParseAddrPort("[2001:db8::10]:41641"),
+						netip.MustParseAddrPort("203.0.113.40:41641"),
+					},
+				},
 			},
 			ExpectedReadyStatus: metav1.ConditionTrue,
 			ExpectedReadyReason: peerrelay.ReasonReady,
@@ -577,6 +710,206 @@ func TestReconciler_Reconcile(t *testing.T) {
 			ExpectedReadyReason: peerrelay.ReasonEndpointsPending,
 		},
 		{
+			// spec.service.port drives the Service port and targetPort as well as the advertised endpoint port.
+			// The external port and the container's listen port are always equal: the relay advertises
+			// address:port to peers, so the load balancer must forward without rewriting the port.
+			Name:    "custom-service-port",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					Service: &tsapi.PeerRelayService{Port: new(uint16(3478))},
+				},
+			},
+			ExistingResources: []client.Object{
+				managedServiceWithLB("test", 0, "1.2.3.4", ""),
+				managedStatefulSet("test", 1, 1),
+			},
+			ExpectedServices: []expectedService{
+				{Name: "peerrelay-test-0", Port: 3478, Protocol: corev1.ProtocolUDP},
+			},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "1.2.3.4", Port: 3478},
+			},
+			ExpectedReadyStatus: metav1.ConditionTrue,
+			ExpectedReadyReason: peerrelay.ReasonReady,
+		},
+		{
+			// spec.staticEndpoints supplements the LB-derived endpoints: every replica advertises the static
+			// entries in addition to its own load balancer addresses.
+			Name:    "static-endpoints-supplement-lb-endpoints",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					Replicas:        new(int32(2)),
+					StaticEndpoints: []string{"203.0.113.99:41641"},
+				},
+			},
+			ExistingResources: []client.Object{
+				managedServiceWithLB("test", 0, "1.2.3.4", ""),
+				managedServiceWithLB("test", 1, "5.6.7.8", ""),
+				managedStatefulSet("test", 2, 2),
+			},
+			ExpectedServices: []expectedService{{Name: "peerrelay-test-0"}, {Name: "peerrelay-test-1"}},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "1.2.3.4", Port: 41641},
+				{Replica: 0, Address: "203.0.113.99", Port: 41641},
+				{Replica: 1, Address: "203.0.113.99", Port: 41641},
+				{Replica: 1, Address: "5.6.7.8", Port: 41641},
+			},
+			ExpectedReadyStatus: metav1.ConditionTrue,
+			ExpectedReadyReason: peerrelay.ReasonReady,
+		},
+		{
+			// A replica whose only endpoint comes from spec.staticEndpoints counts as addressed: the relay is
+			// reachable there even though the cloud never handed its load balancer an address, e.g. an internal
+			// LB behind a NAT gateway the user forwards themselves.
+			Name:    "static-endpoints-count-as-addressed",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					StaticEndpoints: []string{"203.0.113.99:6969"},
+				},
+			},
+			ExistingResources: []client.Object{
+				managedService("test", 0),
+				managedStatefulSet("test", 1, 1),
+			},
+			ExpectedServices: []expectedService{{Name: "peerrelay-test-0"}},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "203.0.113.99", Port: 6969},
+			},
+			ExpectedReadyStatus: metav1.ConditionTrue,
+			ExpectedReadyReason: peerrelay.ReasonReady,
+		},
+		{
+			// status.endpoints is keyed on replica and address, so an address may appear only once per replica.
+			// When a static entry names an address the load balancer already provides, the static entry's port
+			// wins: it is a deliberate user statement, e.g. an external DNAT rewrites the port.
+			Name:    "static-endpoint-overrides-lb-port-on-same-address",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					StaticEndpoints: []string{"1.2.3.4:5000"},
+				},
+			},
+			ExistingResources: []client.Object{
+				managedServiceWithLB("test", 0, "1.2.3.4", ""),
+				managedStatefulSet("test", 1, 1),
+			},
+			ExpectedServices: []expectedService{{Name: "peerrelay-test-0"}},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "1.2.3.4", Port: 5000},
+			},
+			ExpectedReadyStatus: metav1.ConditionTrue,
+			ExpectedReadyReason: peerrelay.ReasonReady,
+		},
+		{
+			// IPv6 static endpoints are advertised with the address in canonical (unbracketed) form.
+			Name:    "ipv6-static-endpoint",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					StaticEndpoints: []string{"[2001:db8::1]:41641"},
+				},
+			},
+			ExistingResources: []client.Object{
+				managedService("test", 0),
+				managedStatefulSet("test", 1, 1),
+			},
+			ExpectedServices: []expectedService{{Name: "peerrelay-test-0"}},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "2001:db8::1", Port: 41641},
+			},
+			ExpectedReadyStatus: metav1.ConditionTrue,
+			ExpectedReadyReason: peerrelay.ReasonReady,
+		},
+		{
+			// The whole chain for a non-default spec.service.port combined with spec.staticEndpoints: the listen
+			// port lands in RelayServerPort, LB-derived endpoints carry the custom port while the static entry
+			// keeps the port the user supplied (an external forward may rewrite it), and static entries reach
+			// every replica's config, including one whose LB has no address yet.
+			Name:    "custom-port-and-static-endpoints-reach-tailscaled-config",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					Replicas:        new(int32(2)),
+					Service:         &tsapi.PeerRelayService{Port: new(uint16(3478))},
+					StaticEndpoints: []string{"203.0.113.99:6969"},
+				},
+			},
+			ExistingResources: []client.Object{
+				managedServiceWithLB("test", 0, "", "multi-az.elb.amazonaws.com"),
+				managedService("test", 1),
+				managedStatefulSet("test", 2, 2),
+			},
+			ExpectedServices: []expectedService{
+				{Name: "peerrelay-test-0", Port: 3478, Protocol: corev1.ProtocolUDP},
+				{Name: "peerrelay-test-1", Port: 3478, Protocol: corev1.ProtocolUDP},
+			},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "203.0.113.20", Port: 3478},
+				{Replica: 0, Address: "203.0.113.30", Port: 3478},
+				{Replica: 0, Address: "203.0.113.99", Port: 6969},
+				{Replica: 1, Address: "203.0.113.99", Port: 6969},
+			},
+			ExpectedConfigs: map[string]expectedConfig{
+				"peerrelay-test-0-config": {
+					RelayServerPort: 3478,
+					RelayServerStaticEndpoints: []netip.AddrPort{
+						netip.MustParseAddrPort("203.0.113.20:3478"),
+						netip.MustParseAddrPort("203.0.113.30:3478"),
+						netip.MustParseAddrPort("203.0.113.99:6969"),
+					},
+				},
+				"peerrelay-test-1-config": {
+					RelayServerPort: 3478,
+					RelayServerStaticEndpoints: []netip.AddrPort{
+						netip.MustParseAddrPort("203.0.113.99:6969"),
+					},
+				},
+			},
+			ExpectedReadyStatus: metav1.ConditionTrue,
+			ExpectedReadyReason: peerrelay.ReasonReady,
+		},
+		{
+			// A malformed static endpoint trips the belt-and-braces check: the CRD Pattern only rejects obvious
+			// junk at admission, and Go's netip.ParseAddrPort is the authoritative parser. The reconciler refuses
+			// to create Services and surfaces StaticEndpointsInvalid so the user can fix the spec.
+			Name:    "invalid-static-endpoint-blocks-reconcile",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					StaticEndpoints: []string{"nonsense"},
+				},
+			},
+			ExpectStatefulSetGone: true,
+			ExpectedReadyStatus:   metav1.ConditionFalse,
+			ExpectedReadyReason:   peerrelay.ReasonStaticEndpointsInvalid,
+		},
+		{
+			// Two static endpoints with the same address but different ports would silently overwrite each
+			// other in status.endpoints (keyed on replica+address), so the reconciler rejects the spec instead
+			// and surfaces StaticEndpointsInvalid.
+			Name:    "duplicate-static-endpoint-address-blocks-reconcile",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					StaticEndpoints: []string{"203.0.113.99:41641", "203.0.113.99:41642"},
+				},
+			},
+			ExpectStatefulSetGone: true,
+			ExpectedReadyStatus:   metav1.ConditionFalse,
+			ExpectedReadyReason:   peerrelay.ReasonStaticEndpointsInvalid,
+		},
+		{
 			// spec.aws.elasticIPs fans out per-replica: each Service gets its OWN eip-allocations + subnets
 			// annotations from the array. This is the HA path on AWS where every replica needs a distinct EIP.
 			Name:    "aws-elasticips-fan-out-per-replica",
@@ -697,6 +1030,21 @@ func TestReconciler_Reconcile(t *testing.T) {
 			ExpectedReadyReason:   peerrelay.ReasonAWSConfigInvalid,
 		},
 		{
+			// Nothing is created until the ProxyClass is ready.
+			Name:    "proxyclass-not-ready-blocks-reconcile",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec:       tsapi.PeerRelaySpec{ProxyClass: "custom"},
+			},
+			ExistingResources: []client.Object{
+				&tsapi.ProxyClass{ObjectMeta: metav1.ObjectMeta{Name: "custom"}},
+			},
+			ExpectStatefulSetGone: true,
+			ExpectedReadyStatus:   metav1.ConditionFalse,
+			ExpectedReadyReason:   peerrelay.ReasonProxyClassNotReady,
+		},
+		{
 			Name:    "deletion",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
@@ -728,10 +1076,9 @@ func TestReconciler_Reconcile(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.Name, func(t *testing.T) {
-			builder := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
-				WithScheme(tsapi.GlobalScheme).
+			builder := reconcilertest.NewClientBuilder().WithInterceptorFuncs(reconcilertest.ApplyPatchInterceptor()).
 				WithStatusSubresource(&tsapi.PeerRelay{}, &appsv1.StatefulSet{}).
-				WithInterceptorFuncs(applyPatchInterceptor())
+				WithInterceptorFuncs(reconcilertest.ApplyPatchInterceptor())
 			if tc.PeerRelay != nil {
 				builder = builder.WithObjects(tc.PeerRelay)
 			}
@@ -743,17 +1090,23 @@ func TestReconciler_Reconcile(t *testing.T) {
 				TailscaleNamespace: tailscaleNamespace,
 				ProxyImage:         testProxyImage,
 				DefaultTags:        []string{"tag:test-peer-relay"},
-				Clients:            &fakeClientProvider{client: &fakeTSClient{}},
+				Clients:            reconcilertest.NewFakeClientProvider(reconcilertest.NewFakeClient()),
 				Resolver:           testResolver,
 				Logger:             logger.Sugar(),
 			})
 
-			_, err = r.Reconcile(t.Context(), tc.Request)
+			res, err := r.Reconcile(t.Context(), tc.Request)
 			if tc.ExpectsError && err == nil {
 				t.Fatalf("expected error, got none")
 			}
 			if !tc.ExpectsError && err != nil {
 				t.Fatalf("expected no error, got %v", err)
+			}
+
+			// A ready PeerRelay is still revisited so load balancer addresses DNS publishes late are picked up,
+			// while one that is not yet ready polls more eagerly.
+			if tc.ExpectedReadyStatus == metav1.ConditionTrue && res.RequeueAfter != peerrelay.ReadyResyncInterval {
+				t.Errorf("expected ready PeerRelay to requeue after %v, got %v", peerrelay.ReadyResyncInterval, res.RequeueAfter)
 			}
 
 			var svcs corev1.ServiceList
@@ -807,7 +1160,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			}
 
 			if tc.ExpectedReadyStatus != "" || tc.ExpectedReadyReason != "" {
-				cond := readyCondition(&pr)
+				cond := reconcilertest.Condition(t, pr.Status.Conditions, tsapi.PeerRelayReady)
 				if tc.ExpectedReadyStatus != "" && cond.Status != tc.ExpectedReadyStatus {
 					t.Errorf("expected PeerRelayReady status %s, got %q", tc.ExpectedReadyStatus, cond.Status)
 				}
@@ -820,6 +1173,16 @@ func TestReconciler_Reconcile(t *testing.T) {
 			configSecrets, stateSecrets := childSecretsFromServices(tc.Request.Name, tc.ExpectedServices)
 			assertConfigSecrets(t, fc, tc.Request.Name, configSecrets)
 			assertStateSecrets(t, fc, tc.Request.Name, stateSecrets)
+
+			for name, want := range tc.ExpectedConfigs {
+				got := readTailscaledConfig(t, fc, name)
+				if got.RelayServerPort == nil || *got.RelayServerPort != want.RelayServerPort {
+					t.Errorf("config %q: expected RelayServerPort=%d, got %v", name, want.RelayServerPort, got.RelayServerPort)
+				}
+				if !slices.Equal(got.RelayServerStaticEndpoints, want.RelayServerStaticEndpoints) {
+					t.Errorf("config %q: expected RelayServerStaticEndpoints=%v, got %v", name, want.RelayServerStaticEndpoints, got.RelayServerStaticEndpoints)
+				}
+			}
 		})
 	}
 }
@@ -877,6 +1240,18 @@ func assertStatefulSet(t *testing.T, fc client.Client, prName string, want *stat
 	}) {
 		t.Errorf("expected container to declare TCP port 9002 for the health check, got ports %v", c.Ports)
 	}
+
+	// The relay server needs NET_ADMIN to force-set its UDP socket buffer sizes.
+	if !hasCapability(c, "NET_ADMIN") {
+		t.Errorf("expected container to add the NET_ADMIN capability, got security context %+v", c.SecurityContext)
+	}
+}
+
+func hasCapability(c corev1.Container, capability corev1.Capability) bool {
+	if c.SecurityContext == nil || c.SecurityContext.Capabilities == nil {
+		return false
+	}
+	return slices.Contains(c.SecurityContext.Capabilities.Add, capability)
 }
 
 func assertConfigSecrets(t *testing.T, fc client.Client, prName string, want []string) {
@@ -930,21 +1305,20 @@ func assertSecretsForType(t *testing.T, fc client.Client, prName, secretType, la
 	}
 }
 
-func readyCondition(pr *tsapi.PeerRelay) metav1.Condition {
-	for _, cond := range pr.Status.Conditions {
-		if cond.Type == string(tsapi.PeerRelayReady) {
-			return cond
-		}
-	}
-
-	return metav1.Condition{}
-}
-
 func assertService(t *testing.T, want expectedService, got *corev1.Service) {
 	t.Helper()
 
 	if want.Type != "" && got.Spec.Type != want.Type {
 		t.Errorf("Service %q: expected type %q, got %q", want.Name, want.Type, got.Spec.Type)
+	}
+
+	if want.IPFamilyPolicy != nil {
+		if got.Spec.IPFamilyPolicy == nil || *got.Spec.IPFamilyPolicy != *want.IPFamilyPolicy {
+			t.Errorf("Service %q: expected ipFamilyPolicy %v, got %v", want.Name, *want.IPFamilyPolicy, got.Spec.IPFamilyPolicy)
+		}
+	}
+	if want.IPFamilies != nil && !slices.Equal(got.Spec.IPFamilies, want.IPFamilies) {
+		t.Errorf("Service %q: expected ipFamilies %v, got %v", want.Name, want.IPFamilies, got.Spec.IPFamilies)
 	}
 
 	if want.Port != 0 || want.Protocol != "" || want.NodePort != 0 {
@@ -956,6 +1330,11 @@ func assertService(t *testing.T, want expectedService, got *corev1.Service) {
 		}
 		if want.Port != 0 && got.Spec.Ports[0].Port != want.Port {
 			t.Errorf("Service %q: expected port %d, got %d", want.Name, want.Port, got.Spec.Ports[0].Port)
+		}
+		// The externally exposed port and the port the container listens on must always be equal: the relay
+		// advertises address:port to peers, so the load balancer must forward without rewriting the port.
+		if want.Port != 0 && got.Spec.Ports[0].TargetPort.IntValue() != int(want.Port) {
+			t.Errorf("Service %q: expected targetPort %d, got %v", want.Name, want.Port, got.Spec.Ports[0].TargetPort)
 		}
 		if want.NodePort != 0 && got.Spec.Ports[0].NodePort != want.NodePort {
 			t.Errorf("Service %q: expected nodePort %d, got %d", want.Name, want.NodePort, got.Spec.Ports[0].NodePort)
@@ -1019,6 +1398,8 @@ const (
 	eipAllocationsAnnotation = "service.beta.kubernetes.io/aws-load-balancer-eip-allocations"
 	subnetsAnnotation        = "service.beta.kubernetes.io/aws-load-balancer-subnets"
 	lbAttributesAnnotation   = "service.beta.kubernetes.io/aws-load-balancer-attributes"
+	ipAddressTypeAnnotation  = "service.beta.kubernetes.io/aws-load-balancer-ip-address-type"
+	ipv6SourceNATAnnotation  = "service.beta.kubernetes.io/aws-load-balancer-enable-prefix-for-ipv6-source-nat"
 )
 
 func managedStatefulSet(prName string, replicas, ready int32) *appsv1.StatefulSet {
@@ -1075,8 +1456,7 @@ func TestReconciler_TailscaledConfig(t *testing.T) {
 		Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(2))},
 	}
 
-	fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
-		WithScheme(tsapi.GlobalScheme).
+	fc := reconcilertest.NewClientBuilder().WithInterceptorFuncs(reconcilertest.ApplyPatchInterceptor()).
 		WithStatusSubresource(&tsapi.PeerRelay{}).
 		WithObjects(
 			pr,
@@ -1091,7 +1471,7 @@ func TestReconciler_TailscaledConfig(t *testing.T) {
 		TailscaleNamespace: tailscaleNamespace,
 		ProxyImage:         testProxyImage,
 		DefaultTags:        []string{"tag:test-peer-relay"},
-		Clients:            &fakeClientProvider{client: &fakeTSClient{loginURL: testLoginURL}},
+		Clients:            reconcilertest.NewFakeClientProvider(reconcilertest.NewFakeClient(reconcilertest.WithLoginURL(testLoginURL))),
 		Resolver:           testResolver,
 		Logger:             logger.Sugar(),
 	})
@@ -1155,100 +1535,6 @@ func readTailscaledConfig(t *testing.T, fc client.Client, secretName string) ipn
 	return conf
 }
 
-func applyPatchInterceptor() interceptor.Funcs {
-	return interceptor.Funcs{
-		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-			if patch.Type() != types.ApplyPatchType {
-				return cl.Patch(ctx, obj, patch, opts...)
-			}
-
-			key := client.ObjectKeyFromObject(obj)
-			existing := obj.DeepCopyObject().(client.Object)
-			if err := cl.Get(ctx, key, existing); err != nil {
-				if !apierrors.IsNotFound(err) {
-					return err
-				}
-
-				return cl.Create(ctx, obj)
-			}
-
-			obj.SetResourceVersion(existing.GetResourceVersion())
-			return cl.Update(ctx, obj)
-		},
-	}
-}
-
-type fakeClientProvider struct {
-	client tsclient.Client
-	err    error
-}
-
-func (p *fakeClientProvider) For(_ string) (tsclient.Client, error) { return p.client, p.err }
-
-type fakeTSClient struct {
-	tsclient.Client
-
-	loginURL string
-
-	mu            sync.Mutex
-	keyCalls      []tailscaleclient.CreateKeyRequest
-	deviceDeletes []string
-	nextKey       []string
-}
-
-func (c *fakeTSClient) Keys() tsclient.KeyResource       { return (*fakeKeys)(c) }
-func (c *fakeTSClient) Devices() tsclient.DeviceResource { return (*fakeDevices)(c) }
-func (c *fakeTSClient) LoginURL() string                 { return c.loginURL }
-
-func (c *fakeTSClient) CreateAuthKeyCalls() []tailscaleclient.CreateKeyRequest {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return slices.Clone(c.keyCalls)
-}
-
-func (c *fakeTSClient) DeviceDeletes() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return slices.Clone(c.deviceDeletes)
-}
-
-type fakeKeys fakeTSClient
-
-func (k *fakeKeys) CreateAuthKey(_ context.Context, req tailscaleclient.CreateKeyRequest) (*tailscaleclient.Key, error) {
-	c := (*fakeTSClient)(k)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.keyCalls = append(c.keyCalls, req)
-
-	var key string
-	if len(c.nextKey) > 0 {
-		key, c.nextKey = c.nextKey[0], c.nextKey[1:]
-	} else {
-		key = fmt.Sprintf("auth-key-%d", len(c.keyCalls))
-	}
-	return &tailscaleclient.Key{Key: key}, nil
-}
-
-func (k *fakeKeys) List(_ context.Context, _ bool) ([]tailscaleclient.Key, error) { return nil, nil }
-
-type fakeDevices fakeTSClient
-
-func (d *fakeDevices) Delete(_ context.Context, id string) error {
-	c := (*fakeTSClient)(d)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.deviceDeletes = append(c.deviceDeletes, id)
-	return nil
-}
-
-func (d *fakeDevices) List(_ context.Context, _ ...tailscaleclient.ListDevicesOptions) ([]tailscaleclient.Device, error) {
-	return nil, nil
-}
-
-func (d *fakeDevices) Get(_ context.Context, _ string) (*tailscaleclient.Device, error) {
-	return nil, nil
-}
-
 func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 	t.Parallel()
 
@@ -1259,19 +1545,18 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 
 	t.Run("mints-key-on-first-reconcile", func(t *testing.T) {
 		pr := &tsapi.PeerRelay{ObjectMeta: metav1.ObjectMeta{Name: "test"}}
-		fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
-			WithScheme(tsapi.GlobalScheme).
+		fc := reconcilertest.NewClientBuilder().WithInterceptorFuncs(reconcilertest.ApplyPatchInterceptor()).
 			WithStatusSubresource(&tsapi.PeerRelay{}).
 			WithObjects(pr).
 			Build()
 
-		tsc := &fakeTSClient{nextKey: []string{"tskey-abc"}}
+		tsc := reconcilertest.NewFakeClient(reconcilertest.WithAuthKeys("tskey-abc"))
 		r := peerrelay.NewReconciler(peerrelay.ReconcilerOptions{
 			Client:             fc,
 			TailscaleNamespace: tailscaleNamespace,
 			ProxyImage:         testProxyImage,
 			DefaultTags:        []string{"tag:k8s-peer-relay"},
-			Clients:            &fakeClientProvider{client: tsc},
+			Clients:            reconcilertest.NewFakeClientProvider(tsc),
 			Resolver:           testResolver,
 			Logger:             logger.Sugar(),
 		})
@@ -1297,19 +1582,18 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 
 	t.Run("reuses-existing-key-across-reconciles", func(t *testing.T) {
 		pr := &tsapi.PeerRelay{ObjectMeta: metav1.ObjectMeta{Name: "test"}}
-		fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
-			WithScheme(tsapi.GlobalScheme).
+		fc := reconcilertest.NewClientBuilder().WithInterceptorFuncs(reconcilertest.ApplyPatchInterceptor()).
 			WithStatusSubresource(&tsapi.PeerRelay{}).
 			WithObjects(pr).
 			Build()
 
-		tsc := &fakeTSClient{nextKey: []string{"tskey-first", "tskey-second"}}
+		tsc := reconcilertest.NewFakeClient(reconcilertest.WithAuthKeys("tskey-first", "tskey-second"))
 		r := peerrelay.NewReconciler(peerrelay.ReconcilerOptions{
 			Client:             fc,
 			TailscaleNamespace: tailscaleNamespace,
 			ProxyImage:         testProxyImage,
 			DefaultTags:        []string{"tag:k8s-peer-relay"},
-			Clients:            &fakeClientProvider{client: tsc},
+			Clients:            reconcilertest.NewFakeClientProvider(tsc),
 			Resolver:           testResolver,
 			Logger:             logger.Sugar(),
 		})
@@ -1337,20 +1621,19 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 			Spec:       tsapi.PeerRelaySpec{Tags: tsapi.Tags{"tag:custom"}},
 		}
 
-		fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
-			WithScheme(tsapi.GlobalScheme).
+		fc := reconcilertest.NewClientBuilder().WithInterceptorFuncs(reconcilertest.ApplyPatchInterceptor()).
 			WithStatusSubresource(&tsapi.PeerRelay{}).
 			WithObjects(pr).
 			Build()
 
-		tsc := &fakeTSClient{}
+		tsc := reconcilertest.NewFakeClient()
 
 		r := peerrelay.NewReconciler(peerrelay.ReconcilerOptions{
 			Client:             fc,
 			TailscaleNamespace: tailscaleNamespace,
 			ProxyImage:         testProxyImage,
 			DefaultTags:        []string{"tag:k8s-peer-relay"},
-			Clients:            &fakeClientProvider{client: tsc},
+			Clients:            reconcilertest.NewFakeClientProvider(tsc),
 			Resolver:           testResolver,
 			Logger:             logger.Sugar(),
 		})
@@ -1405,27 +1688,40 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 				Finalizers:        []string{"tailscale.com/finalizer"},
 				DeletionTimestamp: new(metav1.Now()),
 			},
-			Spec: tsapi.PeerRelaySpec{Replicas: new(int32(2))},
+			Spec: tsapi.PeerRelaySpec{Replicas: new(int32(3))},
 		}
 
-		fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
-			WithScheme(tsapi.GlobalScheme).
+		// Replica 2 registered with control but never reported its device ID.
+		mk := key.NewMachine()
+		mkText, err := mk.MarshalText()
+		if err != nil {
+			t.Fatal(err)
+		}
+		unreported := stateSecret("test", "peerrelay-test-2", 2, "")
+		unreported.Data = map[string][]byte{string(ipn.MachineKeyStateKey): mkText}
+
+		fc := reconcilertest.NewClientBuilder().WithInterceptorFuncs(reconcilertest.ApplyPatchInterceptor()).
 			WithStatusSubresource(&tsapi.PeerRelay{}, &appsv1.StatefulSet{}).
 			WithObjects(
 				pr,
 				stateSecret("test", "peerrelay-test-0", 0, "device-aaa"),
 				stateSecret("test", "peerrelay-test-1", 1, ""), // pod never registered , no device_id
+				unreported,
 				stateSecret("other", "peerrelay-other-0", 0, "device-should-not-touch"),
 			).
 			Build()
 
-		tsc := &fakeTSClient{}
+		tsc := reconcilertest.NewFakeClient()
+		tsc.SetDevices(
+			tailscaleclient.Device{NodeID: "device-bbb", MachineKey: mk.Public().String()},
+			tailscaleclient.Device{NodeID: "device-other", MachineKey: key.NewMachine().Public().String()},
+		)
 		r := peerrelay.NewReconciler(peerrelay.ReconcilerOptions{
 			Client:             fc,
 			TailscaleNamespace: tailscaleNamespace,
 			ProxyImage:         testProxyImage,
 			DefaultTags:        []string{"tag:test-peer-relay"},
-			Clients:            &fakeClientProvider{client: tsc},
+			Clients:            reconcilertest.NewFakeClientProvider(tsc),
 			Resolver:           testResolver,
 			Logger:             logger.Sugar(),
 		})
@@ -1434,12 +1730,14 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if got, want := tsc.DeviceDeletes(), []string{"device-aaa"}; !slices.Equal(got, want) {
+		got := tsc.DeviceDeletes()
+		slices.Sort(got)
+		if want := []string{"device-aaa", "device-bbb"}; !slices.Equal(got, want) {
 			t.Errorf("expected Devices().Delete calls %v, got %v", want, got)
 		}
 
 		// Our state Secrets should be gone; the unrelated PeerRelay's state Secret should still be present.
-		for _, name := range []string{"peerrelay-test-0", "peerrelay-test-1"} {
+		for _, name := range []string{"peerrelay-test-0", "peerrelay-test-1", "peerrelay-test-2"} {
 			var s corev1.Secret
 			if err = fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: name}, &s); !apierrors.IsNotFound(err) {
 				t.Errorf("expected state Secret %q gone, got err=%v", name, err)
@@ -1457,8 +1755,7 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 			Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(1))},
 		}
 
-		fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
-			WithScheme(tsapi.GlobalScheme).
+		fc := reconcilertest.NewClientBuilder().WithInterceptorFuncs(reconcilertest.ApplyPatchInterceptor()).
 			WithStatusSubresource(&tsapi.PeerRelay{}, &appsv1.StatefulSet{}).
 			WithObjects(
 				pr,
@@ -1468,13 +1765,13 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 			).
 			Build()
 
-		tsc := &fakeTSClient{}
+		tsc := reconcilertest.NewFakeClient()
 		r := peerrelay.NewReconciler(peerrelay.ReconcilerOptions{
 			Client:             fc,
 			TailscaleNamespace: tailscaleNamespace,
 			ProxyImage:         testProxyImage,
 			DefaultTags:        []string{"tag:test-peer-relay"},
-			Clients:            &fakeClientProvider{client: tsc},
+			Clients:            reconcilertest.NewFakeClientProvider(tsc),
 			Resolver:           testResolver,
 			Logger:             logger.Sugar(),
 		})
@@ -1517,8 +1814,7 @@ func TestReconciler_TailnetUnavailable(t *testing.T) {
 		Spec:       tsapi.PeerRelaySpec{Tailnet: "missing"},
 	}
 
-	fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
-		WithScheme(tsapi.GlobalScheme).
+	fc := reconcilertest.NewClientBuilder().WithInterceptorFuncs(reconcilertest.ApplyPatchInterceptor()).
 		WithStatusSubresource(&tsapi.PeerRelay{}).
 		WithObjects(pr).
 		Build()
@@ -1528,7 +1824,7 @@ func TestReconciler_TailnetUnavailable(t *testing.T) {
 		TailscaleNamespace: tailscaleNamespace,
 		ProxyImage:         testProxyImage,
 		DefaultTags:        []string{"tag:test-peer-relay"},
-		Clients:            &fakeClientProvider{err: errors.New("tailnet missing: not ready")},
+		Clients:            reconcilertest.NewFailingClientProvider(errors.New("tailnet missing: not ready")),
 		Resolver:           testResolver,
 		Logger:             logger.Sugar(),
 	})
@@ -1542,13 +1838,10 @@ func TestReconciler_TailnetUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cond := readyCondition(&got)
-	if cond.Status != metav1.ConditionFalse {
-		t.Errorf("expected PeerRelayReady=False, got %q", cond.Status)
-	}
-	if cond.Reason != peerrelay.ReasonTailnetUnavailable {
-		t.Errorf("expected reason=%s, got %q", peerrelay.ReasonTailnetUnavailable, cond.Reason)
-	}
+	reconcilertest.ExpectConditionStatus(t, got.Status.Conditions, tsapi.PeerRelayReady,
+		metav1.ConditionFalse, peerrelay.ReasonTailnetUnavailable)
+
+	cond := reconcilertest.Condition(t, got.Status.Conditions, tsapi.PeerRelayReady)
 	if !strings.Contains(cond.Message, "not ready") {
 		t.Errorf("expected condition message to include resolver error, got %q", cond.Message)
 	}
@@ -1596,10 +1889,10 @@ func TestReconciler_AppliesProxyClass(t *testing.T) {
 				},
 			},
 		},
+		Status: readyProxyClassStatus(),
 	}
 
-	fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
-		WithScheme(tsapi.GlobalScheme).
+	fc := reconcilertest.NewClientBuilder().WithInterceptorFuncs(reconcilertest.ApplyPatchInterceptor()).
 		WithStatusSubresource(&tsapi.PeerRelay{}, &appsv1.StatefulSet{}).
 		WithObjects(pr, pc).
 		Build()
@@ -1609,7 +1902,7 @@ func TestReconciler_AppliesProxyClass(t *testing.T) {
 		TailscaleNamespace: tailscaleNamespace,
 		ProxyImage:         testProxyImage,
 		DefaultTags:        []string{"tag:test-peer-relay"},
-		Clients:            &fakeClientProvider{client: &fakeTSClient{}},
+		Clients:            reconcilertest.NewFakeClientProvider(reconcilertest.NewFakeClient()),
 		Resolver:           testResolver,
 		Logger:             logger.Sugar(),
 	})
@@ -1662,5 +1955,20 @@ func TestReconciler_AppliesProxyClass(t *testing.T) {
 
 	if !foundEnv {
 		t.Errorf("expected TS_DEBUG_FIREWALL_MODE=auto env, container env is %+v", c.Env)
+	}
+
+	// The ProxyClass does not set a security context, so the default NET_ADMIN capability must survive.
+	if !hasCapability(c, "NET_ADMIN") {
+		t.Errorf("expected container to keep the NET_ADMIN capability, got security context %+v", c.SecurityContext)
+	}
+}
+
+// readyProxyClassStatus returns a ready status; the fake client leaves Generation at 0, so ObservedGeneration is too.
+func readyProxyClassStatus() tsapi.ProxyClassStatus {
+	return tsapi.ProxyClassStatus{
+		Conditions: []metav1.Condition{{
+			Type:   string(tsapi.ProxyClassReady),
+			Status: metav1.ConditionTrue,
+		}},
 	}
 }

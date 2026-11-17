@@ -19,24 +19,42 @@ func getIPProto(network string) int {
 	return syscall.IPPROTO_IPV6
 }
 
-// connControl allows the caller to run a system call on the socket underlying
-// Conn specified by the string network, which must be "udp4" or "udp6". If the
-// pconn type implements the syscall method, this function returns the value of
-// of the system call fn called with the fd of the socket as its arg (or the
-// error from rc.Control() if that fails). Otherwise it returns the error
-// errUnsupportedConnType.
-func (c *Conn) connControl(network string, fn func(fd uintptr)) error {
-	pconn := c.pconn4.pconn
+// connControl runs the system call fn on the fds of the sockets underlying the
+// Conn specified by the string network, which must be "udp4" or "udp6".
+// See [sockopts.ControlEach] for what it returns.
+func (c *Conn) connControl(network string, fn func(fd uintptr) error) error {
+	pconn := &c.pconn4
 	if network == "udp6" {
-		pconn = c.pconn6.pconn
+		pconn = &c.pconn6
 	}
-	sc, ok := pconn.(syscall.Conn)
-	if !ok {
-		return errUnsupportedConnType
+	return pconn.controlEach(fn)
+}
+
+// setDontFragment sets or clears the don't fragment bit on the network sockets.
+// Network must be "udp4" or "udp6".
+func (c *Conn) setDontFragment(network string, enable bool) error {
+	optArg := dontFragEnabled
+	if !enable {
+		optArg = dontFragDisabled
 	}
-	rc, err := sc.SyscallConn()
-	if err != nil {
-		return err
-	}
-	return rc.Control(fn)
+	return c.connControl(network, func(fd uintptr) error {
+		return syscall.SetsockoptInt(int(fd), getIPProto(network), getDontFragOpt(network), optArg)
+	})
+}
+
+// getDontFragment reports whether the network sockets have the don't fragment bit set.
+// It reports false if any socket could not be read.
+func (c *Conn) getDontFragment(network string) (bool, error) {
+	allSet := true
+	err := c.connControl(network, func(fd uintptr) error {
+		v, err := syscall.GetsockoptInt(int(fd), getIPProto(network), getDontFragOpt(network))
+		if err != nil {
+			return err
+		}
+		if v != dontFragEnabled {
+			allSet = false
+		}
+		return nil
+	})
+	return err == nil && allSet, err
 }

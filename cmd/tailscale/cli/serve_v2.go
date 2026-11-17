@@ -407,13 +407,6 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			return errors.New("Error: --service flag is not supported with funnel")
 		}
 
-		if funnel {
-			// verify node has funnel capabilities
-			if err := e.verifyFunnelEnabled(ctx, 443); err != nil {
-				return err
-			}
-		}
-
 		if forService && !e.bg.Value {
 			return errors.New("Error: --service flag is only compatible with background mode")
 		}
@@ -460,6 +453,12 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		parentSC := sc
 
 		turnOff := len(args) > 0 && "off" == args[len(args)-1]
+		if funnel && !turnOff {
+			// Verify the node can use Funnel on the requested port.
+			if err := e.verifyFunnelEnabled(ctx, srvPort); err != nil {
+				return err
+			}
+		}
 		if !turnOff && srvType == serveTypeHTTPS {
 			// Running serve with https requires that the tailnet has enabled
 			// https cert provisioning. Send users through an interactive flow
@@ -537,6 +536,13 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		if err := e.lc.SetServeConfig(ctx, parentSC); err != nil {
 			if local.IsPreconditionsFailedError(err) {
 				fmt.Fprintln(e.stderr(), "Another client is changing the serve config; please try again.")
+			}
+			if local.IsAccessDeniedError(err) && runtime.GOOS != "windows" && (parentSC.HasPathHandler() || parentSC.IsServingUnixAny()) {
+				// RunWithContext appends advice to configure an operator to
+				// access-denied errors. That does not help here: paths and
+				// Unix sockets require root. Return a plain error with the
+				// right advice instead.
+				return fmt.Errorf("%v\n\nServing a path or Unix socket requires root. Run this command with sudo.", err)
 			}
 			return err
 		}
@@ -947,11 +953,22 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 					// map source port range 1-1 to destination port range
 					destPort := ep.DestinationPorts.First + (port - ppr.Ports.First)
 					portStr := fmt.Sprint(destPort)
-					target = fmt.Sprintf("%s://%s", ep.Protocol, net.JoinHostPort(ep.Destination, portStr))
+					scheme := ep.Protocol
+					if serveType == serveTypeTCP || serveType == serveTypeTLSTerminatedTCP {
+						// applyTCPServe accepts only tcp and unix target
+						// schemes. TLS termination is carried by the serve
+						// type, so the target uses the tcp scheme.
+						scheme = conffile.ProtoTCP
+					}
+					target = fmt.Sprintf("%s://%s", scheme, net.JoinHostPort(ep.Destination, portStr))
 				}
 				err := e.setServe(sc, name.String(), serveType, port, "/", target, false, magicDNSSuffix, nil, 0 /* proxy protocol */)
 				if err != nil {
 					return fmt.Errorf("service %q: %w", name, err)
+				}
+				// Prevent wrapping a maximal uint16 port back to zero.
+				if port == ppr.Ports.Last {
+					break
 				}
 			}
 		}

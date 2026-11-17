@@ -195,10 +195,10 @@ var invalid4RequestBuffer = []byte{
 }
 
 // Regression check for the IHL field pointing beyond the end of the
-// packet.
+// packet. The rejected offset must not be recorded in subofs.
 var invalid4RequestDecode = Parsed{
 	b:      invalid4RequestBuffer,
-	subofs: 40,
+	subofs: 0,
 	length: len(invalid4RequestBuffer),
 
 	IPVersion: 4,

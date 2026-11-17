@@ -273,6 +273,106 @@ func TestFullRebuildWhileCoarse(t *testing.T) {
 	wantOutbound(t, rm, "100.64.0.2", k2, true)
 }
 
+// TestAdvertisedCGNATRangeWhileCoarse checks that the CGNAT /10 stays
+// in the OS route set while either CGNAT coarsening or an accepted
+// subnet route for exactly that prefix still wants it. The two inputs
+// share one table entry, and the incremental path used to let the
+// subnet route's removal delete the entry out from under coarsening.
+func TestAdvertisedCGNATRangeWhileCoarse(t *testing.T) {
+	cgnat := tsaddr.CGNATRange()
+	p3 := peerView{
+		ID:        3,
+		Key:       k3,
+		SelfAddrs: []netip.Prefix{pfx("100.64.0.3/32")},
+		Routes:    []netip.Prefix{cgnat},
+	}
+	rm := New(t.Logf)
+	commit(rm, func(m *Mutation) {
+		m.SetPrefs(Prefs{RouteAll: true})
+		m.SetTailnetConfig(TailnetConfig{OneCGNAT: true})
+		m.upsertPeer(peer1())
+		m.upsertPeer(peer2())
+	})
+	wantOSRoutes(t, rm, "100.64.0.0/10", "fd7a:115c:a1e0::/48")
+
+	// Adding the advertiser while coarse changes nothing in the OS
+	// route set: the /10 is already there.
+	res := commit(rm, func(m *Mutation) { m.upsertPeer(p3) })
+	if res.OSRoutesChanged {
+		t.Errorf("adding /10 advertiser while coarse: %+v", res)
+	}
+	wantOSRoutes(t, rm, "100.64.0.0/10", "fd7a:115c:a1e0::/48")
+
+	// Removing it leaves two CGNAT peers, so coarsening stays on and
+	// the /10 must survive.
+	res = commit(rm, func(m *Mutation) { m.RemovePeer(3) })
+	if res.OSRoutesChanged {
+		t.Errorf("removing /10 advertiser while coarse: %+v", res)
+	}
+	wantOSRoutes(t, rm, "100.64.0.0/10", "fd7a:115c:a1e0::/48")
+
+	// Now the reverse: coarsening turns off while the /10 is still
+	// advertised. Only the advertiser remains, so its own /32 comes
+	// back and the /10 stays as a plain route.
+	commit(rm, func(m *Mutation) {
+		m.upsertPeer(p3)
+		m.RemovePeer(1)
+		m.RemovePeer(2)
+	})
+	if rm.coarseCGNAT {
+		t.Fatal("coarseCGNAT still set with one CGNAT peer")
+	}
+	wantOSRoutes(t, rm, "100.64.0.0/10", "100.64.0.3/32")
+
+	// Either way, the incremental result matches a fresh build.
+	fresh := New(t.Logf)
+	commit(fresh, func(m *Mutation) {
+		m.SetPrefs(Prefs{RouteAll: true})
+		m.SetTailnetConfig(TailnetConfig{OneCGNAT: true})
+		m.upsertPeer(p3)
+	})
+	if !fresh.OSRoutes().Equal(rm.OSRoutes()) {
+		t.Errorf("incremental OSRoutes = %v; fresh build = %v",
+			slices.Collect(rm.OSRoutes().All()), slices.Collect(fresh.OSRoutes().All()))
+	}
+}
+
+// TestAdvertisedULARange is the IPv6 counterpart of
+// TestAdvertisedCGNATRangeWhileCoarse: the ULA /48 is both the coarse
+// route for peers' /128s and a prefix a peer can advertise.
+func TestAdvertisedULARange(t *testing.T) {
+	ula := tsaddr.TailscaleULARange()
+	adv := peerView{
+		ID:        1,
+		Key:       k1,
+		SelfAddrs: []netip.Prefix{pfx("100.64.0.1/32")},
+		Routes:    []netip.Prefix{ula},
+	}
+	rm := New(t.Logf)
+	commit(rm, func(m *Mutation) {
+		m.SetPrefs(Prefs{RouteAll: true})
+		m.upsertPeer(adv)
+		m.upsertPeer(peer2())
+	})
+	wantOSRoutes(t, rm, "100.64.0.1/32", "100.64.0.2/32", "fd7a:115c:a1e0::/48")
+
+	// peer2 was the only peer with a ULA self address. Its removal
+	// must not take the /48 with it while adv still advertises it.
+	res := commit(rm, func(m *Mutation) { m.RemovePeer(2) })
+	if !res.OSRoutesChanged {
+		t.Errorf("removing peer2: %+v", res)
+	}
+	wantOSRoutes(t, rm, "100.64.0.1/32", "fd7a:115c:a1e0::/48")
+
+	// And removing the advertiser while a /128 peer is present must
+	// not take it either.
+	commit(rm, func(m *Mutation) {
+		m.upsertPeer(peer2())
+		m.RemovePeer(1)
+	})
+	wantOSRoutes(t, rm, "100.64.0.2/32", "fd7a:115c:a1e0::/48")
+}
+
 // TestSingleIPPlainRoute checks that a single-IP route outside the
 // CGNAT and ULA ranges is programmed individually, not coarsened.
 func TestSingleIPPlainRoute(t *testing.T) {

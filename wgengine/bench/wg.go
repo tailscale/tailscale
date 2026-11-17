@@ -60,8 +60,9 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 		Addresses:  []netip.Prefix{a2},
 	}
 	t2 := &sinkTun{
-		logf: logger.WithPrefix(logf, "tun2: "),
-		traf: traf,
+		logf:   logger.WithPrefix(logf, "tun2: "),
+		traf:   traf,
+		closed: make(chan struct{}),
 	}
 	s2 := tsd.NewSystem()
 	e2, err := wgengine.NewUserspaceEngine(l2, wgengine.Config{
@@ -92,17 +93,17 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 	e2.SetPeerByIPPacketFunc(func(dst netip.Addr) (_ key.NodePublic, ok bool) {
 		return k1pub, a1.Contains(dst)
 	})
-	e1.SetPeerConfigFunc(func(pubk key.NodePublic) (_ []netip.Prefix, ok bool) {
+	e1.SetPeerConfigFunc(func(pubk key.NodePublic) (_ wgcfg.PeerConfig, ok bool) {
 		if pubk == k2pub {
-			return []netip.Prefix{a2}, true
+			return wgcfg.PeerConfig{AllowedIPs: []netip.Prefix{a2}}, true
 		}
-		return nil, false
+		return wgcfg.PeerConfig{}, false
 	})
-	e2.SetPeerConfigFunc(func(pubk key.NodePublic) (_ []netip.Prefix, ok bool) {
+	e2.SetPeerConfigFunc(func(pubk key.NodePublic) (_ wgcfg.PeerConfig, ok bool) {
 		if pubk == k1pub {
-			return []netip.Prefix{a1}, true
+			return wgcfg.PeerConfig{AllowedIPs: []netip.Prefix{a1}}, true
 		}
-		return nil, false
+		return wgcfg.PeerConfig{}, false
 	})
 
 	var wait sync.WaitGroup
@@ -165,33 +166,39 @@ func (t *sourceTun) Write(b [][]byte, ofs int) (int, error) {
 	return len(b), nil
 }
 
-func (t *sourceTun) Read(b [][]byte, sizes []int, ofs int) (int, error) {
-	for i, b := range b {
-		// Continually generate "input" packets
-		n := t.traf.Generate(b, ofs)
-		sizes[i] = n
-		if n == 0 {
-			return 0, io.EOF
-		}
+func (t *sourceTun) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
+	// Continually generate "input" packets.
+	n := t.traf.Generate(slab, tun.ReadPacketSpacing)
+	packets[0].Size = n
+	packets[0].Offset = tun.ReadPacketSpacing
+	if n == 0 {
+		return 0, io.EOF
 	}
-	return len(b), nil
+	return 1, nil
 }
 
 type sinkTun struct {
-	logf logger.Logf
-	traf *TrafficGen
+	logf      logger.Logf
+	traf      *TrafficGen
+	closeOnce sync.Once
+	closed    chan struct{}
 }
 
-func (t *sinkTun) Close() error             { return nil }
+func (t *sinkTun) Close() error {
+	t.closeOnce.Do(func() {
+		close(t.closed)
+	})
+	return nil
+}
 func (t *sinkTun) Events() <-chan tun.Event { return nil }
 func (t *sinkTun) File() *os.File           { return nil }
 func (t *sinkTun) Flush() error             { return nil }
 func (t *sinkTun) MTU() (int, error)        { return 1500, nil }
 func (t *sinkTun) Name() (string, error)    { return "sink", nil }
 
-func (t *sinkTun) Read(b [][]byte, sizes []int, ofs int) (int, error) {
-	// Never returns
-	select {}
+func (t *sinkTun) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
+	<-t.closed
+	return 0, io.EOF
 }
 
 func (t *sinkTun) Write(b [][]byte, ofs int) (int, error) {

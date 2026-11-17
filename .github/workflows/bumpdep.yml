@@ -1,0 +1,91 @@
+name: bumpdep
+
+on:
+  # Only trigger the workflow on demand.
+  workflow_dispatch:
+    inputs:
+      deps:
+        description: >-
+          Comma-separated dependencies to bump. Special names: "go" (runs
+          ./pull-toolchain.sh), "wireguard-go", "gvisor". Anything else is a
+          Go module path, or a case-insensitive substring of one ("kernel"
+          bumps every gokrazy kernel), bumped to @latest, or to the version
+          given in a "path@version" suffix. See misc/bumpdeps.
+        required: true
+      issue:
+        description: >-
+          URL of the GitHub issue motivating this bump, e.g.
+          https://github.com/tailscale/tailscale/issues/12345. It becomes the
+          "Updates #12345" line of the commit message.
+        required: true
+      exclude-newer-than-days:
+        description: >-
+          Cooldown: ignore releases younger than this many days and use the
+          newest older one instead. 0 means take the latest.
+        required: false
+        default: "0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  bumpdep:
+    runs-on: ubuntu-latest
+    # A hung module fetch shouldn't hold the runner for the 6 hour default.
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # misc/bumpdeps does the work: it validates the inputs, resolves
+      # versions, runs go get, make tidy, and make updatedeps, and writes
+      # the PR title, branch, and commit message to $GITHUB_OUTPUT.
+      - name: Bump dependencies
+        id: bump
+        env:
+          DEPS: ${{ inputs.deps }}
+          ISSUE: ${{ inputs.issue }}
+          COOLDOWN: ${{ inputs.exclude-newer-than-days }}
+        run: ./tool/go run ./misc/bumpdeps -github -issue "$ISSUE" -exclude-newer-than-days "${COOLDOWN:-0}" -- "$DEPS"
+
+      - name: Show changes
+        run: git --no-pager diff --stat
+
+      - name: Get access token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        id: generate-token
+        with:
+          # Get token for app: https://github.com/apps/tailscale-code-updater
+          app-id: ${{ secrets.CODE_UPDATER_APP_ID }}
+          private-key: ${{ secrets.CODE_UPDATER_APP_PRIVATE_KEY }}
+          # Limit the token to only pushing a branch and opening a pull request.
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Send pull request
+        id: pull-request
+        uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 #v8.1.0
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+          author: Dep Updater <noreply+dep-updater@tailscale.com>
+          committer: Dep Updater <noreply+dep-updater@tailscale.com>
+          branch: ${{ steps.bump.outputs.branch }}
+          commit-message: ${{ steps.bump.outputs.commit-message }}
+          title: ${{ steps.bump.outputs.title }}
+          body-path: ${{ steps.bump.outputs.body-path }}
+          signoff: true
+          delete-branch: true
+          # Assign the PR to the user that triggered this action.
+          reviewers: ${{ github.triggering_actor }}
+
+      - name: Summary
+        if: ${{ steps.pull-request.outputs.pull-request-number }}
+        env:
+          PR_OPERATION: ${{ steps.pull-request.outputs.pull-request-operation }}
+          PR_URL: ${{ steps.pull-request.outputs.pull-request-url }}
+        run: echo "$PR_OPERATION $PR_URL" >> "$GITHUB_STEP_SUMMARY"

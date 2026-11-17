@@ -14,27 +14,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 
 	"tailscale.com/feature/featuretags"
 )
-
-// baseTags are the non-featuretag build tags always set for the wasm
-// build. Featuretag omits (ts_omit_*) are computed dynamically by
-// [Tags] from [Keep] using the [featuretags] registry.
-//
-// Note: nethttpomithttp2 is intentionally NOT included: control/ts2021
-// (since commit 1d93bdce2, Oct 2025) requires HTTP/2 from net/http's
-// bundled implementation. Excluding it leaves the wasm client unable
-// to negotiate with any control plane.
-var baseTags = []string{
-	"tailscale_go",
-	"osusergo",
-	"netgo",
-	"omitidna",
-	"omitpemdecrypt",
-}
 
 // Keep is the set of feature/featuretags tags the cmd/tsconnect/wasm
 // build needs LINKED. Every other feature in [featuretags.Features] is
@@ -87,7 +70,19 @@ func init() {
 // ProdLDFlags is the -ldflags value used in production wasm builds.
 // -s strips the symbol table, -w strips DWARF, both to shrink the
 // shipped artifact.
-const ProdLDFlags = "-s -w"
+//
+// It also sets the version stamps to VERSION_LONG and VERSION_SHORT,
+// if those env variables are present.
+func ProdLDFlags() string {
+	ldflags := "-s -w"
+	if long := os.Getenv("VERSION_LONG"); long != "" {
+		ldflags += " -X tailscale.com/version.longStamp=" + long
+	}
+	if short := os.Getenv("VERSION_SHORT"); short != "" {
+		ldflags += " -X tailscale.com/version.shortStamp=" + short
+	}
+	return ldflags
+}
 
 // BuildInfoFile is the basename of the JSON manifest that build-pkg
 // writes alongside main.wasm, recording the sha256 of the raw
@@ -102,31 +97,22 @@ type BuildInfo struct {
 	RawWasmSHA256 string `json:"raw_wasm_sha256"`
 }
 
-// Tags returns the joined -tags value for the wasm build: [baseTags]
-// plus a ts_omit_<feature> for every entry in [featuretags.Features]
-// that is not transitively required by [Keep].
+// Tags returns the joined -tags value for the wasm build: a
+// ts_omit_<feature> for every entry in [featuretags.Features] that is
+// not transitively required by [Keep]. No other tags are needed; the
+// tailscale_go tag is set by the github.com/tailscale/go toolchain
+// itself.
+//
+// Note: nethttpomithttp2 is intentionally NOT included: control/ts2021
+// (since commit 1d93bdce2, Oct 2025) requires HTTP/2 from net/http's
+// bundled implementation. Excluding it leaves the wasm client unable
+// to negotiate with any control plane.
 //
 // The result is sorted so that the same source tree always produces
 // the same string (and therefore the same wasm bytes, given identical
 // inputs to `go build`).
 func Tags() string {
-	keep := map[featuretags.FeatureTag]bool{}
-	for _, ft := range Keep {
-		for dep := range featuretags.Requires(ft) {
-			keep[dep] = true
-		}
-	}
-	tags := slices.Clone(baseTags)
-	for ft := range featuretags.Features {
-		if ft == "" || !ft.IsOmittable() {
-			continue
-		}
-		if !keep[ft] {
-			tags = append(tags, ft.OmitTag())
-		}
-	}
-	slices.Sort(tags)
-	return strings.Join(tags, ",")
+	return strings.Join(featuretags.MinTags(Keep...), ",")
 }
 
 // ProdCommand returns an *exec.Cmd that runs `go build` for
@@ -144,7 +130,7 @@ func ProdCommand(goBin, outputPath string) *exec.Cmd {
 	cmd := exec.Command(goBin, "build",
 		"-tags", Tags(),
 		"-trimpath",
-		"-ldflags", ProdLDFlags,
+		"-ldflags", ProdLDFlags(),
 		"-o", outputPath,
 		"tailscale.com/cmd/tsconnect/wasm",
 	)

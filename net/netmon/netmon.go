@@ -380,12 +380,10 @@ func New(bus *eventbus.Bus, logf logger.Logf) (*Monitor, error) {
 		lastWall: wallTime(),
 	}
 	m.changed = eventbus.Publish[ChangeDelta](m.b)
-	st, err := m.interfaceStateUncached()
-	if err != nil {
-		return nil, err
-	}
-	m.ifState = st
 
+	// Subscribe to OS change notifications before taking the initial
+	// snapshot, so a change between the two is queued rather than lost.
+	var err error
 	m.om, err = newOSMon(bus, logf, m)
 	if err != nil {
 		return nil, err
@@ -394,14 +392,25 @@ func New(bus *eventbus.Bus, logf logger.Logf) (*Monitor, error) {
 		return nil, errors.New("newOSMon returned nil, nil")
 	}
 
+	st, err := m.interfaceStateUncached()
+	if err != nil {
+		m.om.Close()
+		return nil, err
+	}
+	m.ifState = st
+
 	return m, nil
 }
 
 // NewStatic returns a Monitor that's a one-time snapshot of the network state
-// but doesn't actually monitor for changes. It should only be used in tests
-// and situations like cleanups or short-lived CLI programs.
+// but doesn't actually monitor for changes. It should only be used in tests,
+// situations like cleanups or short-lived CLI programs, and userspace-only
+// programs that don't need to react to network changes.
+//
+// It doesn't fail if the network state can't be read, such as in sandboxes
+// without netlink access. The snapshot is then empty.
 func NewStatic() *Monitor {
-	m := &Monitor{static: true}
+	m := &Monitor{static: true, ifState: &State{}} // callers expect non-nil
 	if st, err := m.interfaceStateUncached(); err == nil {
 		m.ifState = st
 	}

@@ -46,8 +46,8 @@ var (
 
 func getBestInterfaceEx(sockaddr *winipcfg.RawSockaddrInet, bestIfaceIndex *uint32) (ret error) {
 	r0, _, _ := syscall.SyscallN(procGetBestInterfaceEx.Addr(), uintptr(unsafe.Pointer(sockaddr)), uintptr(unsafe.Pointer(bestIfaceIndex)))
-	if r0 != 0 {
-		ret = syscall.Errno(r0)
+	if uint32(r0) != 0 {
+		ret = syscall.Errno(uint32(r0))
 	}
 	return
 }

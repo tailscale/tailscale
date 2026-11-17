@@ -19,6 +19,7 @@ import (
 	"github.com/google/nftables/expr"
 	"github.com/mdlayher/netlink"
 	"github.com/vishvananda/netns"
+	"golang.org/x/sys/unix"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
@@ -1101,6 +1102,59 @@ func TestEnsureSNATForDst_nftables(t *testing.T) {
 	mustCreateSNATRule_nft(t, runner, ip3, ip1)
 	chainRuleCount(t, "POSTROUTING", 2, conn, nftables.TableFamilyIPv4) // now two rules
 	checkSNATRule_nft(t, runner, runner.nft4.Proto, ip3, ip1)
+}
+
+func TestDNATNonTailscaleTraffic_nftables(t *testing.T) {
+	conn := newSysConn(t)
+	runner := newFakeNftablesRunnerWithConn(t, conn, true)
+
+	dst := netip.MustParseAddr("10.0.0.5")
+	if err := runner.DNATNonTailscaleTraffic("tailscale0", dst); err != nil {
+		t.Fatalf("DNATNonTailscaleTraffic() failed: %v", err)
+	}
+	chainRuleCount(t, "PREROUTING", 1, conn, nftables.TableFamilyIPv4)
+
+	chains, err := conn.ListChainsOfTableFamily(nftables.TableFamilyIPv4)
+	if err != nil {
+		t.Fatalf("error listing chains: %v", err)
+	}
+	var prerouting *nftables.Chain
+	for _, ch := range chains {
+		if ch.Name == "PREROUTING" {
+			prerouting = ch
+			break
+		}
+	}
+	if prerouting == nil {
+		t.Fatal("PREROUTING chain does not exist")
+	}
+
+	// The rule must exempt traffic that arrives on the tun interface, so that
+	// tailnet-originated packets are not DNATed towards the target and
+	// forwarded back out to the tailnet, bypassing ACLs.
+	wantsRule := &nftables.Rule{
+		Table: prerouting.Table,
+		Chain: prerouting,
+		Exprs: []expr.Any{
+			&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
+			&expr.Cmp{
+				Op:       expr.CmpOpNeq,
+				Register: 1,
+				Data:     []byte("tailscale0"),
+			},
+			&expr.Immediate{
+				Register: 1,
+				Data:     dst.AsSlice(),
+			},
+			&expr.NAT{
+				Type:       expr.NATTypeDestNAT,
+				Family:     unix.NFPROTO_IPV4,
+				RegAddrMin: 1,
+				RegAddrMax: 1,
+			},
+		},
+	}
+	checkRule(t, wantsRule, runner.conn)
 }
 
 func newFakeNftablesRunnerWithConn(t *testing.T, conn *nftables.Conn, hasIPv6 bool) *nftablesRunner {

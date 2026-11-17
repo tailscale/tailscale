@@ -89,6 +89,40 @@ func Listen(path string) (net.Listener, error) {
 	return listen(path)
 }
 
+// Windows-only implementations of ListenCurrentUser and
+// ConnectCurrentUserContext, set by pipe_windows.go. Elsewhere they are nil
+// and the functions behave like Listen and ConnectContext.
+var (
+	listenCurrentUserHook  func(path string) (net.Listener, error)
+	connectCurrentUserHook func(ctx context.Context, path string) (net.Conn, error)
+)
+
+// ListenCurrentUser is like Listen, but on Windows the named pipe is owned
+// by, and accessible only to, the user running this process, so that a
+// client can verify with ConnectCurrentUserContext that it reached a server
+// running as itself. It is for a tailscaled run by a user for their own use
+// (tailscaled --windows-mode=dev) rather than by the system. On other
+// platforms it is Listen.
+func ListenCurrentUser(path string) (net.Listener, error) {
+	if f := listenCurrentUserHook; f != nil {
+		return f(path)
+	}
+	return listen(path)
+}
+
+// ConnectCurrentUserContext is like ConnectContext, but on Windows it fails
+// if the named pipe's owner is not the user running this process. Only
+// administrators may make a pipe owned by anyone but themselves, so this
+// stops another user from standing up a pipe of the expected name and
+// impersonating the user's own tailscaled. On other platforms it is
+// ConnectContext.
+func ConnectCurrentUserContext(ctx context.Context, path string) (net.Conn, error) {
+	if f := connectCurrentUserHook; f != nil {
+		return f(ctx, path)
+	}
+	return ConnectContext(ctx, path)
+}
+
 var (
 	ErrTokenNotFound = errors.New("no token found")
 	ErrNoTokenOnOS   = errors.New("no token on " + runtime.GOOS)

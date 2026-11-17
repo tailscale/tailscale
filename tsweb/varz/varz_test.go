@@ -4,18 +4,15 @@
 package varz
 
 import (
-	"bytes"
 	"expvar"
 	"net/http/httptest"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 
 	"tailscale.com/metrics"
 	"tailscale.com/syncs"
 	"tailscale.com/tstest"
-	"tailscale.com/util/racebuild"
 	"tailscale.com/version"
 )
 
@@ -340,7 +337,7 @@ api_status_code 42
 				f(expvar.KeyValue{Key: tt.k, Value: tt.v})
 			})
 			rec := httptest.NewRecorder()
-			Handler(rec, httptest.NewRequest("GET", "/", nil))
+			ExpvarDoHandler(expvarDo)(rec, httptest.NewRequest("GET", "/", nil))
 			if got := rec.Body.Bytes(); string(got) != tt.want {
 				t.Errorf("mismatch\n got: %q\n%s\nwant: %q\n%s\n", got, got, tt.want, tt.want)
 			}
@@ -453,7 +450,7 @@ func TestVarzHandlerSorting(t *testing.T) {
 	})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/", nil)
-	Handler(rec, req)
+	ExpvarDoHandler(expvarDo)(rec, req)
 	got := rec.Body.Bytes()
 	const want = "# TYPE aa gauge\naa 0\n# TYPE zz counter\nzz 0\n"
 	if string(got) != want {
@@ -468,78 +465,6 @@ func TestVarzHandlerSorting(t *testing.T) {
 		}))
 		if max := 13; allocs > max {
 			t.Errorf("allocs = %v; want max %v", allocs, max)
-		}
-	}
-}
-
-func TestWriteMemestats(t *testing.T) {
-	memstats := &runtime.MemStats{
-		Alloc:        1,
-		TotalAlloc:   2,
-		Sys:          3,
-		Lookups:      4,
-		Mallocs:      5,
-		Frees:        6,
-		HeapAlloc:    7,
-		HeapSys:      8,
-		HeapIdle:     9,
-		HeapInuse:    10,
-		HeapReleased: 11,
-		HeapObjects:  12,
-		StackInuse:   13,
-		StackSys:     14,
-		MSpanInuse:   15,
-		MSpanSys:     16,
-		MCacheInuse:  17,
-		MCacheSys:    18,
-		BuckHashSys:  19,
-		GCSys:        20,
-		OtherSys:     21,
-		NextGC:       22,
-		LastGC:       23,
-		PauseTotalNs: 24,
-		// PauseNs:       [256]int64{},
-		NumGC:         26,
-		NumForcedGC:   27,
-		GCCPUFraction: 0.28,
-	}
-
-	var buf bytes.Buffer
-	writeMemstats(&buf, memstats)
-	lines := strings.Split(buf.String(), "\n")
-
-	checkFor := func(name, typ, value string) {
-		var foundType, foundValue bool
-		for _, line := range lines {
-			if line == "memstats_"+name+" "+value {
-				foundValue = true
-			}
-			if line == "# TYPE memstats_"+name+" "+typ {
-				foundType = true
-			}
-			if foundValue && foundType {
-				return
-			}
-		}
-		t.Errorf("memstats_%s foundType=%v foundValue=%v", name, foundType, foundValue)
-	}
-
-	t.Logf("memstats:\n %s", buf.String())
-
-	checkFor("heap_alloc", "gauge", "7")
-	checkFor("total_alloc", "counter", "2")
-	checkFor("sys", "gauge", "3")
-	checkFor("mallocs", "counter", "5")
-	checkFor("frees", "counter", "6")
-	checkFor("num_gc", "counter", "26")
-	checkFor("gc_cpu_fraction", "gauge", "0.28")
-
-	if !racebuild.On {
-		if allocs := testing.AllocsPerRun(1000, func() {
-			buf.Reset()
-			writeMemstats(&buf, memstats)
-		}); allocs != 1 {
-			t.Errorf("allocs = %v; want max %v", allocs, 1)
 		}
 	}
 }

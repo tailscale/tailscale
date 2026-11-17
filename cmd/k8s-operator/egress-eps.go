@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strings"
 
 	"go.uber.org/zap"
@@ -18,6 +19,7 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -130,6 +132,11 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 			},
 		})
 	}
+	// Endpoints must be in a deterministic order to avoid triggering unnecessary extra reconciles
+	// (see tailscale/tailscale#20916). Sort by Pod UID (Hostname), which is stable per Pod.
+	slices.SortFunc(newEndpoints, func(a, b discoveryv1.Endpoint) int {
+		return strings.Compare(ptr.Deref(a.Hostname, ""), ptr.Deref(b.Hostname, ""))
+	})
 	// Note that Endpoints are being overwritten with the currently valid endpoints so we don't need to explicitly
 	// run a cleanup for deleted Pods etc.
 	eps.Endpoints = newEndpoints

@@ -6,6 +6,8 @@
 package tailssh
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -15,6 +17,17 @@ func TestSSHKeyGen(t *testing.T) {
 	keys, err := getTailscaleHostKeys(dir, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Private host keys must be readable by the owner only: 0600, not 0700,
+	// which would allow the key directory to be walked into by others.
+	for _, typ := range keyTypes {
+		fi, err := os.Stat(filepath.Join(dir, "ssh", "ssh_host_"+typ+"_key"))
+		if err != nil {
+			t.Fatalf("stat host key: %v", err)
+		}
+		if got := fi.Mode().Perm(); got != 0600 {
+			t.Errorf("host key %s mode = %o; want 0600", typ, got)
+		}
 	}
 	got := map[string]bool{}
 	for _, k := range keys {

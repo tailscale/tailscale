@@ -148,7 +148,7 @@ func TestMonitorMode(t *testing.T) {
 		time.AfterFunc(*monitorDuration, bus.Close)
 		n := 0
 		mon.Start()
-		eventbustest.Expect(tw, func(event *ChangeDelta) (bool, error) {
+		eventbustest.Expect(tw, func(event ChangeDelta) (bool, error) {
 			n++
 			t.Logf("cb: changed=%v, ifSt=%v", event.RebindLikelyRequired, event.CurrentState())
 			return false, nil // Return false, indicating we wanna look for more events
@@ -216,6 +216,16 @@ func TestInterfaceIPDisappeared(t *testing.T) {
 				t.Fatalf("InterfaceIPDisappeared(%v) = %v; want %v", ip, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestHasIPDoesNotMatchSibling(t *testing.T) {
+	target := netip.MustParseAddr("2001:db8::1")
+	state := &State{InterfaceIPs: map[string][]netip.Prefix{
+		"eth0": {netip.PrefixFrom(netip.MustParseAddr("2001:db8::2"), 64)},
+	}}
+	if state.HasIP(target) {
+		t.Fatalf("HasIP(%v) matched a different address in the same subnet", target)
 	}
 }
 

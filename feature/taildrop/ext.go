@@ -18,9 +18,12 @@ import (
 
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/cmd/tailscaled/tailscaledhooks"
+	"tailscale.com/feature"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
+	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/ipn/localapi"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tailcfg/peercap"
@@ -32,7 +35,14 @@ import (
 )
 
 func init() {
+	if !feature.Register("taildrop") {
+		return
+	}
 	ipnext.RegisterExtension("taildrop", newExtension)
+	ipnlocal.RegisterPeerAPIHandler("/v0/put/", handlePeerPut)
+	localapi.Register("file-put/", serveFilePut)
+	localapi.Register("files/", serveFiles)
+	localapi.Register("file-targets", serveFileTargets)
 
 	if runtime.GOOS == "windows" {
 		tailscaledhooks.UninstallSystemDaemonWindows.Add(func() {

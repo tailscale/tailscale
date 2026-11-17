@@ -20,6 +20,7 @@ import (
 
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/k8s-proxy/conf"
 	"tailscale.com/kube/kubetypes"
@@ -199,7 +200,7 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 
 	// Simulate Pod prefs updated with advertised services; should see Configured condition updated to true.
 	mustUpdate(t, fc, ns, "test-pg-0", func(o *corev1.Secret) {
-		var p prefs
+		var p tailscaled.Prefs
 		if err = json.Unmarshal(o.Data["test"], &p); err != nil {
 			t.Errorf("failed to unmarshal preferences: %v", err)
 		}
@@ -264,7 +265,11 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionTrue, reasonKubeAPIServerProxyConfigured, "", 1, r.clock, r.logger)
 	pg.Status.URL = "https://" + updatedDomain
 
-	// Delete the ProxyGroup and verify Tailscale Service and cert resources are cleaned up.
+	// Delete the ProxyGroup and verify Tailscale Service and cert resources are
+	// cleaned up. Delete the state Secret first, as a Foreground delete does
+	// on older versions of the operator, so the cleanup cannot read the DNS
+	// name from it.
+	mustDeleteAll(t, fc, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "test-pg-0", Namespace: ns}})
 	if err := fc.Delete(t.Context(), pg); err != nil {
 		t.Fatalf("deleting ProxyGroup: %v", err)
 	}

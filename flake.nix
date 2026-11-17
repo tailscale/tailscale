@@ -56,7 +56,7 @@
           system = system;
           overlays = [
             (final: prev: {
-              go_1_26 = prev.go_1_26.overrideAttrs (old: {
+              go_1_27 = prev.go_1_27.overrideAttrs (old: {
                 version = goVersion;
                 src = prev.fetchFromGitHub {
                   owner = "tailscale";
@@ -100,7 +100,7 @@
     # you're an end user you should be prepared for this flake to not
     # build periodically.
     packages = eachSystem (pkgs: rec {
-      default = pkgs.buildGo126Module {
+      default = pkgs.buildGo127Module {
         name = "tailscale";
         pname = "tailscale";
         src = ./.;
@@ -121,7 +121,7 @@
         # things, but for now, we hardcode the default of port 41641 (taken from
         # ./cmd/tailscaled/tailscaled.defaults).
         postInstall =
-          pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+          pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
             wrapProgram $out/bin/tailscaled --prefix PATH : ${pkgs.lib.makeBinPath [pkgs.iproute2 pkgs.iptables pkgs.getent pkgs.shadow]}
             wrapProgram $out/bin/tailscale --suffix PATH : ${pkgs.lib.makeBinPath [pkgs.procps]}
 
@@ -153,7 +153,7 @@
           gotools
           graphviz
           perl
-          go_1_26
+          go_1_27
           yarn
 
           # qemu and e2fsprogs are needed for natlab
@@ -173,4 +173,4 @@
     });
   };
 }
-# nix-direnv cache busting line: sha256-uwo3oCFKfjRXVEx/xXT2zQrS2pYX32vhVaOAR5NsBOM=
+# nix-direnv cache busting line: sha256-RalHTs+XCjVE33hNhMKjrBeUW5LHSQjPYlRb7iIm/BA=

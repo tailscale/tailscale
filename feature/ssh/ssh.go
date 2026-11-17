@@ -7,5 +7,14 @@
 // management and the SSH server.
 package ssh
 
-// Register implementations of various SSH hooks.
-import _ "tailscale.com/ssh/tailssh"
+import (
+	"tailscale.com/feature"
+	"tailscale.com/ssh/tailssh"
+)
+
+func init() {
+	if !feature.Register("ssh") {
+		return
+	}
+	tailssh.Register()
+}

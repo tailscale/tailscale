@@ -18,7 +18,9 @@ import (
 )
 
 func init() {
-	feature.Register("tailnetlock")
+	if !feature.Register("tailnetlock") {
+		return
+	}
 	ipnlocal.RegisterC2N("/debug/tka/log", handleC2NDebugTKALog)
 }
 

@@ -6,7 +6,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"reflect"
@@ -21,18 +23,22 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"tailscale.com/client/tailscale/v2"
 
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler/proxyclass"
+	"tailscale.com/k8s-operator/reconciler/staticendpoints"
 	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/k8s-proxy/conf"
@@ -717,8 +723,8 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 								t.Fatalf("could not unmarshal config from secret data for replica %d", j)
 							}
 
-							if len(config.StaticEndpoints) > staticEndpointsMaxAddrs {
-								t.Fatalf("expected %d StaticEndpoints in config Secret, but got %d for replica %d. Found Static Endpoints: %v", staticEndpointsMaxAddrs, len(config.StaticEndpoints), j, config.StaticEndpoints)
+							if len(config.StaticEndpoints) > staticendpoints.MaxAddrs {
+								t.Fatalf("expected %d StaticEndpoints in config Secret, but got %d for replica %d. Found Static Endpoints: %v", staticendpoints.MaxAddrs, len(config.StaticEndpoints), j, config.StaticEndpoints)
 							}
 
 							for _, e := range config.StaticEndpoints {
@@ -808,7 +814,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 	}
 }
 
-// TestFindStaticEndpointsStableOrder verifies that findStaticEndpoints returns
+// TestFindStaticEndpointsStableOrder verifies that staticendpoints.FindEndpoints returns
 // the existing endpoint order from the config Secret when the resulting set of
 // addresses is unchanged. nodes.Items from r.List is not order-stable across
 // calls, so without this guarantee the slice can permute on each reconcile,
@@ -835,7 +841,7 @@ func TestFindStaticEndpointsStableOrder(t *testing.T) {
 
 	// Existing config Secret already pins the order [B, A]. The fake client
 	// lists nodes in name order ([node-a, node-b]) so without the stable-order
-	// guard findStaticEndpoints would return [A, B], differing from currAddrs
+	// guard FindEndpoints would return [A, B], differing from currAddrs
 	// and causing a spurious Secret rewrite.
 	currAddrs := []netip.AddrPort{
 		netip.MustParseAddrPort(addrB + ":30001"),
@@ -872,23 +878,22 @@ func TestFindStaticEndpointsStableOrder(t *testing.T) {
 		Build()
 
 	zl, _ := zap.NewDevelopment()
-	r := &ProxyGroupReconciler{Client: fc}
 
-	got, err := r.findStaticEndpoints(t.Context(), existingSecret, pc, port, zl.Sugar())
+	got, err := staticendpoints.FindEndpoints(t.Context(), fc, staticEndpointsFromConfigSecret(existingSecret, zl.Sugar()), pc, port, zl.Sugar())
 	if err != nil {
-		t.Fatalf("findStaticEndpoints: %v", err)
+		t.Fatalf("FindEndpoints: %v", err)
 	}
 	if !slices.Equal(got, currAddrs) {
-		t.Errorf("findStaticEndpoints returned %v, want %v (order must match currAddrs to avoid reconcile churn)", got, currAddrs)
+		t.Errorf("FindEndpoints returned %v, want %v (order must match currAddrs to avoid reconcile churn)", got, currAddrs)
 	}
 
 	// Repeat to confirm the result is stable across calls.
-	got2, err := r.findStaticEndpoints(t.Context(), existingSecret, pc, port, zl.Sugar())
+	got2, err := staticendpoints.FindEndpoints(t.Context(), fc, staticEndpointsFromConfigSecret(existingSecret, zl.Sugar()), pc, port, zl.Sugar())
 	if err != nil {
-		t.Fatalf("findStaticEndpoints (2nd call): %v", err)
+		t.Fatalf("FindEndpoints (2nd call): %v", err)
 	}
 	if !slices.Equal(got, got2) {
-		t.Errorf("findStaticEndpoints not stable across calls: first=%v second=%v", got, got2)
+		t.Errorf("FindEndpoints not stable across calls: first=%v second=%v", got, got2)
 	}
 }
 
@@ -938,7 +943,7 @@ func TestProxyGroup(t *testing.T) {
 		reissuer: tailscaled.NewReissuer(),
 	}
 
-	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}
+	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: tailscaled.ServiceMonitorCRD}}
 	opts := configOpts{
 		proxyType:          "proxygroup",
 		stsName:            pg.Name,
@@ -1051,6 +1056,7 @@ func TestProxyGroup(t *testing.T) {
 	})
 
 	t.Run("scale_down_to_1", func(t *testing.T) {
+		setUnreportedDevice(t, fc, tsClient, pgStateSecretName(pg.Name, 2), "unreported-2")
 		pg.Spec.Replicas = new(int32(1))
 		mustUpdate(t, fc, "", pg.Name, func(p *tsapi.ProxyGroup) {
 			p.Spec = pg.Spec
@@ -1086,6 +1092,7 @@ func TestProxyGroup(t *testing.T) {
 	})
 
 	t.Run("delete_and_cleanup", func(t *testing.T) {
+		setUnreportedDevice(t, fc, tsClient, pgStateSecretName(pg.Name, 0), "unreported-0")
 		if err := fc.Delete(t.Context(), pg); err != nil {
 			t.Fatal(err)
 		}
@@ -1098,13 +1105,118 @@ func TestProxyGroup(t *testing.T) {
 		}
 		// 2 nodes should get deleted as part of the scale down, and then finally
 		// the first node gets deleted with the ProxyGroup cleanup.
-		if diff := cmp.Diff(tsClient.deleted, []string{"nodeid-1", "nodeid-2", "nodeid-0"}); diff != "" {
+		if diff := cmp.Diff(tsClient.deleted, []string{"nodeid-1", "unreported-2", "unreported-0"}); diff != "" {
 			t.Fatalf("unexpected deleted devices (-got +want):\n%s", diff)
 		}
-		expectMissing[corev1.Service](t, reconciler, "tailscale", metricsResourceName(pg.Name))
+		expectMissing[corev1.Service](t, reconciler, "tailscale", tailscaled.MetricsResourceName(pg.Name))
 		// The fake client does not clean up objects whose owner has been
 		// deleted, so we can't test for the owned resources getting deleted.
 	})
+}
+
+// TestProxyGroupDeleteStateSecrets checks that the state Secrets have no owner
+// reference, also when an older operator created them, and that the ProxyGroup
+// cleanup deletes them.
+func TestProxyGroupDeleteStateSecrets(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		pgType     tsapi.ProxyGroupType
+		proxyClass string
+	}{
+		{
+			name:   "egress",
+			pgType: tsapi.ProxyGroupTypeEgress,
+		},
+		{
+			name:   "kube_apiserver",
+			pgType: tsapi.ProxyGroupTypeKubernetesAPIServer,
+		},
+		{
+			// The reconcile stops at the missing ProxyClass, but it
+			// must still remove the old owner reference.
+			name:       "proxyclass_missing",
+			pgType:     tsapi.ProxyGroupTypeEgress,
+			proxyClass: "missing",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pg := &tsapi.ProxyGroup{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "test",
+					UID:        "test-uid",
+					Finalizers: []string{FinalizerName},
+				},
+				Spec: tsapi.ProxyGroupSpec{
+					Type:       tc.pgType,
+					Replicas:   new(int32(2)),
+					ProxyClass: tc.proxyClass,
+				},
+			}
+			if tc.pgType == tsapi.ProxyGroupTypeKubernetesAPIServer {
+				pg.Spec.KubeAPIServer = &tsapi.KubeAPIServerConfig{
+					Mode: new(tsapi.APIServerProxyModeNoAuth),
+				}
+			}
+			// A state Secret created by an older version of the operator,
+			// with an owner reference.
+			oldStateSecret := pgStateSecrets(pg, tsNamespace)[0]
+			oldStateSecret.OwnerReferences = pgOwnerReference(pg)
+
+			fc := fake.NewClientBuilder().
+				WithScheme(tsapi.GlobalScheme).
+				WithObjects(pg, oldStateSecret).
+				WithStatusSubresource(pg).
+				Build()
+			tsClient := &fakeTSClient{}
+			zl, _ := zap.NewDevelopment()
+			reconciler := &ProxyGroupReconciler{
+				tsNamespace:    tsNamespace,
+				tsProxyImage:   testProxyImage,
+				k8sProxyImage:  "tailscale/k8s-proxy:test",
+				defaultTags:    []string{"tag:test-tag"},
+				tsFirewallMode: "auto",
+
+				Client:   fc,
+				clients:  tsclient.NewProvider(tsClient),
+				recorder: record.NewFakeRecorder(10),
+				log:      zl.Sugar(),
+				clock:    tstest.NewClock(tstest.ClockOpts{}),
+				reissuer: tailscaled.NewReissuer(),
+			}
+
+			expectReconciled(t, reconciler, "", pg.Name)
+			var secrets corev1.SecretList
+			if err := fc.List(t.Context(), &secrets, client.InNamespace(tsNamespace), client.MatchingLabels(pgSecretLabels(pg.Name, kubetypes.LabelSecretTypeState))); err != nil {
+				t.Fatal(err)
+			}
+			if len(secrets.Items) != 2 {
+				t.Fatalf("got %d state Secrets, want 2", len(secrets.Items))
+			}
+			for _, s := range secrets.Items {
+				if len(s.OwnerReferences) != 0 {
+					t.Errorf("state Secret %s has owner references %v, want none", s.Name, s.OwnerReferences)
+				}
+			}
+
+			addNodeIDToStateSecrets(t, fc, pg)
+			if err := fc.Delete(t.Context(), pg); err != nil {
+				t.Fatal(err)
+			}
+
+			expectReconciled(t, reconciler, "", pg.Name)
+			expectMissing[tsapi.ProxyGroup](t, fc, "", pg.Name)
+			if diff := cmp.Diff(tsClient.deleted, []string{"nodeid-0", "nodeid-1"}); diff != "" {
+				t.Fatalf("unexpected deleted devices (-got +want):\n%s", diff)
+			}
+			// The config Secrets have an owner reference, and the fake
+			// client does not garbage collect them.
+			var wantSecrets []string
+			if tc.proxyClass == "" {
+				wantSecrets = []string{"test-0-config", "test-1-config"}
+			}
+			expectSecrets(t, fc, wantSecrets)
+		})
+	}
 }
 
 func TestProxyGroupTypes(t *testing.T) {
@@ -1566,7 +1678,7 @@ func TestKubeAPIServerType_DoesNotOverwriteServicesConfig(t *testing.T) {
 			AuthKey:  new("new-authkey"),
 			State:    new(fmt.Sprintf("kube:%s", pgPodName(pg.Name, 0))),
 			App:      new(kubetypes.AppProxyGroupKubeAPIServer),
-			LogLevel: new("debug"),
+			LogLevel: new("info"), // not the reconciler logger's debug
 
 			Hostname: new("test-k8s-apiserver-0"),
 			APIServerProxy: &conf.APIServerProxyConfig{
@@ -2133,13 +2245,13 @@ func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.Prox
 		expectMissing[appsv1.StatefulSet](t, fc, statefulSet.Namespace, statefulSet.Name)
 	}
 
+	// The state Secrets are created before the ProxyClass is checked, so
+	// they exist even when the other resources do not.
 	var expectedSecrets []string
-	if shouldExist {
-		for i := range pgReplicas(pg) {
-			expectedSecrets = append(expectedSecrets,
-				fmt.Sprintf("%s-%d", pg.Name, i),
-				pgConfigSecretName(pg.Name, i),
-			)
+	for i := range pgReplicas(pg) {
+		expectedSecrets = append(expectedSecrets, fmt.Sprintf("%s-%d", pg.Name, i))
+		if shouldExist {
+			expectedSecrets = append(expectedSecrets, pgConfigSecretName(pg.Name, i))
 		}
 	}
 	expectSecrets(t, fc, expectedSecrets)
@@ -2189,10 +2301,10 @@ func addNodeIDToStateSecrets(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyG
 		}
 		mustUpdate(t, fc, tsNamespace, pgStateSecretName(pg.Name, i), func(s *corev1.Secret) {
 			s.Data = map[string][]byte{
-				currentProfileKey:       []byte(key),
-				key:                     bytes,
-				kubetypes.KeyDeviceIPs:  []byte(`["1.2.3.4", "::1"]`),
-				kubetypes.KeyDeviceFQDN: fmt.Appendf(nil, "hostname-nodeid-%d.tails-scales.ts.net", i),
+				string(ipn.CurrentProfileStateKey): []byte(key),
+				key:                                bytes,
+				kubetypes.KeyDeviceIPs:             []byte(`["1.2.3.4", "::1"]`),
+				kubetypes.KeyDeviceFQDN:            fmt.Appendf(nil, "hostname-nodeid-%d.tails-scales.ts.net", i),
 				// TODO(tomhjp): We have two different mechanisms to retrieve device IDs.
 				// Consolidate on this one.
 				kubetypes.KeyDeviceID: fmt.Appendf(nil, "nodeid-%d", i),
@@ -2341,5 +2453,57 @@ func testCasesForLEStagingTests() []leStagingTestCase {
 			defaultProxyClass:     "le-staging-false",
 			useLEStagingEndpoint:  false,
 		},
+	}
+}
+
+func TestProxyGroupOptimisticLockErrorRequeues(t *testing.T) {
+	pg := &tsapi.ProxyGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test",
+			Finalizers: []string{"tailscale.com/finalizer"},
+			Generation: 1,
+		},
+		Spec: tsapi.ProxyGroupSpec{
+			Type: tsapi.ProxyGroupTypeEgress,
+		},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(pg).
+		WithStatusSubresource(pg).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if _, ok := obj.(*appsv1.StatefulSet); ok {
+					return apierrors.NewConflict(schema.GroupResource{Group: "apps", Resource: "statefulsets"}, obj.GetName(), errors.New(optimisticLockErrorMsg))
+				}
+				return c.Create(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	fr := record.NewFakeRecorder(1)
+	r := &ProxyGroupReconciler{
+		tsNamespace:    tsNamespace,
+		tsProxyImage:   testProxyImage,
+		defaultTags:    []string{"tag:test-tag"},
+		tsFirewallMode: "auto",
+		Client:         fc,
+		clients:        tsclient.NewProvider(&fakeTSClient{}),
+		recorder:       fr,
+		log:            zap.NewNop().Sugar(),
+		clock:          tstest.NewClock(tstest.ClockOpts{}),
+		reissuer:       tailscaled.NewReissuer(),
+	}
+
+	expectRequeue(t, r, "", pg.Name)
+
+	if err := fc.Get(t.Context(), client.ObjectKeyFromObject(pg), pg); err != nil {
+		t.Fatalf("getting ProxyGroup: %v", err)
+	}
+	cond := apimeta.FindStatusCondition(pg.Status.Conditions, string(tsapi.ProxyGroupReady))
+	if cond == nil || cond.Reason != reasonProxyGroupCreating || cond.Message != "ProxyGroup resources are being updated, retrying" {
+		t.Errorf("ProxyGroupReady condition = %+v, want reason %q and the retrying message", cond, reasonProxyGroupCreating)
+	}
+	if len(fr.Events) != 0 {
+		t.Errorf("got %d events, want none", len(fr.Events))
 	}
 }

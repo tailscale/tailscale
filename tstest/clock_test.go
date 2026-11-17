@@ -655,6 +655,32 @@ func TestSingleTicker(t *testing.T) {
 			},
 		},
 		{
+			// A large advance drops ticks that don't fit in the channel,
+			// but later ticks must stay aligned to the original schedule.
+			name:        "dropped-ticks-remain-aligned",
+			start:       time.Unix(12345, 0),
+			period:      time.Second,
+			channelSize: 1,
+			steps: []testStep{
+				{
+					advance:  5 * time.Second,
+					wantTime: time.Unix(12350, 0),
+					wantTicks: []time.Time{
+						time.Unix(12346, 0),
+						// Remaining ticks dropped due to channel size.
+					},
+				},
+				{
+					advance:  2 * time.Second,
+					wantTime: time.Unix(12352, 0),
+					wantTicks: []time.Time{
+						time.Unix(12351, 0),
+						// Second tick dropped due to channel size.
+					},
+				},
+			},
+		},
+		{
 			name:        "multiple-tick-per-step",
 			start:       time.Unix(12345, 0),
 			step:        3 * time.Second,
@@ -2470,5 +2496,20 @@ func TestSince(t *testing.T) {
 				t.Errorf("Since duration %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// BenchmarkTickerLargeAdvance measures advancing the clock far past a
+// short-period ticker's next trigger, as happens when a test using an
+// injected clock jumps days into the future while background loops hold
+// tickers with periods of a few seconds. Most of the intermediate ticks
+// are dropped because the channel is full, so they should be cheap.
+func BenchmarkTickerLargeAdvance(b *testing.B) {
+	clock := NewClock(ClockOpts{Start: time.Unix(12345, 0)})
+	tick, _ := clock.NewTicker(5 * time.Second)
+	defer tick.Stop()
+	b.ReportAllocs()
+	for b.Loop() {
+		clock.Advance(24 * time.Hour)
 	}
 }

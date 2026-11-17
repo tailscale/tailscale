@@ -107,6 +107,16 @@ func TestPacketSideEffects(t *testing.T) {
 					),
 				},
 				{
+					// An upstream rcode, for tests that need one. The answer
+					// section stays empty.
+					name: "split-dns-refuses-refused-name",
+					pkt:  mkDNSReqTo(FakeSplitDNSIPv4(), SplitDNSRefusedName),
+					check: all(
+						numPkts(1),
+						pktSubstr("ResponseCode=Query Refused"),
+					),
+				},
+				{
 					// The default DNS server must NOT answer the split zone;
 					// that's what makes the answer above meaningful.
 					name: "default-dns-does-not-answer-split-zone",
@@ -495,6 +505,37 @@ func newSideEffects(s *Server) *sideEffects {
 
 func (se *sideEffects) logf(format string, args ...any) {
 	se.logs = append(se.logs, fmt.Sprintf(format, args...))
+}
+
+// sendUDPToRouter sends payload from node 1 to the router's LAN IP on dstPort
+// and returns the payload of the router's reply.
+func sendUDPToRouter(t *testing.T, s *Server, dstPort uint16, payload []byte) []byte {
+	t.Helper()
+	se := newSideEffects(s)
+	routerIP := s.nodes[0].net.lanIP4.Addr()
+	eth := &layers.Ethernet{SrcMAC: nodeMac(1).HWAddr(), DstMAC: routerMac(1).HWAddr()}
+	ip := mkIPLayer(layers.IPProtocolUDP, clientIPv4(1), routerIP)
+	udp := &layers.UDP{SrcPort: 40000, DstPort: layers.UDPPort(dstPort)}
+	if err := s.handleEthernetFrameFromVM(mustPacket(eth, ip, udp, gopacket.Payload(payload))); err != nil {
+		t.Fatal(err)
+	}
+	if len(se.got) != 1 {
+		t.Fatalf("got %d reply packets, want 1; logs:\n%s", len(se.got), strings.Join(se.logs, "\n"))
+	}
+	pkt := gopacket.NewPacket(se.got[0].eth, layers.LayerTypeEthernet, gopacket.Default)
+	ip4, _ := pkt.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+	res, _ := pkt.Layer(layers.LayerTypeUDP).(*layers.UDP)
+	if ip4 == nil || res == nil {
+		t.Fatalf("reply is not IPv4/UDP:\n%v", pkt)
+	}
+	if src, _ := netip.AddrFromSlice(ip4.SrcIP); src != routerIP || uint16(res.SrcPort) != dstPort {
+		// The client drops replies that don't come from the gateway's port.
+		t.Errorf("reply from %v:%d, want %v:%d", src, res.SrcPort, routerIP, dstPort)
+	}
+	if dst, _ := netip.AddrFromSlice(ip4.DstIP); dst != clientIPv4(1) || res.DstPort != udp.SrcPort {
+		t.Errorf("reply to %v:%d, want %v:%d", dst, res.DstPort, clientIPv4(1), udp.SrcPort)
+	}
+	return res.Payload
 }
 
 // all aggregates several side effects checkers into one.

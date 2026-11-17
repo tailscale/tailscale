@@ -16,6 +16,9 @@ import (
 )
 
 func init() {
+	if !feature.Register("sdnotify") {
+		return
+	}
 	feature.HookSystemdReady.Set(ready)
 	feature.HookSystemdStatus.Set(status)
 }

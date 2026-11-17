@@ -39,11 +39,6 @@ import (
 	"tailscale.com/wgengine/filter"
 )
 
-type responseWithSource struct {
-	response *tailcfg.MapResponse
-	viaTSMP  bool
-}
-
 // mapSession holds the state over a long-polled "map" request to the
 // control plane.
 //
@@ -103,10 +98,6 @@ type mapSession struct {
 	lastPopBrowserURL      string
 	lastTKAInfo            *tailcfg.TKAInfo
 	lastNetmapSummary      string // from NetworkMap.VeryConcise
-	cqmu                   sync.Mutex
-	changeQueue            chan responseWithSource
-	changeQueueClosed      bool
-	processQueue           sync.WaitGroup
 
 	// mu protects the peers map.
 	peersMu sync.RWMutex
@@ -133,46 +124,9 @@ func newMapSession(privateNodeKey key.NodePrivate, nu NetmapUpdater, controlKnob
 		cancel:            func() {},
 		onDebug:           func(context.Context, *tailcfg.Debug) error { return nil },
 		onSelfNodeChanged: func(*netmap.NetworkMap) {},
-		changeQueue:       make(chan responseWithSource),
-		changeQueueClosed: false,
 	}
 	ms.sessionAliveCtx, ms.sessionAliveCtxClose = context.WithCancel(context.Background())
-	ms.processQueue.Add(1)
-	go ms.run()
 	return ms
-}
-
-// run starts the mapSession processing a queue of tailcfg.MapResponse one by
-// one until close() is called on the mapSession.
-// When the mapSession is closed, the remaining queue is locked and processed
-// before the mapSession is done processing.
-func (ms *mapSession) run() {
-	defer ms.processQueue.Done()
-
-	for {
-		select {
-		case change := <-ms.changeQueue:
-			ms.handleNonKeepAliveMapResponse(ms.sessionAliveCtx, change.response, change.viaTSMP)
-		case <-ms.sessionAliveCtx.Done():
-			// Drain any remaining items in the queue before exiting.
-			// Lock the queue during this time to avoid updates through other channels
-			// to be overwritten. This is especially relevant for calls to
-			// updateDiscoForNode.
-			ms.cqmu.Lock()
-			ms.changeQueueClosed = true
-			ms.cqmu.Unlock()
-			for {
-				select {
-				case change := <-ms.changeQueue:
-					ms.handleNonKeepAliveMapResponse(ms.sessionAliveCtx, change.response, change.viaTSMP)
-				default:
-					// Queue is empty, close it and exit
-					close(ms.changeQueue)
-					return
-				}
-			}
-		}
-	}
 }
 
 // occasionallyPrintSummary logs summary at most once very 5 minutes. The
@@ -195,40 +149,9 @@ func (ms *mapSession) clock() tstime.Clock {
 
 func (ms *mapSession) Close() {
 	ms.sessionAliveCtxClose()
-	ms.processQueue.Wait()
 }
 
 var ErrChangeQueueClosed = errors.New("change queue closed")
-
-func (ms *mapSession) updateDiscoForNode(id tailcfg.NodeID, key key.NodePublic, discoKey key.DiscoPublic, lastSeen time.Time, online bool) error {
-	if discoKey.IsZero() {
-		ms.logf("[v1] controlclient: received zero disco key update from nodeID %v", id)
-		return nil
-	}
-
-	ms.cqmu.Lock()
-
-	if ms.changeQueueClosed {
-		ms.cqmu.Unlock()
-		ms.processQueue.Wait()
-		return ErrChangeQueueClosed
-	}
-	defer ms.cqmu.Unlock()
-
-	resp := responseWithSource{
-		response: &tailcfg.MapResponse{
-			PeersChangedPatch: []*tailcfg.PeerChange{{
-				NodeID:   id,
-				Key:      &key,
-				LastSeen: &lastSeen,
-				Online:   &online,
-				DiscoKey: &discoKey,
-			}},
-		},
-		viaTSMP: true,
-	}
-	return ms.addRespToQueue(resp)
-}
 
 // HandleNonKeepAliveMapResponse handles a non-KeepAlive MapResponse (full or
 // incremental).
@@ -238,49 +161,15 @@ func (ms *mapSession) updateDiscoForNode(id tailcfg.NodeID, key key.NodePublic, 
 //
 // Debug messages are handled first, followed by pushing the response onto a
 // queue for new updates handled sequentially.
+//
+// TODO(bradfitz): make this handle all fields later. For now (2023-08-20) this
+// is [re]factoring progress enough.
 func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *tailcfg.MapResponse) error {
 	if debug := resp.Debug; debug != nil {
 		if err := ms.onDebug(ctx, debug); err != nil {
 			return err
 		}
 	}
-
-	ms.cqmu.Lock()
-
-	if ms.changeQueueClosed {
-		ms.cqmu.Unlock()
-		ms.processQueue.Wait()
-		return ErrChangeQueueClosed
-	}
-
-	defer ms.cqmu.Unlock()
-
-	change := responseWithSource{
-		response: resp,
-		viaTSMP:  false,
-	}
-
-	return ms.addRespToQueue(change)
-}
-
-func (ms *mapSession) addRespToQueue(resp responseWithSource) error {
-	select {
-	case ms.changeQueue <- resp:
-		return nil
-	case <-ms.sessionAliveCtx.Done():
-		return ErrChangeQueueClosed
-	}
-}
-
-// handleNonKeepAliveMapResponse handles a non-KeepAlive MapResponse (full or
-// incremental).
-//
-// All fields that are valid on a KeepAlive MapResponse have already been
-// handled.
-//
-// TODO(bradfitz): make this handle all fields later. For now (2023-08-20) this
-// is [re]factoring progress enough.
-func (ms *mapSession) handleNonKeepAliveMapResponse(ctx context.Context, resp *tailcfg.MapResponse, viaTSMP bool) error {
 	if DevKnob.StripEndpoints() {
 		for _, p := range resp.Peers {
 			p.Endpoints = nil
@@ -320,22 +209,7 @@ func (ms *mapSession) handleNonKeepAliveMapResponse(ctx context.Context, resp *t
 
 	ms.patchifyPeersChanged(resp)
 
-	ms.removeUnwantedDiscoUpdates(resp, viaTSMP)
-
-	// TSMP learned key was rejected, no need to do any more work in the engine.
-	if viaTSMP && len(resp.PeersChangedPatch) == 0 {
-		return nil
-	}
-	ms.removeUnwantedDiscoUpdatesFromFullNetmapUpdate(resp)
-
 	ms.updateStateFromResponse(resp)
-
-	// If source was learned via TSMP, the updated disco key need to be marked in
-	// userspaceEngine as an update that should not reconfigure the wireguard
-	// connection.
-	if viaTSMP {
-		ms.tryMarkDiscoAsLearnedFromTSMP(resp)
-	}
 
 	if ms.tryHandleIncrementally(resp) {
 		metricMapResponseHandledIncrementally.Add(1)
@@ -367,21 +241,6 @@ func (ms *mapSession) handleNonKeepAliveMapResponse(ctx context.Context, resp *t
 	return nil
 }
 
-func (ms *mapSession) tryMarkDiscoAsLearnedFromTSMP(res *tailcfg.MapResponse) {
-	dun, ok := ms.netmapUpdater.(DiscoKeyUpdater)
-	if !ok {
-		return
-	}
-
-	// In reality we should never really have more than one change here over TSMP.
-	for _, change := range res.PeersChangedPatch {
-		if change == nil || change.DiscoKey == nil || change.Key == nil {
-			continue
-		}
-		dun.PatchDiscoKey(*change.Key, *change.DiscoKey)
-	}
-}
-
 // upgradeNode upgrades Node fields from the server into the modern forms
 // not using deprecated fields.
 func upgradeNode(n *tailcfg.Node) {
@@ -394,7 +253,7 @@ func upgradeNode(n *tailcfg.Node) {
 			if ip == tailcfg.DerpMagicIP && err == nil {
 				port, err := strconv.Atoi(portStr)
 				if err == nil {
-					n.HomeDERP = port
+					n.HomeDERP = tailcfg.DERPRegionID(port)
 				}
 			}
 		}
@@ -438,28 +297,55 @@ func (ms *mapSession) tryHandleIncrementally(res *tailcfg.MapResponse) bool {
 			return false
 		}
 	}
-	// Same shape for UserProfiles: deliver any new/updated profiles before
-	// the peer mutations that may reference them, so bus consumers never
-	// see a UserID for which a profile hasn't been published. The values
-	// are read from ms.lastUserProfile (just populated by
+	mutations, mutationsOK := netmap.MutationsFromMapResponse(res, time.Now())
+
+	// Same shape for UserProfiles: deliver profiles before the peer
+	// mutations that may reference them, so bus consumers never see a
+	// UserID for which a profile hasn't been published.
+	//
+	// Besides the new/updated profiles carried by the response, also
+	// replay the profiles of upserted peers' users from
+	// ms.lastUserProfile. A full netmap keeps only the profiles of users
+	// with a currently visible peer (see [mapSession.addUserProfile]), so
+	// a peer returning via delta upsert can reference a user the updater
+	// has since dropped, and control (mapver 5+) does not resend
+	// unchanged profiles. Without the replay, WhoIs on the returned peer
+	// fails at the user profile lookup until the next full netmap.
+	//
+	// The values are read from ms.lastUserProfile (just populated by
 	// updateStateFromResponse) so views are shared with mapSession's
 	// store; downstream consumers can use [UserProfileView.Equal] for
 	// dedup without copying.
-	if len(res.UserProfiles) > 0 {
+	var profiles map[tailcfg.UserID]tailcfg.UserProfileView
+	addProfile := func(id tailcfg.UserID) {
+		if id == 0 {
+			return
+		}
+		if up, ok := ms.lastUserProfile[id]; ok {
+			mak.Set(&profiles, id, up)
+		}
+	}
+	for _, up := range res.UserProfiles {
+		addProfile(up.ID)
+	}
+	if mutationsOK {
+		for _, m := range mutations {
+			if up, ok := m.(netmap.NodeMutationUpsert); ok {
+				addProfile(up.Node.User())
+				addProfile(up.Node.Sharer())
+			}
+		}
+	}
+	if len(profiles) > 0 {
 		upu, ok := ms.netmapUpdater.(UserProfileUpdater)
 		if !ok {
 			return false
-		}
-		profiles := make(map[tailcfg.UserID]tailcfg.UserProfileView, len(res.UserProfiles))
-		for _, up := range res.UserProfiles {
-			profiles[up.ID] = ms.lastUserProfile[up.ID]
 		}
 		if !upu.UpdateUserProfiles(profiles) {
 			return false
 		}
 	}
-	mutations, ok := netmap.MutationsFromMapResponse(res, time.Now())
-	if !ok {
+	if !mutationsOK {
 		return false
 	}
 	if len(mutations) > 0 {
@@ -476,125 +362,6 @@ type updateStats struct {
 	added   int
 	removed int
 	changed int
-}
-
-// removeUnwantedDiscoUpdates goes over the patchified updates and reject items
-// where the node is offline and has last been seen before the recorded last seen.
-func (ms *mapSession) removeUnwantedDiscoUpdates(resp *tailcfg.MapResponse, viaTSMP bool) {
-	ms.peersMu.RLock()
-	defer ms.peersMu.RUnlock()
-
-	acceptedDiscoUpdates := resp.PeersChangedPatch[:0]
-
-	for _, change := range resp.PeersChangedPatch {
-		// Accept if:
-		// - DiscoKey is nil and did not change.
-		// - Fields we rely on for rejection is missing.
-		if change.DiscoKey == nil || change.Online == nil || change.LastSeen == nil {
-			acceptedDiscoUpdates = append(acceptedDiscoUpdates, change)
-			continue
-		}
-
-		existingNode, ok := ms.peers[change.NodeID]
-		// Accept if:
-		// - Cannot find the peer, don't have enough data.
-		if !ok {
-			acceptedDiscoUpdates = append(acceptedDiscoUpdates, change)
-			continue
-		}
-
-		// Reject if:
-		// - key was learned via tsmp AND,
-		// - existing node is online AND,
-		// - key did not change.
-		// Here to avoid a deeper reconfig in the case where we get a TSMP key
-		// exchange while that node is already in a connected state (from the view
-		// of the control plane). This is meant to keep the node stable, avoiding a
-		// reconfiguration of the node deeper down in the engine.
-		// With this, we are avoiding updating the LastSeen and Online fields from
-		// TSMP updates when that is not relevant, overall making the connection
-		// state change less, and updating the engine less.
-		if viaTSMP && existingNode.Online().Get() &&
-			*change.DiscoKey == existingNode.DiscoKey() {
-			continue
-		}
-
-		// Accept if:
-		// - Node is online.
-		if *change.Online {
-			acceptedDiscoUpdates = append(acceptedDiscoUpdates, change)
-			continue
-		}
-
-		// Accept if:
-		// - if we don't have a last seen to compare against on the existing node.
-		// - OR lastSeen moved forward in time.
-		if existingLastSeen, ok := existingNode.LastSeen().GetOk(); !ok ||
-			change.LastSeen.After(existingLastSeen) {
-			acceptedDiscoUpdates = append(acceptedDiscoUpdates, change)
-		}
-	}
-
-	resp.PeersChangedPatch = acceptedDiscoUpdates
-}
-
-// removeUnwantedDiscoUpdatesFromFullNetmapUpdate makes a pass over the full
-// set of peers in an update, usually only received when getting a full netmap
-// from control at startup. If the pass finds a peer with a disco key where the
-// local netmap has a newer key learned via TSMP, overwrite the update with the
-// key from TSMP.
-func (ms *mapSession) removeUnwantedDiscoUpdatesFromFullNetmapUpdate(resp *tailcfg.MapResponse) {
-	ms.peersMu.RLock()
-	defer ms.peersMu.RUnlock()
-
-	if len(resp.Peers) == 0 {
-		return
-	}
-	for _, peer := range resp.Peers {
-		if peer.DiscoKey.IsZero() {
-			continue
-		}
-
-		// Accept if:
-		// - peer is new
-		existingNode, ok := ms.peers[peer.ID]
-		if !ok {
-			continue
-		}
-
-		// Accept if:
-		// - disco key has not changed
-		if existingNode.DiscoKey() == peer.DiscoKey {
-			continue
-		}
-
-		// Accept if:
-		// - key has changed but peer is online
-		if peer.Online != nil && *peer.Online {
-			continue
-		}
-
-		// Accept if:
-		// - there's no last seen on the existing node
-		existingLastSeen, ok := existingNode.LastSeen().GetOk()
-		if !ok {
-			continue
-		}
-
-		// Accept if:
-		// - last seen on on control is higher
-		if peer.LastSeen != nil && peer.LastSeen.After(existingLastSeen) {
-			continue
-		}
-
-		// Overwrite the key and last seen in the full netmap update.
-		peer.DiscoKey = existingNode.DiscoKey()
-		if t, ok := existingNode.LastSeen().GetOk(); ok {
-			peer.LastSeen = new(t)
-		} else {
-			peer.LastSeen = nil
-		}
-	}
 }
 
 // updateStateFromResponse updates ms from res. It takes ownership of res.
@@ -638,7 +405,7 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 		// really the control plane should pick this. This is only a fallback.
 		if hostinfo.IsInVM86() {
 			numCanMeasure := 0
-			lowest := 0
+			var lowest tailcfg.DERPRegionID
 			for rid, r := range dm.Regions {
 				if !r.NoMeasureNoHome {
 					numCanMeasure++
@@ -1008,8 +775,8 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node, onFalse func(string))
 		case "computedHostIfDifferent", "ComputedName", "ComputedNameWithHost":
 			// Caller's responsibility to have populated these.
 			continue
-		case "DataPlaneAuditLogID":
-			//  Not sent for peers.
+		case "DataPlaneAuditLogID", "StableTailnetID":
+			// Not sent for peers.
 		case "Capabilities":
 			// Deprecated; see https://github.com/tailscale/tailscale/issues/11508
 			// And it was never sent by any known control server.

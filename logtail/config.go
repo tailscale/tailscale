@@ -32,7 +32,6 @@ type Config struct {
 	BaseURL        string          // if empty defaults to "https://log.tailscale.com"
 	HTTPC          *http.Client    // if empty defaults to http.DefaultClient
 	SkipClientTime bool            // if true, client_time is not written to logs
-	LowMemory      bool            // if true, logtail minimizes memory use
 	Clock          tstime.Clock    // if set, Clock.Now substitutes uses of time.Now
 	Stderr         io.Writer       // if set, logs are sent here instead of os.Stderr
 	Bus            *eventbus.Bus   // if set, uses the eventbus for awaitInternetUp instead of callback

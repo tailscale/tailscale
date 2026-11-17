@@ -18,11 +18,11 @@ func TestAssignmentsExpire(t *testing.T) {
 	clock := tstest.NewClock(tstest.ClockOpts{Start: time.Now()})
 	assignments := addrAssignments{clock: clock}
 	as := &addrs{
-		dst:     netip.MustParseAddr("0.0.0.1"),
-		magic:   netip.MustParseAddr("0.0.0.2"),
-		transit: netip.MustParseAddr("0.0.0.3"),
-		app:     "a",
-		domain:  "example.com.",
+		dst:           netip.MustParseAddr("0.0.0.1"),
+		magic:         netip.MustParseAddr("0.0.0.2"),
+		connectorAddr: connectorAddr{transit: netip.MustParseAddr("0.0.0.3")},
+		app:           "a",
+		domain:        "example.com.",
 	}
 	err := assignments.insert(as)
 	if err != nil {
@@ -55,11 +55,11 @@ func TestPopExpired(t *testing.T) {
 	makeAndAddAddrs := func(n int) *addrs {
 		t.Helper()
 		as := &addrs{
-			dst:     netip.MustParseAddr(fmt.Sprintf("0.0.1.%d", n)),
-			magic:   netip.MustParseAddr(fmt.Sprintf("0.0.2.%d", n)),
-			transit: netip.MustParseAddr(fmt.Sprintf("0.0.3.%d", n)),
-			app:     "a",
-			domain:  "example.com.",
+			dst:           netip.MustParseAddr(fmt.Sprintf("0.0.1.%d", n)),
+			magic:         netip.MustParseAddr(fmt.Sprintf("0.0.2.%d", n)),
+			connectorAddr: connectorAddr{transit: netip.MustParseAddr(fmt.Sprintf("0.0.3.%d", n))},
+			app:           "a",
+			domain:        "example.com.",
 		}
 		err := assignments.insert(as)
 		if err != nil {
@@ -73,9 +73,10 @@ func TestPopExpired(t *testing.T) {
 		return cmp.Diff(
 			want,
 			got,
-			cmp.AllowUnexported(addrs{}),
+			cmp.AllowUnexported(addrs{}, connectorAddr{}),
 			cmpopts.EquateComparable(netip.Addr{}),
 			cmpopts.IgnoreFields(addrs{}, "expiresAt"),
+			nodeViewComparer,
 		)
 	}
 	testAddrs := []*addrs{}
@@ -131,11 +132,11 @@ func TestPopExpiredHandlesExpiresAtChanges(t *testing.T) {
 	makeAndAddAddrs := func(n int) *addrs {
 		t.Helper()
 		as := &addrs{
-			dst:     netip.MustParseAddr(fmt.Sprintf("0.0.1.%d", n)),
-			magic:   netip.MustParseAddr(fmt.Sprintf("0.0.2.%d", n)),
-			transit: netip.MustParseAddr(fmt.Sprintf("0.0.3.%d", n)),
-			app:     "a",
-			domain:  "example.com.",
+			dst:           netip.MustParseAddr(fmt.Sprintf("0.0.1.%d", n)),
+			magic:         netip.MustParseAddr(fmt.Sprintf("0.0.2.%d", n)),
+			connectorAddr: connectorAddr{transit: netip.MustParseAddr(fmt.Sprintf("0.0.3.%d", n))},
+			app:           "a",
+			domain:        "example.com.",
 		}
 		err := assignments.insertWithExpiry(as, expiryInterval)
 		if err != nil {

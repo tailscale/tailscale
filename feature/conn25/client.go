@@ -1,0 +1,473 @@
+// Copyright (c) Tailscale Inc & contributors
+// SPDX-License-Identifier: BSD-3-Clause
+
+package conn25
+
+import (
+	"errors"
+	"fmt"
+	"net/netip"
+	"sync"
+	"time"
+
+	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/net/packet"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
+	"tailscale.com/types/views"
+	"tailscale.com/util/dnsname"
+	"tailscale.com/util/mak"
+	"tailscale.com/util/set"
+)
+
+// client performs the conn25 functionality for clients of connectors
+// It allocates magic and transit IP addresses and communicates them with
+// connectors.
+// It's safe for concurrent use.
+type client struct {
+	logf      logger.Logf
+	addrsCh   chan addrs
+	getIPSets func() ipSets
+
+	// Remember to add new fields to [client.reset] if needed.
+	mu              sync.Mutex // protects the fields below
+	closed          bool
+	generation      uint64 // Current generation ID
+	v4MagicIPPool   *ippool
+	v4TransitIPPool *ippool
+	v6MagicIPPool   *ippool
+	v6TransitIPPool *ippool
+	assignments     addrAssignments
+	byConnKey       map[key.NodePublic]set.Set[netip.Prefix]
+}
+
+// linkLocalAllow returns true if the provided packet with a link-local Dst address has a
+// Dst that is one of our transit IPs, and false otherwise.
+// Tailscale's wireguard filters drop link-local unicast packets (see [wgengine/filter/filter.go])
+// but conn25 uses link-local addresses for transit IPs.
+// Let the filter know if this is one of our addresses and should be allowed.
+func (c *client) linkLocalAllow(p packet.Parsed) (bool, string) {
+	ok := c.isKnownTransitIP(p.Dst.Addr())
+	if ok {
+		return true, packetFilterAllowReason
+	}
+	return false, ""
+}
+
+func (c *client) isKnownTransitIP(tip netip.Addr) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.assignments.lookupByTransitIP(tip)
+	return ok
+}
+
+func (c *client) reconfig() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	ipSets := c.getIPSets()
+
+	c.v4MagicIPPool = c.v4MagicIPPool.reconfig(ipSets.v4Magic)
+	c.v4TransitIPPool = c.v4TransitIPPool.reconfig(ipSets.v4Transit)
+	c.v6MagicIPPool = c.v6MagicIPPool.reconfig(ipSets.v6Magic)
+	c.v6TransitIPPool = c.v6TransitIPPool.reconfig(ipSets.v6Transit)
+}
+
+// reset clears all internal state of [client], that are not configuration
+// passed into it.
+func (c *client) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.generation++
+	ipSets := c.getIPSets()
+	c.v4MagicIPPool = newIPPool(ipSets.v4Magic)
+	c.v4TransitIPPool = newIPPool(ipSets.v4Transit)
+	c.v6MagicIPPool = newIPPool(ipSets.v6Magic)
+	c.v6TransitIPPool = newIPPool(ipSets.v6Transit)
+	c.assignments = addrAssignments{clock: c.assignments.clock}
+	c.byConnKey = nil
+
+	// Drop any assignments still waiting to be sent. They describe the state
+	// we just cleared, so delivering them would register transit IPs with
+	// connectors that this client no longer knows anything about.
+	c.drainAddrsLocked()
+}
+
+// shutdown stops the client from accepting further address assignments and
+// drops any that are still queued.
+func (c *client) shutdown() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.closed = true
+	c.drainAddrsLocked()
+	close(c.addrsCh)
+}
+
+// drainAddrsLocked empties the send queue. c.mu must be held, which is what
+// makes the drain complete: senders can't refill the queue behind it.
+func (c *client) drainAddrsLocked() {
+	for {
+		select {
+		case _, ok := <-c.addrsCh:
+			if !ok {
+				return
+			}
+		default:
+			return
+		}
+	}
+}
+
+// reserveAddresses tries to make an assignment of addrs from the address pools
+// for this domain+dst address, so that this client can use conn25 connectors.
+// The name of the matching app is also provided, no validation is done to check whether or not
+// the app name refers to a configured app.
+// It checks that this domain should be routed and that this client is not itself a connector for the domain
+// and generally if it is valid to make the assignment.
+func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip.Addr, ttl time.Duration, connectorNode tailcfg.NodeView, token string) (*addrs, error) {
+	if !dst.IsValid() {
+		return nil, errors.New("dst is not valid")
+	}
+	if !connectorNode.Valid() {
+		return nil, errors.New("connector node is not valid")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if existing, ok := c.assignments.lookupByDomainDst(domain, dst); ok {
+		// We have the domain/dst, but it's possible this came from another connector
+		// and the original connector is dead, in which case we currently don't
+		// call enqueueAddressAssignment and register the TransitIP with the other
+		// connector. And we don't install the new connector's node key in WireGuard.
+		//
+		// The correct action would be to allocate a new TransitIP associated
+		// with that new connector, and then register the TransitIP address, and
+		// install the node key.
+		// But as of 2026-10-01, the data model doesn't support multiple TransitIPs
+		// per domain/dst/magic.
+		//
+		// For now, try to use the old connector, even if this new DNS request came from
+		// a new connector.
+		//
+		// Token management. If it came from the old connector, token should be updated,
+		// because it is what the connector will expect. If it came from a different
+		// connector, don't modify the token for the original connector.
+		//
+		// TODO(tailscale/corp#50318): support multiple TransitIPs/connectors per domain/dst/magic.
+		if existing.connectorAddr.node.ID() == connectorNode.ID() {
+			existing.connectorAddr.token = token
+		}
+		c.assignments.updateFromTTL(existing, ttl)
+		return existing, nil
+	}
+
+	// Before we check out more addresses from the pools try to return some.
+	// Trying to return any number greater than 1 will cause the number of
+	// addresses used to trend down in general. But as we have 2 different
+	// pools for the different IP versions, use a number a bit higher than
+	// 2 to try and process bursty behavior faster.
+	now := c.assignments.clock.Now()
+	for range 10 {
+		a := c.assignments.popExpired(now)
+		if a == nil {
+			break
+		}
+		if a.is4() {
+			c.v4MagicIPPool.returnAddr(a.magic)
+			c.v4TransitIPPool.returnAddr(a.connectorAddr.transit)
+		} else if a.is6() {
+			c.v6MagicIPPool.returnAddr(a.magic)
+			c.v6TransitIPPool.returnAddr(a.connectorAddr.transit)
+		} else {
+			return nil, errors.New("unexpected neither 4 nor 6")
+		}
+	}
+
+	var magicPool, transitPool *ippool
+	if dst.Is4() {
+		magicPool, transitPool = c.v4MagicIPPool, c.v4TransitIPPool
+	} else if dst.Is6() {
+		magicPool, transitPool = c.v6MagicIPPool, c.v6TransitIPPool
+	} else {
+		return nil, errors.New("unexpected neither 4 nor 6")
+	}
+	// Addresses are only returned to the pools by the popExpired loop above,
+	// which can only see them once they're in c.assignments. So any failure
+	// before the insert below has to put them back itself, or they're leaked
+	// from the pool for the lifetime of the process.
+	mip, err := magicPool.next()
+	if err != nil {
+		return nil, err
+	}
+	tip, err := transitPool.next()
+	if err != nil {
+		magicPool.returnAddr(mip)
+		return nil, err
+	}
+	as := &addrs{
+		dst:        dst,
+		magic:      mip,
+		generation: c.generation,
+		connectorAddr: connectorAddr{
+			transit: tip,
+			node:    connectorNode,
+			token:   token,
+		},
+		app:    appName,
+		domain: domain,
+	}
+	if err := c.assignments.insertFromTTL(as, ttl); err != nil {
+		magicPool.returnAddr(mip)
+		transitPool.returnAddr(tip)
+		return nil, err
+	}
+	if err := c.enqueueAddressAssignment(as); err != nil {
+		c.assignments.remove(as)
+		magicPool.returnAddr(mip)
+		transitPool.returnAddr(tip)
+		return nil, err
+	}
+	return as, nil
+}
+
+func (c *client) addTransitIPForConnector(as addrs) error {
+	conn := as.connectorAddr.node
+	if !conn.Valid() {
+		return fmt.Errorf("unexpectedly received invalid connector node")
+	}
+	if conn.Key().IsZero() {
+		return fmt.Errorf("node with stable ID %q does not have a key", conn.StableID())
+	}
+	return c.insertTransitConnMapping(as, conn.Key())
+}
+
+// errQueueFull is returned when the address assignment send queue is full and
+// the assignment was dropped. It's backpressure, not a hard failure.
+var errQueueFull = errors.New("queue full")
+
+// errClientShutdown is returned once [client.shutdown] has run and the client
+// no longer accepts address assignments.
+var errClientShutdown = errors.New("conn25 client shut down")
+
+// enqueueAddressAssignment queues addrs to be registered with its connector by
+// sendLoop. c.mu must be held.
+func (c *client) enqueueAddressAssignment(addrs *addrs) error {
+	if c.closed {
+		return errClientShutdown
+	}
+	select {
+	// TODO(fran) investigate the value of waiting for multiple addresses and sending them
+	// in one ConnectorTransitIPRequest
+	case c.addrsCh <- *addrs:
+		return nil
+	default:
+		c.logf("address assignment queue full, dropping transit assignment for %v", addrs.domain)
+		return errQueueFull
+	}
+}
+
+// ClientFlowRef is a client-side flow's reference to the address assignment it was counted against.
+type ClientFlowRef struct {
+	transit netip.Addr
+	release func()
+}
+
+// TransitIP returns the Transit IP of the assignment the flow was counted
+// against, which is the address its packets should be forwarded to.
+func (r ClientFlowRef) TransitIP() netip.Addr {
+	return r.transit
+}
+
+// Release gives up the flow's claim on the address assignment, letting the
+// assignment be reclaimed once nothing else holds it. It must be called once
+// the flow is gone, or right away if the caller ends up installing no flow at all.
+func (r ClientFlowRef) Release() {
+	if r.release != nil {
+		r.release()
+	}
+}
+
+// PrepareNewFlowForMagicIP resolves magicIP to the transit IP currently assigned
+// to it and records that a flow is being established against that assignment,
+// returning the reference that both names that transit IP and keeps the
+// assignment from being reclaimed. It reports whether magicIP had an
+// assignment at all.
+func (c *client) PrepareNewFlowForMagicIP(magicIP netip.Addr) (ClientFlowRef, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.assignments.lookupByMagicIP(magicIP)
+	if !ok {
+		return ClientFlowRef{}, false
+	}
+	transit := entry.connectorAddr.transit
+	entry.activeFlowCount++
+	var released bool
+	return ClientFlowRef{transit: transit, release: func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if released {
+			return
+		}
+		released = true
+		if entry.activeFlowCount <= 0 {
+			c.logf("flow removed for transit %v with no active flows", transit)
+			return
+		}
+		entry.activeFlowCount--
+		if entry.activeFlowCount == 0 {
+			entry.zeroFlowTime = c.assignments.clock.Now()
+		}
+	}}, true
+}
+
+func (c *client) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
+	tips, ok := c.lookupTransitIPsByConnKey(k)
+	if !ok {
+		return views.Slice[netip.Prefix]{}
+	}
+	return views.SliceOf(tips)
+}
+
+func (c *client) rewriteDNSResponse(appName string, hdr dnsmessage.Header, questions []dnsmessage.Question, answers []dnsResponseRewrite) ([]byte, error) {
+	b := dnsmessage.NewBuilder(nil, hdr)
+	b.EnableCompression()
+	if err := b.StartQuestions(); err != nil {
+		return nil, err
+	}
+	for _, q := range questions {
+		if err := b.Question(q); err != nil {
+			return nil, err
+		}
+	}
+	if err := b.StartAnswers(); err != nil {
+		return nil, err
+	}
+
+	// make an answer for each rewrite
+	for _, rw := range answers {
+		as, err := c.reserveAddresses(appName, rw.domain, rw.dst, time.Duration(rw.ttlSeconds)*time.Second, rw.connectorNode, rw.token)
+		if err != nil {
+			return nil, err
+		}
+		if !as.isValid() {
+			return nil, errors.New("connector addresses empty")
+		}
+		name, err := dnsmessage.NewName(rw.domain.WithTrailingDot())
+		if err != nil {
+			return nil, err
+		}
+		if rw.dst.Is4() {
+			rhdr := dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: rw.ttlSeconds}
+			if err := b.AResource(rhdr, dnsmessage.AResource{A: as.magic.As4()}); err != nil {
+				return nil, err
+			}
+		} else if rw.dst.Is6() {
+			rhdr := dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET, TTL: rw.ttlSeconds}
+			if err := b.AAAAResource(rhdr, dnsmessage.AAAAResource{AAAA: as.magic.As16()}); err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, errors.New("unexpected neither 4 nor 6")
+		}
+	}
+	// We do _not_ include the additional section in our rewrite. (We don't want to include
+	// eg DNSSEC info, or other extra info like related records).
+	out, err := b.Finish()
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+type addrs struct {
+	dst             netip.Addr
+	magic           netip.Addr
+	generation      uint64
+	connectorAddr   connectorAddr
+	domain          dnsname.FQDN
+	app             string
+	expiresAt       time.Time
+	activeFlowCount int
+	zeroFlowTime    time.Time
+}
+
+func (as addrs) isValid() bool {
+	return as.dst.IsValid()
+}
+
+func (as addrs) is4() bool {
+	return as.dst.Is4()
+}
+
+func (as addrs) is6() bool {
+	return as.dst.Is6()
+}
+
+// errStaleGeneration is returned when an assignment reserved before a
+// [client.reset] is applied after it. The assignment describes state that no
+// longer exists, so it's dropped rather than applied.
+var errStaleGeneration = errors.New("address assignment is from a previous generation")
+
+func (c *client) assignmentIsCurrent(as addrs) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return as.generation == c.generation
+}
+
+// insertTransitConnMapping adds an entry to the byConnKey map
+// for the provided transitIP (as a prefix).
+// The provided assignment must already be present in the byTransitIP map, and
+// must be from the current generation.
+func (c *client) insertTransitConnMapping(as addrs, connKey key.NodePublic) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if as.generation != c.generation {
+		return errStaleGeneration
+	}
+	tip := as.connectorAddr.transit
+	if _, ok := c.assignments.lookupByTransitIP(tip); !ok {
+		return errors.New("transit IP is not already known")
+	}
+
+	ctips, ok := c.byConnKey[connKey]
+	tipp := netip.PrefixFrom(tip, tip.BitLen())
+	if !ok {
+		ctips.Make()
+		mak.Set(&c.byConnKey, connKey, ctips)
+	}
+	ctips.Add(tipp)
+	return nil
+}
+
+// lookupTransitIPsByConnKey returns a slice containing the transit IPs (as netipPrefix)
+// associated with the given connector (identified by node key), or (nil, false) if there is no entry
+// for the given key.
+func (c *client) lookupTransitIPsByConnKey(k key.NodePublic) ([]netip.Prefix, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	s, ok := c.byConnKey[k]
+	if !ok {
+		return nil, false
+	}
+	return s.Slice(), true
+}
+
+// resendTransitIPMapping enqueues a request to re-establish an existing
+// transit IP-real IP mapping after a connector tells the client that the
+// mapping does not exist on its end. If a mapping is not found on the client
+// either, this is a no-op.
+func (c *client) resendTransitIPMapping(transitIP netip.Addr) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	mapping, ok := c.assignments.lookupByTransitIP(transitIP)
+	if !ok {
+		// We have no mappings for this transit IP, so nothing to resend.
+		return
+	}
+	err := c.enqueueAddressAssignment(mapping)
+	if err != nil {
+		c.logf("error enqueueing address assignment for resend: %v", err)
+	}
+}

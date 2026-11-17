@@ -13,7 +13,6 @@ import (
 	"net/netip"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -48,7 +47,12 @@ func TestBasic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r, err := c.GetReport(ctx, stuntest.DERPMapOf(stunAddr.String()), nil)
+	dm := stuntest.DERPMapOf(stunAddr.String())
+	// stuntest nodes are all STUNOnly; make this a regular DERP region so
+	// that the PreferredDERP assertion below exercises the normal path.
+	dm.Regions[1].Nodes[0].STUNOnly = false
+
+	r, err := c.GetReport(ctx, dm, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,6 +113,73 @@ func TestMultiGlobalAddressMapping(t *testing.T) {
 	}
 }
 
+func TestSTUNResponseProvesCanSend(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		addr string
+		got  func(*Report) bool
+	}{
+		{"IPv4", "192.0.2.1:1234", func(r *Report) bool { return r.IPv4CanSend }},
+		{"IPv6", "[2001:db8::1]:1234", func(r *Report) bool { return r.IPv6CanSend }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rs := &reportState{
+				c:      newTestClient(t),
+				report: newReport(),
+			}
+			rs.addNodeLatency(&tailcfg.DERPNode{RegionID: 1}, netip.MustParseAddrPort(test.addr), time.Millisecond)
+			if !test.got(rs.report) {
+				t.Errorf("STUN response from %v did not set %sCanSend", test.addr, test.name)
+			}
+		})
+	}
+}
+
+// TestSTUNOnlyRegionNotPreferredDERP verifies a STUNOnly region is
+// never selected as the preferred DERP, even when it's the only region
+// with a STUN latency sample (as in real setups where only a public
+// STUN server is reachable, e.g. self-hosted DERP behind a TCP-only
+// tunnel), where selecting it would blackhole all relay traffic.
+func TestSTUNOnlyRegionNotPreferredDERP(t *testing.T) {
+	// Region 1: a real, reachable STUN server marked STUNOnly.
+	stunAddr, cleanup := stuntest.Serve(t)
+	defer cleanup()
+
+	// Region 2: a UDP blackhole (unreachable) normal DERP region.
+	blackhole, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to open blackhole STUN listener: %v", err)
+	}
+	defer blackhole.Close()
+
+	dm := stuntest.DERPMapOf(stunAddr.String(), blackhole.LocalAddr().String())
+	dm.Regions[1].Nodes[0].STUNOnly = true
+	dm.Regions[2].Nodes[0].STUNOnly = false
+
+	c := newTestClient(t)
+
+	ctx := t.Context()
+
+	if err := c.Standalone(ctx, "127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := c.GetReport(ctx, dm, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The STUN-only region must have produced a latency sample...
+	if _, ok := r.RegionLatency[1]; !ok {
+		t.Fatalf("expected region 1 (STUNOnly) to have a STUN latency sample; got %+v", r.RegionLatency)
+	}
+	// ...but must not be selected as the preferred DERP, even though it
+	// is the only region with a latency sample.
+	if r.PreferredDERP == 1 {
+		t.Errorf("PreferredDERP = 1 (STUNOnly region); want a region with DERP nodes")
+	}
+}
+
 func TestWorksWhenUDPBlocked(t *testing.T) {
 	blackhole, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
@@ -163,13 +234,13 @@ func TestWorksWhenUDPBlocked(t *testing.T) {
 func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 	// report returns a *Report from (DERP host, time.Duration)+ pairs.
 	report := func(a ...any) *Report {
-		r := &Report{RegionLatency: map[int]time.Duration{}}
+		r := &Report{RegionLatency: map[tailcfg.DERPRegionID]time.Duration{}}
 		for i := 0; i < len(a); i += 2 {
 			s := a[i].(string)
 			if !strings.HasPrefix(s, "d") {
 				t.Fatalf("invalid derp server key %q", s)
 			}
-			regionID, err := strconv.Atoi(s[1:])
+			regionID, err := tailcfg.ParseDERPRegionID(s[1:])
 			if err != nil {
 				t.Fatalf("invalid derp server key %q", s)
 			}
@@ -185,8 +256,8 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 		}
 		return r
 	}
-	mkLDAFunc := func(mm map[int]time.Time) func(int) time.Time {
-		return func(region int) time.Time {
+	mkLDAFunc := func(mm map[tailcfg.DERPRegionID]time.Time) func(tailcfg.DERPRegionID) time.Time {
+		return func(region tailcfg.DERPRegionID) time.Time {
 			return mm[region]
 		}
 	}
@@ -200,9 +271,14 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 		steps       []step
 		homeParams  *tailcfg.DERPHomeParams
 		opts        *GetReportOpts
-		forcedDERP  int // if non-zero, force this DERP to be the preferred one
-		wantDERP    int // want PreferredDERP on final step
-		wantPrevLen int // wanted len(c.prev)
+		forcedDERP  tailcfg.DERPRegionID // if non-zero, force this DERP to be the preferred one
+		wantDERP    tailcfg.DERPRegionID // want PreferredDERP on final step
+		wantPrevLen int                  // wanted len(c.prev)
+
+		// lastRegions, if non-nil, are the only DERP regions in the
+		// DERP map for the final step, simulating regions being removed
+		// by control. Otherwise, regions 1, 2, and 3 are always present.
+		lastRegions []tailcfg.DERPRegionID
 	}{
 		{
 			name: "first_reading",
@@ -284,7 +360,7 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 		{
 			name: "derp_home_params",
 			homeParams: &tailcfg.DERPHomeParams{
-				RegionScore: map[int]float64{
+				RegionScore: map[tailcfg.DERPRegionID]float64{
 					1: 2.0 / 3, // 66%
 				},
 			},
@@ -302,7 +378,7 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 		{
 			name: "derp_home_params_high_latency",
 			homeParams: &tailcfg.DERPHomeParams{
-				RegionScore: map[int]float64{
+				RegionScore: map[tailcfg.DERPRegionID]float64{
 					1: 2.0 / 3, // 66%
 				},
 			},
@@ -316,7 +392,7 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 		{
 			name: "derp_home_params_invalid",
 			homeParams: &tailcfg.DERPHomeParams{
-				RegionScore: map[int]float64{
+				RegionScore: map[tailcfg.DERPRegionID]float64{
 					1: 0.0,
 					2: -1.0,
 				},
@@ -335,7 +411,7 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 				{2 * time.Second, report("d2", 3)},          // (3) d1 gone, but have traffic
 			},
 			opts: &GetReportOpts{
-				GetLastDERPActivity: mkLDAFunc(map[int]time.Time{
+				GetLastDERPActivity: mkLDAFunc(map[tailcfg.DERPRegionID]time.Time{
 					1: startTime.Add(2*time.Second + PreferredDERPFrameTime/2), // within active window of step (3)
 				}),
 			},
@@ -350,7 +426,7 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 				{2 * time.Second, report("d2", 3)},          // (3) d1 gone, but have traffic
 			},
 			opts: &GetReportOpts{
-				GetLastDERPActivity: mkLDAFunc(map[int]time.Time{
+				GetLastDERPActivity: mkLDAFunc(map[tailcfg.DERPRegionID]time.Time{
 					1: startTime.Add(4*time.Second - PreferredDERPFrameTime - 1), // not within active window of (3)
 				}),
 			},
@@ -393,7 +469,7 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 				{2 * time.Second, report("d1", 4)},
 			},
 			opts: &GetReportOpts{
-				GetLastDERPActivity: mkLDAFunc(map[int]time.Time{
+				GetLastDERPActivity: mkLDAFunc(map[tailcfg.DERPRegionID]time.Time{
 					1: startTime,
 					2: startTime.Add(time.Second),
 				}),
@@ -409,7 +485,7 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 				{PreferredDERPFrameTime + time.Second, report("d1", 4)},
 			},
 			opts: &GetReportOpts{
-				GetLastDERPActivity: mkLDAFunc(map[int]time.Time{
+				GetLastDERPActivity: mkLDAFunc(map[tailcfg.DERPRegionID]time.Time{
 					1: startTime,
 					2: startTime,
 				}),
@@ -429,7 +505,7 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 				{2 * time.Second, report()},
 			},
 			opts: &GetReportOpts{
-				GetLastDERPActivity: mkLDAFunc(map[int]time.Time{
+				GetLastDERPActivity: mkLDAFunc(map[tailcfg.DERPRegionID]time.Time{
 					1: startTime,
 				}),
 			},
@@ -444,13 +520,72 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 				{2 * derp.KeepAlive, report()},
 			},
 			opts: &GetReportOpts{
-				GetLastDERPActivity: mkLDAFunc(map[int]time.Time{
+				GetLastDERPActivity: mkLDAFunc(map[tailcfg.DERPRegionID]time.Time{
 					1: startTime,
 				}),
 			},
 			wantPrevLen: 3,
 			wantDERP:    0,
 		},
+		{
+			name: "removed_home_with_traffic",
+			steps: []step{
+				{0, report("d1", 2, "d2", 3)},
+				{2 * time.Second, report("d2", 3)},
+			},
+			opts: &GetReportOpts{
+				GetLastDERPActivity: mkLDAFunc(map[tailcfg.DERPRegionID]time.Time{
+					1: startTime.Add(2 * time.Second), // within active window
+				}),
+			},
+			lastRegions: []tailcfg.DERPRegionID{2, 3},
+			wantPrevLen: 2,
+			wantDERP:    2, // d1 was removed; recent traffic doesn't matter
+		},
+		{
+			name: "removed_home_no_data",
+			steps: []step{
+				{0, report("d1", 2, "d2", 3)},
+				{2 * time.Second, report()},
+			},
+			opts: &GetReportOpts{
+				GetLastDERPActivity: mkLDAFunc(map[tailcfg.DERPRegionID]time.Time{
+					1: startTime.Add(2 * time.Second),
+				}),
+			},
+			lastRegions: []tailcfg.DERPRegionID{2, 3},
+			wantPrevLen: 2,
+			wantDERP:    0, // don't keep removed d1 as a no-data fallback
+		},
+		{
+			name: "forced_removed",
+			steps: []step{
+				{time.Second, report("d1", 2, "d2", 3)},
+				{2 * time.Second, report("d1", 2)},
+			},
+			opts: &GetReportOpts{
+				GetLastDERPActivity: mkLDAFunc(map[tailcfg.DERPRegionID]time.Time{
+					2: startTime.Add(3 * time.Second),
+				}),
+			},
+			forcedDERP:  2,
+			lastRegions: []tailcfg.DERPRegionID{1, 3},
+			wantPrevLen: 2,
+			wantDERP:    1,
+		},
+	}
+	mkDERPMap := func(homeParams *tailcfg.DERPHomeParams, regions ...tailcfg.DERPRegionID) *tailcfg.DERPMap {
+		dm := &tailcfg.DERPMap{
+			HomeParams: homeParams,
+			Regions:    map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{},
+		}
+		for _, id := range regions {
+			dm.Regions[id] = &tailcfg.DERPRegion{
+				RegionID: id,
+				Nodes:    []*tailcfg.DERPNode{{RegionID: id, Name: fmt.Sprintf("%da", id), HostName: fmt.Sprintf("derp%d.invalid", id)}},
+			}
+		}
+		return dm
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -459,15 +594,18 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 				TimeNow:            func() time.Time { return fakeTime },
 				ForcePreferredDERP: tt.forcedDERP,
 			}
-			dm := &tailcfg.DERPMap{HomeParams: tt.homeParams}
+			dm := mkDERPMap(tt.homeParams, 1, 2, 3)
 			rs := &reportState{
 				c:     c,
 				start: fakeTime,
 				opts:  tt.opts,
 			}
-			for _, s := range tt.steps {
+			for i, s := range tt.steps {
 				fakeTime = fakeTime.Add(s.after)
 				rs.start = fakeTime.Add(-100 * time.Millisecond)
+				if i == len(tt.steps)-1 && tt.lastRegions != nil {
+					dm = mkDERPMap(tt.homeParams, tt.lastRegions...)
+				}
 				c.addReportHistoryAndSetPreferredDERP(rs, s.r, dm.View(), fakeTime)
 			}
 			lastReport := tt.steps[len(tt.steps)-1].r
@@ -487,20 +625,20 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 // reports are incremental.
 func TestRecentReportsRetainFullNetcheck(t *testing.T) {
 	dm := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 			1: {RegionID: 1},
 			2: {RegionID: 2},
 			3: {RegionID: 3},
 		},
 	}
-	allRegions := []int{1, 2, 3}
-	incrementalRegions := []int{1, 2} // home + fastest; never includes region 3
+	allRegions := []tailcfg.DERPRegionID{1, 2, 3}
+	incrementalRegions := []tailcfg.DERPRegionID{1, 2} // home + fastest; never includes region 3
 
 	var now time.Time
 	c := &Client{TimeNow: func() time.Time { return now }}
 
-	mkReport := func(regions []int) *Report {
-		r := &Report{RegionLatency: map[int]time.Duration{}}
+	mkReport := func(regions []tailcfg.DERPRegionID) *Report {
+		r := &Report{RegionLatency: map[tailcfg.DERPRegionID]time.Duration{}}
 		for _, rid := range regions {
 			r.RegionLatency[rid] = 10 * time.Millisecond
 		}
@@ -540,11 +678,12 @@ func TestMakeProbePlan(t *testing.T) {
 	// basicMap has 5 regions. each region has a number of nodes
 	// equal to the region number (1 has 1a, 2 has 2a and 2b, etc.)
 	basicMap := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{},
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{},
 	}
-	for rid := 1; rid <= 6; rid++ {
+	for i := range 6 {
+		rid := tailcfg.DERPRegionID(i + 1)
 		var nodes []*tailcfg.DERPNode
-		for nid := 0; nid < rid; nid++ {
+		for nid := range tailcfg.DERPRegionID(rid) {
 			nodes = append(nodes, &tailcfg.DERPNode{
 				Name:     fmt.Sprintf("%d%c", rid, 'a'+rune(nid)),
 				RegionID: rid,
@@ -623,14 +762,14 @@ func TestMakeProbePlan(t *testing.T) {
 			dm:      basicMap,
 			have6if: false,
 			last: &Report{
-				RegionLatency: map[int]time.Duration{
+				RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
 					1: 10 * time.Millisecond,
 					2: 20 * time.Millisecond,
 					3: 30 * time.Millisecond,
 					4: 40 * time.Millisecond,
 					// Pretend 5 is missing
 				},
-				RegionV4Latency: map[int]time.Duration{
+				RegionV4Latency: map[tailcfg.DERPRegionID]time.Duration{
 					1: 10 * time.Millisecond,
 					2: 20 * time.Millisecond,
 					3: 30 * time.Millisecond,
@@ -648,14 +787,14 @@ func TestMakeProbePlan(t *testing.T) {
 			dm:      basicMap,
 			have6if: true,
 			last: &Report{
-				RegionLatency: map[int]time.Duration{
+				RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
 					1: 10 * time.Millisecond,
 					2: 20 * time.Millisecond,
 					3: 30 * time.Millisecond,
 					4: 40 * time.Millisecond,
 					// Pretend 5 is missing
 				},
-				RegionV4Latency: map[int]time.Duration{
+				RegionV4Latency: map[tailcfg.DERPRegionID]time.Duration{
 					1: 10 * time.Millisecond,
 					2: 20 * time.Millisecond,
 					3: 30 * time.Millisecond,
@@ -675,18 +814,18 @@ func TestMakeProbePlan(t *testing.T) {
 			dm:      basicMap,
 			have6if: true,
 			last: &Report{
-				RegionLatency: map[int]time.Duration{
+				RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
 					1: 10 * time.Millisecond,
 					2: 20 * time.Millisecond,
 					3: 30 * time.Millisecond,
 					4: 40 * time.Millisecond,
 					// Pretend 5 is missing
 				},
-				RegionV4Latency: map[int]time.Duration{
+				RegionV4Latency: map[tailcfg.DERPRegionID]time.Duration{
 					1: 10 * time.Millisecond,
 					2: 20 * time.Millisecond,
 				},
-				RegionV6Latency: map[int]time.Duration{
+				RegionV6Latency: map[tailcfg.DERPRegionID]time.Duration{
 					3: 30 * time.Millisecond,
 					4: 40 * time.Millisecond,
 				},
@@ -717,17 +856,17 @@ func TestMakeProbePlan(t *testing.T) {
 			dm:      basicMap,
 			have6if: true,
 			last: &Report{
-				RegionLatency: map[int]time.Duration{
+				RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
 					1: 10 * time.Millisecond,
 					2: 20 * time.Millisecond,
 					3: 30 * time.Millisecond,
 					4: 40 * time.Millisecond,
 				},
-				RegionV4Latency: map[int]time.Duration{
+				RegionV4Latency: map[tailcfg.DERPRegionID]time.Duration{
 					1: 10 * time.Millisecond,
 					2: 20 * time.Millisecond,
 				},
-				RegionV6Latency: map[int]time.Duration{
+				RegionV6Latency: map[tailcfg.DERPRegionID]time.Duration{
 					3: 30 * time.Millisecond,
 					4: 40 * time.Millisecond,
 				},
@@ -749,17 +888,17 @@ func TestMakeProbePlan(t *testing.T) {
 			dm:      basicMap,
 			have6if: true,
 			last: &Report{
-				RegionLatency: map[int]time.Duration{
+				RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
 					1: 50 * time.Millisecond,
 					2: 20 * time.Millisecond,
 					3: 30 * time.Millisecond,
 					4: 40 * time.Millisecond,
 				},
-				RegionV4Latency: map[int]time.Duration{
+				RegionV4Latency: map[tailcfg.DERPRegionID]time.Duration{
 					1: 50 * time.Millisecond,
 					2: 20 * time.Millisecond,
 				},
-				RegionV6Latency: map[int]time.Duration{
+				RegionV6Latency: map[tailcfg.DERPRegionID]time.Duration{
 					3: 30 * time.Millisecond,
 					4: 40 * time.Millisecond,
 				},
@@ -782,7 +921,7 @@ func TestMakeProbePlan(t *testing.T) {
 				HaveV6: tt.have6if,
 				HaveV4: !tt.no4,
 			}
-			preferredDERP := 0
+			var preferredDERP tailcfg.DERPRegionID
 			if tt.last != nil {
 				preferredDERP = tt.last.PreferredDERP
 			}
@@ -821,7 +960,7 @@ func (p probe) String() string {
 
 func TestLogConciseReport(t *testing.T) {
 	dm := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 			1: nil,
 			2: nil,
 			3: nil,
@@ -849,10 +988,10 @@ func TestLogConciseReport(t *testing.T) {
 				UDP:           true,
 				IPv4:          true,
 				PreferredDERP: 1,
-				RegionLatency: map[int]time.Duration{
+				RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
 					1: 10 * ms,
 				},
-				RegionV4Latency: map[int]time.Duration{
+				RegionV4Latency: map[tailcfg.DERPRegionID]time.Duration{
 					1: 10 * ms,
 				},
 			},
@@ -864,12 +1003,12 @@ func TestLogConciseReport(t *testing.T) {
 				UDP:           true,
 				IPv4:          true,
 				PreferredDERP: 1,
-				RegionLatency: map[int]time.Duration{
+				RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
 					1: 10 * ms,
 					2: 20 * ms,
 					3: 30 * ms,
 				},
-				RegionV4Latency: map[int]time.Duration{
+				RegionV4Latency: map[tailcfg.DERPRegionID]time.Duration{
 					1: 10 * ms,
 					2: 20 * ms,
 					3: 30 * ms,
@@ -884,17 +1023,17 @@ func TestLogConciseReport(t *testing.T) {
 				IPv4:          true,
 				IPv6:          true,
 				PreferredDERP: 1,
-				RegionLatency: map[int]time.Duration{
+				RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
 					1: 10 * ms,
 					2: 20 * ms,
 					3: 30 * ms,
 				},
-				RegionV4Latency: map[int]time.Duration{
+				RegionV4Latency: map[tailcfg.DERPRegionID]time.Duration{
 					1: 10 * ms,
 					2: 20 * ms,
 					3: 30 * ms,
 				},
-				RegionV6Latency: map[int]time.Duration{
+				RegionV6Latency: map[tailcfg.DERPRegionID]time.Duration{
 					1: 10 * ms,
 					2: 20 * ms,
 					3: 30 * ms,
@@ -937,9 +1076,10 @@ func TestLogConciseReport(t *testing.T) {
 
 func TestSortRegions(t *testing.T) {
 	unsortedMap := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{},
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{},
 	}
-	for rid := 1; rid <= 5; rid++ {
+	for i := range 5 {
+		rid := tailcfg.DERPRegionID(i + 1)
 		var nodes []*tailcfg.DERPNode
 		nodes = append(nodes, &tailcfg.DERPNode{
 			Name:     fmt.Sprintf("%da", rid),
@@ -963,8 +1103,8 @@ func TestSortRegions(t *testing.T) {
 
 	// Sorting by latency this should result in rid: 5, 2, 1, 3
 	// rid 4 with latency 0 should be at the end
-	want := []int{5, 2, 1, 3, 4}
-	got := make([]int, len(sortedMap))
+	want := []tailcfg.DERPRegionID{5, 2, 1, 3, 4}
+	got := make([]tailcfg.DERPRegionID, len(sortedMap))
 	for i, r := range sortedMap {
 		got[i] = r.RegionID
 	}
@@ -1106,8 +1246,8 @@ func TestRegionLatencyCompare(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		lat  RegionLatency
-		i    int
-		j    int
+		i    tailcfg.DERPRegionID
+		j    tailcfg.DERPRegionID
 		want int
 	}{
 		{

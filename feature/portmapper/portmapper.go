@@ -15,7 +15,9 @@ import (
 )
 
 func init() {
-	feature.Register("portmapper")
+	if !feature.Register("portmapper") {
+		return
+	}
 	portmappertype.HookNewPortMapper.Set(newPortMapper)
 }
 

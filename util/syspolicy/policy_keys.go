@@ -49,6 +49,7 @@ var implicitDefinitions = []*setting.Definition{
 	setting.NewDefinition(pkey.AdminConsoleVisibility, setting.UserSetting, setting.VisibilityValue),
 	setting.NewDefinition(pkey.AutoUpdateVisibility, setting.UserSetting, setting.VisibilityValue),
 	setting.NewDefinition(pkey.ExitNodeMenuVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(pkey.HiddenNetworkDevices, setting.UserSetting, setting.StringListValue),
 	setting.NewDefinition(pkey.KeyExpirationNoticeTime, setting.UserSetting, setting.DurationValue),
 	setting.NewDefinition(pkey.ManagedByCaption, setting.UserSetting, setting.StringValue),
 	setting.NewDefinition(pkey.ManagedByOrganizationName, setting.UserSetting, setting.StringValue),

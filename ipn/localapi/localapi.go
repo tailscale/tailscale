@@ -124,6 +124,7 @@ func init() {
 	}
 	if buildfeatures.HasIPNBus {
 		Register("watch-ipn-bus", (*Handler).serveWatchIPNBus)
+		Register("resume-ipn-bus", (*Handler).serveResumeIPNBus)
 	}
 	if buildfeatures.HasDNS {
 		Register("dns-osconfig", (*Handler).serveDNSOSConfig)
@@ -910,12 +911,6 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// NotifyInitialNetMap is permitted alongside NotifyPeerChanges /
-	// NotifyPeerPatches for backwards compatibility with clients that
-	// set both (e.g. the Apple client). On platforms where
-	// goosGetsLegacyNetmapNotify is true, the initial netmap is
-	// delivered regardless; peer-change subscribers simply receive
-	// deltas after that point.
 
 	w.Header().Set("Content-Type", "application/json")
 	ctx := r.Context()
@@ -931,6 +926,24 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 		f.Flush()
 		return true
 	})
+}
+
+// serveResumeIPNBus resumes a suspended watch-ipn-bus session.
+// See [ipn.NotifySuspendWhenBehind].
+func (h *Handler) serveResumeIPNBus(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "watch ipn bus access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != httpm.POST {
+		http.Error(w, "want POST", http.StatusBadRequest)
+		return
+	}
+	if err := h.b.ResumeWatchNotifications(r.Context(), r.FormValue("session")); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) serveLoginInteractive(w http.ResponseWriter, r *http.Request) {
@@ -1765,7 +1778,7 @@ func (h *Handler) serveDNSQuery(w http.ResponseWriter, r *http.Request) {
 		qt = t
 	}
 
-	res, rrs, err := h.b.QueryDNS(name, qt)
+	res, rrs, err := h.b.QueryDNS(r.Context(), name, qt)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

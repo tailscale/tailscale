@@ -29,12 +29,35 @@ func Registered() map[string]bool { return in }
 // in which case its init does not run.
 func IsRegistered(name string) bool { return in[name] }
 
-// Register notes that the named feature is linked into the binary.
-func Register(name string) {
+// Register notes that the named feature is linked into the binary and
+// reports whether it should initialize itself. It reports false if the
+// feature was disabled via the TS_DISABLE_FEATURE environment variable,
+// in which case the feature is not recorded as registered and the
+// caller should skip the rest of its registration, such as setting
+// hooks and registering extensions and handlers. The typical use is at
+// the top of a feature package's init:
+//
+//	func init() {
+//		if !feature.Register("foo") {
+//			return
+//		}
+//		// ... set hooks, register extensions and handlers ...
+//	}
+//
+// A feature package with more than one init that registers things puts
+// this gate in one of them and guards the others with [Disabled], or
+// better, consolidates them into a single init.
+//
+// Register panics if the feature is already registered.
+func Register(name string) bool {
+	if Disabled(name) {
+		return false
+	}
 	if _, ok := in[name]; ok {
 		panic("duplicate feature registration for " + name)
 	}
 	in[name] = true
+	return true
 }
 
 // Hook is a func that can only be set once.
@@ -54,7 +77,15 @@ func (h *Hook[Func]) IsSet() bool {
 // or f is the zero value.
 //
 // It's meant to be called in init.
+//
+// As a backstop for feature packages that forget to consult
+// [Register], if the caller is a package under tailscale.com/feature/
+// whose feature was disabled via TS_DISABLE_FEATURE, the call is
+// silently ignored and the hook is left unset.
 func (h *Hook[Func]) Set(f Func) {
+	if callerFeatureDisabled() {
+		return
+	}
 	if h.ok {
 		panic("Set on already-set feature hook")
 	}
@@ -110,7 +141,13 @@ type Hooks[Func any] []Func
 // Add should only be called during early program
 // startup before Tailscale has started.
 // It is not safe for concurrent use.
+//
+// Like [Hook.Set], it is silently ignored if the calling feature
+// package was disabled via TS_DISABLE_FEATURE.
 func (h *Hooks[Func]) Add(f Func) {
+	if callerFeatureDisabled() {
+		return
+	}
 	if reflect.ValueOf(f).IsZero() {
 		panic("Add with zero value")
 	}

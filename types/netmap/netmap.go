@@ -297,6 +297,16 @@ func (nm *NetworkMap) DomainName() string {
 	return nm.Domain
 }
 
+// StableTailnetID returns the stable ID of the tailnet the current node is a
+// member of, as sent by control on the self node. It returns the empty string
+// if nm is nil or nm.SelfNode is invalid.
+func (nm *NetworkMap) StableTailnetID() tailcfg.StableTailnetID {
+	if nm == nil || !nm.SelfNode.Valid() {
+		return ""
+	}
+	return nm.SelfNode.StableTailnetID()
+}
+
 // TailnetDisplayName returns the admin-editable name contained in
 // NodeAttrTailnetDisplayName. If the capability is not present it
 // returns an empty string.

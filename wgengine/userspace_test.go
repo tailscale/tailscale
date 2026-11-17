@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
-	"os"
 	"runtime"
 	"slices"
 	"sync"
@@ -266,11 +265,9 @@ func TestUserspaceEnginePeerMTUReconfig(t *testing.T) {
 		t.Skipf("skipping on %q; peer MTU not supported", runtime.GOOS)
 	}
 
-	defer os.Setenv("TS_DEBUG_ENABLE_PMTUD", os.Getenv("TS_DEBUG_ENABLE_PMTUD"))
-	envknob.Setenv("TS_DEBUG_ENABLE_PMTUD", "")
+	envknob.SetenvForTest(t, "TS_DEBUG_ENABLE_PMTUD", "")
 	// Turn on debugging to help diagnose problems.
-	defer os.Setenv("TS_DEBUG_PMTUD", os.Getenv("TS_DEBUG_PMTUD"))
-	envknob.Setenv("TS_DEBUG_PMTUD", "true")
+	envknob.SetenvForTest(t, "TS_DEBUG_PMTUD", "true")
 
 	var knobs controlknobs.Knobs
 
@@ -543,7 +540,7 @@ func TestDERPAppNamePlumbing(t *testing.T) {
 	t.Cleanup(stunCleanup)
 
 	derpMap := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 			1: {
 				RegionID:   1,
 				RegionCode: "test",

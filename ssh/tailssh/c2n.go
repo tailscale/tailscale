@@ -17,7 +17,12 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/lineiter"
+	"tailscale.com/util/set"
 )
+
+// hookLocalUsernames, if non-nil, lists the local user accounts on
+// platforms without /etc/passwd. It is set by platform-specific code.
+var hookLocalUsernames func() ([]string, error)
 
 func handleC2NSSHUsernames(b *ipnlocal.LocalBackend, w http.ResponseWriter, r *http.Request) {
 	var req tailcfg.C2NSSHUsernamesRequest
@@ -36,6 +41,31 @@ func handleC2NSSHUsernames(b *ipnlocal.LocalBackend, w http.ResponseWriter, r *h
 	json.NewEncoder(w).Encode(res)
 }
 
+// maxSSHUsernameHints caps the number of usernames returned to a client;
+// the list is only a login hint.
+const maxSSHUsernameHints = 100
+
+// appendSSHUsernameHint appends u to names unless it is excluded or a
+// service account, is already present, or the list already has max entries
+// (so the result never exceeds max entries).
+func appendSSHUsernameHint(names []string, u string, exclude set.Set[string], max int) []string {
+	if exclude.Contains(u) {
+		return names
+	}
+	switch u {
+	case "nobody", "daemon", "sync":
+		return names
+	}
+	if slices.Contains(names, u) {
+		return names
+	}
+	if len(names) >= max {
+		// Enough for a hint.
+		return names
+	}
+	return append(names, u)
+}
+
 // getSSHUsernames discovers and returns the list of usernames that are
 // potential Tailscale SSH user targets.
 func getSSHUsernames(b *ipnlocal.LocalBackend, req *tailcfg.C2NSSHUsernamesRequest) (*tailcfg.C2NSSHUsernamesResponse, error) {
@@ -46,25 +76,18 @@ func getSSHUsernames(b *ipnlocal.LocalBackend, req *tailcfg.C2NSSHUsernamesReque
 
 	max := 10
 	if req != nil && req.Max != 0 {
-		max = req.Max
+		// The client-supplied cap is just a hint; clamp it to a sane ceiling.
+		max = min(req.Max, maxSSHUsernameHints)
 	}
 
+	exclude := make(set.Set[string])
+	for u, e := range req.Exclude {
+		if e {
+			exclude.Add(u)
+		}
+	}
 	add := func(u string) {
-		if req != nil && req.Exclude[u] {
-			return
-		}
-		switch u {
-		case "nobody", "daemon", "sync":
-			return
-		}
-		if slices.Contains(res.Usernames, u) {
-			return
-		}
-		if len(res.Usernames) > max {
-			// Enough for a hint.
-			return
-		}
-		res.Usernames = append(res.Usernames, u)
+		res.Usernames = appendSSHUsernameHint(res.Usernames, u, exclude, max)
 	}
 
 	if opUser := b.OperatorUserName(); opUser != "" {
@@ -86,6 +109,16 @@ func getSSHUsernames(b *ipnlocal.LocalBackend, req *tailcfg.C2NSSHUsernamesReque
 			add(string(line))
 		}
 	default:
+		if hookLocalUsernames != nil {
+			names, err := hookLocalUsernames()
+			if err != nil {
+				return nil, err
+			}
+			for _, name := range names {
+				add(name)
+			}
+			break
+		}
 		for lr := range lineiter.File("/etc/passwd") {
 			line, err := lr.Value()
 			if err != nil {

@@ -36,6 +36,10 @@ type LoginGoal struct {
 
 var _ Client = (*Auto)(nil)
 
+// maxRetryWindow defines the upper bound on how long control is allowed
+// to tell the client to wait before retrying a request.
+const maxRetryWindow = 5 * time.Minute
+
 // waitUnpause waits until either the client is unpaused or the Auto client is
 // shut down. It reports whether the client should keep running (i.e. it's not
 // closed).
@@ -90,7 +94,11 @@ func (c *Auto) updateRoutine() {
 			if ctx.Err() == nil {
 				c.direct.logf("lite map update error after %v: %v", d, err)
 			}
-			bo.BackOff(ctx, err)
+			if rle, rateLimited := errors.AsType[*rateLimitError](err); rateLimited {
+				c.waitRetryAfter(ctx, "updateRoutine", rle)
+			} else {
+				bo.BackOff(ctx, err)
+			}
 			continue
 		}
 		bo.Reset()
@@ -359,11 +367,7 @@ func (c *Auto) authRoutine() {
 			c.direct.health.SetAuthRoutineInError(err)
 			report(err, f)
 			if rle, ok := errors.AsType[*rateLimitError](err); ok {
-				c.logf("authRoutine: %s", rle)
-				select {
-				case <-ctx.Done():
-				case <-time.After(rle.retryAfter):
-				}
+				c.waitRetryAfter(ctx, "authRoutine", rle)
 			} else {
 				bo.BackOff(ctx, err)
 			}
@@ -575,28 +579,6 @@ func (mrs mapRoutineState) UpdateUserProfiles(profiles map[tailcfg.UserID]tailcf
 	}
 }
 
-var _ DiscoKeyUpdater = mapRoutineState{}
-
-func (mrs mapRoutineState) PatchDiscoKey(pub key.NodePublic, disco key.DiscoPublic) {
-	c := mrs.c
-	c.mu.Lock()
-	goodState := c.loggedIn && c.inMapPoll
-	dun, ok := c.observer.(DiscoKeyUpdater)
-	mapCtx := c.mapCtx
-	c.mu.Unlock()
-
-	if !goodState || !ok {
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(mapCtx, 2*time.Second)
-	defer cancel()
-
-	c.observerQueue.RunSync(ctx, func() {
-		dun.PatchDiscoKey(pub, disco)
-	})
-}
-
 // mapRoutine is responsible for keeping a read-only streaming connection to the
 // control server, and keeping the netmap up to date.
 func (c *Auto) mapRoutine() {
@@ -646,20 +628,43 @@ func (c *Auto) mapRoutine() {
 		c.mu.Lock()
 		c.inMapPoll = false
 		paused := c.paused
+		c.mu.Unlock()
+
+		rle, rateLimited := errors.AsType[*rateLimitError](err)
 
 		if paused {
 			mrs.bo.Reset()
-		} else {
+		} else if !rateLimited {
 			mrs.bo.BackOff(ctx, err)
 		}
-		c.mu.Unlock()
 
-		// Now safe to call functions that might acquire the mutex
 		if paused {
 			c.logf("mapRoutine: paused")
 		} else {
 			report(err, "PollNetMap")
 		}
+
+		if rateLimited {
+			c.waitRetryAfter(ctx, "mapRoutine", rle)
+		}
+	}
+}
+
+// waitRetryAfter sleeps for the delay the server requested in rle, capped at
+// [maxRetryWindow] or until ctx is done, whichever comes first.
+func (c *Auto) waitRetryAfter(ctx context.Context, routine string, rle *rateLimitError) {
+	if rle.retryAfter > maxRetryWindow {
+		rle.retryAfter = maxRetryWindow
+	}
+
+	c.logf("%s: %s", routine, rle)
+
+	t, ch := c.clock.NewTimer(rle.retryAfter)
+	defer t.Stop()
+
+	select {
+	case <-ctx.Done():
+	case <-ch:
 	}
 }
 

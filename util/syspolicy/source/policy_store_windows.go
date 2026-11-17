@@ -117,12 +117,12 @@ func NewUserPlatformPolicyStore(token windows.Token) (*PlatformPolicyStore, erro
 	return newPlatformPolicyStore(gp.UserPolicy, softwareKey, policyLock), nil
 }
 
-func newPlatformPolicyStore(scope gp.Scope, softwareKey registry.Key, policyLock *gp.PolicyLock) *PlatformPolicyStore {
+func newPlatformPolicyStore(scope gp.Scope, softwareKey registry.Key, policyLock lockableCloser) *PlatformPolicyStore {
 	return &PlatformPolicyStore{
 		scope:       scope,
 		softwareKey: softwareKey,
 		done:        make(chan struct{}),
-		policyLock:  &optionalPolicyLock{PolicyLock: policyLock},
+		policyLock:  &optionalPolicyLock{lockableCloser: policyLock},
 	}
 }
 
@@ -304,19 +304,30 @@ func (ps *PlatformPolicyStore) ReadStringArray(key pkey.Key) ([]string, error) {
 			if err != nil {
 				return nil, err
 			}
+			defer valKey.Close()
 			valNames, err := valKey.ReadValueNames(0)
 			if err != nil {
 				return nil, err
 			}
 			val = make([]string, 0, len(valNames))
 			for _, name := range valNames {
-				switch item, _, err := valKey.GetStringValue(name); {
+				switch item, itemType, err := valKey.GetStringValue(name); {
+				case err == nil:
+					val = append(val, item)
 				case err == registry.ErrNotExist:
 					continue
-				case err != nil:
-					return nil, err
+				case itemType == windows.REG_DWORD || itemType == windows.REG_QWORD:
+					// If the item is a REG_DWORD/REG_QWORD, treat it
+					// as an enabled/disabled flag
+					enabled, _, err := valKey.GetIntegerValue(name)
+					if err != nil {
+						return nil, err
+					}
+					if enabled != 0 {
+						val = append(val, name)
+					}
 				default:
-					val = append(val, item)
+					return nil, err
 				}
 			}
 			return val, nil
@@ -468,13 +479,14 @@ type gpLockState int
 const (
 	gpUnlocked = gpLockState(iota)
 	gpLocked
-	gpLockRestricted // the lock could not be acquired due to a restriction in place
+	gpLockSkipped // the lock was not acquired, but reading proceeds without it
 )
 
 // optionalPolicyLock is a wrapper around [gp.PolicyLock] that locks
 // and unlocks the underlying [gp.PolicyLock].
 //
-// If the [gp.PolicyLock.Lock] returns [gp.ErrLockRestricted], the error is ignored,
+// If [gp.PolicyLock.Lock] returns [gp.ErrLockRestricted] or
+// [windows.ERROR_ACCESS_DENIED], the error is ignored,
 // and calling [optionalPolicyLock.Unlock] is a no-op.
 //
 // The underlying GP lock is kinda optional: it is safe to read policy settings
@@ -483,27 +495,38 @@ const (
 //
 // It is not safe for concurrent use.
 type optionalPolicyLock struct {
-	*gp.PolicyLock
-	state gpLockState
+	lockableCloser // typically a [*gp.PolicyLock]
+	state          gpLockState
 }
 
 // Lock acquires the underlying [gp.PolicyLock], returning an error on failure.
+//
 // If the lock cannot be acquired due to a restriction in place
 // (e.g., attempting to acquire a lock while the service is starting),
-// the lock is considered to be held, the method returns nil, and a subsequent
-// call to [Unlock] is a no-op.
+// or because the caller is not allowed to acquire it, the lock is considered
+// to be held, the method returns nil, and a subsequent call to [Unlock] is a no-op.
+// The latter happens with [windows.ERROR_ACCESS_DENIED] when a user policy lock
+// is requested by a process whose user has no interactive logon session, such as
+// tailscaled started from an SSH session; policy settings are then read
+// without the lock.
+//
 // It is a runtime error to call Lock when the lock is already held.
 func (o *optionalPolicyLock) Lock() error {
 	if o.state != gpUnlocked {
 		panic("already locked")
 	}
-	switch err := o.PolicyLock.Lock(); err {
-	case nil:
+	err := o.lockableCloser.Lock()
+	switch {
+	case err == nil:
 		o.state = gpLocked
 		return nil
-	case gp.ErrLockRestricted:
+	case errors.Is(err, gp.ErrLockRestricted):
 		loggerx.Errorf("GP lock not acquired: %v", err)
-		o.state = gpLockRestricted
+		o.state = gpLockSkipped
+		return nil
+	case errors.Is(err, windows.ERROR_ACCESS_DENIED):
+		loggerx.Errorf("GP lock not acquired (%v); reading policy settings without it", err)
+		o.state = gpLockSkipped
 		return nil
 	default:
 		return err
@@ -515,10 +538,10 @@ func (o *optionalPolicyLock) Lock() error {
 func (o *optionalPolicyLock) Unlock() {
 	switch o.state {
 	case gpLocked:
-		o.PolicyLock.Unlock()
-	case gpLockRestricted:
-		// The GP lock wasn't acquired due to a restriction in place
-		// when [optionalPolicyLock.Lock] was called. Unlock is a no-op.
+		o.lockableCloser.Unlock()
+	case gpLockSkipped:
+		// The GP lock wasn't acquired when [optionalPolicyLock.Lock]
+		// was called. Unlock is a no-op.
 	case gpUnlocked:
 		panic("not locked")
 	default:

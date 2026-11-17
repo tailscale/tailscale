@@ -218,15 +218,6 @@ func TestToNode(t *testing.T) {
 	}
 }
 
-func FuzzQuotedLen(f *testing.F) {
-	for _, s := range quotedLenTestdata {
-		f.Add(s)
-	}
-	f.Fuzz(func(t *testing.T, s string) {
-		testQuotedLen(t, s)
-	})
-}
-
 func TestQuotedLen(t *testing.T) {
 	for _, s := range quotedLenTestdata {
 		testQuotedLen(t, s)

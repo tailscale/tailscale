@@ -15,10 +15,6 @@ import (
 	"tailscale.com/util/httpm"
 )
 
-func init() {
-	localapi.Register("prefs/service-clients", serveServiceClientPrefs)
-}
-
 // serveServiceClientPrefs handles GET and POST /localapi/v0/prefs/service-clients. GET returns all
 // of the current profile's service client prefs. POST merges one [apitype.ServiceClientPrefRequest]
 // into the saved service client prefs and returns the full updated set.

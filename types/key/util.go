@@ -129,7 +129,7 @@ func PrivateTypesForTest() set.Set[reflect.Type] {
 		reflect.TypeFor[DiscoPrivate](),
 		reflect.TypeFor[MachinePrivate](),
 		reflect.TypeFor[NodePrivate](),
-		reflect.TypeFor[NLPrivate](),
+		reflect.TypeFor[TLPrivate](),
 		reflect.TypeFor[HardwareAttestationKey](),
 	)
 }

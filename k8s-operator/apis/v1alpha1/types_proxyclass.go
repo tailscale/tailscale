@@ -107,7 +107,7 @@ type NodePortConfig struct {
 	// +kubebuilder:validation:MinItems=1
 	Ports []PortRange `json:"ports"`
 	// A selector which will be used to select the node's that will have their `ExternalIP`'s advertised
-	// by the ProxyGroup as Static Endpoints.
+	// by the ProxyGroup or Connector as Static Endpoints.
 	Selector map[string]string `json:"selector,omitempty"`
 }
 
@@ -332,8 +332,8 @@ type Metrics struct {
 	// Enable to create a Prometheus ServiceMonitor for scraping the proxy's Tailscale metrics.
 	// The ServiceMonitor will select the metrics Service that gets created when metrics are enabled.
 	// The ingested metrics for each Service monitor will have labels to identify the proxy:
-	// ts_proxy_type: ingress_service|ingress_resource|connector|proxygroup
-	// ts_proxy_parent_name: name of the parent resource (i.e name of the Connector, Tailscale Ingress, Tailscale Service or ProxyGroup)
+	// ts_proxy_type: ingress_service|ingress_resource|connector|proxygroup|peerrelay
+	// ts_proxy_parent_name: name of the parent resource (i.e name of the Connector, Tailscale Ingress, Tailscale Service, ProxyGroup or PeerRelay)
 	// ts_proxy_parent_namespace: namespace of the parent resource (if the parent resource is not cluster scoped)
 	// job: ts_<proxy type>_[<parent namespace>]_<parent_name>
 	// +optional

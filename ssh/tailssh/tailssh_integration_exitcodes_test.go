@@ -330,6 +330,15 @@ func TestLocalUnixForwardingHalfClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ul.Close() })
+	// The server dials through a child bound to the session user's
+	// credentials. Make the root-created socket and directory reachable
+	// by testuser.
+	if err := os.Chmod(socketDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(socketPath, 0o666); err != nil {
+		t.Fatal(err)
+	}
 
 	// Delayed-response service: read everything, sleep, then write.
 	const response = "delayed-response-after-client-closes-write"

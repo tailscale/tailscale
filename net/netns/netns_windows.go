@@ -19,29 +19,9 @@ import (
 	"tailscale.com/types/logger"
 )
 
-func interfaceIndex(iface *winipcfg.IPAdapterAddresses) uint32 {
-	if iface == nil {
-		// The zero ifidx means "unspecified". If we end up passing zero
-		// to bindSocket*(), it unsets the binding and lets the socket
-		// behave as normal again, which is what we want if there's no
-		// default route we can use.
-		return 0
-	}
-	return iface.IfIndex
-}
-
-func defaultInterfaceIndex(family winipcfg.AddressFamily) (uint32, error) {
-	iface, err := netmon.GetWindowsDefault(family)
-	if err != nil {
-		return 0, err
-	}
-
-	return interfaceIndex(iface), nil
-}
-
-func control(logf logger.Logf, _ *netmon.Monitor) func(network, address string, c syscall.RawConn) error {
+func control(logf logger.Logf, netMon *netmon.Monitor) func(network, address string, c syscall.RawConn) error {
 	return func(network, address string, c syscall.RawConn) error {
-		return controlC(logf, network, address, c)
+		return controlC(logf, netMon, network, address, c)
 	}
 }
 
@@ -49,7 +29,7 @@ var bindToInterfaceByRouteEnv = envknob.RegisterBool("TS_BIND_TO_INTERFACE_BY_RO
 
 // controlC binds c to the Windows interface that holds a default
 // route, and is not the Tailscale WinTun interface.
-func controlC(logf logger.Logf, network, address string, c syscall.RawConn) (err error) {
+func controlC(logf logger.Logf, netMon *netmon.Monitor, network, address string, c syscall.RawConn) (err error) {
 	if isLocalhost(address) {
 		// Don't bind to an interface for localhost connections,
 		// otherwise we get:
@@ -68,16 +48,21 @@ func controlC(logf logger.Logf, network, address string, c syscall.RawConn) (err
 		canV6 = true
 	}
 
+	// defIfaceIdxV4 and defIfaceIdxV6 are the default interface indices for
+	// each connectable address family. A zero index means there is no
+	// non-Tailscale default route, and leaves the socket unbound. The monitor
+	// caches nonzero indices, per family, until a network change
+	// notification.
 	var defIfaceIdxV4, defIfaceIdxV6 uint32
 	if canV4 {
-		defIfaceIdxV4, err = defaultInterfaceIndex(windows.AF_INET)
+		defIfaceIdxV4, err = netMon.WindowsDefaultInterfaceIndex(windows.AF_INET)
 		if err != nil {
 			return fmt.Errorf("defaultInterfaceIndex(AF_INET): %w", err)
 		}
 	}
 
 	if canV6 {
-		defIfaceIdxV6, err = defaultInterfaceIndex(windows.AF_INET6)
+		defIfaceIdxV6, err = netMon.WindowsDefaultInterfaceIndex(windows.AF_INET6)
 		if err != nil {
 			return fmt.Errorf("defaultInterfaceIndex(AF_INET6): %w", err)
 		}

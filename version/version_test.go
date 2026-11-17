@@ -38,7 +38,9 @@ func readAlpineTag(t *testing.T, file string) string {
 		if !ok {
 			continue
 		}
-		return string(suf)
+		// Drop anything after the tag, such as an "AS stage-name" suffix.
+		tag, _, _ := bytes.Cut(suf, []byte(" "))
+		return string(tag)
 	}
 	return ""
 }

@@ -6,15 +6,12 @@ package vmtest
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -58,26 +55,21 @@ func hardwareAccelAvailable() bool {
 type gokrazyPlatform struct{}
 
 func (gokrazyPlatform) planSteps(e *Env, n *Node) {
-	e.Step("Build gokrazy image")
+	e.Step(fmt.Sprintf("Build %s image", n.os.Name))
 	e.Step("Launch QEMU: " + n.name)
 }
 
 func (gokrazyPlatform) boot(ctx context.Context, e *Env, n *Node) error {
-	e.gokrazyOnce.Do(func() {
-		step := e.Step("Build gokrazy image")
-		step.Begin()
-		if err := e.ensureGokrazy(ctx); err != nil {
-			step.End(err)
-			e.t.Fatalf("ensureGokrazy: %v", err)
-		}
-		step.End(nil)
-	})
+	base, err := e.ensureGokrazy(ctx, n.os)
+	if err != nil {
+		return fmt.Errorf("ensureGokrazy(%s): %w", n.os.Name, err)
+	}
 
 	e.ensureQEMUSocket()
 
 	vmStep := e.Step("Launch QEMU: " + n.name)
 	vmStep.Begin()
-	if err := e.startGokrazyQEMU(n); err != nil {
+	if err := e.startGokrazyQEMU(n, base); err != nil {
 		vmStep.End(err)
 		return err
 	}
@@ -115,11 +107,12 @@ func (qemuCloudPlatform) boot(ctx context.Context, e *Env, n *Node) error {
 	return nil
 }
 
-// startGokrazyQEMU launches a QEMU process for a gokrazy node.
+// startGokrazyQEMU launches a QEMU process for a gokrazy node whose disk is
+// an overlay on the base qcow2 image at basePath.
 // This follows the same pattern as tstest/integration/nat/nat_test.go.
-func (e *Env) startGokrazyQEMU(n *Node) error {
+func (e *Env) startGokrazyQEMU(n *Node, basePath string) error {
 	disk := filepath.Join(e.tempDir, fmt.Sprintf("%s.qcow2", n.name))
-	if err := createOverlay(e.gokrazyBase, disk); err != nil {
+	if err := createOverlay(basePath, disk); err != nil {
 		return err
 	}
 
@@ -161,6 +154,10 @@ func (e *Env) startGokrazyQEMU(n *Node) error {
 	}
 
 	args = append(args, qemuAccelArgs()...)
+	if !hardwareAccelAvailable() {
+		// Make boot timer calibration deterministic to avoid boot hangs.
+		args = append(args, "-icount", "shift=auto")
+	}
 	return e.launchQEMU(n.name, logPath, args)
 }
 
@@ -181,7 +178,7 @@ func (e *Env) startCloudQEMU(n *Node) error {
 	}
 
 	logPath := filepath.Join(e.tempDir, n.name+".log")
-	qmpSock := filepath.Join(e.sockDir, n.name+"-qmp.sock")
+	n.qmpPath = filepath.Join(e.sockDir, n.name+"-qmp.sock")
 
 	args := []string{
 		"-machine", "q35",
@@ -192,7 +189,7 @@ func (e *Env) startCloudQEMU(n *Node) error {
 		"-drive", fmt.Sprintf("file=%s,if=virtio,media=cdrom,readonly=on", seedISO),
 		"-smbios", "type=1,serial=ds=nocloud",
 		"-serial", "file:" + logPath,
-		"-qmp", "unix:" + qmpSock + ",server,nowait",
+		"-qmp", "unix:" + n.qmpPath + ",server,nowait",
 		// Feed host entropy to the guest so early boot doesn't block in
 		// getrandom() waiting for the CRNG to seed. Cheap and worth it on any
 		// backend; the stall is especially likely under TCG.
@@ -228,7 +225,7 @@ func (e *Env) startCloudQEMU(n *Node) error {
 	}
 
 	// Query QMP to find the actual SSH port that QEMU allocated.
-	port, err := qmpQueryHostFwd(qmpSock)
+	port, err := qmpQueryHostFwd(n)
 	if err != nil {
 		return fmt.Errorf("querying SSH port via QMP: %w", err)
 	}
@@ -343,7 +340,13 @@ func (e *Env) startQEMUOnce(name, logPath string, args []string) (*qemuRun, erro
 		qemuLog.Close()
 		return nil, fmt.Errorf("killWithParent: %w", err)
 	}
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	// Child now has a copy of the pipe's read end. Parent can close its own.
+	// These were populated by killWithParent prior to Start.
+	for _, f := range cmd.ExtraFiles {
+		f.Close()
+	}
+	if err != nil {
 		parentPipe.Close()
 		devNull.Close()
 		qemuLog.Close()
@@ -383,84 +386,26 @@ func dumpLogTail(t testing.TB, name, kind, path string) {
 		t.Logf("=== %s %s log unavailable: %v ===", name, kind, err)
 		return
 	}
+	dumpTail(t, name, kind, data, 50)
+}
+
+// dumpTail prints the last maxLines lines of data to the test log, prefixed
+// with the VM name and kind. It prints only a short note if data is empty.
+func dumpTail(t testing.TB, name, kind string, data []byte, maxLines int) {
+	t.Helper()
 	if len(data) == 0 {
 		t.Logf("=== %s %s log is empty ===", name, kind)
 		return
 	}
-	lines := bytes.Split(data, []byte("\n"))
+	lines := bytes.Split(bytes.TrimRight(data, "\n"), []byte("\n"))
 	start := 0
-	if len(lines) > 50 {
-		start = len(lines) - 50
+	if len(lines) > maxLines {
+		start = len(lines) - maxLines
 	}
-	t.Logf("=== last 50 lines of %s %s log ===", name, kind)
+	t.Logf("=== last %d lines of %s %s log ===", len(lines)-start, name, kind)
 	for _, line := range lines[start:] {
 		t.Logf("[%s] %s", name, line)
 	}
-}
-
-// hostFwdRe matches a single TCP[HOST_FORWARD] line from QEMU's
-// "info usernet" human-monitor command output, e.g.:
-//
-//	TCP[HOST_FORWARD]  12       127.0.0.1 35323       10.0.2.15    22
-var hostFwdRe = regexp.MustCompile(`TCP\[HOST_FORWARD\]\s+\d+\s+127\.0\.0\.1\s+(\d+)\s+`)
-
-// qmpQueryHostFwd connects to a QEMU QMP socket and queries the host port
-// assigned to the first TCP host forward rule (the SSH debug port).
-func qmpQueryHostFwd(sockPath string) (int, error) {
-	// Wait for the QMP socket to appear.
-	var conn net.Conn
-	for range 50 {
-		var err error
-		conn, err = net.Dial("unix", sockPath)
-		if err == nil {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if conn == nil {
-		return 0, fmt.Errorf("QMP socket %s not available", sockPath)
-	}
-	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(20 * time.Second))
-
-	// Read the QMP greeting.
-	var greeting json.RawMessage
-	dec := json.NewDecoder(conn)
-	if err := dec.Decode(&greeting); err != nil {
-		return 0, fmt.Errorf("reading QMP greeting: %w", err)
-	}
-
-	// Send qmp_capabilities to initialize.
-	fmt.Fprintf(conn, `{"execute":"qmp_capabilities"}`+"\n")
-	var capsResp json.RawMessage
-	if err := dec.Decode(&capsResp); err != nil {
-		return 0, fmt.Errorf("reading qmp_capabilities response: %w", err)
-	}
-
-	// Poll "info usernet" until the SLIRP host-forward rule appears.
-	// On slow runners (e.g. GitHub Actions) QEMU sometimes returns an
-	// empty "info usernet" if we query it before user-mode networking
-	// has finished wiring up the forward, so single-shot lookups fail.
-	deadline := time.Now().Add(10 * time.Second)
-	var lastReturn string
-	for {
-		fmt.Fprintf(conn, `{"execute":"human-monitor-command","arguments":{"command-line":"info usernet"}}`+"\n")
-		var hmpResp struct {
-			Return string `json:"return"`
-		}
-		if err := dec.Decode(&hmpResp); err != nil {
-			return 0, fmt.Errorf("reading info usernet response: %w", err)
-		}
-		lastReturn = hmpResp.Return
-		if m := hostFwdRe.FindStringSubmatch(hmpResp.Return); m != nil {
-			return strconv.Atoi(m[1])
-		}
-		if time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return 0, fmt.Errorf("no hostfwd port found after waiting: %q", lastReturn)
 }
 
 // tailLogFile tails a VM's serial console log file and publishes each line

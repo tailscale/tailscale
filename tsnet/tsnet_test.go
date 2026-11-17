@@ -43,15 +43,20 @@ import (
 	"github.com/prometheus/common/model"
 	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/net/proxy"
+	"golang.org/x/tools/go/packages"
 
-	"tailscale.com/client/local"
 	"tailscale.com/cmd/testwrapper/flakytest"
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/feature/featuretags"
 	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
+	"tailscale.com/net/memnet"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tstest"
@@ -558,6 +563,115 @@ func TestConn(t *testing.T) {
 	}
 }
 
+// TestDialThroughExitNode verifies that a tsnet server configured to use
+// another node as an exit node (via the ExitNodeID pref) routes a Dial of
+// a non-tailnet IP over WireGuard to that exit node rather than dialing
+// it from the host network.
+//
+// The exit node here is itself a tsnet server. tsnet does not forward
+// exit-node traffic onward to the host network (flows with no matching
+// listener are rejected in getTCPHandlerForFlow), so the test stands in
+// for the upstream destination with a fallback TCP handler on the exit
+// node that echoes the connection.
+func TestDialThroughExitNode(t *testing.T) {
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	controlURL, c := startControl(t)
+	s1, s1ip, s1PubKey := startServer(t, ctx, controlURL, "s1")
+
+	// dstAddr is a TEST-NET-3 (documentation) address standing in for
+	// an address out on the internet, past the exit node.
+	dstAddr := netip.MustParseAddrPort("203.0.113.42:8080")
+
+	var gotSrc atomic.Value // of netip.AddrPort; src seen by s1's fallback handler
+	s1.RegisterFallbackTCPHandler(func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
+		t.Logf("s1: fallback TCP handler called for %v -> %v", src, dst)
+		if dst != dstAddr {
+			return nil, true // reject with a RST
+		}
+		gotSrc.Store(src)
+		return func(conn net.Conn) {
+			defer conn.Close()
+			io.Copy(conn, conn)
+		}, true
+	})
+
+	lc1 := must.Get(s1.LocalClient())
+	must.Get(lc1.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			AdvertiseRoutes: tsaddr.ExitRoutes(),
+		},
+		AdvertiseRoutesSet: true,
+	}))
+	c.SetSubnetRoutes(s1PubKey, tsaddr.ExitRoutes())
+
+	// Start s2 after s1 is fully set up, so s2's first netmap already
+	// shows s1 offering exit node routes.
+	s2, s2ip, _ := startServer(t, ctx, controlURL, "s2")
+	lc2 := must.Get(s2.LocalClient())
+
+	// Ping to make sure the connection is up.
+	pingCtx, cancelPing := pingTimeout(ctx)
+	defer cancelPing()
+	must.Get(lc2.Ping(pingCtx, s1ip, tailcfg.PingTSMP))
+
+	must.Get(lc2.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			ExitNodeID: c.Node(s1PubKey).StableID,
+		},
+		ExitNodeIDSet: true,
+	}))
+
+	// Wait for the exit node's default route to be installed in s2's
+	// route table; it's what UserDial consults to decide that a
+	// non-tailnet IP should be dialed through netstack over WireGuard.
+	if err := tstest.WaitFor(30*time.Second, func() error {
+		p, ok := s2.lb.PeerForIP(dstAddr.Addr())
+		if !ok {
+			return fmt.Errorf("no peer for %v yet", dstAddr.Addr())
+		}
+		if p.Node.Key() != s1PubKey {
+			return fmt.Errorf("peer for %v is %v; want s1 %v", dstAddr.Addr(), p.Node.Key(), s1PubKey)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A dial of a non-tailnet IP must go through the exit node, never
+	// the host network.
+	s2dialer := s2.Sys().Dialer.Get()
+	s2dialer.SetSystemDialerForTest(func(ctx context.Context, netw, addr string) (net.Conn, error) {
+		t.Logf("s2: unexpected system dial called for %s %s", netw, addr)
+		return nil, fmt.Errorf("system dialer called unexpectedly for %s %s", netw, addr)
+	})
+
+	conn, err := s2.Dial(ctx, "tcp", dstAddr.String())
+	if err != nil {
+		t.Fatalf("s2.Dial(%v): %v", dstAddr, err)
+	}
+	defer conn.Close()
+
+	const msg = "hello via exit node"
+	if _, err := io.WriteString(conn, msg); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	buf := make([]byte, len(msg))
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got := string(buf); got != msg {
+		t.Fatalf("echo through exit node: got %q, want %q", got, msg)
+	}
+
+	src, _ := gotSrc.Load().(netip.AddrPort)
+	if src.Addr() != s2ip {
+		t.Errorf("exit node saw connection from %v; want s2's tailnet IP %v", src, s2ip)
+	}
+}
+
 func TestLoopbackLocalAPI(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8557")
 	tstest.ResourceCheck(t)
@@ -724,6 +838,42 @@ func TestTailscaleIPs(t *testing.T) {
 	}
 }
 
+// TestSystemDial verifies that Server.SystemDial carries the control
+// connection, by serving control only on an in-memory listener.
+func TestSystemDial(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	_, control := startControl(t)
+
+	// Nothing listens on this host port, so control is only reachable
+	// via SystemDial.
+	const controlAddr = "127.0.0.1:1"
+	ln := memnet.Listen(controlAddr)
+	defer ln.Close()
+	go http.Serve(ln, control)
+
+	s := &Server{
+		Dir:        t.TempDir(),
+		ControlURL: "http://" + controlAddr,
+		Hostname:   "s1",
+		Store:      new(mem.Store),
+		Ephemeral:  true,
+		SystemDial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if addr == controlAddr {
+				return ln.Dial(ctx, network, addr)
+			}
+			var d net.Dialer
+			return d.DialContext(ctx, network, addr)
+		},
+	}
+	defer s.Close()
+
+	if _, err := s.Up(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestListenerCleanup is a regression test to verify that s.Close doesn't
 // deadlock if a listener is still open.
 func TestListenerCleanup(t *testing.T) {
@@ -817,7 +967,26 @@ func TestStartStopStartGetsSameIP(t *testing.T) {
 	}
 }
 
+func TestServeUnavailable(t *testing.T) {
+	if buildfeatures.HasServe {
+		t.Skip("requires ts_omit_serve")
+	}
+
+	// Neither call should try to start the server when Serve is omitted.
+	s := &Server{}
+	s.initOnce.Do(func() { s.initErr = errors.New("unexpected server startup") })
+	if ln, err := s.ListenFunnel("tcp", ":443"); ln != nil || !errors.Is(err, feature.ErrUnavailable) {
+		t.Errorf("ListenFunnel = %v, %v; want nil, %v", ln, err, feature.ErrUnavailable)
+	}
+	if ln, err := s.ListenService("svc:test", ServiceModeTCP{Port: 80}); ln != nil || !errors.Is(err, feature.ErrUnavailable) {
+		t.Errorf("ListenService = %v, %v; want nil, %v", ln, err, feature.ErrUnavailable)
+	}
+}
+
 func TestFunnel(t *testing.T) {
+	if !buildfeatures.HasServe {
+		t.Skip("requires Serve")
+	}
 	ctx, dialCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer dialCancel()
 
@@ -901,6 +1070,9 @@ func TestFunnel(t *testing.T) {
 // after itself when closed. Specifically, changes made to the serve config
 // should be cleared.
 func TestFunnelClose(t *testing.T) {
+	if !buildfeatures.HasServe {
+		t.Skip("requires Serve")
+	}
 
 	marshalServeConfig := func(t *testing.T, sc ipn.ServeConfigView) string {
 		t.Helper()
@@ -1010,7 +1182,7 @@ func setUpServiceState(t *testing.T, name, ip string, host, client *Server,
 
 	// The Service host must have the 'service-host' capability, which
 	// is a mapping from the Service name to the Service VIP.
-	cm := host.lb.NetMap().SelfNode.CapMap()
+	cm := host.lb.NetMapNoPeers().SelfNode.CapMap()
 	svcIPMap := make(tailcfg.ServiceIPMappings)
 	if cm.Contains(nodecap.ServiceHost) {
 		parsed := must.Get(tailcfg.UnmarshalNodeCapViewJSON[tailcfg.ServiceIPMappings](cm, nodecap.ServiceHost))
@@ -1027,8 +1199,8 @@ func setUpServiceState(t *testing.T, name, ip string, host, client *Server,
 
 	// The Service host must be allowed to advertise the Service VIP.
 	subnetRoutes := []netip.Prefix{netip.MustParsePrefix(ip + `/32`)}
-	selfAddresses := host.lb.NetMap().SelfNode.Addresses()
-	for _, existingRoute := range host.lb.NetMap().SelfNode.AllowedIPs().All() {
+	selfAddresses := host.lb.NetMapNoPeers().SelfNode.Addresses()
+	for _, existingRoute := range host.lb.NetMapNoPeers().SelfNode.AllowedIPs().All() {
 		if views.SliceContains(selfAddresses, existingRoute) {
 			continue
 		}
@@ -1072,7 +1244,7 @@ func setUpServiceState(t *testing.T, name, ip string, host, client *Server,
 	}
 	waitForLatestNetmap := func(t *testing.T, s *Server) {
 		t.Helper()
-		w := must.Get(s.localClient.WatchIPNBus(t.Context(), ipn.NotifyInitialNetMap))
+		w := must.Get(s.localClient.WatchIPNBus(t.Context(), ipn.NotifyInitialStatus))
 		defer w.Close()
 		for {
 			must.Get(w.Next())
@@ -1086,6 +1258,9 @@ func setUpServiceState(t *testing.T, name, ip string, host, client *Server,
 }
 
 func TestListenService(t *testing.T) {
+	if !buildfeatures.HasServe {
+		t.Skip("requires Serve")
+	}
 
 	type dialFn func(context.Context, string, string) (net.Conn, error)
 
@@ -1481,6 +1656,9 @@ func TestListenService(t *testing.T) {
 }
 
 func TestListenServiceClose(t *testing.T) {
+	if !buildfeatures.HasServe {
+		t.Skip("requires Serve")
+	}
 	const serviceName = "svc:foo"
 
 	diffServeConfig := func(a, b ipn.ServeConfigView) string {
@@ -2350,8 +2528,6 @@ func TestUserMetricsByteCounters(t *testing.T) {
 	}
 	t.Logf("ping success: %#+v", res)
 
-	mustDirect(t, t.Logf, lc1, lc2)
-
 	// 1 megabytes
 	bytesToSend := 1 * 1024 * 1024
 
@@ -2376,21 +2552,14 @@ func TestUserMetricsByteCounters(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Allow the metrics for the bytes sent to be off by 15%.
-	bytesSentTolerance := 1.15
-
 	t.Logf("Metrics1:\n%s\n", metrics1)
 
-	// Verify that the amount of data recorded in bytes is higher or equal to the data sent
-	inboundBytes1 := parsedMetrics1[`tailscaled_inbound_bytes_total{path="direct_ipv4"}`]
-	if inboundBytes1 < float64(bytesToSend) {
-		t.Errorf(`metrics1, tailscaled_inbound_bytes_total{path="direct_ipv4"}: expected higher (or equal) than %d, got: %f`, bytesToSend, inboundBytes1)
-	}
-
-	// But ensure that it is not too much higher than the data sent.
-	if inboundBytes1 > float64(bytesToSend)*bytesSentTolerance {
-		t.Errorf(`metrics1, tailscaled_inbound_bytes_total{path="direct_ipv4"}: expected lower than %f, got: %f`, float64(bytesToSend)*bytesSentTolerance, inboundBytes1)
-	}
+	// The transferred bytes can be counted on any path: on a machine where
+	// localhost has both IPv4 and IPv6, magicsock may pick either (it prefers
+	// IPv6 on latency ties), and if no direct path has been established yet
+	// the traffic rides DERP. So assert on the bytes recorded across all
+	// paths rather than on a specific path label.
+	checkBytesCounted(t, "metrics1", "tailscaled_inbound_bytes_total", parsedMetrics1, bytesToSend)
 
 	metrics2, err := lc2.UserMetrics(ctx)
 	if err != nil {
@@ -2404,16 +2573,7 @@ func TestUserMetricsByteCounters(t *testing.T) {
 
 	t.Logf("Metrics2:\n%s\n", metrics2)
 
-	// Verify that the amount of data recorded in bytes is higher or equal than the data sent.
-	outboundBytes2 := parsedMetrics2[`tailscaled_outbound_bytes_total{path="direct_ipv4"}`]
-	if outboundBytes2 < float64(bytesToSend) {
-		t.Errorf(`metrics2, tailscaled_outbound_bytes_total{path="direct_ipv4"}: expected higher (or equal) than %d, got: %f`, bytesToSend, outboundBytes2)
-	}
-
-	// But ensure that it is not too much higher than the data sent.
-	if outboundBytes2 > float64(bytesToSend)*bytesSentTolerance {
-		t.Errorf(`metrics2, tailscaled_outbound_bytes_total{path="direct_ipv4"}: expected lower than %f, got: %f`, float64(bytesToSend)*bytesSentTolerance, outboundBytes2)
-	}
+	checkBytesCounted(t, "metrics2", "tailscaled_outbound_bytes_total", parsedMetrics2, bytesToSend)
 }
 
 func TestUserMetricsRouteGauges(t *testing.T) {
@@ -2542,34 +2702,30 @@ func waitForCondition(t *testing.T, msg string, waitTime time.Duration, f func()
 	t.Fatalf("waiting for condition: %s", msg)
 }
 
-// mustDirect ensures there is a direct connection between LocalClient 1 and 2
-func mustDirect(t *testing.T, logf logger.Logf, lc1, lc2 *local.Client) {
+// checkBytesCounted verifies that the labeled byte counter metric (for
+// example tailscaled_inbound_bytes_total, which carries a path label)
+// accounted for a transfer of bytesToSend bytes: at least bytesToSend
+// bytes must be counted across all paths combined.
+//
+// There is deliberately no upper bound. The counters record wire bytes,
+// which legitimately exceed the payload (WireGuard overhead, relay
+// framing, TCP retransmissions inside the tunnel under load, and the
+// several copies of each packet that magicsock sends while a direct path
+// is still being confirmed), and none of that variance is a bug in the
+// counters. A payload byte that fails to appear is.
+func checkBytesCounted(t *testing.T, label, metric string, parsed map[string]float64, bytesToSend int) {
 	t.Helper()
-	lastLog := time.Now().Add(-time.Minute)
-	// See https://github.com/tailscale/tailscale/issues/654
-	// and https://github.com/tailscale/tailscale/issues/3247 for discussions of this deadline.
-	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		status1, err := lc1.Status(ctx)
-		if err != nil {
+	prefix := metric + `{path="`
+	var total float64
+	for k, v := range parsed {
+		if _, ok := strings.CutPrefix(k, prefix); !ok {
 			continue
 		}
-		status2, err := lc2.Status(ctx)
-		if err != nil {
-			continue
-		}
-		pst := status1.Peer[status2.Self.PublicKey]
-		if pst.CurAddr != "" {
-			logf("direct link %s->%s found with addr %s", status1.Self.HostName, status2.Self.HostName, pst.CurAddr)
-			return
-		}
-		if now := time.Now(); now.Sub(lastLog) > time.Second {
-			logf("no direct path %s->%s yet, addrs %v", status1.Self.HostName, status2.Self.HostName, pst.Addrs)
-			lastLog = now
-		}
+		total += v
 	}
-	t.Error("magicsock did not find a direct path from lc1 to lc2")
+	if total < float64(bytesToSend) {
+		t.Errorf("%s: %s counted %f bytes across all paths, want at least %d", label, metric, total, bytesToSend)
+	}
 }
 
 // chanTUN is a tun.Device for testing that uses channels for packet I/O.
@@ -2611,12 +2767,13 @@ func (t *chanTUN) Close() error {
 	return nil
 }
 
-func (t *chanTUN) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+func (t *chanTUN) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
 	select {
 	case <-t.closed:
 		return 0, io.EOF
 	case pkt := <-t.Outbound:
-		sizes[0] = copy(bufs[0][offset:], pkt)
+		packets[0].Offset = tun.ReadPacketSpacing
+		packets[0].Size = copy(slab[tun.ReadPacketSpacing:len(slab)-tun.ReadPacketSpacing], pkt)
 		return 1, nil
 	}
 }
@@ -3444,6 +3601,8 @@ func TestDeps(t *testing.T) {
 			"tailscale.com/feature/bird":                    "tsnet should not depend on BIRD integration",
 			"tailscale.com/feature/captiveportal":           "tsnet apps don't need captive portal detection; import it explicitly if desired",
 			"tailscale.com/feature/clientupdate":            "tsnet should not depend on feature/clientupdate",
+			"tailscale.com/feature/derpwebsocket":           "tsnet apps don't need DERP-over-WebSocket fallback; import it explicitly if desired",
+			"tailscale.com/feature/dnsresolvecache":         "tsnet apps don't persist DNS resolutions to disk by default; import it explicitly if desired",
 			"tailscale.com/feature/remoteconfig":            "tsnet should not depend on feature/remoteconfig",
 			"tailscale.com/feature/syspolicy":               "tsnet should not depend on syspolicy",
 			"tailscale.com/ipn/store/awsstore":              "tsnet callers wanting AWS state storage should import awsstore themselves",
@@ -3458,6 +3617,72 @@ func TestDeps(t *testing.T) {
 			}
 		},
 	}.Check(t)
+}
+
+// TestTypeCheckFeatureSets verifies that tsnet type-checks with only
+// [featuretags.TSNetMin] and with a few other plausible feature sets.
+// It type-checks from source rather than compiling, which is many
+// times faster and doesn't depend on a warm build cache.
+func TestTypeCheckFeatureSets(t *testing.T) {
+	// minTags returns the build tags for a tsnet build with only the
+	// features in keep plus [featuretags.TSNetMin].
+	minTags := func(keep ...featuretags.FeatureTag) string {
+		return strings.Join(featuretags.MinTags(append(keep, featuretags.TSNetMin...)...), ",")
+	}
+	// withoutTags returns the build tags for a default build without
+	// the features in remove or anything that depends on them.
+	withoutTags := func(remove ...featuretags.FeatureTag) string {
+		var tags []string
+		for _, ft := range remove {
+			for dep := range featuretags.RequiredBy(ft) {
+				tags = append(tags, dep.OmitTag())
+			}
+		}
+		slices.Sort(tags)
+		return strings.Join(slices.Compact(tags), ",")
+	}
+
+	allPlatforms := []string{"linux/amd64", "darwin/arm64", "windows/amd64", "android/arm64"}
+	linuxOnly := []string{"linux/amd64"}
+	tests := []struct {
+		name      string
+		platforms []string
+		tags      string
+	}{
+		{"min", allPlatforms, minTags()},
+		{"min+acme+serve", linuxOnly, minTags("acme", "serve")},
+		{"min+nattraversal+portmapper", linuxOnly, minTags("nattraversal", "portmapper")},
+		{"no-serve", linuxOnly, withoutTags("serve")},
+	}
+	// Each load type-checks hundreds of packages, std included, using
+	// all CPUs, so running more than a couple at once only adds memory.
+	sem := make(chan bool, 2)
+	for _, tt := range tests {
+		for _, plat := range tt.platforms {
+			goos, goarch, _ := strings.Cut(plat, "/")
+			t.Run(tt.name+"/"+goos, func(t *testing.T) {
+				t.Parallel()
+				sem <- true
+				defer func() { <-sem }()
+				pkgs, err := packages.Load(&packages.Config{
+					Mode:       packages.NeedName | packages.NeedImports | packages.NeedDeps | packages.NeedTypes | packages.NeedSyntax,
+					BuildFlags: []string{"-tags=" + tt.tags},
+					Env:        append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=0"),
+				}, "tailscale.com/tsnet")
+				if err != nil {
+					t.Fatal(err)
+				}
+				packages.Visit(pkgs, nil, func(p *packages.Package) {
+					for _, e := range p.Errors {
+						t.Error(e)
+					}
+				})
+				if t.Failed() {
+					t.Logf("tags: %s", tt.tags)
+				}
+			})
+		}
+	}
 }
 
 func TestResolveAuthKey(t *testing.T) {
@@ -3924,4 +4149,69 @@ func TestListenMultipleEphemeralPorts(t *testing.T) {
 		lt := setupTwoClientTest(t, true)
 		testMultipleEphemeral(t, lt)
 	})
+}
+
+// TestCloseBeforeStart verifies that Close on a Server whose Start never ran
+// (or failed early) does not panic. s.sys is assigned partway through doInit,
+// so it is still nil in that state, and close previously dereferenced
+// s.sys.Bus unconditionally.
+func TestCloseBeforeStart(t *testing.T) {
+	s := &Server{}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+// TestHTTPClientDefaultTransport verifies that the transport returned by
+// HTTPClient matches http.DefaultTransport's settings, except for the
+// fields that HTTPClient intentionally overrides.
+func TestHTTPClientDefaultTransport(t *testing.T) {
+	s := &Server{}
+	tr, ok := s.HTTPClient().Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("Transport is %T; want *http.Transport", s.HTTPClient().Transport)
+	}
+	if tr.DialContext == nil {
+		t.Error("DialContext is nil; want it set to Server.Dial")
+	}
+	if tr.Proxy != nil {
+		t.Error("Proxy is non-nil; want nil, as environment proxies are unreachable over the tailnet")
+	}
+
+	// It is safe for a test to assume that no application has replaced or
+	// modified http.DefaultTransport. Production tsnet code cannot assume that.
+	want := http.DefaultTransport.(*http.Transport)
+	gotv := reflect.ValueOf(tr).Elem()
+	wantv := reflect.ValueOf(want).Elem()
+	for i := range gotv.NumField() {
+		f := gotv.Type().Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		switch f.Name {
+		case "DialContext", "Proxy":
+			// Intentionally different; checked above.
+		case "TLSClientConfig", "TLSNextProto", "HTTP2":
+			// net/http may populate these lazily on http.DefaultTransport
+			// when another test uses HTTP/2. They are nil in its definition.
+			if !gotv.Field(i).IsNil() {
+				t.Errorf("field %s is non-nil; want nil (as defined in http.DefaultTransport)", f.Name)
+			}
+		case "OnProxyConnectResponse", "Dial", "DialTLSContext", "DialTLS",
+			"TLSHandshakeTimeout",
+			"DisableKeepAlives", "DisableCompression",
+			"MaxIdleConns", "MaxIdleConnsPerHost", "MaxConnsPerHost",
+			"IdleConnTimeout", "ResponseHeaderTimeout", "ExpectContinueTimeout",
+			"ProxyConnectHeader", "GetProxyConnectHeader",
+			"MaxResponseHeaderBytes", "WriteBufferSize", "ReadBufferSize",
+			"ForceAttemptHTTP2", "Protocols":
+			// Expected to match http.DefaultTransport.
+			g, w := gotv.Field(i).Interface(), wantv.Field(i).Interface()
+			if !reflect.DeepEqual(g, w) {
+				t.Errorf("field %s = %v; want %v (as in http.DefaultTransport)", f.Name, g, w)
+			}
+		default:
+			t.Errorf("unexpected http.Transport field %q; decide how HTTPClient should handle it and update this test", f.Name)
+		}
+	}
 }

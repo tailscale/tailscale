@@ -23,7 +23,6 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/health"
-	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/backoff"
@@ -95,11 +94,6 @@ func (r *winRouter) Set(cfg *router.Config) error {
 	if err != nil {
 		r.logf("ConfigureInterface: %v", err)
 		return err
-	}
-
-	// Flush DNS on router config change to clear cached DNS entries (solves #1430)
-	if err := dns.Flush(); err != nil {
-		r.logf("flushdns error: %v", err)
 	}
 
 	return nil

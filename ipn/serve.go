@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/nodecap"
@@ -620,7 +621,7 @@ func (v ServeConfigView) IsFunnelOn() bool { return v.ж.IsFunnelOn() }
 
 // IsFunnelOn reports whether any funnel endpoint is currently enabled for this node.
 func (sc *ServeConfig) IsFunnelOn() bool {
-	if sc == nil {
+	if !buildfeatures.HasServe || sc == nil {
 		return false
 	}
 	for _, b := range sc.AllowFunnel {
@@ -831,7 +832,7 @@ func ExpandProxyTargetValue(target string, supportedSchemes []string, defaultSch
 		return "", fmt.Errorf("invalid port %q", u.Port())
 	}
 
-	u.Host = fmt.Sprintf("%s:%d", u.Hostname(), port)
+	u.Host = net.JoinHostPort(u.Hostname(), strconv.Itoa(int(port)))
 
 	return u.String(), nil
 }

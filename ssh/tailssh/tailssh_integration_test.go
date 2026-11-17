@@ -6,7 +6,9 @@
 package tailssh
 
 import (
+	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -29,7 +31,8 @@ import (
 	"time"
 
 	"github.com/bramvdbogaerde/go-scp"
-	"github.com/google/go-cmp/cmp"
+	gcmp "github.com/google/go-cmp/cmp"
+	gcmpopts "github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/pkg/sftp"
 	gliderssh "github.com/tailscale/gliderssh"
 	"golang.org/x/crypto/ssh"
@@ -192,6 +195,78 @@ func TestIntegrationSSH(t *testing.T) {
 	}
 }
 
+// TestIntegrationSSHNoLeakedPTY checks that starting a second SSH session
+// while a PTY session is active does not leak extra file descriptors.
+func TestIntegrationSSHNoLeakedPTY(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("requires /proc to inspect file descriptors")
+	}
+	for _, name := range []string{"v1", "v2"} {
+		t.Run(name, func(t *testing.T) {
+			forceV1Behavior := name == "v1"
+			cl := testClient(t, forceV1Behavior, false)
+			// Bound both the readiness read and the descriptor scan if a child hangs.
+			timer := time.AfterFunc(30*time.Second, func() { cl.Close() })
+			defer timer.Stop()
+
+			first, err := cl.NewSession()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer first.Close()
+			stdin, err := first.StdinPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stdin.Close()
+			if err := first.RequestPty("xterm", 24, 80, ssh.TerminalModes{ssh.ECHO: 0, ssh.OPOST: 0}); err != nil {
+				t.Fatal(err)
+			}
+			stdout, err := first.StdoutPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Keep the first session alive until we close it. Receiving its output
+			// proves launchProcess has installed the duplicated master before we
+			// start the second session; no timing-dependent sleep is needed.
+			if err := first.Start("printf 'ready\\n'; read line"); err != nil {
+				t.Fatal(err)
+			}
+			if line, err := bufio.NewReader(stdout).ReadString('\n'); err != nil || line != "ready\n" {
+				t.Fatalf("first PTY session not ready: line=%q, err=%v", line, err)
+			}
+
+			for _, name := range []string{"pipes", "pty"} {
+				t.Run(name, func(t *testing.T) {
+					second, err := cl.NewSession()
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer second.Close()
+					if name == "pty" {
+						if err := second.RequestPty("xterm", 24, 80, ssh.TerminalModes{ssh.ECHO: 0}); err != nil {
+							t.Fatal(err)
+						}
+					}
+					// Inspect the session shell's descriptors. Skip entries that
+					// closed after glob expansion, including the scan's directory FD.
+					out, err := second.CombinedOutput(`for fd in /proc/$$/fd/*; do
+						if [ -L "$fd" ]; then printf '%s\n' "${fd##*/}"; fi
+					done`)
+					if err != nil {
+						t.Fatalf("inspect second session descriptors: %v; output: %s", err, out)
+					}
+					got := strings.Fields(string(out))
+					want := []string{"0", "1", "2"}
+					if diff := gcmp.Diff(want, got, gcmpopts.SortSlices(cmp.Less[string])); diff != "" {
+						t.Errorf("second session descriptors (-want +got):\n%s", diff)
+					}
+				})
+			}
+		})
+	}
+}
+
 // TestIntegrationAcceptEnvSecretNotLogged is the end-to-end regression test
 // for the acceptEnv secret leak: a forwarded secret must reach the session
 // environment, but its value must NOT appear on any process command line
@@ -292,7 +367,7 @@ func TestIntegrationSFTP(t *testing.T) {
 			if err != nil {
 				t.Fatalf("can't read file: %s", err)
 			}
-			if diff := cmp.Diff(string(gotText), wantText); diff != "" {
+			if diff := gcmp.Diff(string(gotText), wantText); diff != "" {
 				t.Fatalf("unexpected file contents (-got +want):\n%s", diff)
 			}
 
@@ -345,7 +420,7 @@ func TestIntegrationSCP(t *testing.T) {
 			if err != nil {
 				t.Fatalf("can't read file: %s", err)
 			}
-			if diff := cmp.Diff(string(gotText), wantText); diff != "" {
+			if diff := gcmp.Diff(string(gotText), wantText); diff != "" {
 				t.Fatalf("unexpected file contents (-got +want):\n%s", diff)
 			}
 
@@ -505,6 +580,16 @@ func TestLocalUnixForwarding(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ul.Close() })
+	// The server dials through a child bound to the session user's
+	// credentials. Make the root-created socket and its directory
+	// traversable and connectable by testuser, modeling a service socket
+	// the user is allowed to reach.
+	if err := os.Chmod(socketDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(socketPath, 0o666); err != nil {
+		t.Fatal(err)
+	}
 
 	// The service echoes back whatever it receives, like an API server would.
 	go func() {
@@ -592,6 +677,13 @@ func TestReverseUnixForwarding(t *testing.T) {
 	}
 	t.Cleanup(func() { os.RemoveAll(socketDir) })
 	remoteSocketPath := filepath.Join(socketDir, "reverse.sock")
+	// The server-side socket is created by a child bound to the
+	// session user's credentials, so the directory must be writable and
+	// traversable by testuser. The test process, which is root, then
+	// connects to the user-owned socket.
+	if err := os.Chmod(socketDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
 
 	ln, err := cl.ListenUnix(remoteSocketPath)
 	if err != nil {
@@ -599,9 +691,14 @@ func TestReverseUnixForwarding(t *testing.T) {
 	}
 	t.Cleanup(func() { ln.Close() })
 
-	// Verify the socket file was created on the server side.
-	if _, err := os.Stat(remoteSocketPath); err != nil {
+	// Verify the socket file was created on the server side, owned by
+	// the session user and readable and writable only by them.
+	fi, err := os.Stat(remoteSocketPath)
+	if err != nil {
 		t.Fatalf("reverse forwarded socket not created: %s", err)
+	}
+	if got := fi.Mode().Perm(); got != 0o600 {
+		t.Errorf("reverse socket mode = %o; want 0600", got)
 	}
 
 	// Accept a connection from the tunnel (client side) and write data.

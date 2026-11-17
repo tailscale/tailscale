@@ -25,13 +25,15 @@ import (
 	"sync/atomic"
 
 	"github.com/go4org/plan9netshell"
-	"github.com/pkg/sftp"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 )
 
-func init() {
+// registerIncubator registers the incubator child process handlers.
+// It is called from [Register], which is called from the init of
+// tailscale.com/feature/ssh.
+func registerIncubator() {
 	childproc.Add("ssh", beIncubator)
 	childproc.Add("sftp", beSFTP)
 	childproc.Add("plan9-netshell", beNetshell)
@@ -143,21 +145,6 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, forw
 
 var debugTest atomic.Bool
 
-type stdRWC struct{}
-
-func (stdRWC) Read(p []byte) (n int, err error) {
-	return os.Stdin.Read(p)
-}
-
-func (stdRWC) Write(b []byte) (n int, err error) {
-	return os.Stdout.Write(b)
-}
-
-func (stdRWC) Close() error {
-	os.Exit(0)
-	return nil
-}
-
 type incubatorArgs struct {
 	localUser          string
 	homeDir            string
@@ -231,10 +218,11 @@ func (ia *incubatorArgs) loadForwardedEnv() error {
 			return fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
 		}
 	}
-	// Enforce "su -w" integrity child-side: old parents may not have filtered these
+	// Enforce "su -w" integrity and the dangerous-env-var denylist
+	// child-side: old parents may not have filtered these
 	pairs = slices.DeleteFunc(pairs, func(kv string) bool {
 		k, _, ok := strings.Cut(kv, "=")
-		return !ok || forbiddenEnvKey(k) || strings.Contains(kv, "\x00")
+		return !ok || isDangerousEnvVar(k) || forbiddenEnvKey(k) || strings.Contains(kv, "\x00")
 	})
 	ia.forwardedEnv = pairs
 	return nil
@@ -325,24 +313,6 @@ func handleSFTPInProcess(dlogf logger.Logf, ia incubatorArgs) error {
 	dlogf("handling sftp")
 
 	return serveSFTP()
-}
-
-// beSFTP serves SFTP in-process.
-func beSFTP(args []string) error {
-	return serveSFTP()
-}
-
-func serveSFTP() error {
-	server, err := sftp.NewServer(stdRWC{})
-	if err != nil {
-		return err
-	}
-	// TODO(https://github.com/pkg/sftp/pull/554): Revert the check for io.EOF,
-	// when sftp is patched to report clean termination.
-	if err := server.Serve(); err != nil && err != io.EOF {
-		return err
-	}
-	return nil
 }
 
 // handleSSHInProcess is a last resort if we couldn't use login or su. It
@@ -454,11 +424,23 @@ func (ss *sshSession) startWithStdPipes() (err error) {
 	return ss.cmd.Start()
 }
 
+// waitMonitorProcess is the plan9 seam of the monitor session path.
+// plan9 has no monitor, so it always reports the direct path.
+func (ss *sshSession) waitMonitorProcess() (code int, ok bool, err error) {
+	return 0, false, nil
+}
+
+// hangupMonitorProcess returns false on Plan 9, which launches children directly.
+// See [sshSession.hangupProcess].
+func (ss *sshSession) hangupMonitorProcess(mandated bool) bool {
+	return false
+}
+
 func envForUser(u *userMeta) []string {
 	return []string{
 		fmt.Sprintf("user=%s", u.Username),
 		fmt.Sprintf("home=%s", u.HomeDir),
-		fmt.Sprintf("path=%s", defaultPathForUser(&u.User)),
+		fmt.Sprintf("path=%s", defaultPathForUser(u)),
 	}
 }
 

@@ -26,10 +26,12 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tka"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
@@ -105,7 +107,7 @@ func newLocalBackendForTKA(t *testing.T, varRoot string, client *http.Client, pm
 	}
 }
 
-func setupProfileManager(t *testing.T, nodePriv key.NodePrivate, nlPriv key.NLPrivate) *profileManager {
+func setupProfileManager(t *testing.T, nodePriv key.NodePrivate, nlPriv key.TLPrivate) *profileManager {
 	t.Helper()
 	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, health.NewTracker(eventbustest.NewBus(t))))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
@@ -134,7 +136,7 @@ func TestTKAEnablementFlow(t *testing.T) {
 
 	// Make a fake TKA authority, getting a usable genesis AUM which
 	// our mock server can communicate.
-	nlPriv := key.NewNLPrivate()
+	nlPriv := key.NewTLPrivate()
 	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 	state := tka.CreateStateForTest(key)
 	chonk := tka.ChonkMem()
@@ -215,7 +217,7 @@ func TestTKADisablementFlow(t *testing.T) {
 
 	// Make a fake TKA authority, to seed local state.
 	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
-	nlPriv := key.NewNLPrivate()
+	nlPriv := key.NewTLPrivate()
 	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 
 	pm := setupProfileManager(t, nodePriv, nlPriv)
@@ -299,7 +301,7 @@ func TestTKADisablementFlow(t *testing.T) {
 }
 
 func TestTKASync(t *testing.T) {
-	someKeyPriv := key.NewNLPrivate()
+	someKeyPriv := key.NewTLPrivate()
 	someKey := tka.Key{Kind: tka.Key25519, Public: someKeyPriv.Public().Verifier(), Votes: 1}
 
 	type tkaSyncScenario struct {
@@ -374,7 +376,7 @@ func TestTKASync(t *testing.T) {
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			nodePriv := key.NewNode()
-			nlPriv := key.NewNLPrivate()
+			nlPriv := key.NewTLPrivate()
 			pm := setupProfileManager(t, nodePriv, nlPriv)
 
 			// Setup the tka authority on the control plane.
@@ -450,11 +452,11 @@ func TestTKASync(t *testing.T) {
 // Whenever we run a TKA sync and get new state from control, we compact the
 // local state.
 func TestTKASyncTriggersCompact(t *testing.T) {
-	someKeyPriv := key.NewNLPrivate()
+	someKeyPriv := key.NewTLPrivate()
 	someKey := tka.Key{Kind: tka.Key25519, Public: someKeyPriv.Public().Verifier(), Votes: 1}
 
 	nodePriv := key.NewNode()
-	nlPriv := key.NewNLPrivate()
+	nlPriv := key.NewTLPrivate()
 	pm := setupProfileManager(t, nodePriv, nlPriv)
 
 	// Create a clock, and roll it back by 30 days.
@@ -583,7 +585,7 @@ func TestTKASyncTriggersCompact(t *testing.T) {
 }
 
 func TestTKAFilterNetmap(t *testing.T) {
-	nlPriv := key.NewNLPrivate()
+	nlPriv := key.NewTLPrivate()
 	nlKey := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 	state := tka.CreateStateForTest(nlKey)
 	storage := tka.ChonkMem()
@@ -610,13 +612,13 @@ func TestTKAFilterNetmap(t *testing.T) {
 	n4Sig.Signature[3] = 42 // mess up the signature
 	n4Sig.Signature[4] = 42 // mess up the signature
 
-	n5nl := key.NewNLPrivate()
+	n5nl := key.NewTLPrivate()
 	n5InitialSig, err := signNodeKey(tailcfg.TKASignInfo{NodePublic: n5.Public(), RotationPubkey: n5nl.Public().Verifier()}, nlPriv)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	resign := func(nl key.NLPrivate, currentSig tkatype.MarshaledSignature) (key.NodePrivate, tkatype.MarshaledSignature) {
+	resign := func(nl key.TLPrivate, currentSig tkatype.MarshaledSignature) (key.NodePrivate, tkatype.MarshaledSignature) {
 		nk := key.NewNode()
 		sig, err := tka.ResignNKS(nl, nk.Public(), currentSig)
 		if err != nil {
@@ -736,7 +738,7 @@ func TestTKADisable(t *testing.T) {
 
 	// Make a fake TKA authority, to seed local state.
 	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
-	nlPriv := key.NewNLPrivate()
+	nlPriv := key.NewTLPrivate()
 	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 
 	pm := setupProfileManager(t, nodePriv, nlPriv)
@@ -802,7 +804,7 @@ func TestTKADisable(t *testing.T) {
 func TestTKASign(t *testing.T) {
 	nodePriv := key.NewNode()
 	toSign := key.NewNode()
-	nlPriv := key.NewNLPrivate()
+	nlPriv := key.NewTLPrivate()
 
 	pm := setupProfileManager(t, nodePriv, nlPriv)
 
@@ -843,7 +845,7 @@ func TestTKAForceDisable(t *testing.T) {
 	nodePriv := key.NewNode()
 
 	// Make a fake TKA authority, to seed local state.
-	nlPriv := key.NewNLPrivate()
+	nlPriv := key.NewTLPrivate()
 	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 	state := tka.CreateStateForTest(key)
 
@@ -920,7 +922,7 @@ func TestTKAForceDisable(t *testing.T) {
 func TestTKAAffectedSigs(t *testing.T) {
 	nodePriv := key.NewNode()
 	// toSign := key.NewNode()
-	nlPriv := key.NewNLPrivate()
+	nlPriv := key.NewTLPrivate()
 
 	pm := setupProfileManager(t, nodePriv, nlPriv)
 
@@ -934,7 +936,7 @@ func TestTKAAffectedSigs(t *testing.T) {
 		t.Fatalf("tka.Create() failed: %v", err)
 	}
 
-	untrustedKey := key.NewNLPrivate()
+	untrustedKey := key.NewTLPrivate()
 	tcs := []struct {
 		name    string
 		makeSig func() *tka.NodeKeySignature
@@ -1024,9 +1026,9 @@ func TestTKAAffectedSigs(t *testing.T) {
 
 func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 	nodePriv := key.NewNode()
-	nlPriv := key.NewNLPrivate()
-	cosignPriv := key.NewNLPrivate()
-	compromisedPriv := key.NewNLPrivate()
+	nlPriv := key.NewTLPrivate()
+	cosignPriv := key.NewTLPrivate()
+	compromisedPriv := key.NewTLPrivate()
 
 	pm := setupProfileManager(t, nodePriv, nlPriv)
 
@@ -1172,5 +1174,50 @@ func TestRotationTracker(t *testing.T) {
 				t.Errorf("rotationTracker.obsoleteKeys() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLogoutDuringTKASyncIgnoresStaleNetmap(t *testing.T) {
+	inBootstrap := make(chan struct{})
+	release := make(chan struct{})
+	ts, client := fakeNoiseServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(inBootstrap)
+		<-release
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer ts.Close()
+
+	lb, _, cc := newLocalBackendWithMockEngineAndControl(t, true)
+	mustDo(t)(lb.Start(ipn.Options{}))
+	mustDo2(t)(lb.EditPrefs(&ipn.MaskedPrefs{Prefs: ipn.Prefs{WantRunning: true}, WantRunningSet: true}))
+	self := makePeer(1)
+	cc().authenticated(buildNetmapWithPeers(self))
+
+	// Block in tkaSyncIfNeeded's bootstrap fetch, which runs with b.mu released.
+	lb.mu.Lock()
+	lb.ccAuto = fakeControlClient(t, client)
+	lb.mu.Unlock()
+	nm := buildNetmapWithPeers(self)
+	nm.AllCaps = set.Of(nodecap.TailnetLock)
+	nm.TKAEnabled = true
+	oldCC := cc()
+	sent := make(chan struct{})
+	go func() {
+		defer close(sent)
+		oldCC.send(sendOpt{nm: nm})
+	}()
+
+	<-inBootstrap
+	if err := lb.Logout(t.Context(), ipnauth.Self); err != nil {
+		t.Errorf("Logout: %v", err)
+	}
+	close(release)
+	<-sent
+
+	if nm := lb.NetMapNoPeers(); nm != nil {
+		t.Errorf("netmap = %v after logout, want nil", nm)
+	}
+	if st := lb.State(); st != ipn.NeedsLogin {
+		t.Errorf("state = %v after logout, want NeedsLogin", st)
 	}
 }

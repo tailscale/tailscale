@@ -202,7 +202,7 @@ func (h *Handler) SetChildren(staticRoot string, children ...*Child) {
 	})
 
 	h.childrenMu.Lock()
-	oldChildren := children
+	oldChildren := h.children
 	h.children = children
 	h.staticRoot = staticRoot
 	h.childrenMu.Unlock()
@@ -222,8 +222,7 @@ func (h *Handler) GetChild(name string) *Child {
 	return child
 }
 
-// Close closes this Handler,including closing all idle connections on children
-// and stopping the StatCache (if caching is enabled).
+// Close closes this Handler, including closing all idle connections on children.
 func (h *Handler) Close() {
 	h.childrenMu.RLock()
 	oldChildren := h.children
@@ -232,10 +231,6 @@ func (h *Handler) Close() {
 
 	for _, child := range oldChildren {
 		child.CloseIdleConnections()
-	}
-
-	if h.StatCache != nil {
-		h.StatCache.stop()
 	}
 }
 

@@ -5,7 +5,6 @@ package vnet
 
 import (
 	"cmp"
-	"context"
 	"fmt"
 	"iter"
 	"net/netip"
@@ -98,11 +97,11 @@ func nodeLANIP6(n int) netip.Addr {
 // AddNode creates a new node in the world.
 //
 // The opts may be of the following types:
-//   - *Network: zero, one, or more networks to add this node to
+//   - [*Network]: zero, one, or more networks to add this node to
 //   - TODO: more
 //
 // On an error or unknown opt type, AddNode returns a
-// node with a carried error that gets returned later.
+// [Node] with a carried error that gets returned later.
 func (c *Config) AddNode(opts ...any) *Node {
 	num := len(c.nodes) + 1
 	n := &Node{
@@ -123,10 +122,6 @@ func (c *Config) AddNode(opts ...any) *Node {
 			switch o {
 			case HostFirewall:
 				n.hostFW = true
-			case RotateDisco:
-				n.rotateDisco = true
-			case PreICMPPing:
-				n.preICMPPing = true
 			case DontJoinTailnet:
 				n.dontJoinTailnet = true
 			case VerboseSyslog:
@@ -154,8 +149,6 @@ type NodeOption string
 
 const (
 	HostFirewall    NodeOption = "HostFirewall"
-	RotateDisco     NodeOption = "RotateDisco"
-	PreICMPPing     NodeOption = "PreICMPPing"
 	DontJoinTailnet NodeOption = "DontJoinTailnet"
 	VerboseSyslog   NodeOption = "VerboseSyslog"
 )
@@ -172,8 +165,8 @@ type TailscaledEnv struct {
 //   - string IP address, for the network's WAN IP (if any)
 //   - string netip.Prefix, for the network's LAN IP (defaults to 192.168.0.0/24)
 //     if IPv4, or its WAN IPv6 + CIDR (e.g. "2000:52::1/64")
-//   - NAT, the type of NAT to use
-//   - NetworkService, a service to add to the network
+//   - [NAT], the type of NAT to use
+//   - [NetworkService], a service to add to the network
 //
 // On an error or unknown opt type, AddNetwork returns a
 // network with a carried error that gets returned later.
@@ -224,8 +217,6 @@ type Node struct {
 
 	env             []TailscaledEnv
 	hostFW          bool
-	rotateDisco     bool
-	preICMPPing     bool
 	verboseSyslog   bool
 	dontJoinTailnet bool
 	capMap          tailcfg.NodeCapMap
@@ -290,29 +281,6 @@ func (n *Node) SetVerboseSyslog(v bool) {
 
 func (n *Node) SetClient(c *NodeAgentClient) {
 	n.client = c
-}
-
-// PostConnectedToControl should be called after the clients have connected to
-// control to modify the client behaviour after getting the network maps.
-// Currently, the only implemented behavior is rotating disco keys.
-func (n *Node) PostConnectedToControl(ctx context.Context) error {
-	if n.rotateDisco {
-		if err := n.client.DebugAction(ctx, "rotate-disco-key"); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// PreICMPPing reports whether node should send an ICMP Ping sent before
-// the disco ping. This is important for the nodes having rotated their
-// disco keys while control is down. Disco pings deliberately does not
-// trigger a TSMPDiscoKeyAdvertisement, making the need for other traffic (here
-// simlulated as an ICMP ping) needed first. Any traffic could trigger this key
-// exchange, the ICMP Ping is used as a handy existing way of sending some
-// non-disco traffic.
-func (n *Node) PreICMPPing() bool {
-	return n.preICMPPing
 }
 
 // ShouldJoinTailnet reports whether node should join the test tailnet. Machines in
@@ -380,17 +348,18 @@ type Network struct {
 
 	wanIP6 netip.Prefix // global unicast router in host bits; CIDR is /64 delegated to LAN
 
-	wanIP4                      netip.Addr // IPv4 WAN IP, if any
-	lanIP4                      netip.Prefix
-	nodes                       []*Node
-	breakWAN4                   bool // whether to break WAN IPv4 connectivity
-	postConnectBlackholeControl bool // whether to break control connectivity after nodes have connected
-	network                     *network
+	wanIP4    netip.Addr // IPv4 WAN IP, if any
+	lanIP4    netip.Prefix
+	nodes     []*Node
+	breakWAN4 bool // whether to break WAN IPv4 connectivity
+	network   *network
 
 	svcs set.Set[NetworkService]
 
 	latency  time.Duration // latency applied to interface writes
 	lossRate float64       // chance of packet loss (0.0 to 1.0)
+
+	portMapLifetime time.Duration // max NAT-PMP/PCP mapping lifetime, if non-zero
 
 	// ...
 	err error // carried error
@@ -411,16 +380,16 @@ func (n *Network) SetPacketLoss(rate float64) {
 	n.lossRate = rate
 }
 
+// SetPortMapLifetime caps the lifetime of NAT-PMP and PCP mappings granted by
+// this network's router to d. UPnP mappings are unaffected.
+func (n *Network) SetPortMapLifetime(d time.Duration) {
+	n.portMapLifetime = d
+}
+
 // SetBlackholedIPv4 sets whether the network should blackhole all IPv4 traffic
 // out to the Internet. (DHCP etc continues to work on the LAN.)
 func (n *Network) SetBlackholedIPv4(v bool) {
 	n.breakWAN4 = v
-}
-
-// SetPostConnectControlBlackhole sets whether the network should blackhole all
-// traffic to the control server after the clients have connected.
-func (n *Network) SetPostConnectControlBlackhole(v bool) {
-	n.postConnectBlackholeControl = v
 }
 
 func (n *Network) CanV4() bool {
@@ -438,17 +407,16 @@ func (n *Network) CanTakeMoreNodes() bool {
 	return len(n.nodes) < 150
 }
 
-// PostConnectedToControl should be called after the clients have connected to
-// the control server to modify network behaviors. Currently the only
-// implemented behavior is to conditionally blackhole traffic to control.
-func (n *Network) PostConnectedToControl() {
-	n.network.SetControlBlackholed(n.postConnectBlackholeControl)
-}
-
 // BlackholeControlForAddr sets weither the network should drop all control
 // traffic for the specified addr starting immediately.
 func (n *Network) BlackholeControlForAddr(addr netip.Addr) {
 	n.network.BlackholeControlForAddr(addr)
+}
+
+// PortMappings returns the router's unexpired port mappings, keyed by WAN
+// IP:port.
+func (n *Network) PortMappings() map[netip.AddrPort]PortMapping {
+	return n.network.portMappings()
 }
 
 // NetworkService is a service that can be added to a network.
@@ -460,7 +428,7 @@ const (
 	UPnP   NetworkService = "UPnP"
 )
 
-// AddService adds a network service (such as port mapping protocols) to a
+// AddService adds a [NetworkService] (such as port mapping protocols) to a
 // network.
 func (n *Network) AddService(s NetworkService) {
 	if n.svcs == nil {
@@ -498,21 +466,22 @@ func (s *Server) initFromConfig(c *Config) error {
 			conf.lanIP4 = netip.MustParsePrefix("192.168.0.0/24")
 		}
 		n := &network{
-			num:        conf.num,
-			s:          s,
-			mac:        conf.mac,
-			portmap:    conf.svcs.Contains(NATPMP), // TODO: expand network.portmap
-			wanIP6:     conf.wanIP6,
-			v4:         conf.lanIP4.IsValid(),
-			v6:         conf.wanIP6.IsValid(),
-			wanIP4:     conf.wanIP4,
-			lanIP4:     conf.lanIP4,
-			breakWAN4:  conf.breakWAN4,
-			latency:    conf.latency,
-			lossRate:   conf.lossRate,
-			nodesByIP4: map[netip.Addr]*node{},
-			nodesByMAC: map[MAC]*node{},
-			logf:       logger.WithPrefix(s.logf, fmt.Sprintf("[net-%v] ", conf.mac)),
+			num:             conf.num,
+			s:               s,
+			mac:             conf.mac,
+			svcs:            conf.svcs.Clone(),
+			wanIP6:          conf.wanIP6,
+			v4:              conf.lanIP4.IsValid(),
+			v6:              conf.wanIP6.IsValid(),
+			wanIP4:          conf.wanIP4,
+			lanIP4:          conf.lanIP4,
+			breakWAN4:       conf.breakWAN4,
+			latency:         conf.latency,
+			lossRate:        conf.lossRate,
+			portMapLifetime: conf.portMapLifetime,
+			nodesByIP4:      map[netip.Addr]*node{},
+			nodesByMAC:      map[MAC]*node{},
+			logf:            logger.WithPrefix(s.logf, fmt.Sprintf("[net-%v] ", conf.mac)),
 		}
 		netOfConf[conf] = n
 		s.networks.Add(n)

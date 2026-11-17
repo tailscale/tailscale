@@ -71,8 +71,9 @@ const negativeTTL = 10 * time.Second
 var timeNow = time.Now
 
 var (
-	errNotQuery   = errors.New("not a DNS query")
-	errNotOurName = errors.New("not a Tailscale DNS name")
+	errNotQuery              = errors.New("not a DNS query")
+	errNotOurName            = errors.New("not a Tailscale DNS name")
+	errLocalResponseOutdated = errors.New("local DNS response predates a negative cache check")
 )
 
 type packet struct {
@@ -241,6 +242,8 @@ type Resolver struct {
 	// closed signals all goroutines to stop.
 	closed chan struct{}
 
+	negativeCache negativeCache
+
 	// mu guards the following fields from being updated while used.
 	mu             syncs.Mutex
 	localDomains   []dnsname.FQDN
@@ -297,6 +300,23 @@ func (r *Resolver) SetMagicDNSHosts(h MagicDNSHosts) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.magicHosts = h
+}
+
+// marshalLocalResponse serializes a local answer and records successfully
+// marshaled authoritative NXDOMAINs so peer updates can invalidate stale OS
+// negative caches. The SOA zone distinguishes authoritative negatives from
+// other NXDOMAINs. This tracks names only, not positive A or AAAA answers;
+// live MagicDNS host records remain the source of truth for those answers.
+// If a cache check or reset occurred since generation was read, a negative
+// answer returns errLocalResponseOutdated so the caller can resolve it again.
+func (r *Resolver) marshalLocalResponse(name dnsname.FQDN, resp *response, generation uint64) ([]byte, error) {
+	packet, err := marshalResponse(resp)
+	if err == nil && resp.Header.RCode == dns.RCodeNameError && resp.SOAZone != "" {
+		if !r.negativeCache.record(name, generation) {
+			return nil, errLocalResponseOutdated
+		}
+	}
+	return packet, err
 }
 
 type ForwardLinkSelector interface {
@@ -405,7 +425,7 @@ func (r *Resolver) Close() {
 // bound on per-query resource usage.
 const dnsQueryTimeout = 10 * time.Second
 
-func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from netip.AddrPort) ([]byte, error) {
+func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from netip.AddrPort) (*Response, error) {
 	if !buildfeatures.HasDNS {
 		return nil, feature.ErrUnavailable
 	}
@@ -419,7 +439,7 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from net
 
 	out, err := r.respond(bs)
 	if err == errNotOurName {
-		responses := make(chan packet, 1)
+		responses := make(chan *Response, 1)
 		ctx, cancel := context.WithTimeout(ctx, dnsQueryTimeout)
 		defer close(responses)
 		defer cancel()
@@ -427,15 +447,15 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from net
 		if err != nil {
 			return nil, err
 		}
-		return (<-responses).bs, nil
+		return <-responses, nil
 	}
 
 	if err != nil {
-		return out, err
+		return nil, err
 	}
 
 	out = checkResponseSizeAndSetTC(out, bs, family, r.logf)
-	return out, nil
+	return &Response{Bs: out}, nil
 }
 
 // GetUpstreamResolvers returns the resolvers that would be used to resolve
@@ -445,6 +465,16 @@ func (r *Resolver) GetUpstreamResolvers(name dnsname.FQDN) []*dnstype.Resolver {
 		return nil
 	}
 	return r.forwarder.GetUpstreamResolvers(name)
+}
+
+// HasConfiguredRouteFor reports whether a configured split or global (".")
+// DNS route matches name. Ambient cloud-host fallback resolvers are
+// excluded. See [forwarder.HasConfiguredRouteFor].
+func (r *Resolver) HasConfiguredRouteFor(name dnsname.FQDN) bool {
+	if !buildfeatures.HasDNS {
+		return false
+	}
+	return r.forwarder.HasConfiguredRouteFor(name)
 }
 
 // parseExitNodeQuery parses a DNS request packet.
@@ -476,7 +506,7 @@ func (r *Resolver) HandlePeerDNSQuery(ctx context.Context, q []byte, from netip.
 		return nil, feature.ErrUnavailable
 	}
 	metricDNSExitProxyQuery.Add(1)
-	ch := make(chan packet, 1)
+	ch := make(chan *Response, 1)
 
 	resp := parseExitNodeQuery(q)
 	if resp == nil {
@@ -532,7 +562,7 @@ func (r *Resolver) HandlePeerDNSQuery(ctx context.Context, q []byte, from netip.
 	select {
 	case p, ok := <-ch:
 		if ok {
-			return p.bs, nil
+			return p.Bs, nil
 		}
 		panic("unexpected close chan")
 	default:
@@ -1413,7 +1443,7 @@ func (r *Resolver) authoritativeZoneFor(name dnsname.FQDN) dnsname.FQDN {
 	return ""
 }
 
-func (r *Resolver) respondReverse(query []byte, name dnsname.FQDN, resp *response) ([]byte, error) {
+func (r *Resolver) respondReverse(query []byte, name dnsname.FQDN, resp *response, generation uint64) ([]byte, error) {
 	if hasRDNSBonjourPrefix(name) {
 		metricDNSReverseMissBonjour.Add(1)
 		return nil, errNotOurName
@@ -1429,12 +1459,23 @@ func (r *Resolver) respondReverse(query []byte, name dnsname.FQDN, resp *respons
 	}
 
 	metricDNSMagicDNSSuccessReverse.Add(1)
-	return marshalResponse(resp)
+	return r.marshalLocalResponse(name, resp, generation)
 }
 
 // respond returns a DNS response to query if it can be resolved locally.
 // Otherwise, it returns errNotOurName.
 func (r *Resolver) respond(query []byte) ([]byte, error) {
+	for {
+		packet, err := r.respondOnce(query)
+		if err != errLocalResponseOutdated {
+			return packet, err
+		}
+		// A peer update checked the negative history while this query was
+		// resolving. Retry so we don't return an NXDOMAIN it could not see.
+	}
+}
+
+func (r *Resolver) respondOnce(query []byte) ([]byte, error) {
 	if !buildfeatures.HasDNS {
 		return nil, feature.ErrUnavailable
 	}
@@ -1468,11 +1509,12 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 		return marshalResponse(resp)
 	}
 
+	generation := r.negativeCache.queryGeneration()
 	// Always try to handle reverse lookups; delegate inside when not found.
 	// This way, queries for existent nodes do not leak,
 	// but we behave gracefully if non-Tailscale nodes exist in CGNATRange.
 	if parser.Question.Type == dns.TypePTR {
-		return r.respondReverse(query, name, parser.response())
+		return r.respondReverse(query, name, parser.response(), generation)
 	}
 
 	ip, rcode := r.resolveLocal(name, parser.Question.Type)
@@ -1495,7 +1537,7 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 		}
 	}
 	metricDNSMagicDNSSuccessName.Add(1)
-	return marshalResponse(resp)
+	return r.marshalLocalResponse(name, resp, generation)
 }
 
 // unARPA maps from "4.4.8.8.in-addr.arpa." to "8.8.4.4", etc.
@@ -1557,12 +1599,19 @@ var (
 
 	metricDNSFwdUDP             = clientmetric.NewCounter("dns_query_fwd_udp")       // on entry
 	metricDNSFwdUDPWrote        = clientmetric.NewCounter("dns_query_fwd_udp_wrote") // sent UDP packet
+	metricDNSFwdUDPDropSrc      = clientmetric.NewCounter("dns_query_fwd_udp_drop_src")
 	metricDNSFwdUDPErrorWrite   = clientmetric.NewCounter("dns_query_fwd_udp_error_write")
 	metricDNSFwdUDPErrorServer  = clientmetric.NewCounter("dns_query_fwd_udp_error_server")
 	metricDNSFwdUDPErrorRefused = clientmetric.NewCounter("dns_query_fwd_udp_error_refused")
 	metricDNSFwdUDPErrorTxID    = clientmetric.NewCounter("dns_query_fwd_udp_error_txid")
 	metricDNSFwdUDPErrorRead    = clientmetric.NewCounter("dns_query_fwd_udp_error_read")
 	metricDNSFwdUDPSuccess      = clientmetric.NewCounter("dns_query_fwd_udp_success")
+
+	// metricDNSFwdUDPReadCtxDone counts reads that ended because the query
+	// ended, either by losing a race or by running out its deadline. Those
+	// reads used to be counted as upstream read failures. Counting them here
+	// instead keeps them visible without blaming the upstream.
+	metricDNSFwdUDPReadCtxDone = clientmetric.NewCounter("dns_query_fwd_udp_read_ctx_done")
 
 	metricDNSFwdTCP             = clientmetric.NewCounter("dns_query_fwd_tcp")       // on entry
 	metricDNSFwdTCPWrote        = clientmetric.NewCounter("dns_query_fwd_tcp_wrote") // sent TCP packet

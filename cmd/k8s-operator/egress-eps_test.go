@@ -237,6 +237,111 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 	})
 }
 
+// TestEgressEndpointSliceEndpointsSorted verifies that endpoints are written in a deterministic (Hostname/UID
+// sorted) order and that a second reconcile over an unchanged ready set does not rewrite the slice (a needless
+// write would re-trigger this reconciler via its own EndpointSlice watch - see tailscale/tailscale#20916).
+func TestEgressEndpointSliceEndpointsSorted(t *testing.T) {
+	clock := tstest.NewClock(tstest.ClockOpts{})
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+			Annotations: map[string]string{
+				AnnotationTailnetTargetFQDN: "foo.bar.ts.net",
+				AnnotationProxyGroup:        "foo",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ExternalName: "placeholder",
+			Type:         corev1.ServiceTypeExternalName,
+			Ports:        []corev1.ServicePort{{Name: "http", Protocol: "TCP", Port: 80}},
+		},
+		Status: corev1.ServiceStatus{
+			Conditions: []metav1.Condition{
+				condition(tsapi.EgressSvcConfigured, metav1.ConditionTrue, "", "", clock),
+				condition(tsapi.EgressSvcValid, metav1.ConditionTrue, "", "", clock),
+			},
+		},
+	}
+	port := randomPort()
+	cm := configMapForSvc(t, svc, port)
+	eps := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "foo",
+			Namespace: "operator-ns",
+			Labels: map[string]string{
+				LabelParentName:      "test",
+				LabelParentNamespace: "default",
+				labelSvcType:         typeEgress,
+				labelProxyGroup:      "foo",
+			},
+		},
+		AddressType: discoveryv1.AddressTypeIPv4,
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(svc, cm).
+		WithStatusSubresource(svc).
+		Build()
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	er := &egressEpsReconciler{Client: fc, logger: zl.Sugar(), tsNamespace: "operator-ns"}
+	mustCreate(t, fc, eps)
+
+	// Two ready Pods whose UIDs sort in the opposite order to their creation, so a stable sort is observable.
+	for _, p := range []struct {
+		uid string
+		ip  string
+	}{{"pod-b", "10.0.0.2"}, {"pod-a", "10.0.0.1"}} {
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      p.uid,
+				Namespace: "operator-ns",
+				Labels:    pgLabels("foo", nil),
+				UID:       types.UID(p.uid),
+			},
+			Status: corev1.PodStatus{PodIPs: []corev1.PodIP{{IP: p.ip}}},
+		}
+		mustCreate(t, fc, pod)
+		s := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      p.uid,
+				Namespace: "operator-ns",
+				Labels:    pgSecretLabels("foo", kubetypes.LabelSecretTypeState),
+			},
+		}
+		stBs := serviceStatusForPodIPs(t, svc, p.ip, "", port)
+		mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
+		mustCreate(t, fc, s)
+	}
+
+	expectReconciled(t, er, "operator-ns", "foo")
+	got := &discoveryv1.EndpointSlice{}
+	if err := fc.Get(t.Context(), types.NamespacedName{Name: "foo", Namespace: "operator-ns"}, got); err != nil {
+		t.Fatalf("getting EndpointSlice: %v", err)
+	}
+	if len(got.Endpoints) != 2 {
+		t.Fatalf("expected 2 endpoints, got %d", len(got.Endpoints))
+	}
+	if h0, h1 := *got.Endpoints[0].Hostname, *got.Endpoints[1].Hostname; h0 != "pod-a" || h1 != "pod-b" {
+		t.Errorf("endpoints not sorted by Hostname: got [%q, %q], want [\"pod-a\", \"pod-b\"]", h0, h1)
+	}
+
+	// A second reconcile over the unchanged ready set must not rewrite the slice.
+	rvBefore := got.ResourceVersion
+	expectReconciled(t, er, "operator-ns", "foo")
+	after := &discoveryv1.EndpointSlice{}
+	if err := fc.Get(t.Context(), types.NamespacedName{Name: "foo", Namespace: "operator-ns"}, after); err != nil {
+		t.Fatalf("getting EndpointSlice: %v", err)
+	}
+	if after.ResourceVersion != rvBefore {
+		t.Errorf("EndpointSlice was rewritten on a no-op reconcile: resourceVersion %s -> %s", rvBefore, after.ResourceVersion)
+	}
+}
+
 func configMapForSvc(t *testing.T, svc *corev1.Service, p uint16) *corev1.ConfigMap {
 	t.Helper()
 	ports := make(map[egressservices.PortMap]struct{})

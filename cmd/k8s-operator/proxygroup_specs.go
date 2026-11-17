@@ -35,10 +35,6 @@ const (
 	authAPIServerProxySAName = "kube-apiserver-auth-proxy"
 )
 
-func pgNodePortServiceName(proxyGroupName string, replica int32) string {
-	return fmt.Sprintf("%s-%d-nodeport", proxyGroupName, replica)
-}
-
 func pgNodePortService(pg *tsapi.ProxyGroup, name string, namespace string) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -564,14 +560,17 @@ func isAuthAPIServerProxy(pg *tsapi.ProxyGroup) bool {
 		*pg.Spec.KubeAPIServer.Mode == tsapi.APIServerProxyModeAuth
 }
 
+// pgStateSecrets returns the state Secrets for each replica of the ProxyGroup.
+// The state Secrets have no owner reference. The ProxyGroup finalizer reads
+// them to find the tailnet devices, so a foreground delete must not remove
+// them first. ProxyGroupReconciler.maybeCleanup deletes them.
 func pgStateSecrets(pg *tsapi.ProxyGroup, namespace string) (secrets []*corev1.Secret) {
 	for i := range pgReplicas(pg) {
 		secrets = append(secrets, &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:            pgStateSecretName(pg.Name, i),
-				Namespace:       namespace,
-				Labels:          pgSecretLabels(pg.Name, kubetypes.LabelSecretTypeState),
-				OwnerReferences: pgOwnerReference(pg),
+				Name:      pgStateSecretName(pg.Name, i),
+				Namespace: namespace,
+				Labels:    pgSecretLabels(pg.Name, kubetypes.LabelSecretTypeState),
 			},
 		})
 	}

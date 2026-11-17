@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store"
 	"tailscale.com/ipn/store/mem"
@@ -29,6 +30,9 @@ import (
 )
 
 func init() {
+	if !feature.Register("kube") {
+		return
+	}
 	store.Register("kube:", func(logf logger.Logf, path string) (ipn.StateStore, error) {
 		secretName := strings.TrimPrefix(path, "kube:")
 		return New(logf, secretName)
@@ -280,9 +284,11 @@ func (s *Store) ShouldUseARIReplacesForRenewal(domain string) (bool, error) {
 	}
 	certFP := sec.Data[keyACMEAcctFP]
 	if len(certFP) == 0 {
-		// Legacy cert, no fingerprint stamp. Assume misaligned only if
-		// we adopted a foreign shared key.
-		if len(s.preAdoptedLocalKey) > 0 {
+		// A legacy cert has no record of its issuing account. With a
+		// shared account, the current key may have been created or adopted
+		// after this cert was issued, even without a prior local key.
+		// Omit replaces until a renewal stamps the issuing fingerprint.
+		if s.acmeAccountsSecretName != "" || len(s.preAdoptedLocalKey) > 0 {
 			return false, nil
 		}
 		return true, nil

@@ -12,15 +12,24 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/binary"
+	"encoding/json"
+	"errors"
 	"expvar"
 	"fmt"
+	"io"
 	"log"
+	"math"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -31,6 +40,7 @@ import (
 	"golang.org/x/time/rate"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derpconst"
+	"tailscale.com/tstest/tlstest"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -132,9 +142,75 @@ func TestIsMeshPeer(t *testing.T) {
 	}
 }
 
+func TestVerifyClientDisallowedAppNames(t *testing.T) {
+	ctx := t.Context()
+	s := &Server{}
+	if err := s.SetMeshKey(testMeshKey); err != nil {
+		t.Fatal(err)
+	}
+	s.SetDisallowedAppNames([]string{"badapp", "worseapp"})
+
+	k := key.NewNode().Public()
+	ip := netip.MustParseAddr("2.3.4.5")
+
+	if err := s.verifyClient(ctx, k, &derp.ClientInfo{AppName: "badapp"}, ip); err == nil {
+		t.Error("disallowed app name: got nil error; want error")
+	}
+	if err := s.verifyClient(ctx, k, &derp.ClientInfo{AppName: "goodapp"}, ip); err != nil {
+		t.Errorf("allowed app name: unexpected error: %v", err)
+	}
+	if err := s.verifyClient(ctx, k, &derp.ClientInfo{}, ip); err != nil {
+		t.Errorf("empty app name: unexpected error: %v", err)
+	}
+
+	// Trusted mesh peers are exempt.
+	mk, err := key.ParseDERPMesh(testMeshKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.verifyClient(ctx, k, &derp.ClientInfo{AppName: "badapp", MeshKey: mk}, ip); err != nil {
+		t.Errorf("mesh peer with disallowed app name: unexpected error: %v", err)
+	}
+}
+
+func TestRecvClientKeyAppName(t *testing.T) {
+	serverPriv := key.NewNode()
+	s := New(serverPriv, t.Logf)
+	defer s.Close()
+
+	tests := []struct {
+		appName string
+		wantErr bool
+	}{
+		{"some-client", false},
+		{"", false},
+		{strings.Repeat("x", derp.MaxAppNameLen+1), true},
+		{"new\nline", true},
+	}
+	for _, tt := range tests {
+		clientPriv := key.NewNode()
+		msg, err := json.Marshal(derp.ClientInfo{AppName: tt.appName})
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload := clientPriv.Public().AppendTo(nil)
+		payload = append(payload, clientPriv.SealTo(serverPriv.Public(), msg)...)
+
+		var buf bytes.Buffer
+		bw := bufio.NewWriter(&buf)
+		if err := derp.WriteFrame(bw, derp.FrameClientInfo, payload); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = s.recvClientKey(bufio.NewReader(&buf))
+		if gotErr := err != nil; gotErr != tt.wantErr {
+			t.Errorf("recvClientKey with AppName %.40q: err = %v; wantErr = %v", tt.appName, err, tt.wantErr)
+		}
+	}
+}
+
 type testFwd int
 
-func (testFwd) ForwardPacket(key.NodePublic, key.NodePublic, []byte) error {
+func (testFwd) ForwardPacket(key.NodePublic, key.NodePublic, derp.LoanedBytes) error {
 	panic("not called in tests")
 }
 func (testFwd) String() string {
@@ -272,8 +348,8 @@ type channelFwd struct {
 }
 
 func (f channelFwd) String() string { return "" }
-func (f channelFwd) ForwardPacket(_ key.NodePublic, _ key.NodePublic, packet []byte) error {
-	f.c <- packet
+func (f channelFwd) ForwardPacket(_ key.NodePublic, _ key.NodePublic, packet derp.LoanedBytes) error {
+	f.c <- packet.Clone()
 	return nil
 }
 
@@ -324,7 +400,7 @@ func TestMultiForwarder(t *testing.T) {
 		s.mu.Lock()
 		fwd = s.clientsMesh[u]
 		s.mu.Unlock()
-		fwd.ForwardPacket(u, u, []byte(strconv.Itoa(i)))
+		fwd.ForwardPacket(u, u, derp.LoanBytes([]byte(strconv.Itoa(i))))
 	}
 
 	cancel()
@@ -675,6 +751,78 @@ func TestServerDupClients(t *testing.T) {
 	})
 }
 
+// TestServerDupClientSendHistoryBounded verifies that a dup client set's
+// sendHistory does not grow without bound when two connections sharing a
+// key take turns sending frames. See the sendHistory field comment.
+func TestServerDupClientSendHistoryBounded(t *testing.T) {
+	clientPub := key.NewNode().Public()
+
+	newClient := func(name string) *sclient {
+		return &sclient{key: clientPub, logf: logger.WithPrefix(t.Logf, name+": ")}
+	}
+
+	t.Run("last_writer_active", func(t *testing.T) {
+		s := New(key.NewNode(), t.Logf)
+		s.dupPolicy = lastWriterIsActive
+		c1, c2 := newClient("c1"), newClient("c2")
+		s.registerClient(c1)
+		s.registerClient(c2)
+
+		cs, _ := s.clients.Load(clientPub)
+		dup := cs.dup
+		if dup == nil {
+			t.Fatal("no dup set")
+		}
+		for range 5000 {
+			s.noteClientActivity(c1)
+			s.noteClientActivity(c2)
+		}
+		if got := len(dup.sendHistory); got > len(dup.set) {
+			t.Fatalf("sendHistory len = %d; want <= %d (set size)", got, len(dup.set))
+		}
+		// The clients must remain active and undisabled, and the last
+		// one to send is the active one.
+		if c1.isDisabled.Load() || c2.isDisabled.Load() {
+			t.Fatal("client disabled under lastWriterIsActive; want none disabled")
+		}
+		if got := cs.activeClient.Load(); got != c2 {
+			t.Fatalf("active client = %p; want c2 %p", got, c2)
+		}
+
+		// When the active connection drops, the surviving one must
+		// still be picked up from the recorded history.
+		s.unregisterClient(c2)
+		if got, _ := s.clients.Load(clientPub); got.activeClient.Load() != c1 {
+			t.Fatalf("after dropping c2, active = %p; want c1 %p", got.activeClient.Load(), c1)
+		}
+	})
+
+	t.Run("disable_fighters", func(t *testing.T) {
+		s := New(key.NewNode(), t.Logf)
+		s.dupPolicy = disableFighters
+		c1, c2 := newClient("c1"), newClient("c2")
+		s.registerClient(c1)
+		s.registerClient(c2)
+
+		cs, _ := s.clients.Load(clientPub)
+		dup := cs.dup
+		if dup == nil {
+			t.Fatal("no dup set")
+		}
+		for range 5000 {
+			s.noteClientActivity(c1)
+			s.noteClientActivity(c2)
+		}
+		if got := len(dup.sendHistory); got > len(dup.set) {
+			t.Fatalf("sendHistory len = %d; want <= %d (set size)", got, len(dup.set))
+		}
+		// Fighting connections must be disabled.
+		if !c1.isDisabled.Load() || !c2.isDisabled.Load() {
+			t.Fatal("fighting clients not disabled; want both disabled")
+		}
+	})
+}
+
 func TestLimiter(t *testing.T) {
 	rl := rate.NewLimiter(rate.Every(time.Minute), 100)
 	for i := range 200 {
@@ -812,6 +960,383 @@ func benchmarkSendRecvSize(b *testing.B, packetSize int) {
 	}
 }
 
+// writeCountingConn wraps a net.Conn and counts Write calls, which on
+// an unwrapped TCP connection is the number of write(2) syscalls.
+type writeCountingConn struct {
+	net.Conn
+	writes atomic.Int64
+}
+
+func (c *writeCountingConn) Write(p []byte) (int, error) {
+	c.writes.Add(1)
+	return c.Conn.Write(p)
+}
+
+// BenchmarkForwardPacket measures a mesh peer forwarding packets into a
+// Server with derp.Client.ForwardPacket from many goroutines at once,
+// as derper's reader goroutines do for every packet whose destination
+// is on another node in the region. An op is complete once the Server
+// has read the forwarded frame, so ns/op is end-to-end throughput
+// rather than just the caller's cost. writes/op is the number of
+// write(2) calls on the mesh connection per forwarded packet; the
+// closer to zero, the more frames are being batched per syscall. The
+// call-* metrics are percentiles of how long ForwardPacket itself
+// takes, which is how long a derper reader goroutine stalls per
+// forward.
+//
+// Packets are spread over several destination clients so that
+// delivering them isn't the bottleneck; dstdrops/op reports how many
+// the Server still dropped at a destination's queue, which should be
+// zero, since a dropped packet skips the delivery work and would make
+// a run that drops more look cheaper. allocs/op counts the whole
+// process, mesh client and Server, so it's a bound on the forward
+// path's own allocations rather than a measure of them.
+func BenchmarkForwardPacket(b *testing.B) {
+	for _, size := range []int{100, 700, 1300, derp.MaxPacketSize} {
+		b.Run(fmt.Sprintf("msgsize=%d", size), func(b *testing.B) { benchmarkForwardPacketSize(b, size) })
+	}
+}
+
+func benchmarkForwardPacketSize(b *testing.B, packetSize int) {
+	env := newForwardTestEnv(b, runtime.GOMAXPROCS(0), false)
+	srcKey := key.NewNode().Public()
+
+	msg := make([]byte, packetSize)
+	b.SetBytes(int64(len(msg)))
+	b.ReportAllocs()
+	env.meshConn.writes.Store(0)
+	before := env.s.packetsForwardedIn.Value()
+	dropsBefore := queueHeadDrops()
+	b.ResetTimer()
+
+	// Per-call latency of ForwardPacket as its callers see it, which
+	// is how long a derper reader goroutine would stall per forward.
+	var latMu sync.Mutex
+	var lats []time.Duration
+	var next atomic.Int64
+	b.RunParallel(func(pb *testing.PB) {
+		mine := make([]time.Duration, 0, 1024)
+		dstKey := env.dstKeys[int(next.Add(1))%len(env.dstKeys)]
+		for pb.Next() {
+			t0 := time.Now()
+			err := env.mesh.ForwardPacket(srcKey, dstKey, derp.LoanBytes(msg))
+			mine = append(mine, time.Since(t0))
+			if err != nil {
+				b.Error(err)
+				return
+			}
+		}
+		latMu.Lock()
+		lats = append(lats, mine...)
+		latMu.Unlock()
+	})
+
+	// The op isn't done until the server has read the frame.
+	want := before + int64(b.N)
+	deadline := time.Now().Add(30 * time.Second)
+	for env.s.packetsForwardedIn.Value() < want {
+		if time.Now().After(deadline) {
+			b.Fatalf("server read %d of %d forwarded packets", env.s.packetsForwardedIn.Value()-before, b.N)
+		}
+		time.Sleep(50 * time.Microsecond)
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(env.meshConn.writes.Load())/float64(b.N), "writes/op")
+	b.ReportMetric(float64(queueHeadDrops()-dropsBefore)/float64(b.N), "dstdrops/op")
+	slices.Sort(lats)
+	b.ReportMetric(float64(lats[len(lats)/2]), "call-p50-ns")
+	b.ReportMetric(float64(lats[len(lats)*99/100]), "call-p99-ns")
+	b.ReportMetric(float64(lats[len(lats)-1]), "call-max-ns")
+}
+
+// BenchmarkForwardPacketSerial measures a lone forward: one goroutine
+// forwards a packet and blocks until the Server has read it before
+// the next, so nothing is ever in flight alongside it and no batching
+// is possible. ns/op is the latency from the call to the frame being
+// read; call-ns/op is how long the call itself took. The waiter
+// blocks on a channel the Server signals, as a derper reader blocks
+// on its next read, so the flusher goroutine can run on the same P
+// right away rather than after another P steals it.
+func BenchmarkForwardPacketSerial(b *testing.B) {
+	env := newForwardTestEnv(b, 1, false)
+	srcKey := key.NewNode().Public()
+	msg := make([]byte, 700)
+	read := make(chan struct{}, 1)
+	env.s.onForwardedInForTest = func() { read <- struct{}{} }
+	env.meshConn.writes.Store(0)
+	var callTotal time.Duration
+	b.SetBytes(int64(len(msg)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		t0 := time.Now()
+		if err := env.mesh.ForwardPacket(srcKey, env.dstKeys[0], derp.LoanBytes(msg)); err != nil {
+			b.Fatal(err)
+		}
+		callTotal += time.Since(t0)
+		<-read
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(callTotal.Nanoseconds())/float64(b.N), "call-ns/op")
+	b.ReportMetric(float64(env.meshConn.writes.Load())/float64(b.N), "writes/op")
+}
+
+// queueHeadDrops returns the process-wide count of non-disco packets
+// the Server dropped from the head of a full destination queue.
+func queueHeadDrops() int64 {
+	return dropCount(dropReasonQueueHead)
+}
+
+// dropCount returns the process-wide count of non-disco packets the
+// Server dropped for reason.
+func dropCount(reason dropReason) int64 {
+	v := packetsDropped.Get(dropReasonKindLabels{Reason: string(reason), Kind: string(packetKindOther)})
+	if v == nil {
+		return 0
+	}
+	var n int64
+	fmt.Sscan(v.String(), &n)
+	return n
+}
+
+// errFwd is a PacketForwarder whose ForwardPacket always fails.
+type errFwd struct{ err error }
+
+func (f errFwd) String() string { return "errFwd" }
+func (f errFwd) ForwardPacket(key.NodePublic, key.NodePublic, derp.LoanedBytes) error {
+	return f.err
+}
+
+// TestForwardPacketErrorRecordsDrop checks that a packet the mesh
+// forwarder fails to accept is counted as dropped with the fwd_error
+// reason, rather than vanishing after being counted as forwarded.
+func TestForwardPacketErrorRecordsDrop(t *testing.T) {
+	s := New(key.NewNode(), logger.Discard)
+	defer s.Close()
+	if err := s.SetMeshKey(testMeshKey); err != nil {
+		t.Fatal(err)
+	}
+	dst := key.NewNode().Public()
+	s.AddPacketForwarder(dst, errFwd{errors.New("peer gone")})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		for {
+			connIn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			brw := bufio.NewReadWriter(bufio.NewReader(connIn), bufio.NewWriter(connIn))
+			go s.Accept(ctx, connIn, brw, connIn.RemoteAddr().String())
+		}
+	}()
+	nc, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	brw := bufio.NewReadWriter(bufio.NewReader(nc), bufio.NewWriter(nc))
+	c, err := derp.NewClient(key.NewNode(), nc, brw, logger.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Recv(); err != nil { // ServerInfo: registered
+		t.Fatal(err)
+	}
+
+	drops0, fwdOut0 := dropCount(dropReasonForwardError), s.packetsForwardedOut.Value()
+	const n = 5
+	for range n {
+		if err := c.Send(dst, []byte("to a dead peer")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for s.packetsForwardedOut.Value() < fwdOut0+n {
+		if time.Now().After(deadline) {
+			t.Fatalf("server forwarded %d of %d packets", s.packetsForwardedOut.Value()-fwdOut0, n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := dropCount(dropReasonForwardError) - drops0; got != n {
+		t.Errorf("fwd_error drops = %d; want %d", got, n)
+	}
+}
+
+// forwardTestEnv is a Server with a mesh peer connected to it, as a
+// derper in a meshed region has, and destination clients for the mesh
+// peer to forward packets to.
+type forwardTestEnv struct {
+	s        *Server
+	mesh     *derp.Client             // connected with the mesh key
+	meshConn *writeCountingConn       // mesh's connection to s
+	dsts     []*derp.Client           // ordinary clients
+	dstKeys  []key.NodePublic         // their keys
+	dstRecv  chan derp.ReceivedPacket // packets the dsts received, with payloads cloned, if deliver was set
+}
+
+// newForwardTestEnv starts a Server and connects a mesh client and
+// numDsts destination clients to it. Every client's incoming frames
+// are drained; if deliver is set, packets the destinations receive are
+// also copied onto dstRecv. The mesh client's connection counts its
+// writes.
+func newForwardTestEnv(tb testing.TB, numDsts int, deliver bool) *forwardTestEnv {
+	tb.Helper()
+	s := New(key.NewNode(), logger.Discard)
+	tb.Cleanup(func() { s.Close() })
+	if err := s.SetMeshKey(testMeshKey); err != nil {
+		tb.Fatal(err)
+	}
+	// This exercises the mesh path, not the destination's overload
+	// policy: a burst of forwards arrives at the server faster than
+	// one destination's writer drains, and with the default depth
+	// of 32 the server would drop the oldest queued packets.
+	s.perClientSendQueueDepth = 4096
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tb.Cleanup(func() { ln.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	tb.Cleanup(cancel)
+	go func() {
+		for {
+			connIn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			brw := bufio.NewReadWriter(bufio.NewReader(connIn), bufio.NewWriter(connIn))
+			go s.Accept(ctx, connIn, brw, connIn.RemoteAddr().String())
+		}
+	}()
+
+	env := &forwardTestEnv{s: s}
+	if deliver {
+		env.dstRecv = make(chan derp.ReceivedPacket, 1024)
+	}
+	dial := func(opts ...derp.ClientOpt) (*derp.Client, *writeCountingConn) {
+		tb.Helper()
+		nc, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			tb.Fatal(err)
+		}
+		tb.Cleanup(func() { nc.Close() })
+		cc := &writeCountingConn{Conn: nc}
+		brw := bufio.NewReadWriter(bufio.NewReader(cc), bufio.NewWriter(cc))
+		c, err := derp.NewClient(key.NewNode(), cc, brw, logger.Discard, opts...)
+		if err != nil {
+			tb.Fatal(err)
+		}
+		// The server sends ServerInfo only after registering the
+		// client, so once it arrives the client can be a
+		// destination; before that, packets for it would be dropped
+		// as unknown and provoke peer gone frames to the sender.
+		m, err := c.Recv()
+		if err != nil {
+			tb.Fatal(err)
+		}
+		if _, ok := m.(derp.ServerInfoMessage); !ok {
+			tb.Fatalf("first message is %T; want ServerInfoMessage", m)
+		}
+		// Drain whatever the server sends (keepalives, peer gone
+		// frames, packets) so its writer to this client never
+		// stalls, delivering packets if asked.
+		go func() {
+			for {
+				m, err := c.Recv()
+				if err != nil {
+					return
+				}
+				if p, ok := m.(derp.ReceivedPacket); ok && env.dstRecv != nil {
+					p.Data = bytes.Clone(p.Data)
+					env.dstRecv <- p
+				}
+			}
+		}()
+		return c, cc
+	}
+
+	meshKey, err := key.ParseDERPMesh(testMeshKey)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	env.mesh, env.meshConn = dial(derp.MeshKey(meshKey))
+	for range numDsts {
+		c, _ := dial()
+		env.dsts = append(env.dsts, c)
+		env.dstKeys = append(env.dstKeys, c.PublicKey())
+	}
+	return env
+}
+
+// TestForwardPacketViaMesh checks that packets a mesh peer forwards
+// with derp.Client.ForwardPacket, from many goroutines at once, all
+// reach the destination client intact and attributed to their source,
+// without any later call on the mesh client to flush them.
+func TestForwardPacketViaMesh(t *testing.T) {
+	env := newForwardTestEnv(t, 1, true)
+	dstKey := env.dstKeys[0]
+	srcKey := key.NewNode().Public()
+
+	const n = 500
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// A payload bigger than the destination's disco
+			// sniffing could mistake, varying per packet.
+			payload := binary.BigEndian.AppendUint32(bytes.Repeat([]byte{0xAB}, 100), uint32(i))
+			if err := env.mesh.ForwardPacket(srcKey, dstKey, derp.LoanBytes(payload)); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	seen := make([]bool, n)
+	timeout := time.After(10 * time.Second)
+	for got := 0; got < n; got++ {
+		select {
+		case p := <-env.dstRecv:
+			if p.Source != srcKey {
+				t.Fatalf("packet from %v; want %v", p.Source.ShortString(), srcKey.ShortString())
+			}
+			if len(p.Data) != 104 {
+				t.Fatalf("payload len %d; want 104", len(p.Data))
+			}
+			i := binary.BigEndian.Uint32(p.Data[100:])
+			if int(i) >= n || seen[i] {
+				t.Fatalf("bad or duplicate packet index %d", i)
+			}
+			seen[i] = true
+		case <-timeout:
+			t.Fatalf("received %d of %d forwarded packets; server drops by reason: %s", got, n, dropsByReason())
+		}
+	}
+	t.Logf("%d packets forwarded in %d writes on the mesh connection", n, env.meshConn.writes.Load())
+}
+
+// dropsByReason returns the process-wide derp_packets_dropped counters
+// for non-disco packets, for test diagnostics.
+func dropsByReason() string {
+	var sb strings.Builder
+	for _, r := range []dropReason{dropReasonUnknownDest, dropReasonUnknownDestOnFwd, dropReasonGoneDisconnected, dropReasonQueueHead, dropReasonQueueTail, dropReasonWriteError, dropReasonDupClient} {
+		if v := packetsDropped.Get(dropReasonKindLabels{Reason: string(r), Kind: string(packetKindOther)}); v != nil {
+			fmt.Fprintf(&sb, "%s=%s ", r, v.String())
+		}
+	}
+	return sb.String()
+}
+
 func TestParseSSOutput(t *testing.T) {
 	contents, err := os.ReadFile("testdata/example_ss.txt")
 	if err != nil {
@@ -866,6 +1391,13 @@ func TestGetPerClientSendQueueDepth(t *testing.T) {
 		},
 		{
 			"64", 64,
+		},
+		// Zero and negative values are treated as unset.
+		{
+			"0", defaultPerClientSendQueueDepth,
+		},
+		{
+			"-5", defaultPerClientSendQueueDepth,
 		},
 	}
 
@@ -1665,4 +2197,1045 @@ func BenchmarkSenderCardinalityOverhead(b *testing.B) {
 			_ = sender.AppendTo(nil)
 		}
 	})
+}
+
+func TestPktQueue(t *testing.T) {
+	mkpkt := func(i int) pkt { return pkt{bs: []byte{byte(i)}} }
+	src := key.NewNode().Public()
+
+	t.Run("fifo_and_pool", func(t *testing.T) {
+		s := New(key.NewNode(), t.Logf)
+		defer s.Close()
+		s.perClientSendQueueDepth = 3
+
+		var q pktQueue
+		if _, more, ok := q.dequeue(s); ok || more {
+			t.Fatal("dequeue on empty queue reported ok or more")
+		}
+		for i := range 3 {
+			dropped, wasEmpty, ok := q.enqueue(s, mkpkt(i))
+			if !ok || dropped.bs != nil {
+				t.Fatalf("enqueue %d: ok=%v dropped=%v", i, ok, dropped.bs)
+			}
+			// Only the first enqueue finds the queue empty.
+			if want := i == 0; wasEmpty != want {
+				t.Errorf("enqueue %d: wasEmpty=%v, want %v", i, wasEmpty, want)
+			}
+		}
+		if q.ring == nil {
+			t.Fatal("ring not allocated after enqueue")
+		}
+		// Full: the head (0) is dropped to make room for 3.
+		dropped, wasEmpty, ok := q.enqueue(s, mkpkt(3))
+		if !ok || string(dropped.bs) != "\x00" {
+			t.Fatalf("enqueue on full queue: ok=%v dropped=%q, want head 0 dropped", ok, dropped.bs)
+		}
+		if wasEmpty {
+			t.Error("enqueue on full queue reported wasEmpty")
+		}
+		var got []byte
+		for {
+			p, more, ok := q.dequeue(s)
+			if !ok {
+				break
+			}
+			got = append(got, p.bs...)
+			if wantMore := len(got) < 3; more != wantMore {
+				t.Errorf("dequeue %d: more=%v, want %v", len(got), more, wantMore)
+			}
+		}
+		if want := "\x01\x02\x03"; string(got) != want {
+			t.Errorf("dequeued %q, want %q", got, want)
+		}
+		if q.ring != nil {
+			t.Error("ring not released to the pool after draining")
+		}
+		// The ring should have gone back to the pool with no
+		// packets still referenced from it.
+		if ring, ok := s.sendQueueRingPool.Get().(*[]pkt); ok {
+			for i, p := range *ring {
+				if p.bs != nil {
+					t.Errorf("pooled ring slot %d still holds a packet", i)
+				}
+			}
+		}
+	})
+
+	t.Run("close", func(t *testing.T) {
+		s := New(key.NewNode(), t.Logf)
+		defer s.Close()
+		s.perClientSendQueueDepth = 4
+
+		var q pktQueue
+		q.enqueue(s, pkt{bs: []byte("a"), src: src})
+		q.enqueue(s, pkt{bs: []byte("b"), src: src})
+		var dropped []string
+		q.close(s, func(p pkt) { dropped = append(dropped, string(p.bs)) })
+		if want := []string{"a", "b"}; !slices.Equal(dropped, want) {
+			t.Errorf("close dropped %q, want %q", dropped, want)
+		}
+		if q.ring != nil {
+			t.Error("ring not released on close")
+		}
+		if _, _, ok := q.enqueue(s, mkpkt(0)); ok {
+			t.Error("enqueue after close succeeded")
+		}
+		if q.ring != nil {
+			t.Error("enqueue after close allocated a ring")
+		}
+	})
+
+	// A Server that didn't come from New (as some unit tests build)
+	// has no configured queue depth and an unprimed pool. Enqueues must
+	// fail cleanly rather than panic on a nil pool.Get result, and must
+	// not allocate.
+	t.Run("zero_server", func(t *testing.T) {
+		s := &Server{}
+		var q pktQueue
+		if _, _, ok := q.enqueue(s, mkpkt(0)); ok {
+			t.Error("enqueue on zero-depth queue succeeded")
+		}
+		if q.ring != nil {
+			t.Error("zero-depth enqueue allocated a ring")
+		}
+		if _, _, ok := q.dequeue(s); ok {
+			t.Error("dequeue on zero-depth queue reported ok")
+		}
+		q.close(s, func(pkt) { t.Error("close on empty queue dropped a packet") })
+	})
+}
+
+// TestSendPktHeadDropAttribution checks that when a full queue drops
+// its head packet to make room, the drop is attributed to that
+// packet's sender, not to the sender of the packet that displaced it.
+func TestSendPktHeadDropAttribution(t *testing.T) {
+	var logMu sync.Mutex
+	var logs []string
+	s := New(key.NewNode(), func(format string, args ...any) {
+		logMu.Lock()
+		defer logMu.Unlock()
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+	defer s.Close()
+	s.perClientSendQueueDepth = 1
+
+	dst := &sclient{s: s, key: key.NewNode().Public()}
+	dst.writerState.Store(packWriterState(writerStopped, 0)) // no conn to write to; sendPkt's wake is a no-op
+	first := &sclient{s: s, key: key.NewNode().Public()}
+	second := &sclient{s: s, key: key.NewNode().Public()}
+
+	// Drops to dst are logged verbosely, with the source key.
+	verboseDropKeys[dst.key] = true
+	defer delete(verboseDropKeys, dst.key)
+
+	if err := first.sendPkt(dst, pkt{bs: []byte("first"), src: first.key}); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.sendPkt(dst, pkt{bs: []byte("second"), src: second.key}); err != nil {
+		t.Fatal(err)
+	}
+
+	logMu.Lock()
+	defer logMu.Unlock()
+	want := fmt.Sprintf("drop (%s) %s -> %s", first.key.ShortString(), dropReasonQueueHead, dst.key.ShortString())
+	if !slices.Contains(logs, want) {
+		t.Errorf("logs = %q; want to contain %q", logs, want)
+	}
+}
+
+// gatedConn is a derp.Conn whose Writes block until the test releases
+// them, one at a time, so a test can hold the writer inside a Flush.
+type gatedConn struct {
+	writes chan int      // receives len(p) as each Write begins
+	gate   chan struct{} // each Write completes on receiving from it
+	closed chan struct{} // closed by Close
+	once   sync.Once
+}
+
+func newGatedConn() *gatedConn {
+	return &gatedConn{
+		writes: make(chan int, 16),
+		gate:   make(chan struct{}),
+		closed: make(chan struct{}),
+	}
+}
+
+func (c *gatedConn) Write(p []byte) (int, error) {
+	c.writes <- len(p)
+	select {
+	case <-c.gate:
+		return len(p), nil
+	case <-c.closed:
+		return 0, net.ErrClosed
+	}
+}
+
+func (c *gatedConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return nil
+}
+
+func (c *gatedConn) LocalAddr() net.Addr              { return &net.TCPAddr{} }
+func (c *gatedConn) SetDeadline(time.Time) error      { return nil }
+func (c *gatedConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *gatedConn) SetWriteDeadline(time.Time) error { return nil }
+
+// TestWriterBufferedWriteFrames checks that the bufferedWriteFrames
+// histogram counts exactly the frames written per flush. In
+// particular a writer pass that itself writes nothing must not
+// inflate the count of the batch that follows it.
+func TestWriterBufferedWriteFrames(t *testing.T) {
+	s := New(key.NewNode(), t.Logf)
+	defer s.Close()
+
+	conn := newGatedConn()
+	c := &sclient{
+		s:    s,
+		key:  key.NewNode().Public(),
+		nc:   conn,
+		bw:   &lazyBufioWriter{w: conn},
+		logf: t.Logf,
+	}
+	c.runWriterFunc = c.runWriter
+
+	src := key.NewNode().Public()
+	send := func(n int) {
+		for range n {
+			if err := c.sendPkt(c, pkt{bs: []byte("hello"), src: src}); err != nil {
+				t.Fatalf("sendPkt: %v", err)
+			}
+		}
+	}
+	// awaitWrite waits for the writer to be blocked in a Write, which
+	// happens only from Flush.
+	awaitWrite := func() {
+		t.Helper()
+		select {
+		case <-conn.writes:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timeout waiting for the writer to flush")
+		}
+	}
+	release := func() { conn.gate <- struct{}{} }
+
+	// One packet: it wakes a writer, which writes it and blocks
+	// flushing it.
+	send(1)
+	awaitWrite()
+
+	// While it's blocked, queue a batch. Its wake sets a pending bit
+	// on the running writer, so after the first flush's observation
+	// the writer's park attempt fails and it drains again, without an
+	// observation for the wake itself.
+	const batch = 5
+	send(batch)
+	release()
+
+	// The batch is drained in one pass and flushed.
+	awaitWrite()
+	release()
+
+	// The writer has parked, or is about to. A pong wakes it again
+	// for one more write and flush; once that Write has begun, the
+	// batch's observation has been recorded.
+	c.queuePong([8]byte{})
+	awaitWrite()
+
+	var h map[string]float64
+	if err := json.Unmarshal([]byte(s.bufferedWriteFrames.String()), &h); err != nil {
+		t.Fatal(err)
+	}
+	// The buckets are cumulative, so the number of observations of
+	// exactly v is bucket[v] minus bucket[v-1].
+	exactly := func(v int) float64 { return h[strconv.Itoa(v)] - h[strconv.Itoa(v-1)] }
+	if h["count"] != 2 || exactly(1) != 1 || exactly(batch) != 1 {
+		t.Errorf("histogram = %v; want exactly two observations, one of 1 and one of %d", h, batch)
+	}
+
+	release()
+	c.stopWriter()
+	if c.writeErr != nil {
+		t.Errorf("writer: %v", c.writeErr)
+	}
+	if got := c.writerState.Load(); got.phase() != writerStopped {
+		t.Errorf("writer phase = %d; want writerStopped (%d)", got.phase(), writerStopped)
+	}
+}
+
+// TestSenderCardinalityEnv checks that the writer keeps a unique sender
+// estimate only when TS_DERP_SENDER_CARDINALITY is set.
+func TestSenderCardinalityEnv(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enabled=%v", enabled), func(t *testing.T) {
+			envVal := ""
+			if enabled {
+				envVal = "1"
+			}
+			t.Setenv("TS_DERP_SENDER_CARDINALITY", envVal)
+			s := New(key.NewNode(), t.Logf)
+			defer s.Close()
+			if s.trackSenderCardinality != enabled {
+				t.Fatalf("trackSenderCardinality = %v; want %v", s.trackSenderCardinality, enabled)
+			}
+
+			conn := newGatedConn()
+			c := &sclient{
+				s:    s,
+				key:  key.NewNode().Public(),
+				nc:   conn,
+				bw:   &lazyBufioWriter{w: conn},
+				logf: t.Logf,
+			}
+			c.runWriterFunc = c.runWriter
+
+			// Send one packet at a time from distinct sources, waiting
+			// for each to reach the conn so its insert has happened.
+			const numSenders = 10
+			for range numSenders {
+				if err := c.sendPkt(c, pkt{bs: []byte("hello"), src: key.NewNode().Public()}); err != nil {
+					t.Fatalf("sendPkt: %v", err)
+				}
+				select {
+				case <-conn.writes:
+				case <-time.After(10 * time.Second):
+					t.Fatal("timeout waiting for the writer to flush")
+				}
+				conn.gate <- struct{}{}
+			}
+
+			got := c.EstimatedUniqueSenders()
+			if !enabled {
+				if got != 0 {
+					t.Errorf("EstimatedUniqueSenders() = %d; want 0 when disabled", got)
+				}
+			} else if got < numSenders-2 || got > numSenders+2 {
+				t.Errorf("EstimatedUniqueSenders() = %d; want ~%d", got, numSenders)
+			}
+
+			c.stopWriter()
+			if c.writeErr != nil {
+				t.Errorf("writer: %v", c.writeErr)
+			}
+		})
+	}
+}
+
+func TestPacketBufPool(t *testing.T) {
+	s := &Server{}
+
+	// smallestClass is the reference implementation of packetBufClass:
+	// the index of the smallest power-of-two class that holds n bytes.
+	smallestClass := func(n int) int {
+		for i := range numPacketBufClasses {
+			if n <= 1<<(packetBufMinClass+i) {
+				return i
+			}
+		}
+		t.Fatalf("no size class holds %d bytes", n)
+		return -1
+	}
+	for n := 0; n <= derp.MaxPacketSize; n++ {
+		got, ok := packetBufClass(n)
+		if want := smallestClass(n); !ok || got != want {
+			t.Fatalf("packetBufClass(%d) = %d, %v; want %d, true", n, got, ok, want)
+		}
+	}
+	for _, n := range []int{-1, derp.MaxPacketSize + 1} {
+		if _, ok := packetBufClass(n); ok {
+			t.Errorf("packetBufClass(%d) ok = true; want false", n)
+		}
+	}
+
+	// Exercise get/put at the bounds of every size class.
+	for class := range numPacketBufClasses {
+		size := 1 << (packetBufMinClass + class)
+		lo := 0
+		if class > 0 {
+			lo = size/2 + 1
+		}
+		for _, n := range []int{lo, lo + 1, size - 1, size} {
+			buf := s.getPacketBuf(n)
+			if len(*buf) != n {
+				t.Errorf("getPacketBuf(%d): len = %d", n, len(*buf))
+			}
+			if cap(*buf) != size {
+				t.Errorf("getPacketBuf(%d): cap = %d; want class %d size %d", n, cap(*buf), class, size)
+			}
+			s.putPacketBuf(buf)
+		}
+	}
+	s.putPacketBuf(nil) // no-op for pkts whose bs didn't come from the pool
+
+	if allocs := testing.AllocsPerRun(1000, func() {
+		s.putPacketBuf(s.getPacketBuf(700))
+	}); allocs != 0 {
+		t.Errorf("get/put cycle allocates %v times per run; want 0", allocs)
+	}
+
+	mustPanic := func(name string, f func()) {
+		t.Helper()
+		defer func() {
+			if recover() == nil {
+				t.Errorf("%s: did not panic", name)
+			}
+		}()
+		f()
+	}
+	mustPanic("getPacketBuf(-1)", func() { s.getPacketBuf(-1) })
+	mustPanic("getPacketBuf(MaxPacketSize+1)", func() { s.getPacketBuf(derp.MaxPacketSize + 1) })
+	for _, c := range []int{0, 3, 1<<packetBufMinClass - 1, 1<<packetBufMinClass + 1, 1500, 2 * derp.MaxPacketSize} {
+		b := make([]byte, c)
+		mustPanic(fmt.Sprintf("putPacketBuf(cap %d)", c), func() { s.putPacketBuf(&b) })
+	}
+}
+
+// frameSeqConn is a derp.Conn that parses the DERP frames written to
+// it. It expects each packet frame's payload to end in a big-endian
+// uint32 sequence number, and records the highest one written before
+// the first pong.
+type frameSeqConn struct {
+	mu           sync.Mutex
+	partial      []byte // bytes of a frame not yet fully written
+	packets      int    // packet frames written
+	maxSeq       uint32 // highest sequence number written
+	pongs        int    // pong frames written
+	maxSeqAtPong uint32 // maxSeq when the first pong was written
+}
+
+func (c *frameSeqConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.partial = append(c.partial, p...)
+	for len(c.partial) >= derp.FrameHeaderLen {
+		ft := derp.FrameType(c.partial[0])
+		fl := int(binary.BigEndian.Uint32(c.partial[1:derp.FrameHeaderLen]))
+		if len(c.partial) < derp.FrameHeaderLen+fl {
+			break
+		}
+		payload := c.partial[derp.FrameHeaderLen : derp.FrameHeaderLen+fl]
+		switch ft {
+		case derp.FrameRecvPacket:
+			c.packets++
+			c.maxSeq = max(c.maxSeq, binary.BigEndian.Uint32(payload[len(payload)-4:]))
+		case derp.FramePong:
+			if c.pongs == 0 {
+				c.maxSeqAtPong = c.maxSeq
+			}
+			c.pongs++
+		}
+		c.partial = c.partial[derp.FrameHeaderLen+fl:]
+	}
+	return len(p), nil
+}
+
+func (c *frameSeqConn) stats() (packets, pongs int, maxSeqAtPong uint32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.packets, c.pongs, c.maxSeqAtPong
+}
+
+func (c *frameSeqConn) Close() error                     { return nil }
+func (c *frameSeqConn) LocalAddr() net.Addr              { return &net.TCPAddr{} }
+func (c *frameSeqConn) SetDeadline(time.Time) error      { return nil }
+func (c *frameSeqConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *frameSeqConn) SetWriteDeadline(time.Time) error { return nil }
+
+// TestWriterFloodDoesNotStarveControlFrames checks that a sender
+// keeping a client's send queue topped up can't hold the writer in its
+// packet drain forever: a pong queued during the flood is written
+// after at most a queue's depth worth of the packets enqueued after it.
+func TestWriterFloodDoesNotStarveControlFrames(t *testing.T) {
+	s := New(key.NewNode(), t.Logf)
+	defer s.Close()
+	depth := uint32(s.perClientSendQueueDepth)
+
+	conn := &frameSeqConn{}
+	c := &sclient{
+		s:    s,
+		key:  key.NewNode().Public(),
+		nc:   conn,
+		bw:   &lazyBufioWriter{w: conn},
+		logf: t.Logf,
+	}
+	c.runWriterFunc = c.runWriter
+
+	// Flood the queue from another goroutine, faster than the writer
+	// drains it, so dequeue always reports more packets behind. Each
+	// packet carries its sequence number.
+	var seq atomic.Uint32
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	src := key.NewNode().Public()
+	wg.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			var bs [4]byte
+			binary.BigEndian.PutUint32(bs[:], seq.Add(1))
+			if err := c.sendPkt(c, pkt{bs: bs[:], src: src}); err != nil {
+				t.Errorf("sendPkt: %v", err)
+				return
+			}
+		}
+	})
+	defer func() {
+		close(stop)
+		wg.Wait()
+		c.stopWriter()
+	}()
+
+	waitFor := func(what string, ok func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for !ok() {
+			if time.Now().After(deadline) {
+				t.Fatalf("timeout waiting for %s", what)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	// Let the flood get well past one queue's depth so the writer is
+	// surely in its drain loop.
+	waitFor("the flood to get going", func() bool {
+		packets, _, _ := conn.stats()
+		return packets >= 4*int(depth)
+	})
+
+	c.queuePong([8]byte{'p', 'o', 'n', 'g'})
+	seqAtPong := seq.Load()
+	waitFor("the pong to be written", func() bool {
+		_, pongs, _ := conn.stats()
+		return pongs > 0
+	})
+	// The pass in progress may finish its budget of depth packets
+	// first, and then the pong goes out before the next pass's packets,
+	// so at most depth packets enqueued after the pong precede it.
+	_, _, maxSeqAtPong := conn.stats()
+	if maxSeqAtPong > seqAtPong+depth {
+		t.Errorf("pong written after packet %d; want no later than packet %d (pong queued at %d, depth %d)", maxSeqAtPong, seqAtPong+depth, seqAtPong, depth)
+	}
+}
+
+// writerTestClient is a DERP client connected over TCP loopback to an
+// in-process Server, for tests of the server's per-client writer.
+type writerTestClient struct {
+	c      *derp.Client
+	nc     net.Conn
+	key    key.NodePrivate
+	cancel context.CancelFunc
+}
+
+// newWriterTestClient connects a new client to s. Its Accept goroutine
+// is the connection's reader; the test's caller owns the client side.
+func newWriterTestClient(t *testing.T, s *Server, ln net.Listener) *writerTestClient {
+	t.Helper()
+	connOut, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	connIn, err := ln.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	brwServer := bufio.NewReadWriter(bufio.NewReader(connIn), bufio.NewWriter(connIn))
+	go s.Accept(ctx, connIn, brwServer, connIn.RemoteAddr().String())
+
+	k := key.NewNode()
+	brw := bufio.NewReadWriter(bufio.NewReader(connOut), bufio.NewWriter(connOut))
+	c, err := derp.NewClient(k, connOut, brw, logger.Discard)
+	if err != nil {
+		cancel()
+		t.Fatalf("client: %v", err)
+	}
+	return &writerTestClient{c: c, nc: connOut, key: k, cancel: cancel}
+}
+
+func (tc *writerTestClient) close() {
+	tc.nc.Close()
+	tc.cancel()
+}
+
+// sendToSelf sends a packet to the client itself and waits to receive
+// it back, exercising the server's writer for that client.
+func (tc *writerTestClient) sendToSelf(t *testing.T, payload []byte) {
+	t.Helper()
+	if err := tc.c.Send(tc.key.Public(), payload); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	for {
+		tc.nc.SetReadDeadline(time.Now().Add(10 * time.Second))
+		m, err := tc.c.Recv()
+		if err != nil {
+			t.Fatalf("Recv: %v", err)
+		}
+		if rp, ok := m.(derp.ReceivedPacket); ok {
+			if !bytes.Equal(rp.Data, payload) {
+				t.Fatalf("got packet %q; want %q", rp.Data, payload)
+			}
+			return
+		}
+	}
+}
+
+// awaitGoroutines waits for the process's goroutine count to settle at
+// want, tolerating transient goroutines such as timer callbacks.
+func awaitGoroutines(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got := runtime.NumGoroutine()
+		if got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			buf := make([]byte, 1<<20)
+			t.Fatalf("goroutines = %d; want %d\n%s", got, want, buf[:runtime.Stack(buf, true)])
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestWriterParksWhenIdle locks in that an idle connection costs the
+// server exactly one goroutine, its reader, both when it has never
+// been written to and after its writer has run and parked again.
+func TestWriterParksWhenIdle(t *testing.T) {
+	s := New(key.NewNode(), t.Logf)
+	defer s.Close()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	base := runtime.NumGoroutine()
+
+	const numClients = 20
+	var clients []*writerTestClient
+	for range numClients {
+		clients = append(clients, newWriterTestClient(t, s, ln))
+	}
+	defer func() {
+		for _, tc := range clients {
+			tc.close()
+		}
+	}()
+	// Accepting a client also handed it its ServerInfo frame, so the
+	// writer ran once already. It must have parked.
+	awaitGoroutines(t, base+numClients)
+
+	for i, tc := range clients {
+		tc.sendToSelf(t, []byte(strconv.Itoa(i)))
+	}
+	awaitGoroutines(t, base+numClients)
+
+	for _, tc := range clients {
+		tc.close()
+	}
+	clients = nil
+	awaitGoroutines(t, base)
+}
+
+// TestWriterWakeStress races the writer's park decision against
+// producers on several goroutines and checks that nothing is lost:
+// every packet, sent one at a time so the writer parks between them,
+// and every peer gone request, which the writer must deliver exactly.
+func TestWriterWakeStress(t *testing.T) {
+	s := New(key.NewNode(), logger.Discard)
+	defer s.Close()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	tc := newWriterTestClient(t, s, ln)
+	defer tc.close()
+
+	var sc *sclient
+	for deadline := time.Now().Add(10 * time.Second); sc == nil; {
+		if set, ok := s.clients.Load(tc.key.Public()); ok {
+			sc = set.activeClient.Load()
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("client never registered")
+		}
+	}
+
+	const (
+		producers      = 4
+		gonePerProd    = 500
+		packets        = 500
+		wantGone       = producers * gonePerProd
+		wantPacketData = "hi"
+	)
+	gonePeer := key.NewNode().Public()
+	var wg sync.WaitGroup
+	for range producers {
+		wg.Go(func() {
+			for range gonePerProd {
+				sc.requestPeerGoneWrite(gonePeer, derp.PeerGoneReasonDisconnected)
+			}
+		})
+	}
+
+	gotGone, gotPackets := 0, 0
+	sent := 0
+	if err := tc.c.Send(tc.key.Public(), []byte(wantPacketData)); err != nil {
+		t.Fatal(err)
+	}
+	sent++
+	for gotGone < wantGone || gotPackets < packets {
+		tc.nc.SetReadDeadline(time.Now().Add(30 * time.Second))
+		m, err := tc.c.Recv()
+		if err != nil {
+			t.Fatalf("Recv after %d gone, %d packets: %v", gotGone, gotPackets, err)
+		}
+		switch m := m.(type) {
+		case derp.PeerGoneMessage:
+			if m.Peer != gonePeer {
+				t.Fatalf("PeerGone for %v; want %v", m.Peer, gonePeer)
+			}
+			gotGone++
+		case derp.ReceivedPacket:
+			if string(m.Data) != wantPacketData {
+				t.Fatalf("packet %q; want %q", m.Data, wantPacketData)
+			}
+			gotPackets++
+			if sent < packets {
+				// Each packet goes out only once the previous one
+				// came back, so the writer had a chance to park in
+				// between.
+				if err := tc.c.Send(tc.key.Public(), []byte(wantPacketData)); err != nil {
+					t.Fatal(err)
+				}
+				sent++
+			}
+		}
+	}
+	wg.Wait()
+}
+
+// TestUnknownFrameSizeLimit checks that the server discards small frames of
+// unknown types, keeping the connection open, but closes the connection on
+// an unknown frame whose declared length exceeds maxUnknownFrameLen. Without
+// that bound, a client could make the server read far more from the socket
+// than the per-client rate limiter charged it for.
+func TestUnknownFrameSizeLimit(t *testing.T) {
+	s := New(key.NewNode(), t.Logf)
+	defer s.Close()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	// unknownFrameType is a frame type the server doesn't know.
+	const unknownFrameType = derp.FrameType(0xfe)
+
+	writeUnknownFrame := func(t *testing.T, tc *writerTestClient, declaredLen uint32, body []byte) {
+		t.Helper()
+		bw := bufio.NewWriter(tc.nc)
+		if err := derp.WriteFrameHeader(bw, unknownFrameType, declaredLen); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := bw.Write(body); err != nil {
+			t.Fatal(err)
+		}
+		if err := bw.Flush(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("small_is_discarded", func(t *testing.T) {
+		tc := newWriterTestClient(t, s, ln)
+		defer tc.close()
+
+		body := bytes.Repeat([]byte{'x'}, maxUnknownFrameLen)
+		writeUnknownFrame(t, tc, uint32(len(body)), body)
+
+		// The connection must still work after the unknown frame.
+		tc.sendToSelf(t, []byte("still here"))
+	})
+
+	t.Run("huge_closes_conn", func(t *testing.T) {
+		tc := newWriterTestClient(t, s, ln)
+		defer tc.close()
+
+		// Declare a frame far larger than the server should read, but only
+		// send a little of it. If the server tried to drain the declared
+		// length, it would wait on the socket instead of closing.
+		writeUnknownFrame(t, tc, math.MaxUint32, []byte("just a bit"))
+
+		// Read the raw connection rather than using tc.c.Recv, which
+		// resets the read deadline to its own much longer timeout.
+		// The server should close the connection, giving us EOF.
+		tc.nc.SetReadDeadline(time.Now().Add(10 * time.Second))
+		if _, err := io.Copy(io.Discard, tc.nc); err != nil {
+			t.Fatalf("server did not close the connection: %v", err)
+		}
+	})
+}
+
+func newBenchWriterClient(tb testing.TB, s *Server, useTLS bool) (*sclient, *writeCountingConn) {
+	tb.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		tb.Fatal(err)
+	}
+	defer ln.Close()
+	connOut, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tb.Cleanup(func() { connOut.Close() })
+	connIn, err := ln.Accept()
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tb.Cleanup(func() { connIn.Close() })
+
+	cc := &writeCountingConn{Conn: connOut}
+	var nc derp.Conn = cc
+	drain := connIn
+	if useTLS {
+		roots := x509.NewCertPool()
+		roots.AppendCertsFromPEM(tlstest.TestRootCA())
+		cli := tls.Client(connIn, &tls.Config{RootCAs: roots, ServerName: string(tlstest.Derper), MinVersion: tls.VersionTLS13})
+		drain = cli // its first Read runs the client side of the handshake
+		srv := tls.Server(cc, tlstest.Derper.ServerTLSConfig())
+		go io.Copy(io.Discard, drain)
+		if err := srv.Handshake(); err != nil {
+			tb.Fatalf("TLS handshake: %v", err)
+		}
+		nc = srv
+	} else {
+		go io.Copy(io.Discard, drain)
+	}
+
+	c := &sclient{
+		s:    s,
+		key:  key.NewNode().Public(),
+		nc:   nc,
+		bw:   &lazyBufioWriter{w: nc},
+		logf: logger.Discard,
+	}
+	c.runWriterFunc = c.runWriter
+	return c, cc
+}
+
+// BenchmarkWriterBatch measures a client's writer draining a batch of
+// queued packets in one pass, as [sclient.runWriter] does after a
+// wake, over a loopback connection. Each op enqueues batch packets of
+// msgsize bytes and runs the writer inline until it parks.
+func BenchmarkWriterBatch(b *testing.B) {
+	for _, transport := range []string{"tcp", "tls"} {
+		for _, size := range []int{100, 1300} {
+			for _, batch := range []int{1, 2, 4, 16} {
+				name := fmt.Sprintf("transport=%s/msgsize=%d/batch=%d", transport, size, batch)
+				b.Run(name, func(b *testing.B) { benchmarkWriterBatch(b, transport == "tls", size, batch) })
+			}
+		}
+	}
+}
+
+func benchmarkWriterBatch(b *testing.B, useTLS bool, size, batch int) {
+	s := New(key.NewNode(), logger.Discard)
+	defer s.Close()
+	if batch > s.perClientSendQueueDepth {
+		b.Fatalf("batch %d exceeds the send queue depth %d; the queue would drop", batch, s.perClientSendQueueDepth)
+	}
+
+	c, conn := newBenchWriterClient(b, s, useTLS)
+
+	src := key.NewNode().Public()
+	payload := bytes.Repeat([]byte{'x'}, size)
+
+	b.SetBytes(int64(batch * size))
+	b.ReportAllocs()
+	conn.writes.Store(0) // don't count the TLS handshake
+	b.ResetTimer()
+	for range b.N {
+		for range batch {
+			buf := s.getPacketBuf(size)
+			copy(*buf, payload)
+			p := pkt{bs: *buf, buf: buf, src: src, enqueuedAt: s.clock.Now()}
+			if _, _, ok := c.sendQueue.enqueue(s, p); !ok {
+				b.Fatal("enqueue failed")
+			}
+		}
+		// Run the writer inline, as the keepalive timer does
+		// ([sclient.onKeepAliveTimer]), so the pass is synchronous
+		// and drains exactly this batch before parking.
+		if !c.claimWriter(pendSendQueue) {
+			b.Fatal("writer was not parked")
+		}
+		c.runWriter()
+		if c.writeErr != nil {
+			b.Fatal(c.writeErr)
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(conn.writes.Load())/float64(b.N), "writes/op")
+}
+
+// deadlineRecordingConn records the write deadlines set on it and
+// counts and discards writes. Nothing else may be called; the embedded
+// Conn is nil.
+type deadlineRecordingConn struct {
+	derp.Conn
+	deadlines []time.Time
+	writes    int
+}
+
+func (c *deadlineRecordingConn) SetWriteDeadline(t time.Time) error {
+	c.deadlines = append(c.deadlines, t)
+	return nil
+}
+
+func (c *deadlineRecordingConn) Write(p []byte) (int, error) {
+	c.writes++
+	return len(p), nil
+}
+
+// TestWriteTimeout checks that each write to the connection, and
+// nothing else, sets a write deadline of the client's timeout from
+// now, however many frames the write carries; that a zero timeout sets
+// no deadline; and that mesh peers get privilegedWriteTimeout.
+func TestWriteTimeout(t *testing.T) {
+	s := New(key.NewNode(), t.Logf)
+	defer s.Close()
+	const d = time.Hour
+	s.tcpWriteTimeout = d
+
+	// batch makes a client, writes frames keep-alive frames on it and
+	// flushes them, then checks that they took at least minWrites
+	// writes and that each write set a deadline timeout from now, give
+	// or take the call's own duration, or none if timeout is zero.
+	batch := func(what string, canMesh bool, frames, minWrites int, timeout time.Duration) {
+		t.Helper()
+		conn := &deadlineRecordingConn{}
+		c := &sclient{
+			s:       s,
+			key:     key.NewNode().Public(),
+			nc:      conn,
+			bw:      &lazyBufioWriter{w: conn},
+			canMesh: canMesh,
+			logf:    t.Logf,
+		}
+		if err := c.bw.setWriteTimeout(conn, s.writeTimeout(canMesh)); err != nil {
+			t.Fatal(err)
+		}
+		before := time.Now()
+		for range frames {
+			if err := c.sendKeepAlive(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := c.bw.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		after := time.Now()
+		if conn.writes < minWrites {
+			t.Fatalf("%s: %d writes; want at least %d", what, conn.writes, minWrites)
+		}
+		want := conn.writes
+		if timeout == 0 {
+			want = 0
+		}
+		if len(conn.deadlines) != want {
+			t.Fatalf("%s: set %d deadlines over %d writes; want %d", what, len(conn.deadlines), conn.writes, want)
+		}
+		for _, got := range conn.deadlines {
+			if got.Before(before.Add(timeout)) || got.After(after.Add(timeout)) {
+				t.Fatalf("%s: set deadline %v; want %v from now", what, got, timeout)
+			}
+		}
+	}
+
+	batch("one frame", false, 1, 1, d)
+	batch("many frames", false, 100, 1, d)
+	// A keep-alive frame is a 5 byte header, so this many overflow
+	// the buffer at least once before the flush.
+	batch("buffer overflow", false, bufioWriterSize/5+1, 2, d)
+	batch("mesh peer", true, 1, 1, privilegedWriteTimeout)
+
+	s.tcpWriteTimeout = 0
+	batch("zero timeout", false, 1, 1, 0)
+	batch("zero timeout, mesh peer", true, 1, 1, privilegedWriteTimeout)
+}
+
+// BenchmarkWriteTimeout measures what moving the write deadline from
+// each frame to each flush saves: a batch of keep-alive frames written
+// through a client's buffered writer and flushed to a TCP connection,
+// setting the deadline once per frame (what the server did before) or
+// once per flush (what [deadlineWriter] does). The frames fit one
+// buffer, so both do one connection write per flush and differ only in
+// deadline calls.
+func BenchmarkWriteTimeout(b *testing.B) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer ln.Close()
+	nc, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer nc.Close()
+	drain, err := ln.Accept()
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer drain.Close()
+	go io.Copy(io.Discard, drain)
+
+	s := New(key.NewNode(), logger.Discard)
+	defer s.Close()
+
+	for _, frames := range []int{1, 16, 128} {
+		for _, perFrame := range []bool{true, false} {
+			name := fmt.Sprintf("frames=%d/deadline=", frames)
+			if perFrame {
+				name += "per-frame"
+			} else {
+				name += "per-flush"
+			}
+			b.Run(name, func(b *testing.B) {
+				c := &sclient{
+					s:    s,
+					key:  key.NewNode().Public(),
+					nc:   nc,
+					bw:   &lazyBufioWriter{w: nc},
+					logf: logger.Discard,
+				}
+				timeout := s.writeTimeout(false)
+				if !perFrame {
+					if err := c.bw.setWriteTimeout(nc, timeout); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.ReportAllocs()
+				for range b.N {
+					for range frames {
+						if perFrame {
+							nc.SetWriteDeadline(time.Now().Add(timeout))
+						}
+						if err := c.sendKeepAlive(); err != nil {
+							b.Fatal(err)
+						}
+					}
+					if err := c.bw.Flush(); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
 }

@@ -85,6 +85,19 @@ func (c *connHalf) Close() error {
 	return c.r.Close()
 }
 
+// CloseWrite closes the write side of the connection. The peer can read
+// buffered data, then gets io.EOF. It matches net.TCPConn.CloseWrite, which
+// proxies such as tcpproxy rely on to propagate a backend's close.
+func (c *connHalf) CloseWrite() error {
+	return c.w.Close()
+}
+
+// CloseRead closes the read side of the connection. Subsequent reads return
+// io.EOF and the peer's writes fail.
+func (c *connHalf) CloseRead() error {
+	return c.r.Close()
+}
+
 func (c *connHalf) SetDeadline(t time.Time) error {
 	err1 := c.SetReadDeadline(t)
 	err2 := c.SetWriteDeadline(t)

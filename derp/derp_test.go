@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -409,6 +410,20 @@ func TestSendRecv(t *testing.T) {
 	recv(2, string(msg2))
 	recvNothing(0)
 	recvNothing(1)
+
+	// Client 1 has now received one 11-byte packet and sent one,
+	// which the debug clients page should show in its per-connection
+	// counters. The server bumps them before the packet reaches the
+	// client, so they're settled by the time recv returns.
+	{
+		rec := httptest.NewRecorder()
+		s.ServeDebugClients(rec, httptest.NewRequest("GET", "/debug/clients/?key="+clientKeys[1].String(), nil))
+		body := rec.Body.String()
+		const wantCounters = "<td class=\"n\">1</td>\n<td class=\"n\">11</td>\n<td class=\"n\">1</td>\n<td class=\"n\">11</td>"
+		if rec.Code != 200 || !strings.Contains(body, wantCounters) {
+			t.Errorf("debug clients page for client 1: status %d, missing rx/tx counters %q:\n%s", rec.Code, wantCounters, body)
+		}
+	}
 
 	// Send messages to a non-existent node
 	neKey := key.NewNode().Public()
@@ -908,6 +923,76 @@ func TestWatch(t *testing.T) {
 	w1.wantGone(t, c1.pub)
 	w2.wantGone(t, c1.pub)
 	w3.wantGone(t, c1.pub)
+}
+
+// TestWatchAppName tests that the app name a client advertises in its
+// ClientInfo is relayed to watchers in peerPresent frames.
+func TestWatchAppName(t *testing.T) {
+	ctx := t.Context()
+
+	ts := newTestServer(t, ctx)
+	defer ts.close(t)
+
+	c1 := newTestClient(t, ts, "c1", func(nc net.Conn, priv key.NodePrivate, logf logger.Logf) (*Client, error) {
+		brw := bufio.NewReadWriter(bufio.NewReader(nc), bufio.NewWriter(nc))
+		c, err := derp.NewClient(priv, nc, brw, logf, derp.AppName("test-app"))
+		if err != nil {
+			return nil, err
+		}
+		waitConnect(t, c)
+		return c, nil
+	})
+
+	w := newTestWatcher(t, ts, "w")
+
+	want := map[key.NodePublic]string{
+		c1.pub: "test-app",
+		w.pub:  "",
+	}
+	for len(want) > 0 {
+		m, err := w.c.RecvTimeoutForTest(time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pp, ok := m.(derp.PeerPresentMessage)
+		if !ok {
+			t.Fatalf("unexpected message type %T", m)
+		}
+		wantName, ok := want[pp.Key]
+		if !ok {
+			t.Fatalf("peer present for unexpected peer %v", ts.keyName(pp.Key))
+		}
+		if pp.AppName != wantName {
+			t.Errorf("peer %v AppName = %q; want %q", ts.keyName(pp.Key), pp.AppName, wantName)
+		}
+		delete(want, pp.Key)
+	}
+}
+
+func TestValidAppName(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"", true},
+		{"some-client", true},
+		{"app with spaces 123!", true},
+		{strings.Repeat("x", 32), true},
+		{strings.Repeat("x", 33), false},
+		{"new\nline", false},
+		{"nul\x00", false},
+		{"emoji🐱", false},
+	}
+	for _, tt := range tests {
+		if got := derp.ValidAppName(tt.name); got != tt.want {
+			t.Errorf("ValidAppName(%q) = %v; want %v", tt.name, got, tt.want)
+		}
+	}
+
+	// NewClient should reject an invalid app name before touching the conn.
+	if _, err := derp.NewClient(key.NewNode(), nil, nil, t.Logf, derp.AppName("emoji🐱")); err == nil {
+		t.Error("NewClient with invalid app name: got nil error; want error")
+	}
 }
 
 func waitConnect(t testing.TB, c *Client) {

@@ -4,73 +4,43 @@
 package appc
 
 import (
-	"cmp"
 	"fmt"
-	"slices"
 	"strings"
 
-	"tailscale.com/ipn/ipnext"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/dnstype"
-	"tailscale.com/util/set"
 )
 
-const AppConnectorsExperimentalAttrName = "tailscale.com/app-connectors-experimental"
-
-func isPeerEligibleConnector(peer tailcfg.NodeView) bool {
-	if !peer.Valid() || !peer.Hostinfo().Valid() {
-		return false
-	}
-	isConn, _ := peer.Hostinfo().AppConnector().Get()
-	return isConn
-}
-
-func sortByPreference(ns []tailcfg.NodeView) {
-	// The ordering of the nodes is semantic (callers use the first node they can
-	// get a peer api url for). We don't (currently 2026-02-27) have any
-	// preference over which node is chosen as long as it's consistent.  In the
-	// future we anticipate integrating with traffic steering.
-	slices.SortFunc(ns, func(a, b tailcfg.NodeView) int {
-		return cmp.Compare(a.ID(), b.ID())
-	})
-}
-
-// PickConnector returns peers the backend knows about that match the app, in order of preference to use as
-// a connector.
-func PickConnector(nb ipnext.NodeBackend, app appctype.Conn25Attr) []tailcfg.NodeView {
-	appTagsSet := set.SetOf(app.Connectors)
-	matches := nb.AppendMatchingPeers(nil, func(n tailcfg.NodeView) bool {
-		if !isPeerEligibleConnector(n) {
-			return false
-		}
-		for _, t := range n.Tags().All() {
-			if appTagsSet.Contains(t) {
-				return true
-			}
-		}
-		return false
-	})
-	sortByPreference(matches)
-	return matches
-}
+const AppConnectorAttrName = "tailscale.com/app-connectors"
 
 // DNSAddrScheme is the custom URI scheme used for conn25-managed split DNS
 // entries to determine the destination at query time rather than configuration
 // time.
 const DNSAddrScheme = "tailscale-app"
 
+// AppDNSRoutes returns split DNS routes, keyed by domain suffix, for the app
+// domains configured in self's capability map. Each route resolves via the
+// [DNSAddrScheme] scheme naming the app, so the connector that serves it is
+// chosen at query time. It returns nil if the node lacks Connectors 2025 apps.
 func AppDNSRoutes(hasCap func(c nodecap.Cap) bool, self tailcfg.NodeView) map[string][]*dnstype.Resolver {
-	if !hasCap(AppConnectorsExperimentalAttrName) {
+	if !hasCap(AppConnectorAttrName) {
 		return nil
 	}
-	apps, err := tailcfg.UnmarshalNodeCapViewJSON[appctype.AppConnectorAttr](self.CapMap(), AppConnectorsExperimentalAttrName)
+
+	apps, err := tailcfg.UnmarshalNodeCapViewJSON[appctype.AppConnectorAttr](self.CapMap(), AppConnectorAttrName)
 	if err != nil {
 		return nil
 	}
+
 	appNamesByDomain := map[string]string{}
 	for _, app := range apps {
+		// conn25 apps are provided under [AppConnectorAttrName] with the Mode
+		// field set to [appctype.AppConnectorModeMagicIP].
+		if app.Mode != appctype.MagicIP {
+			continue
+		}
 		for _, domain := range app.Domains {
 			domain, _ = strings.CutPrefix(domain, "*.")
 			domain = strings.ToLower(domain)

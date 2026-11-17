@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/feature"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/portmapper"
@@ -24,6 +25,9 @@ import (
 )
 
 func init() {
+	if !feature.Register("debugportmapper") {
+		return
+	}
 	localapi.Register("debug-portmap", serveDebugPortmap)
 }
 

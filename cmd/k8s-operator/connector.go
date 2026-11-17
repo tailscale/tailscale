@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +27,7 @@ import (
 
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
@@ -139,20 +139,21 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 
 	if err := a.validate(cn); err != nil {
 		message := fmt.Sprintf(messageConnectorInvalid, err)
-		a.recorder.Eventf(cn, corev1.EventTypeWarning, reasonConnectorInvalid, message)
+		a.recorder.Event(cn, corev1.EventTypeWarning, reasonConnectorInvalid, message)
 		return setStatus(cn, tsapi.ConnectorReady, metav1.ConditionFalse, reasonConnectorInvalid, message)
 	}
 
 	if err = a.maybeProvisionConnector(ctx, logger, cn); err != nil {
 		reason := reasonConnectorCreationFailed
 		message := fmt.Sprintf(messageConnectorCreationFailed, err)
-		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+		if reconciler.IsOptimisticLockError(err) {
 			reason = reasonConnectorCreating
-			message = fmt.Sprintf("optimistic lock error, retrying: %s", err)
+			message = "Connector resources are being updated, retrying"
+			logger.Debugf("update conflict, retrying: %v", err)
 			err = nil
-			logger.Info(message)
+			res = reconcile.Result{RequeueAfter: shortRequeue}
 		} else {
-			a.recorder.Eventf(cn, corev1.EventTypeWarning, reason, message)
+			a.recorder.Event(cn, corev1.EventTypeWarning, reason, message)
 		}
 
 		return setStatus(cn, tsapi.ConnectorReady, metav1.ConditionFalse, reason, message)
@@ -268,6 +269,13 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 		cn.Status.Devices[i] = tsapi.ConnectorDevice{
 			Hostname:   dev.hostname,
 			TailnetIPs: dev.ips,
+		}
+		if eps := sts.staticEndpointsPerReplica[dev.ordinal]; len(eps) > 0 {
+			staticEndpoints := make([]string, len(eps))
+			for j, ep := range eps {
+				staticEndpoints[j] = ep.String()
+			}
+			cn.Status.Devices[i].StaticEndpoints = staticEndpoints
 		}
 	}
 

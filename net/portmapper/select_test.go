@@ -173,7 +173,7 @@ func TestSelectBestService(t *testing.T) {
 			loc := mustParseURL(igd.ts.URL)
 			rootDev := mustParseRootDev(t, rootDesc, loc)
 
-			svc, err := selectBestService(ctx, t.Logf, rootDev, loc)
+			svc, _, err := selectBestService(ctx, t.Logf, rootDev, loc)
 			if err != nil {
 				t.Fatal(err)
 			}

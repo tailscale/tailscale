@@ -42,7 +42,9 @@ const c2nPrefix = "/remoteapi/localapi/"
 const localAPIStrip = "/remoteapi"
 
 func init() {
-	feature.Register("remoteconfig")
+	if !feature.Register("remoteconfig") {
+		return
+	}
 	ipnlocal.RegisterC2NPrefix(c2nPrefix, handleC2NRemoteAPI)
 }
 

@@ -231,7 +231,7 @@ func (v NodeView) LegacyDERPString() string { return v.ж.LegacyDERPString }
 //
 // HomeDERP may be zero if not (yet) known, but ideally always be non-zero
 // for magicsock connectivity to function normally.
-func (v NodeView) HomeDERP() int          { return v.ж.HomeDERP }
+func (v NodeView) HomeDERP() DERPRegionID { return v.ж.HomeDERP }
 func (v NodeView) Hostinfo() HostinfoView { return v.ж.Hostinfo }
 func (v NodeView) Created() time.Time     { return v.ж.Created }
 
@@ -376,7 +376,14 @@ func (v NodeView) IsJailed() bool { return v.ж.IsJailed }
 func (v NodeView) ExitNodeDNSResolvers() views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
 	return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](v.ж.ExitNodeDNSResolvers)
 }
-func (v NodeView) Equal(v2 NodeView) bool { return v.ж.Equal(v2.ж) }
+
+// StableTailnetID is the identifier of the tailnet this node is a
+// member of.
+//
+// Control only populates this for the self node in a MapResponse
+// (MapResponse.Node); it is empty for peers.
+func (v NodeView) StableTailnetID() StableTailnetID { return v.ж.StableTailnetID }
+func (v NodeView) Equal(v2 NodeView) bool           { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _NodeViewNeedsRegeneration = Node(struct {
@@ -394,7 +401,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	AllowedIPs                    []netip.Prefix
 	Endpoints                     []netip.AddrPort
 	LegacyDERPString              string
-	HomeDERP                      int
+	HomeDERP                      DERPRegionID
 	Hostinfo                      HostinfoView
 	Created                       time.Time
 	Cap                           CapabilityVersion
@@ -416,6 +423,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	IsWireGuardOnly               bool
 	IsJailed                      bool
 	ExitNodeDNSResolvers          []*dnstype.Resolver
+	StableTailnetID               StableTailnetID
 }{})
 
 // View returns a read-only view of Hostinfo.
@@ -795,7 +803,7 @@ func (v NetInfoView) PCP() opt.Bool { return v.ж.PCP }
 // that are located elsewhere) but PreferredDERP is the region ID
 // that the node subscribes to traffic at.
 // Zero means disconnected or unknown.
-func (v NetInfoView) PreferredDERP() int { return v.ж.PreferredDERP }
+func (v NetInfoView) PreferredDERP() DERPRegionID { return v.ж.PreferredDERP }
 
 // LinkType is the current link type, if known.
 func (v NetInfoView) LinkType() string { return v.ж.LinkType }
@@ -830,7 +838,7 @@ var _NetInfoViewNeedsRegeneration = NetInfo(struct {
 	UPnP                  opt.Bool
 	PMP                   opt.Bool
 	PCP                   opt.Bool
-	PreferredDERP         int
+	PreferredDERP         DERPRegionID
 	LinkType              string
 	DERPLatency           map[string]float64
 	FirewallMode          string
@@ -1343,7 +1351,7 @@ func (v *RegisterRequestView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 func (v RegisterRequestView) Version() CapabilityVersion     { return v.ж.Version }
 func (v RegisterRequestView) NodeKey() key.NodePublic        { return v.ж.NodeKey }
 func (v RegisterRequestView) OldNodeKey() key.NodePublic     { return v.ж.OldNodeKey }
-func (v RegisterRequestView) NLKey() key.NLPublic            { return v.ж.NLKey }
+func (v RegisterRequestView) NLKey() key.TLPublic            { return v.ж.NLKey }
 func (v RegisterRequestView) Auth() RegisterResponseAuthView { return v.ж.Auth.View() }
 
 // Expiry optionally specifies the requested key expiry.
@@ -1406,7 +1414,7 @@ var _RegisterRequestViewNeedsRegeneration = RegisterRequest(struct {
 	Version          CapabilityVersion
 	NodeKey          key.NodePublic
 	OldNodeKey       key.NodePublic
-	NLKey            key.NLPublic
+	NLKey            key.TLPublic
 	Auth             *RegisterResponseAuth
 	Expiry           time.Time
 	Followup         string
@@ -1500,13 +1508,13 @@ func (v *DERPHomeParamsView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 //
 // A nil map means no change from the previous value (if any); an empty
 // non-nil map can be sent to reset all scores back to 1.0.
-func (v DERPHomeParamsView) RegionScore() views.Map[int, float64] {
+func (v DERPHomeParamsView) RegionScore() views.Map[DERPRegionID, float64] {
 	return views.MapOf(v.ж.RegionScore)
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _DERPHomeParamsViewNeedsRegeneration = DERPHomeParams(struct {
-	RegionScore map[int]float64
+	RegionScore map[DERPRegionID]float64
 }{})
 
 // View returns a read-only view of DERPRegion.
@@ -1588,7 +1596,7 @@ func (v *DERPRegionView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 //
 // RegionIDs in range 900-999 are reserved for end users to run their
 // own DERP nodes.
-func (v DERPRegionView) RegionID() int { return v.ж.RegionID }
+func (v DERPRegionView) RegionID() DERPRegionID { return v.ж.RegionID }
 
 // RegionCode is a short name for the region. It's usually a popular
 // city or airport code in the region: "nyc", "sf", "sin",
@@ -1647,7 +1655,7 @@ func (v DERPRegionView) Nodes() views.SliceView[*DERPNode, DERPNodeView] {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _DERPRegionViewNeedsRegeneration = DERPRegion(struct {
-	RegionID        int
+	RegionID        DERPRegionID
 	RegionCode      string
 	RegionName      string
 	Latitude        float64
@@ -1734,7 +1742,7 @@ func (v DERPMapView) HomeParams() DERPHomeParamsView { return v.ж.HomeParams.Vi
 // It's keyed by the DERPRegion.RegionID.
 //
 // The numbers are not necessarily contiguous.
-func (v DERPMapView) Regions() views.MapFn[int, *DERPRegion, DERPRegionView] {
+func (v DERPMapView) Regions() views.MapFn[DERPRegionID, *DERPRegion, DERPRegionView] {
 	return views.MapFnOf(v.ж.Regions, func(t *DERPRegion) DERPRegionView {
 		return t.View()
 	})
@@ -1749,7 +1757,7 @@ func (v DERPMapView) OmitDefaultRegions() bool { return v.ж.OmitDefaultRegions 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _DERPMapViewNeedsRegeneration = DERPMap(struct {
 	HomeParams         *DERPHomeParams
-	Regions            map[int]*DERPRegion
+	Regions            map[DERPRegionID]*DERPRegion
 	OmitDefaultRegions bool
 }{})
 
@@ -1828,7 +1836,7 @@ func (v DERPNodeView) Name() string { return v.ж.Name }
 
 // RegionID is the RegionID of the DERPRegion that this node
 // is running in.
-func (v DERPNodeView) RegionID() int { return v.ж.RegionID }
+func (v DERPNodeView) RegionID() DERPRegionID { return v.ж.RegionID }
 
 // HostName is the DERP node's hostname.
 //
@@ -1892,7 +1900,7 @@ func (v DERPNodeView) CanPort80() bool { return v.ж.CanPort80 }
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _DERPNodeViewNeedsRegeneration = DERPNode(struct {
 	Name             string
-	RegionID         int
+	RegionID         DERPRegionID
 	HostName         string
 	CertName         string
 	IPv4             string

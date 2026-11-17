@@ -40,8 +40,15 @@ func Every(interval time.Duration) Limit {
 //
 // [token bucket]: https://en.wikipedia.org/wiki/Token_bucket
 type Limiter struct {
-	limit  Limit
-	burst  float64
+	limit Limit
+	burst float64
+
+	// next is the time before which no token will be available, as
+	// of the last denial. allow checks it without taking mu, so that a
+	// Limiter that's mostly denying, such as one for logging on a hot
+	// path, doesn't contend on mu.
+	next mono.AtomicTime
+
 	mu     sync.Mutex // protects following fields
 	tokens float64    // number of tokens currently in bucket
 	last   mono.Time  // the last time the limiter's tokens field was updated
@@ -62,16 +69,22 @@ func (lim *Limiter) Allow() bool {
 }
 
 func (lim *Limiter) allow(now mono.Time) bool {
+	if now.Before(lim.next.Load()) {
+		return false
+	}
 	lim.mu.Lock()
 	defer lim.mu.Unlock()
 
 	// If time has moved backwards, look around awkwardly and pretend nothing happened.
-	if now.Before(lim.last) {
-		lim.last = now
+	// Only an allowed event updates lim.last, so that a denial changes no
+	// state and the lock-free denials above match this path.
+	last := lim.last
+	if now.Before(last) {
+		last = now
 	}
 
 	// Calculate the new number of tokens available due to the passage of time.
-	elapsed := now.Sub(lim.last)
+	elapsed := now.Sub(last)
 	tokens := lim.tokens + float64(lim.limit)*elapsed.Seconds()
 	if tokens > lim.burst {
 		tokens = lim.burst
@@ -85,6 +98,14 @@ func (lim *Limiter) allow(now mono.Time) bool {
 	if ok {
 		lim.last = now
 		lim.tokens = tokens
+		// The bucket may have tokens left over for a caller whose
+		// earlier timestamp is still before next.
+		lim.next.Store(0)
+	} else {
+		// The bucket is short of one token by -tokens, which it gains in
+		// -tokens/limit seconds.
+		wait := time.Duration(-tokens / float64(lim.limit) * float64(time.Second))
+		lim.next.Store(now.Add(wait))
 	}
 	return ok
 }

@@ -14,6 +14,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 // lookupPeerByIP returns the node public key for the peer that should
@@ -40,14 +41,14 @@ func (b *LocalBackend) lookupPeerByIP(ip netip.Addr) (key.NodePublic, bool) {
 	return key.NodePublic{}, false
 }
 
-// peerAllowedIPs returns the prefixes from which the peer with the
-// given public key is currently allowed to originate traffic, or
-// ok=false if the peer is unknown (or currently routable via no
+// peerConfig returns the WireGuard configuration for the peer with the given
+// public key, or ok=false if the peer is unknown (or currently routable via no
 // prefix at all). It is installed as the
 // [wgengine.Engine.SetPeerConfigFunc] callback, backing wireguard-go's
 // lazy peer creation and per-delta peer sync.
-func (b *LocalBackend) peerAllowedIPs(k key.NodePublic) (_ []netip.Prefix, ok bool) {
-	return b.currentNode().PeerAllowedIPs(k)
+func (b *LocalBackend) peerConfig(k key.NodePublic) (_ wgcfg.PeerConfig, ok bool) {
+	ips, ok := b.currentNode().PeerAllowedIPs(k)
+	return wgcfg.PeerConfig{AllowedIPs: ips}, ok
 }
 
 // resolveMagicDNS resolves a MagicDNS hostname to the owning node's IP
@@ -81,8 +82,8 @@ func (b *LocalBackend) resolveMagicDNS(hostname, network string) (_ netip.Addr, 
 // pushing a Hosts map of every node into it on every netmap change.
 // It is installed once at LocalBackend construction; going through
 // currentNode makes profile switches take effect immediately.
-// Short names ("foo") are only resolved if MagicDNS is enabled
-// for the current tailnet.
+// Unlike [LocalBackend.resolveMagicDNS], it never resolves short
+// names; see [nodeBackend.nodeByFQDNLocked].
 type magicDNSHosts struct{ b *LocalBackend }
 
 func (m magicDNSHosts) LookupHost(fqdn dnsname.FQDN) (ips []netip.Addr, ok bool) {

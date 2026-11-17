@@ -29,7 +29,7 @@ func (m mutatingNodeID) NodeIDBeingMutated() tailcfg.NodeID { return tailcfg.Nod
 // has changed its DERP home region.
 type NodeMutationDERPHome struct {
 	mutatingNodeID
-	DERPRegion int
+	DERPRegion tailcfg.DERPRegionID
 }
 
 func (m NodeMutationDERPHome) Apply(n *tailcfg.Node) {

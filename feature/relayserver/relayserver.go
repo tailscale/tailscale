@@ -34,7 +34,9 @@ import (
 const featureName = "relayserver"
 
 func init() {
-	feature.Register(featureName)
+	if !feature.Register(featureName) {
+		return
+	}
 	ipnext.RegisterExtension(featureName, newExtension)
 	localapi.Register("debug-peer-relay-sessions", servePeerRelayDebugSessions)
 }

@@ -47,6 +47,7 @@ kelvin
 celsius
 decibel
 beaufort
+fitzpatrick
 mohs
 pauling
 python

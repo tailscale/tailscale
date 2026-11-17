@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -18,15 +19,19 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"tailscale.com/k8s-operator/apis/v1alpha1"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/net/dns/resolvconffile"
@@ -1977,7 +1982,7 @@ func Test_metricsResourceCreation(t *testing.T) {
 			LoadBalancerClass: new("tailscale"),
 		},
 	}
-	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}
+	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: tailscaled.ServiceMonitorCRD}}
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
 		WithObjects(pc, svc).
@@ -2045,7 +2050,7 @@ func Test_metricsResourceCreation(t *testing.T) {
 		pc.Spec.Metrics = nil
 	})
 	expectReconciled(t, sr, "default", "test")
-	expectMissing[corev1.Service](t, fc, "operator-ns", metricsResourceName(opts.stsName))
+	expectMissing[corev1.Service](t, fc, "operator-ns", tailscaled.MetricsResourceName(opts.stsName))
 	// ServiceMonitor gets garbage collected when Service gets deleted (it has OwnerReference of the Service
 	// object). We cannot test this using the fake client.
 }
@@ -2095,6 +2100,58 @@ func TestIgnorePGService(t *testing.T) {
 	findNoGenName(t, fc, "default", "test", "svc")
 }
 
+// Regression test: the service-pg-reconciler used to watch ProxyGroups with
+// ingressesFromIngressProxyGroup, which lists Ingresses and returns Ingress
+// keys. Fed to the Service reconciler those keys never match a Service, so a
+// ProxyGroup becoming Available did not re-enqueue the HA Services waiting on
+// it and provisioning only happened on the next operator restart (full
+// re-list).
+func Test_servicesFromIngressProxyGroup(t *testing.T) {
+	ingressPG := &tsapi.ProxyGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "ingress-pg"},
+		Spec:       tsapi.ProxyGroupSpec{Type: tsapi.ProxyGroupTypeIngress},
+	}
+	egressPG := &tsapi.ProxyGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "egress-pg"},
+		Spec:       tsapi.ProxyGroupSpec{Type: tsapi.ProxyGroupTypeEgress},
+	}
+	svcForIngressPG := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "svc-1",
+			Namespace:   "ns-1",
+			Annotations: map[string]string{AnnotationProxyGroup: "ingress-pg"},
+		},
+	}
+	svcForOtherPG := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "svc-2",
+			Namespace:   "ns-2",
+			Annotations: map[string]string{AnnotationProxyGroup: "other-pg"},
+		},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(svcForIngressPG, svcForOtherPG).
+		WithIndex(new(corev1.Service), indexIngressProxyGroup, indexPGIngresses).
+		Build()
+	zl := zap.Must(zap.NewDevelopment())
+	h := servicesFromIngressProxyGroup(fc, zl.Sugar())
+
+	// An event on an ingress ProxyGroup enqueues only the Services that are
+	// annotated for it.
+	gotReqs := h(t.Context(), ingressPG)
+	wantReqs := []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: "ns-1", Name: "svc-1"}}}
+	if diff := cmp.Diff(gotReqs, wantReqs); diff != "" {
+		t.Errorf("servicesFromIngressProxyGroup(ingress-pg) mismatch (-got +want):\n%s", diff)
+	}
+
+	// An egress ProxyGroup is handled by a different reconciler and must not
+	// enqueue anything here.
+	if gotReqs := h(t.Context(), egressPG); len(gotReqs) != 0 {
+		t.Errorf("servicesFromIngressProxyGroup(egress-pg) = %v, want none", gotReqs)
+	}
+}
+
 func toFQDN(t *testing.T, s string) dnsname.FQDN {
 	t.Helper()
 	fqdn, err := dnsname.ToFQDN(s)
@@ -2117,4 +2174,154 @@ func proxyCreatedCondition(clock tstime.Clock) []metav1.Condition {
 
 func conditionTime(clock tstime.Clock) metav1.Time {
 	return metav1.NewTime(clock.Now().Truncate(time.Second))
+}
+
+func TestNodeHandlerForConnector(t *testing.T) {
+	pc := &tsapi.ProxyClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "static-endpoints"},
+		Spec: tsapi.ProxyClassSpec{
+			StaticEndpoints: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports:    []tsapi.PortRange{{Port: 30001, EndPort: 30003}},
+					Selector: map[string]string{"zone": "eu"},
+				},
+			},
+		},
+	}
+	noStaticPC := &tsapi.ProxyClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "no-static-endpoints"},
+	}
+	connectors := []*tsapi.Connector{
+		// Matches the node via the ProxyClass selector.
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "matching"},
+			Spec:       tsapi.ConnectorSpec{ProxyClass: pc.Name},
+		},
+		// References a ProxyClass that does not exist. This must not
+		// prevent other Connectors from being reconciled.
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "missing-proxyclass"},
+			Spec:       tsapi.ConnectorSpec{ProxyClass: "does-not-exist"},
+		},
+		// References a ProxyClass without static endpoints.
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "no-static-endpoints"},
+			Spec:       tsapi.ConnectorSpec{ProxyClass: noStaticPC.Name},
+		},
+		// No ProxyClass at all.
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "no-proxyclass"},
+		},
+		// Also matches the node, listed after the Connector with the
+		// missing ProxyClass.
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "matching-after-missing"},
+			Spec:       tsapi.ConnectorSpec{ProxyClass: pc.Name},
+		},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(pc, noStaticPC).
+		Build()
+	for _, cn := range connectors {
+		mustCreate(t, fc, cn)
+	}
+	handler := nodeHandlerForConnector(fc, zap.Must(zap.NewDevelopment()).Sugar())
+
+	t.Run("matching_node", func(t *testing.T) {
+		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", Labels: map[string]string{"zone": "eu"}}}
+		got := handler(t.Context(), node)
+		want := []reconcile.Request{
+			{NamespacedName: types.NamespacedName{Name: "matching"}},
+			{NamespacedName: types.NamespacedName{Name: "matching-after-missing"}},
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf("unexpected reconcile requests (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("non_matching_node", func(t *testing.T) {
+		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-b", Labels: map[string]string{"zone": "us"}}}
+		got := handler(t.Context(), node)
+		if len(got) != 0 {
+			t.Fatalf("expected no reconcile requests, got %v", got)
+		}
+	})
+}
+
+func TestStateSecretHandlerForProxyGroup(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		labels map[string]string
+		want   []reconcile.Request
+	}{
+		{
+			name:   "state_secret",
+			labels: pgSecretLabels("test", kubetypes.LabelSecretTypeState),
+			want:   []reconcile.Request{{NamespacedName: types.NamespacedName{Name: "test"}}},
+		},
+		{
+			name:   "config_secret",
+			labels: pgSecretLabels("test", kubetypes.LabelSecretTypeConfig),
+		},
+		{
+			name: "unmanaged_secret",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-0",
+					Namespace: tsNamespace,
+					Labels:    tc.labels,
+				},
+			}
+			got := stateSecretHandlerForProxyGroup(t.Context(), secret)
+			if diff := cmp.Diff(got, tc.want); diff != "" {
+				t.Fatalf("unexpected reconcile requests (-got +want):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestServiceOptimisticLockErrorRequeues(t *testing.T) {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP:         "10.20.30.40",
+			Type:              corev1.ServiceTypeLoadBalancer,
+			LoadBalancerClass: new("tailscale"),
+		},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(svc).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				if _, ok := obj.(*corev1.Service); ok {
+					return apierrors.NewConflict(schema.GroupResource{Resource: "services"}, obj.GetName(), errors.New(optimisticLockErrorMsg))
+				}
+				return c.Update(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	sr := &ServiceReconciler{
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			clients:           tsclient.NewProvider(&fakeTSClient{}),
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger:   zap.Must(zap.NewDevelopment()).Sugar(),
+		clock:    tstest.NewClock(tstest.ClockOpts{}),
+		recorder: record.NewFakeRecorder(100),
+	}
+
+	expectRequeue(t, sr, "default", "test")
 }

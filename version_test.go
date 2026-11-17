@@ -4,7 +4,6 @@
 package tailscaleroot
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
@@ -14,19 +13,6 @@ import (
 	"golang.org/x/mod/modfile"
 )
 
-func TestDockerfileVersion(t *testing.T) {
-	goVersion := mustGetGoModVersion(t, false)
-
-	dockerFile, err := os.ReadFile("Dockerfile")
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantSub := fmt.Sprintf("FROM golang:%s-alpine AS build-env", goVersion)
-	if !strings.Contains(string(dockerFile), wantSub) {
-		t.Errorf("didn't find %q in Dockerfile", wantSub)
-	}
-}
-
 // TestGoVersion tests that the Go version specified in go.mod matches ./tool/go version.
 func TestGoVersion(t *testing.T) {
 	// We could special-case ./tool/go path for Windows, but really there is no
@@ -34,7 +20,7 @@ func TestGoVersion(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Skipping test on Windows")
 	}
-	goModVersion := mustGetGoModVersion(t, true)
+	goModVersion := mustGetGoModVersion(t)
 
 	goToolCmd := exec.Command("./tool/go", "version")
 	goToolOutput, err := goToolCmd.Output()
@@ -56,7 +42,7 @@ func TestGoVersion(t *testing.T) {
 	}
 }
 
-func mustGetGoModVersion(t *testing.T, includePatchVersion bool) string {
+func mustGetGoModVersion(t *testing.T) string {
 	t.Helper()
 
 	goModBytes, err := os.ReadFile("go.mod")
@@ -73,13 +59,5 @@ func mustGetGoModVersion(t *testing.T, includePatchVersion bool) string {
 		t.Fatal("no Go version found in go.mod")
 	}
 
-	version := modFile.Go.Version
-
-	parts := strings.Split(version, ".")
-	if !includePatchVersion {
-		if len(parts) >= 2 {
-			version = parts[0] + "." + parts[1]
-		}
-	}
-	return version
+	return modFile.Go.Version
 }

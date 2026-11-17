@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -33,7 +34,7 @@ func TestCache(t *testing.T) {
 
 	// Write initial cache value
 	initialCache := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 			99: {
 				RegionID:   99,
 				RegionCode: "test",
@@ -109,7 +110,7 @@ func TestCacheUnchanged(t *testing.T) {
 
 	// Write initial cache value
 	initialCache := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 			99: {
 				RegionID:   99,
 				RegionCode: "test",
@@ -155,7 +156,7 @@ func TestCacheUnchanged(t *testing.T) {
 	// Now, update the cache with something slightly different and verify
 	// that we did re-write the file on-disk.
 	updatedCache := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 			99: {
 				RegionID:   99,
 				RegionCode: "test",
@@ -204,4 +205,18 @@ func TestLookup(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("addrs: %+v", addrs)
+}
+
+// TestBootstrapDNSMapNilNetMon verifies that bootstrapDNSMap tolerates a nil
+// netmon.Monitor. It used to panic in netns.NewDialer, which callers such as
+// control/tsp hit under fault injection when their first dial failed.
+func TestBootstrapDNSMapNilNetMon(t *testing.T) {
+	// The context is already canceled so that no network I/O happens. The
+	// panic, when it existed, fired before any I/O.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := bootstrapDNSMap(ctx, "derp1.tailscale.com", netip.MustParseAddr("192.0.2.1"), "controlplane.tailscale.com", t.Logf, nil, nil)
+	if err == nil {
+		t.Fatal("expected error from canceled context")
+	}
 }

@@ -32,6 +32,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
@@ -54,7 +55,7 @@ func NewDialer(netMon *netmon.Monitor) *Dialer {
 // and no netMon. It's meant exclusively for the "tailscale debug ts2021"
 // debug command, and perhaps tests.
 func NewFromFuncForDebug(logf logger.Logf, dial netx.DialFunc) *Dialer {
-	return &Dialer{sysDialForTest: dial, Logf: logf}
+	return &Dialer{sysDial: dial, Logf: logf}
 }
 
 // Dialer dials out of tailscaled, while taking care of details while
@@ -85,7 +86,7 @@ type Dialer struct {
 
 	netnsDialerOnce sync.Once
 	netnsDialer     netns.Dialer
-	sysDialForTest  netx.DialFunc // or nil
+	sysDial         netx.DialFunc // or nil
 
 	routes atomic.Pointer[bart.Table[bool]] // or nil if UserDial should not use routes. `true` indicates routes that point into the Tailscale interface
 
@@ -96,6 +97,10 @@ type Dialer struct {
 	// implementation is [ipnlocal.LocalBackend.resolveMagicDNS],
 	// installed at construction time. It is read without holding mu.
 	resolveMagicDNS atomic.Pointer[func(hostname, network string) (_ netip.Addr, ok bool)]
+
+	// userDialResolver resolves UserDial names not answered by MagicDNS.
+	// A nil value uses the default resolver. See [Dialer.SetUserDialResolver].
+	userDialResolver atomic.Pointer[func(ctx context.Context, network, host string, port uint16) (_ []netip.AddrPort, err error)]
 
 	mu               syncs.Mutex
 	closed           bool
@@ -125,14 +130,22 @@ func (c sysConn) Close() error {
 	return nil
 }
 
-// CloseWrite closes the write half of the underlying connection without
-// removing it from the dialer's active connection tracking.
-func (c sysConn) CloseWrite() error {
-	cw, ok := c.Conn.(interface{ CloseWrite() error })
-	if !ok {
-		return errors.ErrUnsupported
+// CloseRead implements [nettype.HalfCloser], allowing the underlying Conn
+// to be half-closed if possible. Otherwise, this is a no-op.
+func (c sysConn) CloseRead() error {
+	if hc, ok := c.Conn.(nettype.HalfCloser); ok {
+		return hc.CloseRead()
 	}
-	return cw.CloseWrite()
+	return nil
+}
+
+// CloseWrite implements [nettype.HalfCloser], allowing the underlying Conn
+// to be half-closed if possible. Otherwise, this is a no-op.
+func (c sysConn) CloseWrite() error {
+	if hc, ok := c.Conn.(nettype.HalfCloser); ok {
+		return hc.CloseWrite()
+	}
+	return nil
 }
 
 // SetTUNName sets the name of the tun device in use ("tailscale0", "utun6",
@@ -214,7 +227,9 @@ func (d *Dialer) Close() error {
 		c.Close()
 	}
 	d.activeSysConns = nil
-	d.PeerAPITransport().CloseIdleConnections()
+	if buildfeatures.HasPeerAPIClient {
+		d.PeerAPITransport().CloseIdleConnections()
+	}
 	return nil
 }
 
@@ -356,17 +371,17 @@ func (d *Dialer) closeSysConn(id int) {
 
 // peerDialControlFunc is non-nil on platforms that require a way to
 // bind to dial out to other peers.
-var peerDialControlFunc func(*Dialer) func(network, address string, c syscall.RawConn) error
+var peerDialControlFunc func(*Dialer) func(ctx context.Context, network, address string, c syscall.RawConn) error
 
 // PeerDialControlFunc returns a function
-// that can assigned to net.Dialer.Control to set sockopts or whatnot
+// that can be assigned to net.Dialer.ControlContext to set socket options
 // to make a dial escape the current platform's network sandbox.
 //
 // On many platforms the returned func will be nil.
 //
 // Notably, this is non-nil on iOS and macOS when run as a Network or
 // System Extension (the GUI variants).
-func (d *Dialer) PeerDialControlFunc() func(network, address string, c syscall.RawConn) error {
+func (d *Dialer) PeerDialControlFunc() func(ctx context.Context, network, address string, c syscall.RawConn) error {
 	if peerDialControlFunc == nil {
 		return nil
 	}
@@ -381,6 +396,22 @@ func (d *Dialer) SetResolveMagicDNS(fn func(hostname, network string) (_ netip.A
 		return
 	}
 	d.resolveMagicDNS.Store(&fn)
+}
+
+// SetUserDialResolver sets fn to resolve [Dialer.UserDial] names not answered
+// by [Dialer.SetResolveMagicDNS]. fn must return candidate addresses for
+// Happy Eyeballs dialing.
+//
+// fn must apply tailnet DNS policy. Only userspace (netstack-only) backends
+// may set fn; backends with tailnet-managed host DNS must leave it nil.
+//
+// A nil fn restores the host resolver or an active exit node's DoH proxy.
+func (d *Dialer) SetUserDialResolver(fn func(ctx context.Context, network, host string, port uint16) (_ []netip.AddrPort, err error)) {
+	if fn == nil {
+		d.userDialResolver.Store(nil)
+		return
+	}
+	d.userDialResolver.Store(&fn)
 }
 
 // resolveAddr tries to resolve addr (a "host:port" string) via MagicDNS.
@@ -426,38 +457,46 @@ func (d *Dialer) userDialResolveAll(ctx context.Context, network, addr string) (
 
 	// Otherwise, hit the network.
 
-	// TODO(bradfitz): wire up net/dnscache too.
-
 	host, port, err := splitHostPort(addr)
 	if err != nil {
 		// addr is malformed.
 		return nil, err
 	}
 
-	var r net.Resolver
-	if buildfeatures.HasUseExitNode && buildfeatures.HasPeerAPIClient && exitDNSDoH != "" {
-		r.PreferGo = true
-		r.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
-			return &dohConn{
-				ctx:      ctx,
-				baseURL:  exitDNSDoH,
-				hc:       d.PeerAPIHTTPClient(),
-				dnsCache: d.dnsCache,
-			}, nil
+	var out []netip.AddrPort
+	if fn := d.userDialResolver.Load(); fn != nil {
+		out, err = (*fn)(ctx, network, host, port)
+		if err != nil {
+			return nil, err
 		}
-	}
+	} else {
+		// TODO(bradfitz): wire up net/dnscache too.
 
-	ips, err := r.LookupIP(ctx, ipNetOfNetwork(network), host)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]netip.AddrPort, 0, len(ips))
-	for _, stdIP := range ips {
-		ip, ok := netip.AddrFromSlice(stdIP)
-		if !ok {
-			continue
+		var r net.Resolver
+		if buildfeatures.HasUseExitNode && buildfeatures.HasPeerAPIClient && exitDNSDoH != "" {
+			r.PreferGo = true
+			r.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+				return &dohConn{
+					ctx:      ctx,
+					baseURL:  exitDNSDoH,
+					hc:       d.PeerAPIHTTPClient(),
+					dnsCache: d.dnsCache,
+				}, nil
+			}
 		}
-		out = append(out, netip.AddrPortFrom(ip.Unmap(), port))
+
+		ips, err := r.LookupIP(ctx, ipNetOfNetwork(network), host)
+		if err != nil {
+			return nil, err
+		}
+		out = make([]netip.AddrPort, 0, len(ips))
+		for _, stdIP := range ips {
+			ip, ok := netip.AddrFromSlice(stdIP)
+			if !ok {
+				continue
+			}
+			out = append(out, netip.AddrPortFrom(ip.Unmap(), port))
+		}
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("DNS lookup returned no results for %q", host)
@@ -514,11 +553,20 @@ func (d *Dialer) logf(format string, args ...any) {
 	}
 }
 
+// SetSystemDialer sets an alternate function to use for SystemDial.
+// It must be called before d is first used. If it is not set, host
+// network dials use a [netns.Dialer] constructed from the network monitor.
+func (d *Dialer) SetSystemDialer(fn netx.DialFunc) {
+	d.sysDial = fn
+}
+
 // SetSystemDialerForTest sets an alternate function to use for SystemDial
 // instead of netns.Dialer. This is intended for use with nettest.MemoryNetwork.
+//
+// Deprecated: Use SetSystemDialer instead.
 func (d *Dialer) SetSystemDialerForTest(fn netx.DialFunc) {
 	testenv.AssertInTest()
-	d.sysDialForTest = fn
+	d.sysDial = fn
 }
 
 // SystemDial connects to the provided network address without going over
@@ -527,7 +575,7 @@ func (d *Dialer) SetSystemDialerForTest(fn netx.DialFunc) {
 // Control and (in the future, as of 2022-04-27) DERPs..
 func (d *Dialer) SystemDial(ctx context.Context, network, addr string) (net.Conn, error) {
 	d.mu.Lock()
-	if d.netMon == nil && d.sysDialForTest == nil {
+	if d.netMon == nil && d.sysDial == nil {
 		d.mu.Unlock()
 		if testenv.InTest() {
 			panic("SystemDial requires a netmon.Monitor; call SetNetMon first")
@@ -542,8 +590,8 @@ func (d *Dialer) SystemDial(ctx context.Context, network, addr string) (net.Conn
 
 	var c net.Conn
 	var err error
-	if d.sysDialForTest != nil {
-		c, err = d.sysDialForTest(ctx, network, addr)
+	if d.sysDial != nil {
+		c, err = d.sysDial(ctx, network, addr)
 	} else {
 		d.netnsDialerOnce.Do(func() {
 			d.netnsDialer = netns.NewDialer(d.logf, d.netMon)
@@ -708,9 +756,9 @@ func (d *Dialer) dialPeerAPI(ctx context.Context, network, addr string) (net.Con
 func (d *Dialer) getPeerDialer() *net.Dialer {
 	d.peerDialerOnce.Do(func() {
 		d.peerDialer = &net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: netknob.PlatformTCPKeepAlive(),
-			Control:   d.PeerDialControlFunc(),
+			Timeout:        30 * time.Second,
+			KeepAlive:      netknob.PlatformTCPKeepAlive(),
+			ControlContext: d.PeerDialControlFunc(),
 		}
 	})
 	return d.peerDialer

@@ -21,7 +21,9 @@ import (
 )
 
 func init() {
-	feature.Register("awsparamstore")
+	if !feature.Register("awsparamstore") {
+		return
+	}
 	tailscale.HookResolveValueFromParameterStore.Set(ResolveValue)
 }
 

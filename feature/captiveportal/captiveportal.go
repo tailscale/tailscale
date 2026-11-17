@@ -17,6 +17,7 @@ import (
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/net/captivedetection"
 	"tailscale.com/syncs"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
@@ -25,7 +26,9 @@ import (
 const featureName = "captiveportal"
 
 func init() {
-	feature.Register(featureName)
+	if !feature.Register(featureName) {
+		return
+	}
 	ipnext.RegisterExtension(featureName, newExtension)
 }
 
@@ -266,7 +269,7 @@ func (e *Extension) performCaptiveDetection(ctx context.Context) {
 
 	d := captivedetection.NewDetector(e.logf)
 	dm := e.host.NodeBackend().DERPMap()
-	preferredDERP := 0
+	var preferredDERP tailcfg.DERPRegionID
 	if mc, ok := e.sb.Sys().MagicSock.GetOK(); ok {
 		if report := mc.GetLastNetcheckReport(ctx); report != nil {
 			preferredDERP = report.PreferredDERP

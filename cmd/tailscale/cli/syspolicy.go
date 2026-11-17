@@ -61,7 +61,7 @@ func init() {
 }
 
 func runSysPolicyList(ctx context.Context, args []string) error {
-	policy, err := localClient.GetEffectivePolicy(ctx, setting.DefaultScope())
+	policy, err := localClient.GetEffectivePolicyForCurrentUser(ctx)
 	if err != nil {
 		return err
 	}
@@ -70,7 +70,7 @@ func runSysPolicyList(ctx context.Context, args []string) error {
 }
 
 func runSysPolicyReload(ctx context.Context, args []string) error {
-	policy, err := localClient.ReloadEffectivePolicy(ctx, setting.DefaultScope())
+	policy, err := localClient.ReloadEffectivePolicyForCurrentUser(ctx)
 	if err != nil {
 		return err
 	}

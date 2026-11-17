@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"path"
+	"path/filepath"
 
 	"github.com/tailscale/hujson"
 	"tailscale.com/cmd/tsconnect/wasmbuild"
@@ -51,6 +52,9 @@ func runBuildPkg() {
 	log.Printf("Generating types...\n")
 	if err := runYarn("pkg-types"); err != nil {
 		log.Fatalf("Type generation failed: %v", err)
+	}
+	if err := copyTypeDeclarations(); err != nil {
+		log.Fatalf("Cannot copy generated types: %v", err)
 	}
 
 	if err := updateVersion(); err != nil {
@@ -116,4 +120,19 @@ func copyReadme() error {
 		return fmt.Errorf("Could not read README.pkg.md: %w", err)
 	}
 	return os.WriteFile(path.Join(*pkgDir, "README.md"), readmeBytes, 0644)
+}
+
+// copyTypeDeclarations copies pkg.d.ts into pkgDir
+// if pkgDir differs from the local default ./pkg.
+func copyTypeDeclarations() error {
+	const src = "pkg/pkg.d.ts"
+	dst := path.Join(*pkgDir, "pkg.d.ts")
+	if filepath.Clean(src) == filepath.Clean(dst) {
+		return nil
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0644)
 }

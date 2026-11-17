@@ -18,8 +18,10 @@ import (
 	"fmt"
 	"sync"
 
+	"tailscale.com/feature"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/localapi"
 	"tailscale.com/net/routecheck"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -31,6 +33,9 @@ import (
 const featureName = "routecheck"
 
 func init() {
+	if !feature.Register(featureName) {
+		return
+	}
 	ipnext.RegisterExtension(featureName, func(logf logger.Logf, b ipnext.SafeBackend) (ipnext.Extension, error) {
 		return &Extension{
 			logf:    logger.WithPrefix(logf, featureName+": "),
@@ -39,6 +44,8 @@ func init() {
 	})
 
 	ipnlocal.HookRouteCheckReport.Set(routeCheckReport)
+	localapi.Register("routecheck", serveRouteCheck)
+	localapi.HookRouteCheckRefresh.Set(routeCheckRefresh)
 }
 
 // Extension implements the [ipnext.Extension] interface.

@@ -23,44 +23,70 @@ import (
 
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
+	"tailscale.com/syncs"
 	"tailscale.com/tsconst/wintun"
 )
 
 // serviceName is the Windows service tailscaled installs itself as.
 const serviceName = "Tailscale"
 
+// serviceOwner is the node whose service is installed, or nil if none is.
+var serviceOwner syncs.AtomicValue[*TestNode]
+
 // startWindowsServiceDaemon installs and starts tailscaled as a Windows service.
 func (n *TestNode) startWindowsServiceDaemon() *Daemon {
 	t := n.env.t
 	t.Helper()
 
+	installed := serviceExists(t)
+	isFirstStart := serviceOwner.CompareAndSwap(nil, n)
 	// A pre-existing Tailscale service means this isn't a disposable/CI machine;
 	// fail rather than uninstall it. Stale state is wiped below, not fatal.
-	if serviceExists(t) {
+	if isFirstStart && installed {
 		t.Fatal("existing Tailscale service found; run only on a disposable/CI machine")
 	}
 
-	n.cleanupServiceState()
+	// A service restart should preserve the node's state and identity.
+	if isFirstStart {
+		n.cleanupServiceState()
+	}
 	stageWintun(t, filepath.Dir(n.env.daemon))
 	n.writeServiceEnvFile()
-
-	if out, err := exec.CommandContext(t.Context(), n.env.daemon, "install-system-daemon").CombinedOutput(); err != nil {
-		t.Fatalf("install-system-daemon: %v\n%s", err, out)
+	if n.syspolicy != nil {
+		// The service takes no flags, so it reads the default --syspolicy-file path.
+		n.writeSyspolicy(filepath.Join(serviceStateDir(), "syspolicy.json"))
 	}
-	// Teardown (LIFO): stop, uninstall, then wipe state for the next test.
+
+	if !installed {
+		// install-system-daemon fails if the service is already there.
+		if out, err := exec.CommandContext(t.Context(), n.env.daemon, "install-system-daemon").CombinedOutput(); err != nil {
+			t.Fatalf("install-system-daemon: %v\n%s", err, out)
+		}
+	}
+	var proc *os.Process
+	// Teardown: stop, wait for the process to exit so it releases the files below,
+	// then uninstall, which also wipes state for the next test.
 	t.Cleanup(func() {
 		n.stopService()
+		if proc != nil {
+			proc.Wait()
+		}
 		n.uninstallService()
-		n.cleanupServiceState()
 	})
 
-	n.startService()
+	proc = n.startService()
+	if !*windowsUnattended {
+		// Before waitServiceReady, so its status polls don't each connect and disconnect the user.
+		n.watchIPNBusLikeGUI()
+	}
 	n.waitServiceReady(90 * time.Second)
-	return &Daemon{svc: n}
+	return &Daemon{node: n, svc: n, Process: proc}
 }
 
-// startService starts the service and waits for the SCM to report it Running.
-func (n *TestNode) startService() {
+// startService starts the service, waits for the SCM to report it Running, and
+// returns its process. Holding the process open keeps its PID from being reused,
+// so waiting on it can't wait on an unrelated process.
+func (n *TestNode) startService() *os.Process {
 	t := n.env.t
 	t.Helper()
 	m := connectSCM(t)
@@ -73,7 +99,12 @@ func (n *TestNode) startService() {
 	if err := s.Start(); err != nil {
 		t.Fatalf("start service %q: %v", serviceName, err)
 	}
-	n.waitServiceState(s, svc.Running, 60*time.Second)
+	st := n.waitServiceState(s, svc.Running, 60*time.Second)
+	p, err := os.FindProcess(int(st.ProcessId))
+	if err != nil {
+		t.Fatalf("open service process %d: %v", st.ProcessId, err)
+	}
+	return p
 }
 
 // stopService requests a stop and waits until the service is Stopped, failing
@@ -101,8 +132,8 @@ func (n *TestNode) stopService() {
 	n.waitServiceState(s, svc.Stopped, 60*time.Second)
 }
 
-// uninstallService removes the service via tailscaled's uninstall-system-daemon
-// and waits until it's gone; a missing service is fine.
+// uninstallService removes the service via tailscaled's uninstall-system-daemon,
+// waits until it's gone, then wipes its state and ownership; a missing service is fine.
 func (n *TestNode) uninstallService() {
 	t := n.env.t
 	t.Helper()
@@ -116,6 +147,8 @@ func (n *TestNode) uninstallService() {
 		t.Fatalf("uninstall-system-daemon: %v\n%s", err, out)
 	}
 	n.waitServiceGone(30 * time.Second)
+	n.cleanupServiceState()
+	serviceOwner.CompareAndSwap(n, nil)
 }
 
 // writeServiceEnvFile writes the harness env to the file tailscaled reads at
@@ -169,7 +202,7 @@ func (n *TestNode) waitServiceReady(timeout time.Duration) {
 }
 
 // waitServiceState polls s until it reaches want, failing the test on timeout.
-func (n *TestNode) waitServiceState(s *mgr.Service, want svc.State, timeout time.Duration) {
+func (n *TestNode) waitServiceState(s *mgr.Service, want svc.State, timeout time.Duration) svc.Status {
 	t := n.env.t
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -179,11 +212,12 @@ func (n *TestNode) waitServiceState(s *mgr.Service, want svc.State, timeout time
 			t.Fatalf("query service %q: %v", serviceName, err)
 		}
 		if st.State == want {
-			return
+			return st
 		}
 		time.Sleep(time.Second)
 	}
 	t.Fatalf("service %q did not reach state %d within %v", serviceName, want, timeout)
+	panic("unreachable")
 }
 
 // waitServiceGone polls until the service no longer exists.

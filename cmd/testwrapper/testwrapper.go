@@ -29,6 +29,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -58,6 +59,16 @@ const (
 	// their own logs — for example, this package's own race tests,
 	// which exec a child testwrapper and dump its captured output.
 	raceDetectorMarkerLine = "WARNING: DATA RACE\n"
+
+	// defaultGoTestTimeout is go test's default -timeout.
+	defaultGoTestTimeout = 10 * time.Minute
+	// goToolTimeout bounds go commands other than tests, such as "go list".
+	goToolTimeout = 10 * time.Minute
+	// retryBuildSlack is extra time allowed beyond a retry attempt's -timeout
+	// for go test to rebuild the test binary.
+	retryBuildSlack = 5 * time.Minute
+	// waitDelay is how long to wait for a killed go command's I/O to finish.
+	waitDelay = 10 * time.Second
 )
 
 // Tunables for the per-test retry budget. These default to production values
@@ -76,6 +87,11 @@ var (
 	// doesn't block for an unreasonable amount of time. Override via
 	// TS_TESTWRAPPER_MAX_RETRY_TIME (a time.Duration string).
 	maxRetryTime = envDuration("TS_TESTWRAPPER_MAX_RETRY_TIME", 10*time.Minute)
+	// idleMargin is how much longer than the go test -timeout we wait for
+	// any output from go test before deciding it's hung. The -timeout only
+	// bounds running test binaries, not compiling and linking them.
+	// Override via TS_TESTWRAPPER_IDLE_MARGIN (a time.Duration string).
+	idleMargin = envDuration("TS_TESTWRAPPER_IDLE_MARGIN", 5*time.Minute)
 )
 
 func envDuration(key string, def time.Duration) time.Duration {
@@ -128,6 +144,7 @@ type testAttempt struct {
 	start, end    time.Time
 	isMarkedFlaky bool   // set if the test is marked as flaky
 	issueURL      string // set if the test is marked as flaky
+	inferredFail  bool   // outcome assumed because the package died, not reported by `go test`
 	// raceDetected is true on a per-test event if that test's output
 	// contained a race report, and true on a pkgFinished event if any
 	// test in the package -- or the package's own output -- did.
@@ -145,6 +162,7 @@ type failedTest struct {
 	attempts          int           // number of retry attempts run so far
 	totalRetryElapsed time.Duration // total time spent across retry attempts
 	everPassed        bool          // a retry attempt passed
+	inferredFail      bool          // the first failure was assumed, not reported by `go test`
 }
 
 // packageTests describes what to run.
@@ -192,7 +210,11 @@ func testsForShard(ctx context.Context, pkg, shardSpec string) ([]string, error)
 		return nil, nil
 	}
 
-	out, err := exec.CommandContext(ctx, "go", "list", "-json", pkg).Output()
+	ctx, cancel := context.WithTimeout(ctx, goToolTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "list", "-json", pkg)
+	cmd.WaitDelay = waitDelay
+	out, err := cmd.Output()
 	if err != nil {
 		// Errors will be surfaced by the main test run.
 		return nil, nil
@@ -261,28 +283,29 @@ func testFuncNames(path string) ([]string, error) {
 	return names, sc.Err()
 }
 
-// runTests runs the tests in pt and sends the results on ch. It sends a
-// testAttempt for each test and a final testAttempt per pkg with pkgFinished
-// set to true. Package build errors will not emit a testAttempt (as no valid
-// JSON is produced) but the [os/exec.ExitError] will be returned.
+// runTests runs the tests in the packages matching patterns in a single
+// "go test" invocation and sends the results on ch. It sends a testAttempt
+// for each test and a final testAttempt per pkg with pkgFinished set to
+// true. Package build errors will not emit a testAttempt (as no valid JSON
+// is produced) but the [os/exec.ExitError] will be returned.
 // It calls close(ch) when it's done.
-func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, testArgs []string, ch chan<- *testAttempt) error {
+func runTests(ctx context.Context, attempt int, patterns []string, goTestArgs, testArgs []string, ch chan<- *testAttempt) error {
 	defer close(ch)
 	args := []string{"test"}
 	args = append(args, goTestArgs...)
-	args = append(args, pt.Pattern)
-	if len(pt.Tests) > 0 {
-		// Specific tests requested (e.g. flaky test retry).
-		runArg := strings.Join(pt.Tests, "|")
-		args = append(args, "--run", runArg)
-	} else if shardSpec := os.Getenv("TS_TEST_SHARD"); shardSpec != "" {
+	args = append(args, patterns...)
+	if shardSpec := os.Getenv("TS_TEST_SHARD"); shardSpec != "" {
 		// Automatic test-name sharding: list tests and filter by hash.
-		shardTests, err := testsForShard(ctx, pt.Pattern, shardSpec)
+		if len(patterns) != 1 {
+			return fmt.Errorf("TS_TEST_SHARD requires a single package pattern per go test invocation; got %q", patterns)
+		}
+		pattern := patterns[0]
+		shardTests, err := testsForShard(ctx, pattern, shardSpec)
 		if err != nil {
 			return err
 		}
 		if len(shardTests) == 0 {
-			ch <- &testAttempt{pkg: pt.Pattern, outcome: outcomeSkip, pkgFinished: true}
+			ch <- &testAttempt{pkg: pattern, outcome: outcomeSkip, pkgFinished: true}
 			return nil
 		}
 		quoted := make([]string, len(shardTests))
@@ -296,13 +319,30 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 	if debug {
 		fmt.Println("running", strings.Join(args, " "))
 	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	cmd := exec.CommandContext(ctx, "go", args...)
+	cmd.WaitDelay = waitDelay
 	r, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Printf("error creating stdout pipe: %v", err)
 	}
 	defer r.Close()
 	cmd.Stderr = os.Stderr
+
+	// Kill go test if it goes quiet for longer than any single test binary
+	// may run. That means something else, like the linker, is stuck.
+	var watchdog *time.Timer
+	var idle time.Duration
+	if t := goTestTimeout(goTestArgs, testArgs); t > 0 {
+		idle = t + idleMargin
+		watchdog = time.AfterFunc(idle, func() {
+			log.Printf("testwrapper: no output from go test in %v; killing it", idle)
+			dumpProcesses()
+			cancel(fmt.Errorf("go test produced no output for %v", idle))
+		})
+		defer watchdog.Stop()
+	}
 
 	cmd.Env = slices.DeleteFunc(os.Environ(), func(s string) bool {
 		return strings.HasPrefix(s, "TS_TEST_SHARD=")
@@ -319,6 +359,9 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 	s := bufio.NewScanner(r)
 	resultMap := make(map[string]map[string]*testAttempt) // pkg -> test -> testAttempt
 	for s.Scan() {
+		if watchdog != nil && ctx.Err() == nil {
+			watchdog.Reset(idle)
+		}
 		var goOutput goTestOutput
 		if err := json.Unmarshal(s.Bytes(), &goOutput); err != nil {
 			return fmt.Errorf("failed to parse go test output %q: %w", s.Bytes(), err)
@@ -350,6 +393,7 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 				for _, test := range pkgTests {
 					if test.testName != "" && test.outcome == outcomeUnknown {
 						test.outcome = outcomeFail
+						test.inferredFail = true
 						ch <- test
 					}
 				}
@@ -450,12 +494,83 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 		}
 	}
 	if err := cmd.Wait(); err != nil {
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
 		return err
 	}
 	if err := s.Err(); err != nil {
 		return fmt.Errorf("reading go test stdout: %w", err)
 	}
 	return nil
+}
+
+// goTestTimeout returns the go test -timeout set in any of argLists, or go
+// test's default if none is set. Zero means no timeout.
+func goTestTimeout(argLists ...[]string) time.Duration {
+	t := defaultGoTestTimeout
+	for _, args := range argLists {
+		for i := 0; i < len(args); i++ {
+			name, val, hasEq := strings.Cut(strings.TrimLeft(args[i], "-"), "=")
+			if name != "timeout" && name != "test.timeout" {
+				continue
+			}
+			if !hasEq && i+1 < len(args) {
+				i++
+				val = args[i]
+			}
+			if d, err := time.ParseDuration(val); err == nil {
+				t = d
+			}
+		}
+	}
+	return t
+}
+
+// listShardPackages returns the packages in shard nOfM (e.g. "1/2") of ./...
+func listShardPackages(ctx context.Context, nOfM string) []string {
+	ctx, cancel := context.WithTimeout(ctx, goToolTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "run", "tailscale.com/tool/listpkgs", "-shard", nOfM, "./...")
+	cmd.WaitDelay = waitDelay
+	out, err := cmd.Output()
+	if err != nil {
+		log.Fatalf("failed to list packages for sharded test: %v", err)
+	}
+	return strings.Split(strings.TrimSpace(string(out)), "\n")
+}
+
+// dumpProcesses logs testwrapper's descendant processes on Linux, to show
+// what a hung go test was waiting on.
+func dumpProcesses() {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	children := map[string][]string{} // ppid -> pids
+	stats, _ := filepath.Glob("/proc/[0-9]*/stat")
+	for _, f := range stats {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		// The fields after the parenthesized command name are state, then ppid.
+		_, rest, ok := bytes.Cut(b, []byte(") "))
+		if fields := strings.Fields(string(rest)); ok && len(fields) > 1 {
+			children[fields[1]] = append(children[fields[1]], filepath.Base(filepath.Dir(f)))
+		}
+	}
+	var pids []string
+	queue := []string{strconv.Itoa(os.Getpid())}
+	for len(queue) > 0 {
+		p := queue[0]
+		queue = queue[1:]
+		pids = append(pids, p)
+		queue = append(queue, children[p]...)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ps", "--forest", "-o", "pid,etime,stat,args", "-p", strings.Join(pids, ",")).CombinedOutput()
+	log.Printf("testwrapper: process tree (err=%v):\n%s", err, out)
 }
 
 // runOneTest runs a single test in a single package via `go test -run` with a
@@ -478,7 +593,10 @@ func runOneTest(ctx context.Context, pkg, testName string, perAttemptTimeout tim
 	if debug {
 		fmt.Println("running", strings.Join(args, " "))
 	}
+	ctx, cancel := context.WithTimeout(ctx, perAttemptTimeout+retryBuildSlack)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, "go", args...)
+	cmd.WaitDelay = waitDelay
 	// Strip TS_TEST_SHARD so the child doesn't try to shard inside a
 	// single-test retry — we are telling it exactly what to run.
 	cmd.Env = slices.DeleteFunc(os.Environ(), func(s string) bool {
@@ -698,6 +816,79 @@ func writeFlakeSummary(path string, flaky []*failedTest, repo string) {
 	}
 }
 
+// writeResultsSummary renders the per-test results panel and JSON for the Windows results feature.
+func writeResultsSummary(summaryPath, jsonPath, pkgOnly string, results map[string]testOutcome, retried map[string]bool, pkgFatal bool) {
+	type result struct {
+		Package string
+		Test    string
+		Outcome string
+	}
+	var rows []result
+	for key, outcome := range results {
+		pkg, test, _ := strings.Cut(key, "\t")
+		if pkgOnly != "" && pkg != pkgOnly {
+			continue
+		}
+		out := string(outcome)
+		if outcome == outcomeFail && retried[key] {
+			out = "retried"
+		}
+		rows = append(rows, result{Package: pkg, Test: test, Outcome: out})
+	}
+	slices.SortFunc(rows, func(a, b result) int {
+		return strings.Compare(a.Test, b.Test)
+	})
+
+	if jsonPath != "" {
+		if j, err := json.Marshal(rows); err != nil {
+			log.Printf("testwrapper: marshaling results JSON: %v", err)
+		} else if err := os.WriteFile(jsonPath, j, 0o644); err != nil {
+			log.Printf("testwrapper: writing results JSON %s: %v", jsonPath, err)
+		}
+	}
+
+	f, err := os.OpenFile(summaryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		log.Printf("testwrapper: opening summary file %s: %v", summaryPath, err)
+		return
+	}
+	defer f.Close()
+
+	title := "Windows integration test results"
+	if pkgOnly == "" {
+		title = "Test results"
+	}
+	fmt.Fprintf(f, "\n### %s\n\n", title)
+	if len(rows) == 0 {
+		fmt.Fprintln(f, "_No tests ran._")
+		if pkgFatal {
+			fmt.Fprintln(f, "\n_⚠️ A package did not complete (build error or timeout); results may be partial._")
+		}
+		return
+	}
+	var pass, fail, skip int
+	fmt.Fprintln(f, "| Result | Test |")
+	fmt.Fprintln(f, "|--------|------|")
+	for _, r := range rows {
+		var icon string
+		switch r.Outcome {
+		case "pass":
+			icon, pass = "✅", pass+1
+		case "retried":
+			icon, pass = "✅ (retried)", pass+1
+		case "skip":
+			icon, skip = "⚠️", skip+1
+		default:
+			icon, fail = "❌", fail+1
+		}
+		fmt.Fprintf(f, "| %s | `%s` |\n", icon, r.Test)
+	}
+	fmt.Fprintf(f, "\n**%d passed, %d failed, %d skipped**\n", pass, fail, skip)
+	if pkgFatal {
+		fmt.Fprintln(f, "\n_⚠️ A package did not complete (build error or timeout); results may be partial._")
+	}
+}
+
 // buildPackageTests groups failedTests by package into the wire format
 // flakeapp expects.
 //
@@ -735,6 +926,12 @@ func buildPackageTests(fts []*failedTest, fakeRepo string) []packageTests {
 	return out
 }
 
+// isGoFile reports whether arg names a Go source file rather than a
+// package pattern.
+func isGoFile(arg string) bool {
+	return strings.HasSuffix(arg, ".go")
+}
+
 func main() {
 	goTestArgs, packages, testArgs, err := splitArgs(os.Args[1:])
 	if err != nil {
@@ -746,17 +943,14 @@ func main() {
 		return
 	}
 
+	ctx := context.Background()
+
 	// As a special case, if the packages looks like "sharded:1/2" then shell out to
 	// ./tool/listpkgs to cut up the package list pieces for each sharded builder.
 	if nOfM, ok := strings.CutPrefix(packages[0], "sharded:"); ok && len(packages) == 1 {
-		out, err := exec.Command("go", "run", "tailscale.com/tool/listpkgs", "-shard", nOfM, "./...").Output()
-		if err != nil {
-			log.Fatalf("failed to list packages for sharded test: %v", err)
-		}
-		packages = strings.Split(strings.TrimSpace(string(out)), "\n")
+		packages = listShardPackages(ctx, nOfM)
 	}
 
-	ctx := context.Background()
 	repo := detectRepo()
 
 	printPkgOutcome := func(pkg string, outcome testOutcome, cached bool, testDur time.Duration) {
@@ -784,18 +978,34 @@ func main() {
 	}
 
 	// First pass: run every package once, collect failed tests for retry.
+	//
+	// All package patterns go to one "go test" invocation so the go
+	// command can build, link, and run them in parallel, exactly as it
+	// does for a single "./..." pattern. Test-name sharding lists tests
+	// per package, and .go file arguments each form their own
+	// "command-line-arguments" package, so those keep one invocation
+	// per argument.
+	batches := [][]string{packages}
+	if os.Getenv("TS_TEST_SHARD") != "" || slices.ContainsFunc(packages, isGoFile) {
+		batches = nil
+		for _, p := range packages {
+			batches = append(batches, []string{p})
+		}
+	}
 	var failed []*failedTest
 	var pkgFatal bool // a package produced a non-test fatal (build error, etc.)
-	for _, pkgPattern := range packages {
-		pt := &packageTests{Pattern: pkgPattern}
+
+	resultsSummary := os.Getenv("TS_TESTWRAPPER_RESULTS_SUMMARY") != ""
+	allResults := map[string]testOutcome{}
+	for _, patterns := range batches {
 		ch := make(chan *testAttempt)
 		runErrCh := make(chan error, 1)
 		go func() {
 			defer close(runErrCh)
-			runErrCh <- runTests(ctx, 1, pt, goTestArgs, testArgs, ch)
+			runErrCh <- runTests(ctx, 1, patterns, goTestArgs, testArgs, ch)
 		}()
 
-		// Collect failed tests in this package on the side; we use the count
+		// Collect failed tests in this batch on the side; we use the count
 		// when a package reports a fail to decide if the failure is explained
 		// by retryable test failures or is a separate package-level fatal.
 		var pkgFailedTests []*failedTest
@@ -803,9 +1013,11 @@ func main() {
 			// Go assigns the package name "command-line-arguments" when you
 			// `go test FILE` rather than `go test PKG`. It's more
 			// convenient for us to specify files in tests, so fix tr.pkg
-			// so that subsequent testwrapper attempts run correctly.
+			// so that subsequent testwrapper attempts run correctly. File
+			// arguments always run one per batch, so the batch's only
+			// pattern is the file.
 			if tr.pkg == "command-line-arguments" {
-				tr.pkg = packages[0]
+				tr.pkg = patterns[0]
 			}
 			if tr.pkgFinished {
 				if tr.raceDetected {
@@ -828,6 +1040,9 @@ func main() {
 				printPkgOutcome(tr.pkg, tr.outcome, tr.cached, tr.end.Sub(tr.start))
 				continue
 			}
+			if resultsSummary && tr.testName != "" {
+				allResults[tr.pkg+"\t"+tr.testName] = tr.outcome
+			}
 			if testingVerbose || tr.outcome == outcomeFail {
 				io.Copy(os.Stdout, &tr.logs)
 			}
@@ -839,15 +1054,18 @@ func main() {
 				testName:          tr.testName,
 				firstFailDuration: tr.end.Sub(tr.start),
 				issueURL:          tr.issueURL, // real if Mark()'d, else "".
+				inferredFail:      tr.inferredFail,
 			})
 		}
 		failed = append(failed, pkgFailedTests...)
 		if err := <-runErrCh; err != nil {
-			if exit, ok := errors.AsType[*exec.ExitError](err); ok {
-				if code := exit.ExitCode(); code > -1 && len(pkgFailedTests) == 0 {
+			// ExitCode is -1 if go test was killed by a signal, which
+			// must not be mistaken for success.
+			if exit, ok := errors.AsType[*exec.ExitError](err); ok && exit.ExitCode() > -1 {
+				if len(pkgFailedTests) == 0 {
 					// Pure exec failure with no test-level failures to retry:
 					// honor the original exit code.
-					os.Exit(code)
+					os.Exit(exit.ExitCode())
 				}
 			} else {
 				log.Printf("testwrapper: %s", err)
@@ -880,6 +1098,19 @@ func main() {
 	}
 	if path := os.Getenv("GITHUB_STEP_SUMMARY"); path != "" {
 		writeFlakeSummary(path, flaky, repo)
+		if resultsSummary {
+			retried := map[string]bool{}
+			for _, ft := range flaky {
+				key := ft.pkg + "\t" + ft.testName
+				if ft.inferredFail {
+					// It never failed on its own, so it isn't a flake.
+					allResults[key] = outcomePass
+					continue
+				}
+				retried[key] = true
+			}
+			writeResultsSummary(path, os.Getenv("TS_TESTWRAPPER_RESULTS_JSON"), os.Getenv("TS_TESTWRAPPER_RESULTS_PKG"), allResults, retried, pkgFatal)
+		}
 	}
 	if len(permanent) > 0 {
 		j, _ := json.Marshal(buildPackageTests(permanent, ""))

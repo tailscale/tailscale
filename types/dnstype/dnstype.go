@@ -17,10 +17,10 @@ type Resolver struct {
 	//  - A plain IP address for a "classic" UDP+TCP DNS resolver.
 	//    This is the common format as sent by the control plane.
 	//  - An IP:port, for tests.
-	//  - "https://resolver.com/path" for DNS over HTTPS; currently
-	//    as of 2022-09-08 only used for certain well-known resolvers
-	//    (see the publicdns package) for which the IP addresses to dial DoH are
-	//    known ahead of time, so bootstrap DNS resolution is not required.
+	//  - "https://resolver.com/path" for DNS over HTTPS. Well-known public
+	//    providers (see the publicdns package) are dialed at their known IPs;
+	//    arbitrary providers require BootstrapResolution below, or an
+	//    IP-literal URL host.
 	//  - "http://node-address:port/path" for DNS over HTTP over WireGuard. This
 	//    is implemented in the PeerAPI for exit nodes and app connectors.
 	//  - [TODO] "tls://resolver.com" for DNS over TCP+TLS
@@ -31,9 +31,8 @@ type Resolver struct {
 	// address directly.
 	// BootstrapResolution may be empty, in which case clients should
 	// look up the DoT/DoH server using their local "classic" DNS
-	// resolver.
-	//
-	// As of 2022-09-08, BootstrapResolution is not yet used.
+	// resolver, or only use the resolver if its addresses are already
+	// known (as for well-known public providers).
 	BootstrapResolution []netip.Addr `json:",omitempty"`
 
 	// UseWithExitNode designates that this resolver should continue to be used when an

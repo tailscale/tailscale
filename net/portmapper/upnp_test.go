@@ -15,8 +15,11 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"tailscale.com/net/portmapper/portmappertype"
 	"tailscale.com/tstest"
@@ -517,7 +520,7 @@ func TestGetUPnPClient(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			c, err := selectBestService(ctx, logBuf.Logf, dev, loc)
+			c, _, err := selectBestService(ctx, logBuf.Logf, dev, loc)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -531,6 +534,43 @@ func TestGetUPnPClient(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestGetUPnPRootDeviceSlowResponse verifies that a router whose HTTP
+// server takes over a second to answer the root device fetch (as the
+// NETGEAR RS700 firmware does) still yields a root device, instead of
+// failing with a context deadline error.
+func TestGetUPnPRootDeviceSlowResponse(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		slowRT := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			select {
+			case <-time.After(1500 * time.Millisecond):
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			}
+			return &http.Response{
+				Status:     "200 OK",
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"text/xml"},
+				},
+				Body:    io.NopCloser(strings.NewReader(pfSenseRootDescXML)),
+				Request: req,
+			}, nil
+		})
+		ctx := upnpHTTPClientKey.WithValue(t.Context(), &http.Client{Transport: slowRT})
+
+		var logBuf tstest.MemLogger
+		dev, _, err := getUPnPRootDevice(ctx, logBuf.Logf, DebugKnobs{}, netip.MustParseAddr("192.168.1.1"), uPnPDiscoResponse{
+			Location: "http://192.168.1.1:5000/rootDesc.xml",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dev == nil {
+			t.Fatal("got nil root device")
+		}
+	})
 }
 
 func TestGetUPnPPortMapping(t *testing.T) {
@@ -714,6 +754,61 @@ func TestGetUPnPPortMapping_LeaseDuration(t *testing.T) {
 			}
 			t.Logf("external IP: %v", ext)
 		})
+	}
+}
+
+func TestGetUPnPPortMapping_MikroTikDoesNotQueryExternalIPAfterMapping(t *testing.T) {
+	igd, err := NewTestIGD(t, TestIGDOptions{UPnP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer igd.Close()
+
+	var externalIPRequests atomic.Int32
+	handlers := map[string]any{
+		"AddPortMapping": func(body []byte) (int, string) {
+			var req struct {
+				LeaseDuration string `xml:"NewLeaseDuration"`
+			}
+			if err := xml.Unmarshal(body, &req); err != nil {
+				t.Errorf("bad request: %v", err)
+				return http.StatusBadRequest, "bad request"
+			}
+			if req.LeaseDuration != "0" {
+				return http.StatusOK, testAddPortMappingPermanentLease
+			}
+			return http.StatusOK, testAddPortMappingResponse
+		},
+		"GetExternalIPAddress": func([]byte) (int, string) {
+			if externalIPRequests.Add(1) > 1 {
+				return http.StatusInternalServerError, "too many requests"
+			}
+			return http.StatusOK, testGetExternalIPAddressResponse
+		},
+		"GetStatusInfo":     testGetStatusInfoResponse,
+		"DeletePortMapping": "",
+	}
+	igd.SetUPnPHandler(&upnpServer{
+		t:    t,
+		Desc: mikrotikRootDescXML,
+		Control: map[string]map[string]any{
+			"/upnp/control/yomkmsnooi/wanipconn-1": handlers,
+		},
+	})
+
+	ctx := context.Background()
+	c := newTestClient(t, igd, nil)
+	mustProbeUPnP(t, ctx, c)
+
+	gw, myIP, ok := c.gatewayAndSelfIP()
+	if !ok {
+		t.Fatal("could not get gateway and self IP")
+	}
+	if _, ok := c.getUPnPPortMapping(ctx, gw, netip.AddrPortFrom(myIP, 12345), 0); !ok {
+		t.Fatal("could not get UPnP port mapping")
+	}
+	if got := externalIPRequests.Load(); got != 1 {
+		t.Fatalf("GetExternalIPAddress requests = %d, want 1", got)
 	}
 }
 
@@ -920,8 +1015,12 @@ func TestGetUPnPPortMapping_Invalid(t *testing.T) {
 			defer igd.Close()
 
 			// This is a very basic fake UPnP server handler.
+			var addPortMappingRequests atomic.Int32
 			handlers := map[string]any{
-				"AddPortMapping":       testAddPortMappingResponse,
+				"AddPortMapping": func([]byte) (int, string) {
+					addPortMappingRequests.Add(1)
+					return http.StatusOK, testAddPortMappingResponse
+				},
 				"GetExternalIPAddress": makeGetExternalIPAddressResponse(responseAddr),
 				"GetStatusInfo":        testGetStatusInfoResponse,
 				"DeletePortMapping":    "", // Do nothing for test
@@ -952,6 +1051,9 @@ func TestGetUPnPPortMapping_Invalid(t *testing.T) {
 			}
 			if ext.IsValid() {
 				t.Fatalf("expected no external address; got %v", ext)
+			}
+			if got := addPortMappingRequests.Load(); got != 0 {
+				t.Fatalf("AddPortMapping requests = %d, want 0", got)
 			}
 		})
 	}

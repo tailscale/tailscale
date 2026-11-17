@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
@@ -27,6 +26,7 @@ import (
 
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/k8s-proxy/conf"
 	"tailscale.com/kube/kubetypes"
@@ -85,9 +85,9 @@ func (r *KubeAPIServerTSServiceReconciler) Reconcile(ctx context.Context, req re
 
 	if markedForDeletion(pg) {
 		logger.Debugf("ProxyGroup is being deleted, ensuring any created resources are cleaned up")
-		if err = r.maybeCleanup(ctx, serviceName, pg, logger, tsClient); err != nil && strings.Contains(err.Error(), optimisticLockErrorMsg) {
-			logger.Infof("optimistic lock error, retrying: %s", err)
-			return res, nil
+		if err = r.maybeCleanup(ctx, serviceName, pg, logger, tsClient); reconciler.IsOptimisticLockError(err) {
+			logger.Debugf("update conflict, retrying: %v", err)
+			return reconcile.Result{RequeueAfter: shortRequeue}, nil
 		}
 
 		return res, err
@@ -95,9 +95,9 @@ func (r *KubeAPIServerTSServiceReconciler) Reconcile(ctx context.Context, req re
 
 	err = r.maybeProvision(ctx, serviceName, pg, logger, tsClient)
 	if err != nil {
-		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
-			logger.Infof("optimistic lock error, retrying: %s", err)
-			return reconcile.Result{}, nil
+		if reconciler.IsOptimisticLockError(err) {
+			logger.Debugf("update conflict, retrying: %v", err)
+			return reconcile.Result{RequeueAfter: shortRequeue}, nil
 		}
 		return reconcile.Result{}, err
 	}
@@ -253,7 +253,9 @@ func (r *KubeAPIServerTSServiceReconciler) maybeCleanup(ctx context.Context, ser
 		return fmt.Errorf("error deleting Tailscale Service: %w", err)
 	}
 
-	if err = cleanupCertResources(ctx, r.Client, r.tsNamespace, serviceName, pg); err != nil {
+	// Find the cert resources by label, because the state Secrets that hold
+	// the DNS name can already be gone.
+	if err = cleanupAllCertResources(ctx, r.Client, r.tsNamespace, pg.Name); err != nil {
 		return fmt.Errorf("failed to clean up cert resources: %w", err)
 	}
 

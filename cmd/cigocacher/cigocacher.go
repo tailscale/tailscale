@@ -29,8 +29,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bradfitz/go-tool-cache/cacheproc"
-	"github.com/bradfitz/go-tool-cache/cachers"
+	"github.com/tailscale/tb/gocache/cacheproc"
+	"github.com/tailscale/tb/gocache/cachers"
 )
 
 func main() {
@@ -97,11 +97,7 @@ func main() {
 		if *srvURL == "" {
 			log.Fatal("--cigocached-url is empty; cannot fetch stats")
 		}
-		tk := *token
-		if tk == "" {
-			log.Fatal("--token is empty; cannot fetch stats")
-		}
-		stats, err := fetchStats(httpClient(srvHost, *srvHostDial), *srvURL, tk)
+		stats, err := fetchStats(httpClient(srvHost, *srvHostDial), *srvURL, *token)
 		if err != nil {
 			// Errors that are not due to misconfiguration are non-fatal so we
 			// don't fail builds if e.g. cigocached is down.
@@ -125,7 +121,6 @@ func main() {
 			log.Fatal(err)
 		}
 		*dir = filepath.Join(d, "go-cacher")
-		log.Printf("Defaulting to cache dir %v ...", *dir)
 	}
 	if err := os.MkdirAll(*dir, 0750); err != nil {
 		log.Fatal(err)
@@ -336,7 +331,9 @@ func fetchAccessToken(cl *http.Client, idTokenURL, idTokenRequestToken, gocached
 
 func fetchStats(cl *http.Client, baseURL, accessToken string) (string, error) {
 	req, _ := http.NewRequest("GET", baseURL+"/session/stats", nil)
-	req.Header.Set("Authorization", "Bearer "+accessToken)
+	if accessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+	}
 	resp, err := cl.Do(req)
 	if err != nil {
 		return "", err

@@ -16,8 +16,9 @@ import (
 // Backoff tracks state the history of consecutive failures and sleeps
 // an increasing amount of time, up to a provided limit.
 type Backoff struct {
-	n          int // number of consecutive failures
-	maxBackoff time.Duration
+	n              int // number of consecutive failures
+	maxBackoff     time.Duration
+	initialBackoff time.Duration
 
 	// Name is the name of this backoff timer, for logging purposes.
 	name string
@@ -32,16 +33,37 @@ type Backoff struct {
 	LogLongerThan time.Duration
 }
 
+// Option configures a [Backoff] instance.
+type Option func(*Backoff)
+
+const defaultInitialBackoff = 10 * time.Millisecond
+
+// WithInitialBackoff sets the base delay for the first failure, before jitter.
+// Subsequent delays grow quadratically, up to maxBackoff before jitter.
+// If d <= 0, defaultInitialBackoff is used
+func WithInitialBackoff(d time.Duration) Option {
+	return func(b *Backoff) {
+		if d > 0 {
+			b.initialBackoff = d
+		}
+	}
+}
+
 // NewBackoff returns a new Backoff timer with the provided name (for logging), logger,
 // and max backoff time. By default, all failures (calls to BackOff with a non-nil err)
 // are logged unless the returned Backoff.LogLongerThan is adjusted.
-func NewBackoff(name string, logf logger.Logf, maxBackoff time.Duration) *Backoff {
-	return &Backoff{
-		name:       name,
-		logf:       logf,
-		maxBackoff: maxBackoff,
-		Clock:      tstime.StdClock{},
+func NewBackoff(name string, logf logger.Logf, maxBackoff time.Duration, opts ...Option) *Backoff {
+	b := &Backoff{
+		name:           name,
+		logf:           logf,
+		maxBackoff:     maxBackoff,
+		initialBackoff: defaultInitialBackoff,
+		Clock:          tstime.StdClock{},
 	}
+	for _, opt := range opts {
+		opt(b)
+	}
+	return b
 }
 
 // BackOff sleeps an increasing amount of time if err is non-nil while the
@@ -60,9 +82,13 @@ func (b *Backoff) BackOff(ctx context.Context, err error) {
 	b.n++
 	// n^2 backoff timer is a little smoother than the
 	// common choice of 2^n.
-	d := min(time.Duration(b.n*b.n)*10*time.Millisecond, b.maxBackoff)
-	// Randomize the delay between 0.5-1.5 x msec, in order
+	d := min(time.Duration(b.n*b.n)*b.initialBackoff, b.maxBackoff)
+	// Randomize the delay between 0.5-1.5 x d, in order
 	// to prevent accidental "thundering herd" problems.
+	//
+	// TODO(mpminardi): revisit the below as it can result
+	// in us waiting for longer than maxBackoff which is
+	// counterintuitive.
 	d = time.Duration(float64(d) * (rand.Float64() + 0.5))
 
 	if d >= b.LogLongerThan {

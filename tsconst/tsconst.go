@@ -10,6 +10,9 @@ package tsconst
 const WintunInterfaceDesc = "Tailscale Tunnel"
 const WintunInterfaceDesc0_14 = "Wintun Userspace Tunnel"
 
+// WintunInterfaceGUID is the GUID of the Tailscale interface on Windows.
+const WintunInterfaceGUID = "{37217669-42da-4657-a55b-0d995d328250}"
+
 // TailnetLockNotTrustedMsg is the error message used by tailnet lock
 // and sniffed (via substring) out of an error sent over the network.
 const TailnetLockNotTrustedMsg = "this node is not trusted by Tailnet Lock"

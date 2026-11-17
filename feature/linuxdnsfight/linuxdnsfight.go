@@ -12,10 +12,14 @@ import (
 	"fmt"
 
 	"github.com/illarion/gonotify/v3"
+	"tailscale.com/feature"
 	"tailscale.com/net/dns"
 )
 
 func init() {
+	if !feature.Register("linuxdnsfight") {
+		return
+	}
 	dns.HookWatchFile.Set(watchFile)
 }
 

@@ -17,7 +17,15 @@ import (
 // ApplyProxyClass overlays the settings in pc onto ss. It's the generic slice of ProxyClass application used by
 // any reconciler that produces a tailscaled StatefulSet (peer relay, connector, proxy group, etc.).
 func ApplyProxyClass(ss *appsv1.StatefulSet, pc *tsapi.ProxyClass, managedLabels, managedAnnotations []string) *appsv1.StatefulSet {
-	if pc == nil || ss == nil || pc.Spec.StatefulSet == nil {
+	if pc == nil || ss == nil {
+		return ss
+	}
+
+	if pc.Spec.Metrics != nil && pc.Spec.Metrics.Enable {
+		enableMetrics(ss)
+	}
+
+	if pc.Spec.StatefulSet == nil {
 		return ss
 	}
 
@@ -74,6 +82,19 @@ func ApplyProxyClass(ss *appsv1.StatefulSet, pc *tsapi.ProxyClass, managedLabels
 	return ss
 }
 
+// enableMetrics makes containerboot serve /metrics alongside /healthz on HealthCheckPort.
+func enableMetrics(ss *appsv1.StatefulSet) {
+	for i := range ss.Spec.Template.Spec.Containers {
+		c := &ss.Spec.Template.Spec.Containers[i]
+		if c.Name != containerName {
+			continue
+		}
+
+		c.Env = append(c.Env, corev1.EnvVar{Name: "TS_ENABLE_METRICS", Value: "true"})
+		break
+	}
+}
+
 func mergeProtected(current, custom map[string]string, protected []string) map[string]string {
 	if custom == nil {
 		custom = make(map[string]string)
@@ -100,9 +121,13 @@ func applyContainerOverlay(c *corev1.Container, overlay *tsapi.Container) {
 	}
 
 	for _, e := range overlay.Env {
-		// Env vars added by ProxyClass are appended; Kubernetes uses the last entry for a duplicate name, so this
-		// lets the user override anything we set (e.g. TS_USERSPACE) without us having to know the full list.
-		c.Env = append(c.Env, corev1.EnvVar{Name: string(e.Name), Value: e.Value})
+		// Replace rather than append, as server-side apply rejects a StatefulSet with duplicate env names.
+		env := corev1.EnvVar{Name: string(e.Name), Value: e.Value}
+		if i := slices.IndexFunc(c.Env, func(v corev1.EnvVar) bool { return v.Name == env.Name }); i >= 0 {
+			c.Env[i] = env
+			continue
+		}
+		c.Env = append(c.Env, env)
 	}
 
 	if overlay.Image != "" {

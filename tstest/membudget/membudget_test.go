@@ -48,16 +48,12 @@ import (
 // http://go/ios-memory or `go tool pprof` the heap) or, if the growth is
 // genuinely necessary and accounted for, raise the budget in the same change
 // with a justification.
-//
-// Note that these tests run with TS_DEBUG_WG_BATCH_SIZE=1 (see
-// measureNodeCost), so wireguard-go packet-pool memory is measured at its
-// mobile configuration, not the Linux server default.
 const (
 	// startupBudget is the live-heap budget for bringing up a backend
 	// connected to a tailnet with zero peers: feature/extension init,
 	// engine, netstack, DNS, control client, etc.
 	//
-	// As of 2026-08 the measured cost is ~1.3 MiB; the budget leaves ~6x
+	// As of 2026-09 the measured cost is ~1.73 MiB; the budget leaves ~5x
 	// headroom for organic growth while still catching multi-MiB
 	// regressions (the conn25 flow table pre-allocation this test was
 	// written for measured 17 MiB here).
@@ -135,15 +131,6 @@ func measureNodeCost(t *testing.T, peers int) uint64 {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	// Use the minimum wireguard-go batch size, matching iOS and other
-	// memory-constrained platforms (which are what these budgets protect).
-	// Without this, on Linux each of wireguard-go's four reader goroutines
-	// (three UDP receive paths plus the TUN reader) pins batch-size (128) ×
-	// 64 KiB message buffers at startup: ~32 MiB of live heap that exists
-	// only in the Linux configuration and would drown out the regressions
-	// this test exists to catch.
-	t.Setenv("TS_DEBUG_WG_BATCH_SIZE", "1")
-
 	controlURL := startControl(t, peers)
 	baseline := liveHeap()
 	s := startNode(t, ctx, controlURL)
@@ -192,6 +179,6 @@ func TestBackendPerPeerMemory(t *testing.T) {
 		float64(base)/(1<<20), nPeers, float64(loaded)/(1<<20),
 		float64(perPeer)/(1<<10), float64(perPeerBudget)/(1<<10))
 	if perPeer > perPeerBudget {
-		t.Errorf("per-peer live heap %v exceeds budget %v", perPeer, int(perPeerBudget))
+		t.Errorf("per-peer live heap %v exceeds budget %v", perPeer, perPeerBudget)
 	}
 }

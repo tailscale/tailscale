@@ -124,9 +124,6 @@ func (b *LocalBackend) probeLocks() {
 	if mc, ok := sys.MagicSock.GetOK(); ok && mc != nil {
 		mc.ProbeLocks()
 	}
-	if tun, ok := sys.Tun.GetOK(); ok && tun != nil {
-		tun.ProbeLocks()
-	}
 	if ht, ok := sys.HealthTracker.GetOK(); ok && ht != nil {
 		ht.ProbeLocks()
 	}

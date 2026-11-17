@@ -38,6 +38,8 @@ type fakeNodeSource struct {
 	byAddr   map[netip.Addr]nodeAndUser
 }
 
+func (s *fakeNodeSource) LogUploadAuth() (string, func() string) { return "", nil }
+
 func (s *fakeNodeSource) SelfNode() (tailcfg.NodeView, tailcfg.UserProfileView) {
 	return s.self, s.selfUser
 }

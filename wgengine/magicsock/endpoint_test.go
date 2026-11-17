@@ -294,7 +294,7 @@ func Test_endpoint_maybeProbeUDPLifetimeLocked(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := &Conn{}
+			c := &Conn{logf: func(msg string, args ...any) {}}
 			if tt.localDisco.IsZero() {
 				c.discoAtomic.Set(key.NewDisco())
 			} else if tt.localDisco.Compare(lower) == 0 {
@@ -309,10 +309,7 @@ func Test_endpoint_maybeProbeUDPLifetimeLocked(t *testing.T) {
 				bestAddr: tt.bestAddr,
 			}
 			if tt.remoteDisco != nil {
-				remote := &endpointDisco{
-					key: *tt.remoteDisco,
-				}
-				de.disco.Store(remote)
+				de.updateDiscoKey(*tt.remoteDisco)
 			}
 			p := tt.probeUDPLifetimeFn()
 			de.probeUDPLifetime = p
@@ -570,9 +567,9 @@ func Test_endpoint_sendDiscoPingsLocked_neverDirectUDP(t *testing.T) {
 		t.Run(fmt.Sprintf("neverDirectUDP=%v", neverDirectUDP), func(t *testing.T) {
 			prev := envknob.String("TS_DEBUG_NEVER_DIRECT_UDP")
 			if neverDirectUDP {
-				envknob.Setenv("TS_DEBUG_NEVER_DIRECT_UDP", "true")
+				envknob.SetenvForTest(t, "TS_DEBUG_NEVER_DIRECT_UDP", "true")
 			} else {
-				envknob.Setenv("TS_DEBUG_NEVER_DIRECT_UDP", "")
+				envknob.SetenvForTest(t, "TS_DEBUG_NEVER_DIRECT_UDP", "")
 			}
 			t.Cleanup(func() { envknob.Setenv("TS_DEBUG_NEVER_DIRECT_UDP", prev) })
 			now := mono.Now()
@@ -585,7 +582,7 @@ func Test_endpoint_sendDiscoPingsLocked_neverDirectUDP(t *testing.T) {
 				sentPing:      make(map[stun.TxID]sentPing),
 				endpointState: make(map[netip.AddrPort]*endpointState),
 			}
-			de.disco.Store(&endpointDisco{key: key.NewDisco().Public()})
+			de.updateDiscoKey(key.NewDisco().Public())
 			de.endpointState[directAddr] = &endpointState{}
 			de.sendDiscoPingsLocked(now, true)
 
@@ -595,6 +592,81 @@ func Test_endpoint_sendDiscoPingsLocked_neverDirectUDP(t *testing.T) {
 			}
 			if gotPing := de.endpointState[directAddr].lastPing == now; gotPing != wantPing {
 				t.Errorf("direct endpoint lastPing set = %v, want %v", gotPing, wantPing)
+			}
+		})
+	}
+}
+
+func Test_endpoint_updateFromNodeAfterDiscoKeyChange(t *testing.T) {
+	relayAddr := epAddr{ap: netip.MustParseAddrPort("192.0.2.2:77")}
+	relayAddr.vni.Set(1)
+	directAddr := epAddr{ap: netip.MustParseAddrPort("192.0.2.1:7")}
+
+	for _, tc := range []struct {
+		name       string
+		bestAddr   epAddr
+		keyChanges bool
+	}{
+		{
+			name:       "relay-bestaddr-key-changed",
+			bestAddr:   relayAddr,
+			keyChanges: true,
+		},
+		{
+			name:       "direct-bestaddr-key-changed",
+			bestAddr:   directAddr,
+			keyChanges: true,
+		},
+		{
+			name:       "relay-bestaddr-key-unchanged",
+			bestAddr:   relayAddr,
+			keyChanges: false,
+		},
+		{
+			name:       "direct-bestaddr-key-unchanged",
+			bestAddr:   directAddr,
+			keyChanges: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := mono.Now()
+			c := &Conn{
+				logf: func(msg string, args ...any) {},
+			}
+			c.discoAtomic.Set(key.NewDisco())
+			c.relayManager.hasPeerRelayServers.Store(true)
+
+			oldKey := key.NewDisco().Public()
+			de := &endpoint{
+				c:                  c,
+				publicKey:          key.NewNode().Public(),
+				bestAddr:           addrQuality{epAddr: tc.bestAddr},
+				trustBestAddrUntil: now.Add(time.Hour),
+				sentPing:           make(map[stun.TxID]sentPing),
+				endpointState:      make(map[netip.AddrPort]*endpointState),
+				debugUpdates:       ringlog.New[EndpointChange](10),
+			}
+			de.lastUDPRelayPathDiscovery = mono.Now()
+			de.disco.Store(&endpointDisco{controlKey: oldKey, controlShort: oldKey.ShortString()})
+
+			incomingKey := oldKey
+			if tc.keyChanges {
+				incomingKey = key.NewDisco().Public()
+			}
+			nv := (&tailcfg.Node{
+				ID:       1,
+				Key:      key.NewNode().Public(),
+				DiscoKey: incomingKey,
+				HomeDERP: 1,
+				Cap:      121, // capVerIsRelayCapable
+			}).View()
+			de.updateFromNode(nv, false, false)
+
+			de.mu.Lock()
+			got := de.wantUDPRelayPathDiscoveryLocked(now)
+			de.mu.Unlock()
+			if got != tc.keyChanges {
+				t.Errorf("wantUDPRelayPathDiscoveryLocked = %v, want %v", got, tc.keyChanges)
 			}
 		})
 	}
@@ -724,4 +796,544 @@ func Test_endpoint_handlePongConnLocked(t *testing.T) {
 			})
 		})
 	}
+}
+
+// TestUpdateFromNodeUsesControlKeyForComparison verifies that updateFromNode
+// compares the netmap-provided disco key against the endpoint's control-learned
+// key (keyFromControl), not the currently active key (key()).
+func TestUpdateFromNodeUsesControlKeyForComparison(t *testing.T) {
+	dk1 := key.NewDisco().Public() // initial control key
+	dk2 := key.NewDisco().Public() // TSMP key
+
+	tests := []struct {
+		name           string
+		netmapDiscoKey key.DiscoPublic
+		wantControlKey key.DiscoPublic
+		wantActiveKey  key.DiscoPublic
+		wantTsmpActive bool
+	}{
+		{
+			name:           "control_catches_up_to_tsmp_key",
+			netmapDiscoKey: dk2,
+			wantControlKey: dk2,
+			wantActiveKey:  dk2,
+			wantTsmpActive: true,
+		},
+		{
+			name:           "unchanged_netmap_key_preserves_active",
+			netmapDiscoKey: dk1,
+			wantControlKey: dk1,
+			wantActiveKey:  dk2,
+			wantTsmpActive: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			de := &endpoint{c: &Conn{logf: func(msg string, args ...any) {}}}
+			de.updateDiscoKey(dk1)
+			de.updateTSMPDiscoKey(dk2)
+
+			// Calls updateDiscoKey() internally and sets the endpoint `disco` field.
+			de.updateFromNode(
+				(&tailcfg.Node{Key: de.publicKey, DiscoKey: tt.netmapDiscoKey}).View(),
+				false, false)
+
+			epDisco := de.disco.Load()
+			if got := epDisco.keyFromControl(); got != tt.wantControlKey {
+				t.Errorf("keyFromControl: got %v, want %v", got, tt.wantControlKey)
+			}
+			if got := epDisco.tsmpActive; got != tt.wantTsmpActive {
+				t.Errorf("tsmpActive: got %t, want %t", got, tt.wantTsmpActive)
+			}
+			if got := epDisco.key(); got != tt.wantActiveKey {
+				t.Errorf("key(): got %v, want %v", got, tt.wantActiveKey)
+			}
+		})
+	}
+}
+
+func TestSawDiscoKey(t *testing.T) {
+	controlKey := key.NewDisco().Public()
+	tsmpKey := key.NewDisco().Public()
+	unknownKey := key.NewDisco().Public()
+	controlKey2 := key.NewDisco().Public()
+
+	tests := []struct {
+		name           string
+		initial        *endpointDisco
+		seen           key.DiscoPublic
+		hook           func(de *endpoint) // injected between Load and CAS; nil = no hook
+		wantResult     bool
+		wantNil        bool
+		wantTsmpActive bool // checked only when initial != nil
+		wantCalled     bool // whether changedActiveDisco should be called
+	}{
+		{
+			name:       "nil-disco",
+			initial:    nil,
+			seen:       controlKey,
+			wantResult: false,
+			wantNil:    true,
+		},
+		{
+			name:           "active-control-key-seen",
+			initial:        &endpointDisco{controlKey: controlKey, tsmpKey: tsmpKey, tsmpActive: false},
+			seen:           controlKey,
+			wantResult:     true,
+			wantTsmpActive: false,
+		},
+		{
+			name:           "active-tsmp-key-seen",
+			initial:        &endpointDisco{controlKey: controlKey, tsmpKey: tsmpKey, tsmpActive: true},
+			seen:           tsmpKey,
+			wantResult:     true,
+			wantTsmpActive: true,
+		},
+		{
+			name:           "inactive-tsmp-key-seen-swaps-to-tsmp-active",
+			initial:        &endpointDisco{controlKey: controlKey, tsmpKey: tsmpKey, tsmpActive: false},
+			seen:           tsmpKey,
+			wantResult:     true,
+			wantTsmpActive: true,
+			wantCalled:     true,
+		},
+		{
+			name:           "inactive-control-key-seen-swaps-to-control-active",
+			initial:        &endpointDisco{controlKey: controlKey, tsmpKey: tsmpKey, tsmpActive: true},
+			seen:           controlKey,
+			wantResult:     true,
+			wantTsmpActive: false,
+			wantCalled:     true,
+		},
+		{
+			name:           "unknown-key",
+			initial:        &endpointDisco{controlKey: controlKey, tsmpKey: tsmpKey, tsmpActive: false},
+			seen:           unknownKey,
+			wantResult:     false,
+			wantTsmpActive: false,
+		},
+		{
+			name:           "only-control-key-seen",
+			initial:        &endpointDisco{controlKey: controlKey},
+			seen:           controlKey,
+			wantResult:     true,
+			wantTsmpActive: false,
+		},
+		{
+			name:           "only-tsmp-key-seen",
+			initial:        &endpointDisco{tsmpKey: tsmpKey, tsmpActive: true},
+			seen:           tsmpKey,
+			wantResult:     true,
+			wantTsmpActive: true,
+		},
+		{
+			// Hook fires once and replaces the struct (same tsmpKey, different controlKey),
+			// forcing the first CAS to fail. The retry should still find tsmpKey as the
+			// inactive key and succeed.
+			name:    "CAS-retry-on-concurrent-update",
+			initial: &endpointDisco{controlKey: controlKey, tsmpKey: tsmpKey, tsmpActive: false},
+			seen:    tsmpKey,
+			hook: func(de *endpoint) {
+				de.disco.Store(&endpointDisco{
+					controlKey: controlKey2,
+					tsmpKey:    tsmpKey,
+					tsmpActive: false,
+				})
+			},
+			wantResult:     true,
+			wantTsmpActive: true,
+			wantCalled:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			de := &endpoint{c: &Conn{logf: func(msg string, args ...any) {}}}
+			if tt.initial != nil {
+				de.disco.Store(tt.initial)
+			}
+
+			if tt.wantCalled {
+				de.trustBestAddrUntil = mono.Now().Add(time.Hour)
+			}
+
+			hookFired := false
+			if tt.hook != nil {
+				sawDiscoKeyTestHook = func() {
+					if !hookFired {
+						hookFired = true
+						tt.hook(de)
+					}
+				}
+				t.Cleanup(func() { sawDiscoKeyTestHook = nil })
+			}
+
+			epDisco, got := de.checkAndUpdateDiscoKey(tt.seen)
+
+			if got != tt.wantResult {
+				t.Errorf("sawDiscoKey().seen = %v, want %v", got, tt.wantResult)
+			}
+			if tt.wantNil && epDisco != nil {
+				t.Errorf("sawDiscoKey().epDisco = %v, want %v", epDisco, nil)
+			}
+			if tt.hook != nil && !hookFired {
+				t.Error("test hook was never called; CAS retry path not exercised")
+			}
+			if tt.initial != nil {
+				if active := de.disco.Load(); active.tsmpActive != tt.wantTsmpActive {
+					t.Errorf("after call: tsmpActive = %v, want %v", active.tsmpActive, tt.wantTsmpActive)
+				}
+			}
+			if tt.wantCalled && de.trustBestAddrUntil != 0 {
+				t.Errorf("de.trustBedstAddrUntil expected to be 0, got %d", de.trustBestAddrUntil)
+			}
+		})
+	}
+}
+
+func TestUpdateDiscoKey(t *testing.T) {
+	dk1 := key.NewDisco().Public()
+	dk2 := key.NewDisco().Public()
+	dk3 := key.NewDisco().Public()
+	zero := key.DiscoPublic{}
+
+	tests := []struct {
+		name           string
+		setup          func(de *endpoint)
+		newKey         key.DiscoPublic
+		wantChanged    bool
+		wantActiveKey  key.DiscoPublic
+		wantTsmpActive bool
+		wantTSMPKey    key.DiscoPublic
+	}{
+		{
+			name:          "first-key-set",
+			newKey:        dk1,
+			wantChanged:   true,
+			wantActiveKey: dk1,
+		},
+		{
+			name: "same-control-key-no-change",
+			setup: func(de *endpoint) {
+				de.disco.Store(&endpointDisco{controlKey: dk1, controlShort: dk1.ShortString()})
+			},
+			newKey:        dk1,
+			wantChanged:   false,
+			wantActiveKey: dk1,
+		},
+		{
+			name: "control-key-rotates-while-control-active",
+			setup: func(de *endpoint) {
+				de.disco.Store(&endpointDisco{controlKey: dk1, controlShort: dk1.ShortString()})
+			},
+			newKey:        dk2,
+			wantChanged:   true,
+			wantActiveKey: dk2,
+		},
+		{
+			name: "control-key-rotates-while-tsmp-active",
+			setup: func(de *endpoint) {
+				de.disco.Store(&endpointDisco{
+					controlKey: dk1, controlShort: dk1.ShortString(),
+					tsmpKey: dk2, tsmpShort: dk2.ShortString(),
+					tsmpActive: true,
+				})
+			},
+			newKey:         dk3,
+			wantChanged:    true,
+			wantActiveKey:  dk2,
+			wantTsmpActive: true,
+			wantTSMPKey:    dk2,
+		},
+		{
+			name: "control-key-matches-active-tsmp-key",
+			setup: func(de *endpoint) {
+				de.disco.Store(&endpointDisco{
+					controlKey: dk1, controlShort: dk1.ShortString(),
+					tsmpKey: dk2, tsmpShort: dk2.ShortString(),
+					tsmpActive: true,
+				})
+			},
+			newKey:         dk2,
+			wantChanged:    true,
+			wantActiveKey:  dk2,
+			wantTsmpActive: true,
+			wantTSMPKey:    dk2,
+		},
+		{
+			// Control and the active TSMP key are the same key. A later
+			// control rotation is a peer restart: prefer the new control
+			// key and keep the retired TSMP material.
+			name: "equal-control-and-tsmp-key-rotates",
+			setup: func(de *endpoint) {
+				de.disco.Store(&endpointDisco{
+					controlKey: dk1, controlShort: dk1.ShortString(),
+					tsmpKey: dk1, tsmpShort: dk1.ShortString(),
+					tsmpActive: true,
+				})
+			},
+			newKey:        dk2,
+			wantChanged:   true,
+			wantActiveKey: dk2,
+			wantTSMPKey:   dk1,
+		},
+		{
+			name: "control-key-cleared-tsmp-present",
+			setup: func(de *endpoint) {
+				de.disco.Store(&endpointDisco{
+					controlKey: dk1, controlShort: dk1.ShortString(),
+					tsmpKey: dk2, tsmpShort: dk2.ShortString(),
+					tsmpActive: false,
+				})
+			},
+			newKey:         zero,
+			wantChanged:    true,
+			wantActiveKey:  dk2,
+			wantTsmpActive: true,
+			wantTSMPKey:    dk2,
+		},
+		{
+			name: "control-key-cleared-no-tsmp",
+			setup: func(de *endpoint) {
+				de.disco.Store(&endpointDisco{controlKey: dk1, controlShort: dk1.ShortString()})
+			},
+			newKey:        zero,
+			wantChanged:   true,
+			wantActiveKey: zero,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			de := &endpoint{c: &Conn{logf: func(msg string, args ...any) {}}}
+			if tt.setup != nil {
+				tt.setup(de)
+			}
+
+			if got := de.updateDiscoKey(tt.newKey); got != tt.wantChanged {
+				t.Errorf("expected de.updateDiscoKey()=%t, got %t", tt.wantChanged, got)
+			}
+			gotDisco := de.disco.Load()
+			if got := gotDisco.key(); got != tt.wantActiveKey {
+				t.Errorf("active key: got %v, want %v", got, tt.wantActiveKey)
+			}
+			if got := gotDisco.tsmpIsActive(); got != tt.wantTsmpActive {
+				t.Errorf("tsmpActive: got %t, want %t", got, tt.wantTsmpActive)
+			}
+			if got := gotDisco.keyFromTSMP(); got != tt.wantTSMPKey {
+				t.Errorf("tsmp key: got %v, want %v", got, tt.wantTSMPKey)
+			}
+		})
+	}
+}
+
+func TestUpdateTSMPDiscoKey(t *testing.T) {
+	dk1 := key.NewDisco().Public()
+	dk2 := key.NewDisco().Public()
+	dk3 := key.NewDisco().Public()
+	zero := key.DiscoPublic{}
+
+	tests := []struct {
+		name          string
+		setup         func(de *endpoint)
+		newKey        key.DiscoPublic
+		wantChanged   bool
+		wantActiveKey key.DiscoPublic
+	}{
+		{
+			name:          "first-tsmp-key-set",
+			newKey:        dk1,
+			wantChanged:   true,
+			wantActiveKey: dk1,
+		},
+		{
+			name: "same-tsmp-key-no-change",
+			setup: func(de *endpoint) {
+				de.disco.Store(&endpointDisco{tsmpKey: dk1, tsmpShort: dk1.ShortString(), tsmpActive: true})
+			},
+			newKey:        dk1,
+			wantChanged:   false,
+			wantActiveKey: dk1,
+		},
+		{
+			name: "tsmp-key-rotates-while-tsmp-active",
+			setup: func(de *endpoint) {
+				de.disco.Store(&endpointDisco{tsmpKey: dk1, tsmpShort: dk1.ShortString(), tsmpActive: true})
+			},
+			newKey:        dk2,
+			wantChanged:   true,
+			wantActiveKey: dk2,
+		},
+		{
+			name: "tsmp-key-set-while-tsmp-active",
+			setup: func(de *endpoint) {
+				de.disco.Store(&endpointDisco{
+					controlKey: dk1, controlShort: dk1.ShortString(), tsmpActive: true,
+					tsmpKey: dk2, tsmpShort: dk2.ShortString(),
+				})
+			},
+			newKey:        dk3,
+			wantChanged:   true,
+			wantActiveKey: dk3,
+		},
+		{
+			name: "tsmp-key-cleared-control-present",
+			setup: func(de *endpoint) {
+				de.disco.Store(&endpointDisco{
+					controlKey: dk1, controlShort: dk1.ShortString(),
+					tsmpKey: dk2, tsmpShort: dk2.ShortString(),
+					tsmpActive: true,
+				})
+			},
+			newKey:        zero,
+			wantChanged:   true,
+			wantActiveKey: dk1,
+		},
+		{
+			name: "tsmp-key-cleared-no-control",
+			setup: func(de *endpoint) {
+				de.disco.Store(&endpointDisco{tsmpKey: dk2, tsmpShort: dk2.ShortString(), tsmpActive: true})
+			},
+			newKey:        zero,
+			wantChanged:   true,
+			wantActiveKey: zero,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			de := &endpoint{c: &Conn{logf: func(msg string, args ...any) {}}}
+			if tt.setup != nil {
+				tt.setup(de)
+			}
+
+			if got := de.updateTSMPDiscoKey(tt.newKey); got != tt.wantChanged {
+				t.Errorf("expected de.updateDiscoKey()=%t, got %t", tt.wantChanged, got)
+			}
+			if got := de.disco.Load().key(); got != tt.wantActiveKey {
+				t.Errorf("active key: got %v, want %v", got, tt.wantActiveKey)
+			}
+		})
+	}
+}
+
+// TestUpdateFromNodeChangedActiveDisco verifies that updateFromNode resets
+// trustBestAddrUntil (via changedActiveDisco) when the control disco key
+// changes, and leaves it untouched when the key is unchanged.
+func TestUpdateFromNodeChangedActiveDisco(t *testing.T) {
+	dk1 := key.NewDisco().Public()
+	dk2 := key.NewDisco().Public()
+
+	tests := []struct {
+		name           string
+		initial        *endpointDisco
+		netmapKey      key.DiscoPublic
+		wantCalled     bool
+		wantActiveKey  key.DiscoPublic
+		wantTsmpActive bool
+	}{
+		{
+			name:          "control-key-changes-fires",
+			initial:       &endpointDisco{controlKey: dk1, controlShort: dk1.ShortString()},
+			netmapKey:     dk2,
+			wantCalled:    true,
+			wantActiveKey: dk2,
+		},
+		{
+			name:          "control-key-unchanged-no-fire",
+			initial:       &endpointDisco{controlKey: dk1, controlShort: dk1.ShortString()},
+			netmapKey:     dk1,
+			wantCalled:    false,
+			wantActiveKey: dk1,
+		},
+		{
+			// Control and the active TSMP key match, then control rotates.
+			// updateFromNode must follow that new key and drop discovery trust.
+			name: "equal-tsmp-active-rotates-fires",
+			initial: &endpointDisco{
+				controlKey: dk1, controlShort: dk1.ShortString(),
+				tsmpKey: dk1, tsmpShort: dk1.ShortString(),
+				tsmpActive: true,
+			},
+			netmapKey:     dk2,
+			wantCalled:    true,
+			wantActiveKey: dk2,
+		},
+		{
+			name: "equal-tsmp-active-unchanged-no-fire",
+			initial: &endpointDisco{
+				controlKey: dk1, controlShort: dk1.ShortString(),
+				tsmpKey: dk1, tsmpShort: dk1.ShortString(),
+				tsmpActive: true,
+			},
+			netmapKey:      dk1,
+			wantCalled:     false,
+			wantActiveKey:  dk1,
+			wantTsmpActive: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			de := &endpoint{c: &Conn{logf: func(string, ...any) {}}}
+			de.disco.Store(tt.initial)
+
+			// Set a future trustBestAddrUntil so we can detect if it was zeroed.
+			de.trustBestAddrUntil = mono.Now().Add(time.Hour)
+			before := de.trustBestAddrUntil
+
+			de.updateFromNode(
+				(&tailcfg.Node{Key: de.publicKey, DiscoKey: tt.netmapKey}).View(),
+				false, false)
+
+			addrUntil := de.trustBestAddrUntil
+			if tt.wantCalled && addrUntil != 0 {
+				t.Errorf("trustBestAddrUntil not reset: got %v, want 0", addrUntil)
+			}
+			if !tt.wantCalled && addrUntil != before {
+				t.Errorf("trustBestAddrUntil unexpectedly changed from %v to %v", before, addrUntil)
+			}
+			gotDisco := de.disco.Load()
+			if got := gotDisco.key(); got != tt.wantActiveKey {
+				t.Errorf("active key: got %v, want %v", got, tt.wantActiveKey)
+			}
+			if got := gotDisco.tsmpIsActive(); got != tt.wantTsmpActive {
+				t.Errorf("tsmpActive: got %t, want %t", got, tt.wantTsmpActive)
+			}
+		})
+	}
+}
+
+func TestChangedActiveDiscoLocked(t *testing.T) {
+	t.Run("resets-trustBestAddrUntil", func(t *testing.T) {
+		de := &endpoint{}
+		de.trustBestAddrUntil = mono.Now().Add(time.Hour)
+		de.mu.Lock()
+		de.changedActiveDiscoLocked()
+		de.mu.Unlock()
+		if de.trustBestAddrUntil != 0 {
+			t.Errorf("trustBestAddrUntil not reset to zero, got %v", de.trustBestAddrUntil)
+		}
+	})
+
+	t.Run("invalidates-disco-path-fields", func(t *testing.T) {
+		de := &endpoint{}
+		de.lastSendExt = mono.Now()
+		de.lastFullPing = mono.Now()
+		de.lastUDPRelayPathDiscovery = mono.Now()
+		de.isWireguardOnly = true // avoid sentPing iteration, which requires de.c
+		de.mu.Lock()
+		de.changedActiveDiscoLocked()
+		de.mu.Unlock()
+		if de.lastSendExt != 0 {
+			t.Error("lastSendExt not reset to zero")
+		}
+		if de.lastFullPing != 0 {
+			t.Error("lastFullPing not reset to zero")
+		}
+		if de.lastUDPRelayPathDiscovery != 0 {
+			t.Error("lastUDPRelayPathDiscovery not reset to zero")
+		}
+	})
 }

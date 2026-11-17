@@ -5,9 +5,11 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
-	"strings"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -35,73 +37,93 @@ func TestL3Ingress(t *testing.T) {
 	// Apply nginx
 	nginx := nginxDeployment(ns)
 	createAndCleanup(t, kubeClient, nginx)
-	// Apply service to expose it as ingress
-	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      generateName("test-ingress"),
-			Namespace: ns,
-			Annotations: map[string]string{
-				"tailscale.com/expose": "true",
-			},
-		},
-		Spec: corev1.ServiceSpec{
-			Selector: map[string]string{
-				"app.kubernetes.io/name": nginx.Name,
-			},
-			Ports: []corev1.ServicePort{
-				{
-					Name:     "http",
-					Protocol: "TCP",
-					Port:     80,
+
+	// Singleton ingress proxy forwards only the Service's primary ClusterIP family,
+	// Dualstack isn't supported. See https://github.com/tailscale/tailscale/issues/22138.
+	for _, tc := range []struct {
+		name     string
+		families []corev1.IPFamily
+	}{
+		{"IPv4", []corev1.IPFamily{corev1.IPv4Protocol}},
+		{"IPv6", []corev1.IPFamily{corev1.IPv6Protocol}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			skipIfUnsupportedFamilies(t, tc.families)
+			// Apply service to expose it as ingress
+			svc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      generateName("test-ingress"),
+					Namespace: ns,
+					Annotations: map[string]string{
+						"tailscale.com/expose": "true",
+					},
 				},
-			},
-		},
-	}
-	createAndCleanup(t, kubeClient, svc)
+				Spec: corev1.ServiceSpec{
+					IPFamilyPolicy: new(ipFamilyPolicy(tc.families)),
+					IPFamilies:     tc.families,
+					Selector: map[string]string{
+						"app.kubernetes.io/name": nginx.Name,
+					},
+					Ports: []corev1.ServicePort{
+						{
+							Name:     "http",
+							Protocol: "TCP",
+							Port:     80,
+						},
+					},
+				},
+			}
+			createAndCleanup(t, kubeClient, svc)
 
-	if err := tstest.WaitFor(time.Minute, func() error {
-		maybeReadySvc := &corev1.Service{ObjectMeta: objectMeta(ns, svc.Name)}
-		if err := get(t.Context(), kubeClient, maybeReadySvc); err != nil {
-			return err
-		}
-		isReady := kube.SvcIsReady(maybeReadySvc)
-		if isReady {
-			t.Log("Service is ready")
-			return nil
-		}
-		return fmt.Errorf("Service is not ready yet")
-	}); err != nil {
-		t.Fatalf("error waiting for the Service to become Ready: %v", err)
-	}
+			if err := tstest.WaitFor(time.Minute, func() error {
+				maybeReadySvc := &corev1.Service{ObjectMeta: objectMeta(ns, svc.Name)}
+				if err := get(t.Context(), kubeClient, maybeReadySvc); err != nil {
+					return err
+				}
+				if kube.SvcIsReady(maybeReadySvc) {
+					return nil
+				}
+				return fmt.Errorf("Service is not ready yet")
+			}); err != nil {
+				t.Fatalf("error waiting for the Service to become Ready: %v", err)
+			}
 
-	// Get the DNS name for the Service from the associated Secret.
-	var fqdn string
-	if err := tstest.WaitFor(time.Minute, func() error {
-		var secrets corev1.SecretList
-		if err := kubeClient.List(t.Context(), &secrets,
-			client.InNamespace("tailscale"),
-			client.MatchingLabels{
-				"tailscale.com/parent-resource":    svc.Name,
-				"tailscale.com/parent-resource-ns": ns,
-			},
-		); err != nil {
-			return err
-		}
-		if len(secrets.Items) == 0 {
-			return fmt.Errorf("Service not ready yet")
-		}
-		fqdn = strings.TrimSuffix(string(secrets.Items[0].Data[kubetypes.KeyDeviceFQDN]), ".")
-		if fqdn != "" {
-			t.Log("Got DNS name for Service")
-			return nil
-		}
-		return fmt.Errorf("device FQDN not set yet")
-	}); err != nil {
-		t.Fatalf("error waiting for DNS Name for Service: %v", err)
-	}
-
-	if err := testIngressIsReachable(t, newHTTPClient(tnClient), fmt.Sprintf("http://%s:80", fqdn)); err != nil {
-		t.Fatal(err)
+			// Get matching-family Tailscale IPs for the Service from the associated Secret.
+			var proxyIP string
+			if err := tstest.WaitFor(time.Minute, func() error {
+				var secrets corev1.SecretList
+				if err := kubeClient.List(t.Context(), &secrets,
+					client.InNamespace("tailscale"),
+					client.MatchingLabels{
+						"tailscale.com/parent-resource":    svc.Name,
+						"tailscale.com/parent-resource-ns": ns,
+					},
+				); err != nil {
+					return err
+				}
+				if len(secrets.Items) == 0 {
+					return fmt.Errorf("Service not ready yet")
+				}
+				var deviceIPs []string
+				if err := json.Unmarshal(secrets.Items[0].Data[kubetypes.KeyDeviceIPs], &deviceIPs); err != nil {
+					return fmt.Errorf("decoding device IPs: %w", err)
+				}
+				currentSvc := &corev1.Service{ObjectMeta: objectMeta(ns, svc.Name)}
+				if err := get(t.Context(), kubeClient, currentSvc); err != nil {
+					return err
+				}
+				proxyIP = ipMatchingFamily(deviceIPs, currentSvc.Spec.ClusterIP)
+				if proxyIP == "" {
+					return fmt.Errorf("device has no IP matching Service ClusterIP family")
+				}
+				return nil
+			}); err != nil {
+				t.Fatalf("error waiting for matching-family IP for Service: %v", err)
+			}
+			if err := testIngressIsReachable(t, newHTTPClient(tnClient), "http://"+net.JoinHostPort(proxyIP, "80")); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -126,61 +148,88 @@ func TestL3HAIngress(t *testing.T) {
 	}
 	createAndCleanup(t, kubeClient, pg)
 
-	// Apply a Service to expose nginx via the ProxyGroup.
-	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      generateName("test-ingress"),
-			Namespace: ns,
-			Annotations: map[string]string{
-				"tailscale.com/proxy-group": pg.Name,
-			},
-		},
-		Spec: corev1.ServiceSpec{
-			Type:              corev1.ServiceTypeLoadBalancer,
-			LoadBalancerClass: new("tailscale"),
-			Selector: map[string]string{
-				"app.kubernetes.io/name": nginx.Name,
-			},
-			Ports: []corev1.ServicePort{
-				{
-					Name:     "http",
-					Protocol: "TCP",
-					Port:     80,
+	for _, tc := range []struct {
+		name     string
+		families []corev1.IPFamily
+	}{
+		{"IPv4", []corev1.IPFamily{corev1.IPv4Protocol}},
+		{"IPv6", []corev1.IPFamily{corev1.IPv6Protocol}},
+		{"DualStack", []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			skipIfUnsupportedFamilies(t, tc.families)
+			// Apply a Service to expose nginx via the ProxyGroup.
+			svc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      generateName("test-ingress"),
+					Namespace: ns,
+					Annotations: map[string]string{
+						"tailscale.com/proxy-group": pg.Name,
+					},
 				},
-			},
-		},
-	}
-	createAndCleanup(t, kubeClient, svc)
-
-	var svcIPv4 string
-	forceReconcile := triggerReconcile(t,
-		client.ObjectKey{Namespace: ns, Name: svc.Name},
-		&corev1.Service{}, 30*time.Second)
-
-	// Wait for Service to be ready
-	if err := tstest.WaitFor(5*time.Minute, func() error {
-		maybeReadySvc := &corev1.Service{ObjectMeta: objectMeta(ns, svc.Name)}
-		forceReconcile()
-		if err := get(t.Context(), kubeClient, maybeReadySvc); err != nil {
-			return err
-		}
-		for _, cond := range maybeReadySvc.Status.Conditions {
-			if cond.Type == string(tsapi.IngressSvcConfigured) && cond.Status == metav1.ConditionTrue {
-				if len(maybeReadySvc.Status.LoadBalancer.Ingress) == 0 {
-					return fmt.Errorf("Service does not have an IP assigned yet")
-				}
-				svcIPv4 = maybeReadySvc.Status.LoadBalancer.Ingress[0].IP
-				t.Log("Service is ready")
-				return nil
+				Spec: corev1.ServiceSpec{
+					Type:              corev1.ServiceTypeLoadBalancer,
+					LoadBalancerClass: new("tailscale"),
+					IPFamilyPolicy:    new(ipFamilyPolicy(tc.families)),
+					IPFamilies:        tc.families,
+					Selector: map[string]string{
+						"app.kubernetes.io/name": nginx.Name,
+					},
+					Ports: []corev1.ServicePort{
+						{
+							Name:     "http",
+							Protocol: "TCP",
+							Port:     80,
+						},
+					},
+				},
 			}
-		}
-		return fmt.Errorf("Service is not ready yet")
-	}); err != nil {
-		t.Fatalf("error waiting for the Service to become ready: %v", err)
-	}
+			createAndCleanup(t, kubeClient, svc)
 
-	if err := testIngressIsReachable(t, newHTTPClient(tnClient), fmt.Sprintf("http://%s:80", svcIPv4)); err != nil {
-		t.Fatal(err)
+			var svcIPs []string
+			forceReconcile := triggerReconcile(t,
+				client.ObjectKey{Namespace: ns, Name: svc.Name},
+				&corev1.Service{}, 30*time.Second)
+
+			// Wait for Service to be ready
+			if err := tstest.WaitFor(5*time.Minute, func() error {
+				maybeReadySvc := &corev1.Service{ObjectMeta: objectMeta(ns, svc.Name)}
+				forceReconcile()
+				if err := get(t.Context(), kubeClient, maybeReadySvc); err != nil {
+					return err
+				}
+				for _, cond := range maybeReadySvc.Status.Conditions {
+					if cond.Type == string(tsapi.IngressSvcConfigured) && cond.Status == metav1.ConditionTrue {
+						if len(maybeReadySvc.Status.LoadBalancer.Ingress) == 0 {
+							return fmt.Errorf("Service does not have an IP assigned yet")
+						}
+						tsSvc, err := tsClient.VIPServices().Get(t.Context(), "svc:default-"+svc.Name)
+						if err != nil {
+							return fmt.Errorf("getting Tailscale Service: %w", err)
+						}
+						ips := make([]string, 0, len(maybeReadySvc.Spec.ClusterIPs))
+						for _, clusterIP := range maybeReadySvc.Spec.ClusterIPs {
+							ip := ipMatchingFamily(tsSvc.Addrs, clusterIP)
+							if ip == "" {
+								return fmt.Errorf("Tailscale Service has no IP matching Kubernetes ClusterIP %s family", clusterIP)
+							}
+							ips = append(ips, ip)
+						}
+						svcIPs = ips
+						return nil
+					}
+				}
+				return fmt.Errorf("Service is not ready yet")
+			}); err != nil {
+				t.Fatalf("error waiting for the Service to become ready: %v", err)
+			}
+
+			for _, svcIP := range svcIPs {
+				if err := testIngressIsReachable(t, newHTTPClient(tnClient), "http://"+net.JoinHostPort(svcIP, "80")); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
 	}
 }
 
@@ -193,47 +242,58 @@ func TestL7Ingress(t *testing.T) {
 	// Apply nginx Deployment and Service.
 	nginx := nginxDeployment(ns)
 	createAndCleanup(t, kubeClient, nginx)
-	createAndCleanup(t, kubeClient, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      nginx.Name,
-			Namespace: ns,
-		},
-		Spec: corev1.ServiceSpec{
-			Selector: map[string]string{
-				"app.kubernetes.io/name": nginx.Name,
-			},
-			Ports: []corev1.ServicePort{
-				{
-					Name: "http",
-					Port: 80,
+
+	for _, tc := range []struct {
+		name     string
+		families []corev1.IPFamily
+	}{
+		{"IPv4", []corev1.IPFamily{corev1.IPv4Protocol}},
+		{"IPv6", []corev1.IPFamily{corev1.IPv6Protocol}},
+		{"DualStack", []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			skipIfUnsupportedFamilies(t, tc.families)
+			backend := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      generateName("test-nginx"),
+					Namespace: ns,
 				},
-			},
-		},
-	})
+				Spec: corev1.ServiceSpec{
+					IPFamilyPolicy: new(ipFamilyPolicy(tc.families)),
+					IPFamilies:     tc.families,
+					Selector: map[string]string{
+						"app.kubernetes.io/name": nginx.Name,
+					},
+					Ports: []corev1.ServicePort{
+						{
+							Name: "http",
+							Port: 80,
+						},
+					},
+				},
+			}
+			createAndCleanup(t, kubeClient, backend)
 
-	// Apply Ingress to expose nginx.
-	ingress := l7Ingress(ns, nginx.Name, map[string]string{})
-	createAndCleanup(t, kubeClient, ingress)
-
-	t.Log("Waiting for the Ingress to be ready...")
-
-	hostname, err := waitForIngressHostname(t, ns, ingress.Name)
-	if err != nil {
-		t.Fatalf("error waiting for Ingress hostname: %v", err)
-	}
-
-	if err := testIngressIsReachable(t, newHTTPClient(tnClient), fmt.Sprintf("https://%s:443", hostname)); err != nil {
-		t.Fatal(err)
+			// Apply Ingress to expose nginx.
+			ingress := l7Ingress(ns, backend.Name, nil)
+			createAndCleanup(t, kubeClient, ingress)
+			hostname, err := waitForIngressHostname(t, ns, ingress.Name)
+			if err != nil {
+				t.Fatalf("error waiting for Ingress hostname: %v", err)
+			}
+			if err := testIngressIsReachable(t, newHTTPClient(tnClient), fmt.Sprintf("https://%s:443", hostname)); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
-func TestL7HAIngress(t *testing.T) {
+func TestL7IngressDNSConfig(t *testing.T) {
 	if tnClient == nil {
-		t.Skip("TestL7HAIngress requires a working tailnet client")
+		t.Skip("TestL7IngressDNSConfig requires a working tailnet client")
 	}
 	t.Parallel()
 
-	// Apply nginx Deployment and Service.
 	nginx := nginxDeployment(ns)
 	createAndCleanup(t, kubeClient, nginx)
 	createAndCleanup(t, kubeClient, &corev1.Service{
@@ -254,6 +314,27 @@ func TestL7HAIngress(t *testing.T) {
 		},
 	})
 
+	ingress := l7Ingress(ns, nginx.Name, map[string]string{
+		"tailscale.com/experimental-forward-cluster-traffic-via-ingress": "true",
+	})
+	createAndCleanup(t, kubeClient, ingress)
+	hostname, err := waitForIngressHostname(t, ns, ingress.Name)
+	if err != nil {
+		t.Fatalf("error waiting for Ingress hostname: %v", err)
+	}
+	requireTargetIsReachable(t, fmt.Sprintf("https://%s:443", hostname))
+}
+
+func TestL7HAIngress(t *testing.T) {
+	if tnClient == nil {
+		t.Skip("TestL7HAIngress requires a working tailnet client")
+	}
+	t.Parallel()
+
+	// Apply nginx Deployment.
+	nginx := nginxDeployment(ns)
+	createAndCleanup(t, kubeClient, nginx)
+
 	// Create ProxyGroup that the Ingress will reference.
 	pg := &tsapi.ProxyGroup{
 		ObjectMeta: metav1.ObjectMeta{
@@ -265,19 +346,49 @@ func TestL7HAIngress(t *testing.T) {
 	}
 	createAndCleanup(t, kubeClient, pg)
 
-	// Apply Ingress to expose nginx.
-	ingress := l7Ingress(ns, nginx.Name, map[string]string{"tailscale.com/proxy-group": pg.Name})
-	createAndCleanup(t, kubeClient, ingress)
+	for _, tc := range []struct {
+		name     string
+		families []corev1.IPFamily
+	}{
+		{"IPv4", []corev1.IPFamily{corev1.IPv4Protocol}},
+		{"IPv6", []corev1.IPFamily{corev1.IPv6Protocol}},
+		{"DualStack", []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			skipIfUnsupportedFamilies(t, tc.families)
+			backend := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      generateName("test-nginx"),
+					Namespace: ns,
+				},
+				Spec: corev1.ServiceSpec{
+					IPFamilyPolicy: new(ipFamilyPolicy(tc.families)),
+					IPFamilies:     tc.families,
+					Selector: map[string]string{
+						"app.kubernetes.io/name": nginx.Name,
+					},
+					Ports: []corev1.ServicePort{
+						{
+							Name: "http",
+							Port: 80,
+						},
+					},
+				},
+			}
+			createAndCleanup(t, kubeClient, backend)
+			ingress := l7Ingress(ns, backend.Name, map[string]string{"tailscale.com/proxy-group": pg.Name})
+			createAndCleanup(t, kubeClient, ingress)
 
-	t.Log("Waiting for the Ingress to be ready...")
+			t.Log("Waiting for the Ingress to be ready...")
 
-	hostname, err := waitForIngressHostname(t, ns, ingress.Name)
-	if err != nil {
-		t.Fatalf("error waiting for Ingress hostname: %v", err)
-	}
-
-	if err := testIngressIsReachable(t, newHTTPClient(tnClient), fmt.Sprintf("https://%s:443", hostname)); err != nil {
-		t.Fatal(err)
+			hostname, err := waitForIngressHostname(t, ns, ingress.Name)
+			if err != nil {
+				t.Fatalf("error waiting for Ingress hostname: %v", err)
+			}
+			if err := testIngressIsReachable(t, newHTTPClient(tnClient), fmt.Sprintf("https://%s:443", hostname)); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -471,9 +582,45 @@ func triggerReconcile(t testing.TB, key client.ObjectKey, obj client.Object, aft
 	}
 }
 
+func ipMatchingFamily(ips []string, target string) string {
+	targetIP, err := netip.ParseAddr(target)
+	if err != nil {
+		return ""
+	}
+	for _, ip := range ips {
+		addr, err := netip.ParseAddr(ip)
+		// Check that addr IP family matches targetIP family
+		if err == nil && addr.Is4() == targetIP.Is4() {
+			return ip
+		}
+	}
+	return ""
+}
+
+// ipFamilyPolicy returns the IPFamilyPolicy for the requested families:
+// RequireDualStack when both families are requested, SingleStack otherwise.
+func ipFamilyPolicy(families []corev1.IPFamily) corev1.IPFamilyPolicy {
+	if len(families) > 1 {
+		return corev1.IPFamilyPolicyRequireDualStack
+	}
+	return corev1.IPFamilyPolicySingleStack
+}
+
+// skipIfUnsupportedFamilies skips the test if the cluster does not support the IP family being tested.
+func skipIfUnsupportedFamilies(t *testing.T, families []corev1.IPFamily) {
+	t.Helper()
+	for _, f := range families {
+		if f == corev1.IPv4Protocol && !clusterIPv4Support {
+			t.Skipf("cluster does not support %s", f)
+		}
+		if f == corev1.IPv6Protocol && !clusterIPv6Support {
+			t.Skipf("cluster does not support %s", f)
+		}
+	}
+}
+
 func testIngressIsReachable(t *testing.T, httpClient *http.Client, url string) error {
 	t.Helper()
-	var resp *http.Response
 	if err := tstest.WaitFor(time.Minute, func() error {
 		req, err := http.NewRequest(httpm.GET, url, nil)
 		if err != nil {
@@ -481,11 +628,14 @@ func testIngressIsReachable(t *testing.T, httpClient *http.Client, url string) e
 		}
 		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 		defer cancel()
-		resp, err = httpClient.Do(req.WithContext(ctx))
+		resp, err := httpClient.Do(req.WithContext(ctx))
 		if err != nil {
 			return err
 		}
-		resp.Body.Close()
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("unexpected status from %s: %d", url, resp.StatusCode)
+		}
 		return nil
 	}); err != nil {
 		return fmt.Errorf("error trying to reach %s: %w", url, err)

@@ -19,7 +19,8 @@ import (
 	"time"
 
 	"tailscale.com/tsweb"
-	"tailscale.com/util/precompress"
+	"tailscale.com/tsweb/compserve"
+	"tailscale.com/tsweb/vcstime"
 )
 
 //go:embed index.html
@@ -36,7 +37,7 @@ func runServe() {
 	var distFS fs.FS
 	if *distDir == "./dist" {
 		var err error
-		distFS, err = fs.Sub(embeddedDistFS, "dist")
+		distFS, err = fs.Sub(vcstime.FS(embeddedDistFS), "dist")
 		if err != nil {
 			log.Fatalf("Could not drop dist/ prefix from embedded FS: %v", err)
 		}
@@ -120,25 +121,13 @@ var entryPointsToDefaultDistPaths = map[string]string{
 }
 
 func handleServeDist(w http.ResponseWriter, r *http.Request, distFS fs.FS) {
-	path := r.URL.Path
-	f, err := precompress.OpenPrecompressedFile(w, r, path, distFS)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-	defer f.Close()
-
-	// fs.File does not claim to implement Seeker, but in practice it does.
-	fSeeker, ok := f.(io.ReadSeeker)
-	if !ok {
-		http.Error(w, "Not seekable", http.StatusInternalServerError)
-		return
-	}
-
 	// Aggressively cache static assets, since we cache-bust our assets with
 	// hashed filenames.
 	w.Header().Set("Cache-Control", "public, max-age=31535996")
-	w.Header().Set("Vary", "Accept-Encoding")
-
-	http.ServeContent(w, r, path, serveStartTime, fSeeker)
+	err := compserve.ServeFile(w, r, distFS, r.URL.Path, compserve.Options{})
+	if err != nil {
+		// Do not reflect the error (and with it the request path) to the
+		// client.
+		http.NotFound(w, r)
+	}
 }

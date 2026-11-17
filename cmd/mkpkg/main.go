@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/goreleaser/nfpm/v2"
 	_ "github.com/goreleaser/nfpm/v2/deb"
@@ -75,7 +76,7 @@ func main() {
 	}
 	emptyDirList := parseEmptyDirs(*emptyDirs)
 	contents := append(filesList, append(configsList, emptyDirList...)...)
-	contents, err = files.PrepareForPackager(contents, 0, *pkgType, false)
+	contents, err = files.PrepareForPackager(contents, 0, *pkgType, false, time.Time{})
 	if err != nil {
 		log.Fatalf("Building package contents: %v", err)
 	}

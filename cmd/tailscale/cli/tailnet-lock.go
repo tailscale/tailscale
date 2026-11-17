@@ -408,7 +408,7 @@ of the Tailscale network. Proceed with caution.
 
 // parseTLArgs parses a slice of strings into slices of tka.Key & disablement
 // values/secrets.
-// The keys encoded in args should be specified using their key.NLPublic.MarshalText
+// The keys encoded in args should be specified using their [key.TLPublic.MarshalText]
 // representation with an optional '?<votes>' suffix.
 // Disablement values or secrets must be encoded in hex with a prefix of 'disablement:' or
 // 'disablement-secret:'.
@@ -430,7 +430,7 @@ func parseTLArgs(args []string, parseKeys, parseDisablements bool) (keys []tka.K
 			return nil, nil, fmt.Errorf("parsing argument %d: expected value with \"disablement:\" or \"disablement-secret:\" prefix, got %q", i+1, a)
 		}
 
-		var nlpk key.NLPublic
+		var nlpk key.TLPublic
 		spl := strings.SplitN(a, "?", 2)
 		if err := nlpk.UnmarshalText([]byte(spl[0])); err != nil {
 			return nil, nil, fmt.Errorf("parsing key %d: %v", i+1, err)
@@ -511,7 +511,7 @@ func runTailnetLockSign(ctx context.Context, args []string) error {
 
 	var (
 		nodeKey     key.NodePublic
-		rotationKey key.NLPublic
+		rotationKey key.TLPublic
 	)
 
 	if len(args) == 0 || len(args) > 2 {
@@ -764,7 +764,7 @@ func wrapAuthKey(ctx context.Context, keyStr string, status *ipnstate.Status) er
 	// Generate a separate tailnet-lock key just for the credential signature.
 	// We use the free-form meta strings to mark a little bit of metadata about this
 	// key.
-	priv := key.NewNLPrivate()
+	priv := key.NewTLPrivate()
 	m := map[string]string{
 		"purpose":            "pre-auth key",
 		"wrapper_stableid":   string(status.Self.ID),

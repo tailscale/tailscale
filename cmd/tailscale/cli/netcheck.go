@@ -115,8 +115,10 @@ func runNetcheck(ctx context.Context, args []string) error {
 		return err
 	}
 
-	if err := c.Standalone(ctx, bind); err != nil {
-		fmt.Fprintln(Stderr, "netcheck: UDP test failure:", err)
+	if buildfeatures.HasNATTraversal {
+		if err := c.Standalone(ctx, bind); err != nil {
+			fmt.Fprintln(Stderr, "netcheck: UDP test failure:", err)
+		}
 	}
 
 	dm, err := localClient.CurrentDERPMap(ctx)

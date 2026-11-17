@@ -40,7 +40,7 @@ func peerRelayTailscaledConfig(pr *tsapi.PeerRelay, idx int32, endpoints []tsapi
 		AcceptRoutes:    "false",
 		Locked:          "false",
 		Hostname:        new(peerRelayHostname(pr, idx)),
-		RelayServerPort: new(uint16(servicePort)),
+		RelayServerPort: new(peerRelayPort(pr)),
 		AuthKey:         authKey,
 	}
 
@@ -84,6 +84,14 @@ func (r *Reconciler) peerRelayStatefulSet(pr *tsapi.PeerRelay, replicas int32, p
 		},
 	})
 
+	// The relay server force-sets its UDP socket buffer sizes, which requires NET_ADMIN. Without it, tailscaled falls
+	// back to the kernel defaults and relay throughput suffers. A ProxyClass security context replaces this entirely.
+	ss.Spec.Template.Spec.Containers[0].SecurityContext = &corev1.SecurityContext{
+		Capabilities: &corev1.Capabilities{
+			Add: []corev1.Capability{"NET_ADMIN"},
+		},
+	}
+
 	return tailscaled.ApplyProxyClass(ss, pc, managedLabelKeys, nil)
 }
 
@@ -91,6 +99,19 @@ var managedLabelKeys = []string{
 	kubetypes.LabelManaged,
 	reconciler.LabelParentType,
 	reconciler.LabelParentName,
+}
+
+func (r *Reconciler) metricsOptions(pr *tsapi.PeerRelay) tailscaled.MetricsOptions {
+	return tailscaled.MetricsOptions{
+		StatefulSetName: resourceName(pr.Name),
+		Namespace:       r.tailscaleNamespace,
+		PodLabels:       peerRelayLabels(pr.Name),
+		ProxyType:       parentTypePeerRelay,
+		ParentName:      pr.Name,
+
+		// Lets the Service watch enqueue this PeerRelay when its metrics Service changes.
+		Labels: peerRelayLabels(pr.Name),
+	}
 }
 
 func (r *Reconciler) getProxyClass(ctx context.Context, pr *tsapi.PeerRelay) (*tsapi.ProxyClass, error) {

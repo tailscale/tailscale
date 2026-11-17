@@ -206,7 +206,11 @@ type logindRunner interface {
 	getSessionType(string) (string, error)
 }
 
-// osLogindRunner implements [logindRunner] by shelling out to the system logind.
+// osLogindRunner implements [logindRunner] by shelling out to the
+// system logind. The probes drop the systemd service variables.
+// loginctl sends sd_notify(3) messages on exit and error. systemd
+// rejects these messages because they come from the wrong PID. See
+// [EnvironWithoutSystemdServiceVars].
 type osLogindRunner struct{ ctx context.Context }
 
 // listSessions implements [logindRunner] using os calls.
@@ -216,6 +220,7 @@ func (r *osLogindRunner) listSessions() ([]byte, error) {
 		return nil, err
 	}
 	cmd := exec.CommandContext(r.ctx, path, "list-sessions", "--json=short")
+	cmd.Env = EnvironWithoutSystemdServiceVars(nil)
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -232,6 +237,7 @@ func (r *osLogindRunner) getSessionType(session string) (string, error) {
 	}
 	cmd := exec.CommandContext(r.ctx,
 		path, "show-session", session, "--property=Type", "--value")
+	cmd.Env = EnvironWithoutSystemdServiceVars(nil)
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err

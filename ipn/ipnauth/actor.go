@@ -55,9 +55,11 @@ type Actor interface {
 	// IsLocalAdmin reports whether the actor has administrative access to the
 	// local machine, for whatever that means with respect to the current OS.
 	//
-	// The operatorUID is only used on Unix-like platforms and specifies the ID
-	// of a local user (in the os/user.User.Uid string form) who is allowed to
-	// operate tailscaled without being root or using sudo.
+	// The operatorUID specifies the ID of a local user (in the
+	// os/user.User.Uid string form) who is allowed to operate tailscaled
+	// without being root. No implementation currently consults it: on
+	// Unix-like platforms only root is a local admin, and on Windows the
+	// check is whether the caller's token is elevated.
 	//
 	// Deprecated: this method exists for compatibility with the current (as of 2024-08-27)
 	// permission model and will be removed as we progress on tailscale/corp#18342.

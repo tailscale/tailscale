@@ -6,7 +6,12 @@
 package hostinfo
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -181,5 +186,46 @@ func TestSystemdLogindFindDesktop(t *testing.T) {
 				t.Errorf("systemdLogindFindDesktop() = %v; want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestLogindProbesDropSystemdServiceEnv checks that the loginctl
+// probes drop the systemd service variables. With NOTIFY_SOCKET
+// inherited, systemd rejects each probe's sd_notify(3) messages as
+// coming from the wrong PID. A fake loginctl dumps its environment, so
+// the test sees exactly what the probe child inherited.
+func TestLogindProbesDropSystemdServiceEnv(t *testing.T) {
+	dir := t.TempDir()
+	dump := filepath.Join(dir, "probe-env")
+
+	script := "#!/bin/sh\nenv >\"" + dump + "\"\necho '[]'\n"
+	if err := os.WriteFile(filepath.Join(dir, "loginctl"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate the daemon's environment under a Type=notify systemd unit.
+	t.Setenv("NOTIFY_SOCKET", "/fake/systemd/notify")
+	t.Setenv("PROBE_SANITY_VAR", "kept")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	out, err := (&osLogindRunner{ctx: context.Background()}).listSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(bytes.TrimSpace(out)) != "[]" {
+		t.Fatalf("probe output = %q", out)
+	}
+
+	b, err := os.ReadFile(dump)
+	if err != nil {
+		t.Fatalf("probe did not dump its environment: %v", err)
+	}
+	for _, kv := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(kv, "NOTIFY_SOCKET=") {
+			t.Errorf("loginctl probe inherited %q", kv)
+		}
+	}
+	if !strings.Contains(string(b), "PROBE_SANITY_VAR=kept") {
+		t.Errorf("probe environment missing an ordinary caller variable; got:\n%s", b)
 	}
 }

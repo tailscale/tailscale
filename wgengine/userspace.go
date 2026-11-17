@@ -69,6 +69,13 @@ type userspaceEngine struct {
 	eventBus    *eventbus.Bus
 	eventClient *eventbus.Client
 
+	// connReject is storage for the optional connection-rejection
+	// callback installed via [SetConnRejectCallback]. The type is
+	// defined per build tag (see connreject.go / connreject_stub.go)
+	// so this always-built file does not reference
+	// tailscale.com/net/connreject.
+	connReject connRejectState
+
 	linkChangeQueue execqueue.ExecQueue
 
 	logf           logger.Logf
@@ -109,11 +116,11 @@ type userspaceEngine struct {
 	// for the cold-path control lookups (Ping, TSMP, pendopen, etc).
 	peerForIPFn atomic.Pointer[func(netip.Addr) (_ PeerForIP, ok bool)]
 
-	// peerConfigFn, if non-nil, is the live per-peer allowed-IPs
+	// peerConfigFn, if non-nil, is the live per-peer WireGuard config
 	// source installed via [userspaceEngine.SetPeerConfigFunc]. When
 	// set, wgdev's PeerLookupFunc queries it directly, so reconfigs
 	// no longer install per-config lookup closures.
-	peerConfigFn atomic.Pointer[func(key.NodePublic) (allowedIPs []netip.Prefix, ok bool)]
+	peerConfigFn atomic.Pointer[func(key.NodePublic) (config wgcfg.PeerConfig, ok bool)]
 
 	lastCfg        wgcfg.Config
 	lastRouter     *router.Config
@@ -259,7 +266,7 @@ type Config struct {
 	// true, the packet is considered handled and is not passed to
 	// WireGuard. The pkt slice is borrowed and must be copied if
 	// the callee needs to retain it.
-	OnDERPRecv func(regionID int, src key.NodePublic, pkt []byte) (handled bool)
+	OnDERPRecv func(regionID tailcfg.DERPRegionID, src key.NodePublic, pkt []byte) (handled bool)
 }
 
 // NewFakeUserspaceEngine returns a new userspace engine for testing.
@@ -423,6 +430,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		EventBus:       e.eventBus,
 		Logf:           logf,
 		Port:           conf.ListenPort,
+		UDPSockets:     envknob.MaxQueues(), // in sync with tun queues
 		EndpointsFunc:  endpointsFn,
 		DERPActiveFunc: e.RequestStatus,
 		IdleFunc:       e.tundev.IdleDuration,
@@ -573,6 +581,16 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	if err := e.router.Set(nil); err != nil {
 		return nil, fmt.Errorf("router.Set(nil): %w", err)
 	}
+	// Subscribe to network changes before starting the monitor, which
+	// publishes nothing before Start, so no change can be missed.
+	ec := e.eventBus.Client("userspaceEngine")
+	eventbus.SubscribeFunc(ec, func(cd netmon.ChangeDelta) {
+		if f, ok := feature.HookProxyInvalidateCache.GetOk(); ok {
+			f()
+		}
+		e.linkChangeQueue.Add(func() { e.linkChange(&cd) })
+	})
+
 	e.logf("Starting network monitor...")
 	e.netMon.Start()
 
@@ -588,15 +606,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		}
 	}
 
-	ec := e.eventBus.Client("userspaceEngine")
-	eventbus.SubscribeFunc(ec, func(cd netmon.ChangeDelta) {
-		if f, ok := feature.HookProxyInvalidateCache.GetOk(); ok {
-			f()
-		}
-		e.linkChangeQueue.Add(func() { e.linkChange(&cd) })
-	})
-	eventbus.SubscribeFunc(ec, func(update events.PeerDiscoKeyUpdate) {
-		e.logf("[v1] wgengine: got TSMP disco key advertisement from %v via eventbus", update.Src)
+	eventbus.SubscribeFunc(ec, func(update events.DiscoKeyAdvertisement) {
 		if e.magicConn == nil {
 			e.logf("wgengine: no magicConn")
 			return
@@ -623,7 +633,7 @@ func echoRespondToAll(p *packet.Parsed, t *tstun.Wrapper, gro *gro.GRO) (filter.
 		header := p.ICMP4Header()
 		header.ToResponse()
 		outp := packet.Generate(&header, p.Payload())
-		t.InjectOutbound(outp)
+		t.TryInjectOutbound(outp)
 		// We already responded to it, but it's not an error.
 		// Proceed with regular delivery. (Since this code is only
 		// used in fake mode, regular delivery just means throwing
@@ -672,14 +682,14 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 
 // SetPeerConfigFunc implements [Engine.SetPeerConfigFunc]. It stores
 // fn and installs a single wgdev PeerLookupFunc wrapping it, so
-// lazily-created peers always get current allowed IPs and the lookup
+// lazily-created peers always get their current config and the lookup
 // func never needs to be reinstalled as the peer set changes.
-func (e *userspaceEngine) SetPeerConfigFunc(fn func(key.NodePublic) (allowedIPs []netip.Prefix, ok bool)) {
+func (e *userspaceEngine) SetPeerConfigFunc(fn func(key.NodePublic) (config wgcfg.PeerConfig, ok bool)) {
 	if fn == nil {
 		panic("SetPeerConfigFunc: nil fn")
 	}
 	e.peerConfigFn.Store(&fn)
-	e.wgdev.SetPeerLookupFunc(wgcfg.NewPeerLookupFunc(e.wgdev.Bind(), e.logf, func(pubk device.NoisePublicKey) ([]netip.Prefix, bool) {
+	e.wgdev.SetPeerLookupFunc(wgcfg.NewPeerLookupFunc(e.wgdev.Bind(), e.logf, func(pubk device.NoisePublicKey) (wgcfg.PeerConfig, bool) {
 		return fn(key.NodePublicFromRaw32(mem.B(pubk[:])))
 	}))
 }
@@ -695,22 +705,24 @@ func (e *userspaceEngine) SyncDevicePeer(k key.NodePublic) {
 	// The peer set may be about to change; drop the wgLogger's cached
 	// peer-string rewrites so the next log line re-resolves them.
 	e.wgLogger.Invalidate()
-	allowedIPs, ok := (*fn)(k)
+	conf, ok := (*fn)(k)
 	if !ok {
 		e.wgdev.RemovePeer(k.Raw32())
 		return
 	}
 	if peer, ok := e.wgdev.LookupActivePeer(k.Raw32()); ok {
-		peer.SetAllowedIPs(allowedIPs)
+		peer.SetPresharedKey(conf.PresharedKey)
+		peer.SetAllowedIPs(conf.AllowedIPs)
+		peer.SetHybridHandshake(conf.Hybrid)
 	}
 }
 
-// ResetDevicePeer implements [Engine.ResetDevicePeer].
-func (e *userspaceEngine) ResetDevicePeer(k key.NodePublic) {
+// MarkDevicePeerForHandshake implements [Engine.MarkDevicePeerForHandshake].
+func (e *userspaceEngine) MarkDevicePeerForHandshake(k key.NodePublic) {
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 	e.wgLogger.Invalidate()
-	e.wgdev.RemovePeer(k.Raw32())
+	e.wgdev.ScheduleHandshakeOnUserSend(k.Raw32())
 }
 
 // SetPeerByIPPacketFunc installs a callback used by wireguard-go to look up

@@ -407,8 +407,7 @@ func TestStartShutsDownPreviousControlClient(t *testing.T) {
 // predictable, but maybe a bit less thorough. This is more of an overall
 // state machine test than a test of the wgengine+magicsock integration.
 func TestStateMachine(t *testing.T) {
-	envknob.Setenv("TAILSCALE_USE_WIP_CODE", "1")
-	defer envknob.Setenv("TAILSCALE_USE_WIP_CODE", "")
+	envknob.SetenvForTest(t, "TAILSCALE_USE_WIP_CODE", "1")
 	c := qt.New(t)
 
 	logf := tstest.WhileTestRunningLogger(t)
@@ -635,7 +634,7 @@ func TestStateMachine(t *testing.T) {
 		// Verify login finished but need machine auth using backend state
 		c.Assert(isFullyAuthenticated(b), qt.IsTrue)
 		c.Assert(needsMachineAuth(b), qt.IsTrue)
-		nm := b.NetMap()
+		nm := b.NetMapNoPeers()
 		c.Assert(nm, qt.IsNotNil)
 		// For an empty netmap (after initial login), SelfNode may not be valid yet.
 		// In this case, we can't check MachineAuthorized, but needsMachineAuth already verified the state.
@@ -662,7 +661,7 @@ func TestStateMachine(t *testing.T) {
 		// nn[0] is a state notification after machine auth granted
 		c.Assert(len(nn), qt.Equals, 1)
 		// Verify machine authorized using backend state
-		nm := b.NetMap()
+		nm := b.NetMapNoPeers()
 		c.Assert(nm, qt.IsNotNil)
 		c.Assert(nm.SelfNode.Valid(), qt.IsTrue)
 		c.Assert(nm.SelfNode.MachineAuthorized(), qt.IsTrue)
@@ -1260,6 +1259,8 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 		wantPeers     []key.NodePublic
 		wantRouterCfg *router.Config
 		wantDNSCfg    *dns.Config
+
+		wantNodeRemoved bool // whether the node-removed warning is set
 	}{
 		{
 			name: "Initial",
@@ -1546,6 +1547,63 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			wantRouterCfg: &router.Config{},
 			wantDNSCfg:    &dns.Config{},
 		},
+		{
+			name: "Start/Connect/Login/NodeRemoved",
+			steps: func(t *testing.T, lb *LocalBackend, cc func() *mockControl) {
+				mustDo(t)(lb.Start(ipn.Options{}))
+				mustDo2(t)(lb.EditPrefs(connect))
+				cc().authenticated(node1)
+				cc().send(sendOpt{err: fmt.Errorf("%w: initial fetch failed 404", controlclient.ErrNodeRemoved)})
+			},
+			// If control deletes the node, we want to disconnect:
+			wantState:       ipn.NeedsLogin,
+			wantCfg:         &wgcfg.Config{},
+			wantRouterCfg:   &router.Config{},
+			wantDNSCfg:      &dns.Config{},
+			wantNodeRemoved: true,
+		},
+		{
+			name: "Start/Connect/Login/NodeRemoved/NewProfile",
+			steps: func(t *testing.T, lb *LocalBackend, cc func() *mockControl) {
+				mustDo(t)(lb.Start(ipn.Options{}))
+				mustDo2(t)(lb.EditPrefs(connect))
+				cc().authenticated(node1)
+				cc().send(sendOpt{err: fmt.Errorf("%w: initial fetch failed 404", controlclient.ErrNodeRemoved)})
+				mustDo(t)(lb.NewProfile())
+			},
+			// The new profile is a different node, so the warning is cleared:
+			wantState:     ipn.NeedsLogin,
+			wantCfg:       &wgcfg.Config{},
+			wantRouterCfg: &router.Config{},
+			wantDNSCfg:    &dns.Config{},
+		},
+		{
+			name: "Start/Connect/Login/NodeRemoved/Login",
+			steps: func(t *testing.T, lb *LocalBackend, cc func() *mockControl) {
+				mustDo(t)(lb.Start(ipn.Options{}))
+				mustDo2(t)(lb.EditPrefs(connect))
+				cc().authenticated(node1)
+				cc().send(sendOpt{err: fmt.Errorf("%w: initial fetch failed 404", controlclient.ErrNodeRemoved)})
+				cc().authenticated(node1)
+			},
+			// A new netmap means the node is known to control again:
+			wantState: ipn.Starting,
+			wantCfg: &wgcfg.Config{
+				Addresses: node1.SelfNode.Addresses().AsSlice(),
+			},
+			wantRouterCfg: &router.Config{
+				SNATSubnetRoutes: true,
+				NetfilterMode:    preftype.NetfilterOn,
+				LocalAddrs:       node1.SelfNode.Addresses().AsSlice(),
+				Routes:           routesWithQuad100(),
+			},
+			wantDNSCfg: &dns.Config{
+				AcceptDNS:             true,
+				Routes:                map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:                 map[dnsname.FQDN][]netip.Addr{},
+				MagicDNSHostsUnrouted: true,
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1559,6 +1617,9 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 
 			if gotState := lb.State(); gotState != tt.wantState {
 				t.Errorf("State: got %v; want %v", gotState, tt.wantState)
+			}
+			if got := lb.HealthTracker().IsUnhealthy(nodeRemovedWarnable); got != tt.wantNodeRemoved {
+				t.Errorf("node-removed warning set = %v; want %v", got, tt.wantNodeRemoved)
 			}
 
 			// Peers are not part of wgcfg.Config; the engine learns
@@ -1766,7 +1827,7 @@ func buildNetmapWithPeers(self tailcfg.NodeView, peers ...tailcfg.NodeView) *net
 	}
 
 	derpmap := &tailcfg.DERPMap{
-		Regions: make(map[int]*tailcfg.DERPRegion),
+		Regions: make(map[tailcfg.DERPRegionID]*tailcfg.DERPRegion),
 	}
 	makeDERPRegionForNode := func(n *tailcfg.Node) {
 		if n.HomeDERP == 0 {
@@ -1885,9 +1946,12 @@ type mockEngine struct {
 
 	filter, jailedFilter *filter.Filter
 
-	peerConfigFn func(key.NodePublic) (allowedIPs []netip.Prefix, ok bool)
+	peerConfigFn func(key.NodePublic) (config wgcfg.PeerConfig, ok bool)
 
 	statusCb wgengine.StatusCallback
+
+	// syncedPeers records every key passed to SyncDevicePeer, in order.
+	syncedPeers []key.NodePublic
 }
 
 func newMockEngine() *mockEngine {
@@ -1992,7 +2056,7 @@ func (e *mockEngine) InstallCaptureHook(packet.CaptureCallback) {}
 
 func (e *mockEngine) SetPeerByIPPacketFunc(func(netip.Addr) (_ key.NodePublic, ok bool)) {}
 func (e *mockEngine) SetPeerForIPFunc(func(netip.Addr) (_ wgengine.PeerForIP, ok bool))  {}
-func (e *mockEngine) SetPeerConfigFunc(fn func(key.NodePublic) (allowedIPs []netip.Prefix, ok bool)) {
+func (e *mockEngine) SetPeerConfigFunc(fn func(key.NodePublic) (config wgcfg.PeerConfig, ok bool)) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.peerConfigFn = fn
@@ -2007,14 +2071,28 @@ func (e *mockEngine) PeerAllowedIPs(k key.NodePublic) (_ []netip.Prefix, ok bool
 	if fn == nil {
 		return nil, false
 	}
-	return fn(k)
+	conf, ok := fn(k)
+	return conf.AllowedIPs, ok
 }
 
-func (e *mockEngine) SyncDevicePeer(key.NodePublic)  {}
-func (e *mockEngine) ResetDevicePeer(key.NodePublic) {}
+func (e *mockEngine) SyncDevicePeer(k key.NodePublic) {
+	e.mu.Lock()
+	e.syncedPeers = append(e.syncedPeers, k)
+	e.mu.Unlock()
+}
+
+// syncedPeersSince returns the keys passed to SyncDevicePeer since index n,
+// where n is a previous return value of len(e.syncedPeers).
+func (e *mockEngine) syncedPeersSince(n int) []key.NodePublic {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return slices.Clone(e.syncedPeers[n:])
+}
+
+func (e *mockEngine) MarkDevicePeerForHandshake(key.NodePublic) {}
 func (e *mockEngine) SetPeerSessionStateFunc(func(key.NodePublic, wgengine.PeerWireGuardState)) {
 }
-func (e *mockEngine) SetNetLogSource(wgengine.NetLogSource)                            {}
+func (e *mockEngine) SetNetLogSource(wgengine.NetLogSource) {}
 func (e *mockEngine) SetPeerPriorityMessageOnEstablishmentFunc(fn func(key.NodePublic) (msg []byte)) {
 }
 func (e *mockEngine) SetWGPeerLookup(func(wgString string) (tsString string, ok bool)) {}
@@ -2034,9 +2112,67 @@ func (e *mockEngine) Done() <-chan struct{} {
 	return e.done
 }
 
+// TestProfileSwitchRemovesWireGuardPeers verifies that switching to a new
+// profile causes SyncDevicePeer to be called for all peers from the previous
+// tailnet, so that the WireGuard device removes them rather than keeping them
+// as ghost peers.
+func TestProfileSwitchRemovesWireGuardPeers(t *testing.T) {
+	lb, engine, cc := newLocalBackendWithMockEngineAndControl(t, true)
+
+	// Build a netmap whose self node has two peers with known AllowedIPs.
+	peer1 := makePeer(1,
+		withName("peer-1"),
+		withAddresses(netip.MustParsePrefix("100.64.1.1/32")),
+		withAllowedIPs(netip.MustParsePrefix("100.64.1.1/32")),
+	)
+	peer2 := makePeer(2,
+		withName("peer-2"),
+		withAddresses(netip.MustParsePrefix("100.64.1.2/32")),
+		withAllowedIPs(netip.MustParsePrefix("100.64.1.2/32")),
+	)
+	self := makePeer(3,
+		withName("self"),
+		withAddresses(netip.MustParsePrefix("100.64.1.3/32")),
+	)
+	nm := buildNetmapWithPeers(self, peer1, peer2)
+
+	// Connect and authenticate with the netmap containing the two peers.
+	mustDo(t)(lb.Start(ipn.Options{}))
+	cc().authenticated(nm)
+
+	if _, ok := engine.PeerAllowedIPs(peer1.Key()); !ok {
+		t.Fatal("peer1 not in engine")
+	}
+	if _, ok := engine.PeerAllowedIPs(peer2.Key()); !ok {
+		t.Fatal("peer2 not in engine")
+	}
+
+	// Record the current number of SyncDevicePeer calls.
+	engine.mu.Lock()
+	nBefore := len(engine.syncedPeers)
+	engine.mu.Unlock()
+
+	// Switch to a new empty profile.
+	mustDo(t)(lb.NewProfile())
+
+	// Peers synced after switcing profile.
+	synced := engine.syncedPeersSince(nBefore)
+
+	// Verify the absence of the peers.
+	for _, peer := range []tailcfg.NodeView{peer1, peer2} {
+		if !slices.Contains(synced, peer.Key()) {
+			t.Errorf("SyncDevicePeer(%v) not called for %s during profile switch. Called for: %v",
+				peer.Key().ShortString(), peer.Name(), synced)
+		}
+		if _, ok := engine.PeerAllowedIPs(peer.Key()); ok {
+			t.Errorf("peer(%s) still in peer config after new profile", peer.Name())
+		}
+	}
+}
+
 // hasValidNetMap returns true if the backend has a valid network map with a valid self node.
 func hasValidNetMap(b *LocalBackend) bool {
-	nm := b.NetMap()
+	nm := b.NetMapNoPeers()
 	return nm != nil && nm.SelfNode.Valid()
 }
 
@@ -2055,8 +2191,8 @@ func needsLogin(b *LocalBackend) bool {
 // needsMachineAuth returns true if the user has logged in but the machine is not yet authorized.
 // This includes the case where we have a netmap but no valid SelfNode yet (empty netmap after initial login).
 func needsMachineAuth(b *LocalBackend) bool {
-	// Note: b.NetMap() and b.Prefs() handle their own locking
-	nm := b.NetMap()
+	// Note: b.NetMapNoPeers() and b.Prefs() handle their own locking
+	nm := b.NetMapNoPeers()
 	prefs := b.Prefs()
 	if prefs.LoggedOut() || nm == nil {
 		return false
@@ -2080,8 +2216,8 @@ func hasAuthURL(b *LocalBackend) bool {
 // canRouteTraffic returns true if the backend is capable of routing traffic.
 // This requires a valid netmap, machine authorization, and WantRunning preference.
 func canRouteTraffic(b *LocalBackend) bool {
-	// Note: b.NetMap() and b.Prefs() handle their own locking
-	nm := b.NetMap()
+	// Note: b.NetMapNoPeers() and b.Prefs() handle their own locking
+	nm := b.NetMapNoPeers()
 	prefs := b.Prefs()
 	return nm != nil &&
 		nm.SelfNode.Valid() &&

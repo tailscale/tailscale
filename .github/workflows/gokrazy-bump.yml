@@ -1,0 +1,74 @@
+name: gokrazy-bump
+
+# Weekly bump of the gokrazy modules (kernels, firmware, gokrazy itself)
+# that the natlab VM tests boot. The PR carries the run-natlab-tests
+# label so natlab-test.yml exercises the new kernels before merge.
+
+on:
+  schedule:
+    # Sunday night (Monday 05:17 UTC), off-the-hour to avoid GitHub's :00
+    # cron-stampede window.
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  gokrazy-bump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # The substring matches every direct github.com/gokrazy/* module.
+      # See misc/bumpdeps for what the tool does and the outputs it sets.
+      - name: Bump gokrazy modules
+        id: bump
+        run: ./tool/go run ./misc/bumpdeps -github -issue https://github.com/tailscale/tailscale/issues/1866 -- github.com/gokrazy/
+
+      - name: Show changes
+        run: git --no-pager diff --stat
+
+      - name: Get access token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        id: generate-token
+        with:
+          # Get token for app: https://github.com/apps/tailscale-code-updater
+          app-id: ${{ secrets.CODE_UPDATER_APP_ID }}
+          private-key: ${{ secrets.CODE_UPDATER_APP_PRIVATE_KEY }}
+          # Limit the token to only pushing a branch and opening a pull request.
+          permission-contents: write
+          permission-pull-requests: write
+
+      # Nothing happens if go.mod didn't change: create-pull-request
+      # opens a PR only when there's a diff to commit.
+      - name: Send pull request
+        id: pull-request
+        uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 #v8.1.0
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+          author: Dep Updater <noreply+dep-updater@tailscale.com>
+          committer: Dep Updater <noreply+dep-updater@tailscale.com>
+          branch: ${{ steps.bump.outputs.branch }}
+          commit-message: ${{ steps.bump.outputs.commit-message }}
+          title: ${{ steps.bump.outputs.title }}
+          body-path: ${{ steps.bump.outputs.body-path }}
+          labels: run-natlab-tests
+          signoff: true
+          delete-branch: true
+          # For scheduled runs this is whoever last edited this file.
+          reviewers: ${{ github.triggering_actor }}
+
+      - name: Summary
+        if: ${{ steps.pull-request.outputs.pull-request-number }}
+        env:
+          PR_OPERATION: ${{ steps.pull-request.outputs.pull-request-operation }}
+          PR_URL: ${{ steps.pull-request.outputs.pull-request-url }}
+        run: echo "$PR_OPERATION $PR_URL" >> "$GITHUB_STEP_SUMMARY"

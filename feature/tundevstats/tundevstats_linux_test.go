@@ -34,14 +34,14 @@ type fakeDevice struct {
 	name string
 }
 
-func (f *fakeDevice) File() *os.File                                                 { return nil }
-func (f *fakeDevice) Read(bufs [][]byte, sizes []int, offset int) (n int, err error) { return 0, nil }
-func (f *fakeDevice) Write(bufs [][]byte, offset int) (int, error)                   { return 0, nil }
-func (f *fakeDevice) MTU() (int, error)                                              { return 0, nil }
-func (f *fakeDevice) Name() (string, error)                                          { return f.name, nil }
-func (f *fakeDevice) Events() <-chan tun.Event                                       { return nil }
-func (f *fakeDevice) Close() error                                                   { return nil }
-func (f *fakeDevice) BatchSize() int                                                 { return 0 }
+func (f *fakeDevice) File() *os.File                                                { return nil }
+func (f *fakeDevice) Read(slab []byte, packets []tun.ReadPacket) (n int, err error) { return 0, nil }
+func (f *fakeDevice) Write(bufs [][]byte, offset int) (int, error)                  { return 0, nil }
+func (f *fakeDevice) MTU() (int, error)                                             { return 0, nil }
+func (f *fakeDevice) Name() (string, error)                                         { return f.name, nil }
+func (f *fakeDevice) Events() <-chan tun.Event                                      { return nil }
+func (f *fakeDevice) Close() error                                                  { return nil }
+func (f *fakeDevice) BatchSize() int                                                { return 0 }
 
 func Test_poller(t *testing.T) {
 	getTXQDropsMetric().Set(0) // reset for test count > 1

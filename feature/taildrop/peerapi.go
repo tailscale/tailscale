@@ -19,10 +19,6 @@ import (
 	"tailscale.com/util/httphdr"
 )
 
-func init() {
-	ipnlocal.RegisterPeerAPIHandler("/v0/put/", handlePeerPut)
-}
-
 var (
 	metricPutCalls = clientmetric.NewCounter("peerapi_put")
 )

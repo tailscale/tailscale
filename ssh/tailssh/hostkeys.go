@@ -31,13 +31,11 @@ import (
 // running as root.
 var keyTypes = []string{"rsa", "ecdsa", "ed25519"}
 
-// getHostKeys returns the SSH host keys, using system keys when running as root
-// and generating Tailscale-specific keys as needed.
+// getHostKeys returns the SSH host keys, using the system's OpenSSH keys when
+// they are readable (see systemHostKeyFile) and generating Tailscale-specific
+// keys as needed.
 func getHostKeys(varRoot string, logf logger.Logf) ([]ssh.Signer, error) {
-	var existing map[string]ssh.Signer
-	if os.Geteuid() == 0 {
-		existing = getSystemHostKeys(logf)
-	}
+	existing := getSystemHostKeys(logf)
 	return getTailscaleHostKeys(varRoot, existing)
 }
 
@@ -133,13 +131,21 @@ func hostKeyFileOrCreate(keyDir, typ string) ([]byte, error) {
 		return nil, err
 	}
 	pemGen := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: mk})
-	err = os.WriteFile(path, pemGen, 0700)
+	// Private host keys are for tailscaled only: no group/other access,
+	// so 0600 rather than 0700 (which would needlessly allow the key to
+	// be walked into).
+	err = os.WriteFile(path, pemGen, 0600)
 	return pemGen, err
 }
 
+// getSystemHostKeys returns the system's OpenSSH host keys that tailssh can
+// read, keyed by type. It returns nil if there are none.
 func getSystemHostKeys(logf logger.Logf) (ret map[string]ssh.Signer) {
 	for _, typ := range keyTypes {
-		filename := "/etc/ssh/ssh_host_" + typ + "_key"
+		filename := systemHostKeyFile(typ)
+		if filename == "" {
+			continue
+		}
 		hostKey, err := os.ReadFile(filename)
 		if err != nil || len(bytes.TrimSpace(hostKey)) == 0 {
 			continue

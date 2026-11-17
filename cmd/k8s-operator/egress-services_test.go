@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/tstest"
@@ -449,6 +450,123 @@ func TestTailscaleEgressServicesDualStack(t *testing.T) {
 	})
 }
 
+// TestEgressServiceGatedProvision verifies that egress provisioning is gated on
+// up-to-date configuration. If an expected EndpointSlice is
+// missing, provision must recreate it, without depending on a configuration change
+// and without reshuffling the ClusterIP Service ports.
+func TestEgressServiceGatedProvision(t *testing.T) {
+	pg := &tsapi.ProxyGroup{
+		TypeMeta: metav1.TypeMeta{Kind: "ProxyGroup", APIVersion: "tailscale.com/v1alpha1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "foo",
+			UID:  types.UID("1234-UID"),
+		},
+		Spec: tsapi.ProxyGroupSpec{
+			Replicas: pointer.To[int32](3),
+			Type:     tsapi.ProxyGroupTypeEgress,
+		},
+	}
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pgEgressCMName("foo"),
+			Namespace: "operator-ns",
+		},
+	}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := tstest.NewClock(tstest.ClockOpts{})
+	// Mark the ProxyGroup Available so validateClusterResources does not strip
+	// the EgressSvcConfigured condition.
+	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, "foo", "foo", pg.Generation, clock, zl.Sugar())
+
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(pg, cm).
+		WithStatusSubresource(pg, &corev1.Service{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: clusterIPInterceptor("10.96.0.1"),
+		}).
+		Build()
+
+	esr := &egressSvcsReconciler{
+		Client:      fc,
+		logger:      zl.Sugar(),
+		clock:       clock,
+		tsNamespace: "operator-ns",
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+			Annotations: map[string]string{
+				AnnotationTailnetTargetFQDN: "foo.bar.ts.net.",
+				AnnotationProxyGroup:        "foo",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ExternalName: "placeholder",
+			Type:         corev1.ServiceTypeExternalName,
+			Ports: []corev1.ServicePort{
+				{Protocol: "TCP", Port: 80},
+			},
+		},
+	}
+	mustCreate(t, fc, svc)
+
+	// First reconcile: provisions the single-stack (IPv4) EndpointSlice and sets
+	// EgressSvcConfigured=True.
+	expectReconciled(t, esr, "default", "test")
+	name := findGenNameForEgressSvcResources(t, fc, svc)
+	v4Name := fmt.Sprintf("%s-ipv4", name)
+	v6Name := fmt.Sprintf("%s-ipv6", name)
+	expectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", v6Name)
+	gotSvc := &corev1.Service{}
+	if err := fc.Get(t.Context(), client.ObjectKey{Namespace: "default", Name: "test"}, gotSvc); err != nil {
+		t.Fatalf("getting Service: %v", err)
+	}
+	if cond := tsoperator.GetServiceCondition(gotSvc, tsapi.EgressSvcConfigured); cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("EgressSvcConfigured condition not True after first reconcile: %+v", cond)
+	}
+
+	// Second reconcile: the service is up to date (same single family), so the
+	// gate must skip provision and not rewrite the IPv4 EndpointSlice.
+	v4Before := mustGetEndpointSlice(t, fc, v4Name)
+	expectReconciled(t, esr, "default", "test")
+	v4After := mustGetEndpointSlice(t, fc, v4Name)
+	if v4Before.ResourceVersion != v4After.ResourceVersion {
+		t.Errorf("IPv4 EndpointSlice was rewritten on a no-op reconcile: resourceVersion %s -> %s", v4Before.ResourceVersion, v4After.ResourceVersion)
+	}
+
+	// If an expected EndpointSlice is missing while the config is up to date, the
+	// missingEndpointSliceFamilies check must flip the gate false so provision reruns
+	// and recreates the slice, without reshuffling the ClusterIP Service ports.
+	clusterPortsBefore := mustGetClusterIPSvc(t, fc, name).Spec.Ports
+	if err := fc.Delete(t.Context(), &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{Name: v4Name, Namespace: "operator-ns"},
+	}); err != nil {
+		t.Fatalf("deleting EndpointSlice: %v", err)
+	}
+	expectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", v4Name)
+	expectReconciled(t, esr, "default", "test")
+	clusterSvc := mustGetClusterIPSvc(t, fc, name)
+	expectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv4))
+	if diff := cmp.Diff(clusterSvc.Spec.Ports, clusterPortsBefore); diff != "" {
+		t.Errorf("ClusterIP Service ports changed after reprovision (-got +want):\n%s", diff)
+	}
+}
+
+func mustGetEndpointSlice(t *testing.T, cl client.Client, name string) *discoveryv1.EndpointSlice {
+	t.Helper()
+	eps := &discoveryv1.EndpointSlice{}
+	if err := cl.Get(context.Background(), client.ObjectKey{Namespace: "operator-ns", Name: name}, eps); err != nil {
+		t.Fatalf("getting EndpointSlice %s: %v", name, err)
+	}
+	return eps
+}
+
 // clusterIPInterceptor returns an interceptor.Funcs Create function that
 // simulates the API server assigning ClusterIPs to ClusterIP Services.
 // This is required because the reconciler iterates ClusterIPs to create
@@ -460,5 +578,48 @@ func clusterIPInterceptor(clusterIPs ...string) func(ctx context.Context, c clie
 			svc.Spec.ClusterIP = clusterIPs[0]
 		}
 		return c.Create(ctx, obj, opts...)
+	}
+}
+
+// TestMissingEndpointSliceFamilies verifies that the check reports an expected IP family's
+// EndpointSlice as missing until a slice named for the current ClusterIP Service exists.
+func TestMissingEndpointSliceFamilies(t *testing.T) {
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	extNSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			Annotations: map[string]string{
+				AnnotationTailnetTargetFQDN: "foo.bar.ts.net.",
+				AnnotationProxyGroup:        "foo",
+			},
+		},
+	}
+	current := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "ts-foo-current", Namespace: "operator-ns"}}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		Build()
+	esr := &egressSvcsReconciler{Client: fc, logger: zl.Sugar(), tsNamespace: "operator-ns"}
+
+	// No slice exists for the current ClusterIP Service yet.
+	missing, err := esr.missingEndpointSliceFamilies(t.Context(), current, []discoveryv1.AddressType{discoveryv1.AddressTypeIPv4})
+	if err != nil {
+		t.Fatalf("missingEndpointSliceFamilies: %v", err)
+	}
+	if !missing {
+		t.Error("expected missing=true when no EndpointSlice exists for the current ClusterIP Service")
+	}
+
+	// Should not be mising once the EndpointSlice exists.
+	mustCreate(t, fc, endpointSlice("ts-foo-current", extNSvc, current, discoveryv1.AddressTypeIPv4))
+	missing, err = esr.missingEndpointSliceFamilies(t.Context(), current, []discoveryv1.AddressType{discoveryv1.AddressTypeIPv4})
+	if err != nil {
+		t.Fatalf("missingEndpointSliceFamilies: %v", err)
+	}
+	if missing {
+		t.Error("expected missing=false once the current ClusterIP Service's IPv4 slice exists")
 	}
 }

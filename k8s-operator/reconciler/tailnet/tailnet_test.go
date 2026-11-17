@@ -13,10 +13,10 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler/reconcilertest"
 	"tailscale.com/k8s-operator/reconciler/tailnet"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/tstest"
@@ -374,7 +374,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.Name, func(t *testing.T) {
-			builder := fake.NewClientBuilder().WithScheme(tsapi.GlobalScheme)
+			builder := reconcilertest.NewClientBuilder()
 			if tc.Tailnet != nil {
 				builder = builder.WithObjects(tc.Tailnet).WithStatusSubresource(tc.Tailnet)
 			}

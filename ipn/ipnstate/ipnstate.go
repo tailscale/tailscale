@@ -93,7 +93,7 @@ type Status struct {
 // TKAKey describes a key trusted by tailnet lock.
 type TKAKey struct {
 	Kind     string
-	Key      key.NLPublic
+	Key      key.TLPublic
 	Metadata map[string]string
 	Votes    uint
 }
@@ -121,7 +121,7 @@ type TailnetLockStatus struct {
 
 	// PublicKey describes the node's tailnet-lock public key.
 	// It may be zero if the node has not logged in.
-	PublicKey key.NLPublic
+	PublicKey key.TLPublic
 
 	// NodeKey describes the node's current node-key. This field is not
 	// populated if the node is not operating (i.e. waiting for a login).
@@ -172,6 +172,10 @@ type NetworkLockUpdate = TailnetLockUpdate
 type TailnetStatus struct {
 	// Name is the name of the network that's currently in use.
 	Name string
+
+	// StableID is the stable, unique identifier of the tailnet, as used to
+	// identify the tailnet in the Tailscale API.
+	StableID tailcfg.StableTailnetID
 
 	// MagicDNSSuffix is the network's MagicDNS suffix for nodes
 	// in the network such as "userfoo.tailscale.net".
@@ -366,7 +370,7 @@ func (ps *PeerStatus) HasCap(cap nodecap.Cap) bool {
 // Examples: an exit node, a subnet router, an app connector, etc.
 // It is the analogue of [tailcfg.Node.IsRouter].
 func (ps *PeerStatus) IsRouter() bool {
-	// TODO(sfllaw): Keep this aligned with dbx.Node.IsSubnetRouter.
+	// TODO(sfllaw): Keep this aligned with dbx.Node.IsRouter.
 	if ps.AllowedIPs == nil {
 		return false
 	}
@@ -746,7 +750,7 @@ type PingResult struct {
 
 	// DERPRegionID is non-zero DERP region ID if DERP was used.
 	// It is not currently set for TSMP pings.
-	DERPRegionID int
+	DERPRegionID tailcfg.DERPRegionID
 
 	// DERPRegionCode is the three-letter region code
 	// corresponding to DERPRegionID.

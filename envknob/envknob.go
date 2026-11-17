@@ -35,6 +35,7 @@ import (
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/syncs"
 	"tailscale.com/types/opt"
+	"tailscale.com/util/testenv"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
@@ -108,6 +109,26 @@ func Setenv(envVar, val string) {
 	if p := regDuration[envVar]; p != nil {
 		setDurationLocked(p, envVar, val)
 	}
+}
+
+// SetenvForTest safely changes an environment variable in a test.
+//
+// It is designed to avoid leaking state between tests. It registers
+// a cleanup function to reset the variable once the test completes,
+// and panics if you try to set environment variables in parallel tests.
+//
+// Use this instead of t.Setenv() if your variable will be read by envknob,
+// and you need to update envknob's internal caches with the new value.
+func SetenvForTest(t testenv.TB, envVar, val string) {
+	t.Helper()
+
+	// This is copied from [tstest.AssertNotParallel], which we can't
+	// call here because it would create an import cycle.
+	t.Setenv("ASSERT_NOT_PARALLEL_TEST", "1") // panics if t.Parallel was called
+
+	prev := String(envVar)
+	Setenv(envVar, val)
+	t.Cleanup(func() { Setenv(envVar, prev) })
 }
 
 // String returns the named environment variable, using os.Getenv.
@@ -683,4 +704,23 @@ func IPCVersion() string {
 		return v
 	}
 	return version.Long()
+}
+
+// MaxQueues limits the amount of tun and magicsock queues to open. The value
+// is capped by GOMAXPROCS and can be overridden by TS_DEBUG_MAX_QUEUES.
+//
+// Each extra queue means allocating a goroutine and related buffers, and brings
+// diminishing returns in performance (which also only apply to nodes speaking
+// with multiple concurrent peers), so we stop scaling at a sane default max:
+// 16.
+//
+// TODO(illotum): 16 is conservative. On a subnet router peering with 256
+// concurrent clients TX grows ~6x with 16 queues, and ~10x with 128. RX is
+// capped by someting else and doesn't scale with more queues at all. This value
+// may and should be reevaluated after other performance improvements.
+func MaxQueues() int {
+	if n, ok := LookupInt("TS_DEBUG_MAX_QUEUES"); ok {
+		return max(1, n)
+	}
+	return min(16, runtime.GOMAXPROCS(0))
 }

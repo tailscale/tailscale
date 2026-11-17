@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -411,6 +412,29 @@ func TestServeDevConfigMutations(t *testing.T) {
 					},
 				},
 			},
+		},
+		{
+			name: "IPv6_localhost",
+			steps: []step{{
+				command: cmd("serve --bg --https=443 http://[::1]:3000"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://[::1]:3000"},
+						}},
+					},
+				},
+			}},
+		},
+		{
+			name: "IPv6_localhost_TCP",
+			steps: []step{{
+				command: cmd("serve --tcp=5432 --bg tcp://[::1]:3000"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{5432: {TCPForward: "[::1]:3000"}},
+				},
+			}},
 		},
 		{
 			name: "path_in_dest",
@@ -869,6 +893,101 @@ func TestServeDevConfigMutations(t *testing.T) {
 					want:    &ipn.ServeConfig{},
 				},
 			},
+		},
+		{
+			// The fake status only allows Funnel on ports 443 and 8443.
+			name: "funnel_port_not_allowed",
+			steps: []step{
+				{
+					command: cmd("funnel --bg --https=10000 3000"),
+					wantErr: func(err error) (badErrMsg string) {
+						if err == nil || !strings.Contains(err.Error(), "not allowed for funnel") {
+							return fmt.Sprintf("want a port-not-allowed error; got %v", err)
+						}
+						return ""
+					},
+				},
+				{
+					command: cmd("funnel --bg --tcp=10000 tcp://localhost:5432"),
+					wantErr: func(err error) (badErrMsg string) {
+						if err == nil || !strings.Contains(err.Error(), "not allowed for funnel") {
+							return fmt.Sprintf("want a port-not-allowed error; got %v", err)
+						}
+						return ""
+					},
+				},
+			},
+		},
+		{
+			// Turning Funnel off on a port that is no longer allowed must
+			// still work, so users can clean up configs made before the
+			// port check applied to the requested port.
+			name: "funnel_off_on_disallowed_port",
+			initialState: fakeLocalServeClient{
+				config: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{10000: {HTTPS: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:10000": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://127.0.0.1:3000"},
+						}},
+					},
+					AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:10000": true},
+				},
+			},
+			steps: []step{{
+				command: cmd("funnel --https=10000 off"),
+				want:    &ipn.ServeConfig{},
+			}},
+		},
+		{
+			// A non-root, non-operator user gets access denied from
+			// tailscaled. For a path or Unix socket target the generic
+			// "set up an operator" advice is wrong, so the serve command
+			// replaces the error with one that says root is required.
+			name:         "access_denied_path_target_needs_root",
+			skipOn:       []string{"windows"},
+			initialState: fakeLocalServeClient{setErr: &local.AccessDeniedError{}},
+			steps: []step{
+				{
+					command: cmd("serve --bg " + filepath.Join(td, "foo")),
+					wantErr: func(err error) (badErrMsg string) {
+						if err == nil || !strings.Contains(err.Error(), "requires root") {
+							return fmt.Sprintf("want an error mentioning root; got %v", err)
+						}
+						if local.IsAccessDeniedError(err) {
+							return "error still reports as access denied, so the CLI would append operator advice"
+						}
+						return ""
+					},
+				},
+				{
+					command: cmd("serve --bg --tcp=80 unix:/tmp/foo.sock"),
+					wantErr: func(err error) (badErrMsg string) {
+						if err == nil || !strings.Contains(err.Error(), "requires root") {
+							return fmt.Sprintf("want an error mentioning root; got %v", err)
+						}
+						if local.IsAccessDeniedError(err) {
+							return "error still reports as access denied, so the CLI would append operator advice"
+						}
+						return ""
+					},
+				},
+			},
+		},
+		{
+			// Proxy targets do not need root, so the access denied error
+			// passes through unchanged and the operator advice still applies.
+			name:         "access_denied_proxy_target_passes_through",
+			initialState: fakeLocalServeClient{setErr: &local.AccessDeniedError{}},
+			steps: []step{{
+				command: cmd("serve --bg 3000"),
+				wantErr: func(err error) (badErrMsg string) {
+					if !local.IsAccessDeniedError(err) {
+						return fmt.Sprintf("want access denied error; got %v", err)
+					}
+					return ""
+				},
+			}},
 		},
 		{
 			name: "no_http_with_funnel",
@@ -2621,6 +2740,20 @@ func TestRunServeSetConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("max_port_does_not_wrap", func(t *testing.T) {
+		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
+		e := &serveEnv{lc: lc, allServices: true, testStdout: &bytes.Buffer{}, testStderr: &bytes.Buffer{}}
+		path := writeTmpServeConfig(t, `{"version":"0.0.1","services":{"svc:foo":{"endpoints":{"tcp:65535":"http://localhost:8080"}}}}`)
+
+		if err := e.runServeSetConfig(context.Background(), []string{path}); err != nil {
+			t.Fatal(err)
+		}
+		svc := lc.config.Services[fooSvc]
+		if svc == nil || svc.TCP[65535] == nil || !svc.TCP[65535].HTTP {
+			t.Errorf("svc:foo TCP/65535 HTTP not applied; got %+v", lc.config.Services)
+		}
+	})
+
 	t.Run("new_format_single_service_no_warning", func(t *testing.T) {
 		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
 		var stdout, stderr bytes.Buffer
@@ -2699,4 +2832,67 @@ func TestRunServeSetConfig(t *testing.T) {
 			t.Errorf("get-config output missing https-over-unix target:\n%s", gotStdout.String())
 		}
 	})
+
+	t.Run("tls_terminated_tcp_roundtrip", func(t *testing.T) {
+		// A tls-terminated-tcp endpoint applies with TerminateTLS set and
+		// round-trips through get-config.
+		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
+		var stdout, stderr bytes.Buffer
+		e := &serveEnv{lc: lc, service: fooSvc, testStdout: &stdout, testStderr: &stderr}
+		path := writeTmpServeConfig(t, `{"version":"0.0.1","endpoints":{"tcp:443":"tls-terminated-tcp://localhost:9481"}}`)
+
+		if err := e.runServeSetConfig(context.Background(), []string{path}); err != nil {
+			t.Fatalf("set-config: %v", err)
+		}
+		svc := lc.config.Services[fooSvc]
+		if svc == nil || svc.TCP[443] == nil {
+			t.Fatalf("svc:foo TCP/443 not applied; got %+v", lc.config.Services)
+		}
+		if got := svc.TCP[443].TCPForward; got != "localhost:9481" {
+			t.Errorf("TCPForward = %q, want %q", got, "localhost:9481")
+		}
+		if got := svc.TCP[443].TerminateTLS; got != "foo.test.ts.net" {
+			t.Errorf("TerminateTLS = %q, want %q", got, "foo.test.ts.net")
+		}
+		if stderr.Len() != 0 {
+			t.Errorf("stderr must be empty; got:\n%s", stderr.String())
+		}
+
+		// Round-trip through get-config.
+		var gotStdout, gotStderr bytes.Buffer
+		g := &serveEnv{lc: lc, service: fooSvc, testStdout: &gotStdout, testStderr: &gotStderr}
+		if err := g.runServeGetConfig(context.Background(), nil); err != nil {
+			t.Fatalf("get-config: %v", err)
+		}
+		if !strings.Contains(gotStdout.String(), `"tcp:443": "tls-terminated-tcp://localhost:9481"`) {
+			t.Errorf("get-config output missing tls-terminated-tcp target:\n%s", gotStdout.String())
+		}
+	})
+
+	t.Run("tls_terminated_tcp_all_services", func(t *testing.T) {
+		// The --all path shares the endpoint loop, so it needs the same target
+		// scheme.
+		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
+		var stdout, stderr bytes.Buffer
+		e := &serveEnv{lc: lc, allServices: true, testStdout: &stdout, testStderr: &stderr}
+		path := writeTmpServeConfig(t, `{"version":"0.0.1","services":{"svc:foo":{"endpoints":{"tcp:443":"tls-terminated-tcp://localhost:9481"}}}}`)
+
+		if err := e.runServeSetConfig(context.Background(), []string{path}); err != nil {
+			t.Fatalf("set-config: %v", err)
+		}
+		svc := lc.config.Services[fooSvc]
+		if svc == nil || svc.TCP[443] == nil {
+			t.Fatalf("svc:foo TCP/443 not applied; got %+v", lc.config.Services)
+		}
+		if got := svc.TCP[443].TCPForward; got != "localhost:9481" {
+			t.Errorf("TCPForward = %q, want %q", got, "localhost:9481")
+		}
+		if got := svc.TCP[443].TerminateTLS; got != "foo.test.ts.net" {
+			t.Errorf("TerminateTLS = %q, want %q", got, "foo.test.ts.net")
+		}
+		if stderr.Len() != 0 {
+			t.Errorf("stderr must be empty; got:\n%s", stderr.String())
+		}
+	})
+
 }

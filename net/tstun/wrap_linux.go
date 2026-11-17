@@ -81,8 +81,8 @@ func probeTCPGRO(dev tun.GRODevice) error {
 	ipAs4 := ipPort.Addr().As4()
 	bufs := make([][]byte, 2)
 	for i := range bufs {
-		bufs[i] = make([]byte, PacketStartOffset+totalLen, PacketStartOffset+(totalLen*2))
-		ipv4H := header.IPv4(bufs[i][PacketStartOffset:])
+		bufs[i] = make([]byte, WritePacketStartOffset+totalLen, WritePacketStartOffset+(totalLen*2))
+		ipv4H := header.IPv4(bufs[i][WritePacketStartOffset:])
 		ipv4H.Encode(&header.IPv4Fields{
 			SrcAddr:  tcpip.AddrFromSlice(ipAs4[:]),
 			DstAddr:  tcpip.AddrFromSlice(ipAs4[:]),
@@ -92,7 +92,7 @@ func probeTCPGRO(dev tun.GRODevice) error {
 			TTL:         0,
 			TotalLength: uint16(totalLen),
 		})
-		tcpH := header.TCP(bufs[i][PacketStartOffset+iphLen:])
+		tcpH := header.TCP(bufs[i][WritePacketStartOffset+iphLen:])
 		tcpH.Encode(&header.TCPFields{
 			SrcPort:    ipPort.Port(),
 			DstPort:    ipPort.Port(),
@@ -102,12 +102,12 @@ func probeTCPGRO(dev tun.GRODevice) error {
 			Flags:      header.TCPFlagAck,
 			WindowSize: 3000,
 		})
-		copy(bufs[i][PacketStartOffset+iphLen+tcphLen:], fingerprint)
+		copy(bufs[i][WritePacketStartOffset+iphLen+tcphLen:], fingerprint)
 		ipv4H.SetChecksum(^ipv4H.CalculateChecksum())
 		pseudoCsum := header.PseudoHeaderChecksum(unix.IPPROTO_TCP, ipv4H.SourceAddress(), ipv4H.DestinationAddress(), uint16(tcphLen+segmentSize))
-		pseudoCsum = checksum.Checksum(bufs[i][PacketStartOffset+iphLen+tcphLen:], pseudoCsum)
+		pseudoCsum = checksum.Checksum(bufs[i][WritePacketStartOffset+iphLen+tcphLen:], pseudoCsum)
 		tcpH.SetChecksum(^tcpH.CalculateChecksum(pseudoCsum))
 	}
-	_, err := dev.Write(bufs, PacketStartOffset)
+	_, err := dev.Write(bufs, WritePacketStartOffset)
 	return err
 }

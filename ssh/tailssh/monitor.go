@@ -1,0 +1,892 @@
+// Copyright (c) Tailscale Inc & contributors
+// SPDX-License-Identifier: BSD-3-Clause
+
+//go:build (linux && !android) || (darwin && !ios) || freebsd || openbsd
+
+// The per-connection privileged ssh-monitor process. tailscaled spawns
+// it, as "tailscaled be-child ssh-monitor", once a connection is
+// authorized, and speaks the protocol of monitor_rpc.go over the
+// socketpair fd it inherits at spawn.
+//
+// The monitor owns every child process the connection spawns. Session
+// children are the incubator in incubator.go, spawned with the
+// monitor's credentials because the incubator needs root to exec
+// login and su and to register the login session. Forwarding children
+// in fwdchild.go are Unix dial relays and one-shot TCP dial/bind workers, spawned with the
+// connection user's credentials.
+//
+// The connection's identity, the uid, gid, and groups of its
+// localUser, is fixed in argv at spawn. Only the event loop touches
+// the RPC channel, the child table, and file descriptors.
+//
+// Graceful close preserves session children unless termination is required.
+// RPC loss and external SIGHUP terminate all children. Forwarding children
+// always terminate.
+
+package tailssh
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"golang.org/x/sys/unix"
+)
+
+const (
+	// monExecOpDeadline is the maximum accepted duration of an exec spawn.
+	// It is checked after cmd.Start returns; it does not interrupt Start
+	// or limit the child's lifetime.
+	monExecOpDeadline = 30 * time.Second
+
+	// monFwdOpDeadline bounds a forwarding child from spawn to
+	// result. On expiry the child's group is SIGKILLed.
+	monFwdOpDeadline = 10 * time.Second
+
+	// monTeardownReap bounds the teardown grace period and reap wait.
+	monTeardownReap = 2 * time.Second
+)
+
+// monChild is one entry of the monitor's child table, keyed by pid.
+// Every child leads its own group, so pgid equals pid. A oneshot
+// child, a dialer or listener, reports its outcome in its op's reply,
+// and its exit is reaped silently by the sweep after its SIGCHLD.
+// A Unix dialer stays alive to relay bytes after reporting its outcome.
+type monChild struct {
+	pgid    int   // the child's process group. Equal to its pid.
+	id      int64 // exec request ID, or zero for a forwarding child
+	oneshot bool  // dialer or listener child. Outcome carried by the op reply.
+
+	// killAt is the SIGKILL deadline. While nonzero, the leader remains
+	// unreaped to prevent PID and process-group reuse.
+	killAt time.Time
+}
+
+// beginTermination sends SIGHUP and sets the SIGKILL deadline once.
+func (c *monChild) beginTermination(grace time.Duration) {
+	if c.killAt.IsZero() {
+		c.killAt = time.Now().Add(grace)
+		_ = killGroup(c.pgid, unix.SIGHUP)
+	}
+}
+
+// kill sends SIGKILL and permits reaping the leader.
+func (c *monChild) kill() {
+	_ = killGroup(c.pgid, unix.SIGKILL)
+	c.killAt = time.Time{}
+}
+
+// monitor is the running ssh-monitor process state, owned entirely by
+// the event loop goroutine.
+type monitor struct {
+	conn     *rpcConn
+	args     monitorArgs // the spawn-bound identity
+	children map[int]*monChild
+	hup      chan os.Signal
+	broken   bool // a reply or notification write failed. Leave the loop.
+
+	// killAll requires teardown to terminate all session children.
+	killAll bool
+
+	// gracefulClose records receipt of an explicit close request.
+	gracefulClose bool
+
+	// pendingFds holds relayed dial/listen descriptors, keyed by request
+	// ID, from the reply write until tailscaled's fdack receipt. See
+	// replyFD and the monitor_rpc.go header for the darwin kernel
+	// behavior this coverage exists for.
+	pendingFds map[int64][]int
+}
+
+// monitorArgs are the monitor's spawn arguments, in the style of
+// incubatorArgs. The identity fields are the connection's bound
+// identity, fixed at spawn.
+type monitorArgs struct {
+	// uid, gid, and gids are the Linux ABI's 32-bit ids, as passed in
+	// argv at spawn.
+	uid       uint32
+	gid       uint32
+	gids      []uint32
+	localUser string
+	rpcFD     int
+}
+
+// formatID renders one 32-bit Linux uid or gid as the decimal string
+// form the monitor's and the incubator's argv flags carry.
+func formatID(v uint32) string {
+	return strconv.FormatUint(uint64(v), 10)
+}
+
+// parseMonitorArgs parses the arguments following "be-child ssh-monitor".
+func parseMonitorArgs(args []string) (monitorArgs, error) {
+	var ma monitorArgs
+	var uidStr, gidStr, groups string
+
+	flags := flag.NewFlagSet("ssh-monitor", flag.ContinueOnError)
+	flags.StringVar(&uidStr, "uid", "", "uid of the connection's local user (bound at spawn)")
+	flags.StringVar(&gidStr, "gid", "", "gid of the connection's local user (bound at spawn)")
+	flags.StringVar(&groups, "groups", "", "comma-separated supplementary gids of the local user")
+	flags.StringVar(&ma.localUser, "local-user", "", "name of the connection's local user")
+	flags.IntVar(&ma.rpcFD, "rpc-fd", -1, "inherited AF_UNIX stream fd of the RPC channel")
+	if err := flags.Parse(args); err != nil {
+		return ma, err
+	}
+	if uidStr == "" || gidStr == "" {
+		return ma, errors.New("--uid and --gid are required")
+	}
+	if ma.rpcFD < 3 {
+		return ma, fmt.Errorf("invalid --rpc-fd %d: must be >= 3 (an ExtraFiles fd)", ma.rpcFD)
+	}
+	// Ids are parsed at their ABI width: unsigned 32-bit, the full range
+	// the kernel's uid_t and gid_t carry.
+	u64, err := strconv.ParseUint(uidStr, 10, 32)
+	if err != nil {
+		return ma, fmt.Errorf("unable to parse uid %q: %w", uidStr, err)
+	}
+	ma.uid = uint32(u64)
+	g64, err := strconv.ParseUint(gidStr, 10, 32)
+	if err != nil {
+		return ma, fmt.Errorf("unable to parse gid %q: %w", gidStr, err)
+	}
+	ma.gid = uint32(g64)
+	for g := range strings.SplitSeq(groups, ",") {
+		if g == "" {
+			continue
+		}
+		gid, err := strconv.ParseUint(g, 10, 32)
+		if err != nil {
+			return ma, fmt.Errorf("unable to parse group id %q: %w", g, err)
+		}
+		ma.gids = append(ma.gids, uint32(gid))
+	}
+	return ma, nil
+}
+
+// beMonitor is the entrypoint of the "tailscaled be-child ssh-monitor"
+// subcommand, the per-connection privileged monitor process.
+func beMonitor(args []string) error {
+	ma, err := parseMonitorArgs(args)
+	if err != nil {
+		return err
+	}
+
+	// Scrub every descriptor from 3 up to close-on-exec at entry,
+	// before anything else runs. The monitor inherits its parent's
+	// whole non-close-on-exec descriptor table, and a privileged
+	// monitor must not leak any of it into the children it execs. The
+	// RPC fd is included: the root-privileged channel must never
+	// survive into an exec'd child either.
+	if err := scrubFds(); err != nil {
+		return fmt.Errorf("ssh-monitor: scrub fds: %w", err)
+	}
+
+	conn, err := wrapUnixConn(ma.rpcFD) // consumes the raw fd
+	if err != nil {
+		return fmt.Errorf("ssh-monitor: rpc fd: %w", err)
+	}
+
+	// An external SIGHUP gets the same teardown as RPC EOF. The loop
+	// selects on it between events. Delivery waits for the current op
+	// to finish.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, unix.SIGHUP)
+	defer signal.Stop(hup)
+
+	m := &monitor{
+		conn:       newRPCConn(conn),
+		args:       ma,
+		children:   make(map[int]*monChild),
+		pendingFds: make(map[int64][]int),
+		hup:        hup,
+	}
+	return m.loop()
+}
+
+// spawnRPCChild spawns exe with argv. The child receives one end of a
+// fresh AF_UNIX SOCK_STREAM socketpair as fd 3. The parent end is
+// returned as a *net.UnixConn via wrapUnixConn, along with the started
+// child. prefix names the child class in error messages.
+//
+// Both raw socketpair ends are close-on-exec at creation, as is the
+// parent end's wrapUnixConn dup.
+//
+// env is used exactly as given. A nil env gives the child an empty
+// environment, never the spawner's. Callers give the privileged
+// monitor the daemon's environment without the systemd service
+// variables, and give user-identity children an empty environment.
+// The daemon's environment never reaches a child running as the
+// connection's user.
+func spawnRPCChild(prefix, exe string, argv, env []string, attr *syscall.SysProcAttr) (*exec.Cmd, *net.UnixConn, error) {
+	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s: socketpair: %w", prefix, err)
+	}
+	for _, fd := range pair {
+		if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, unix.FD_CLOEXEC); err != nil {
+			unix.Close(pair[0])
+			unix.Close(pair[1])
+			return nil, nil, fmt.Errorf("%s: fcntl(F_SETFD) on socketpair: %w", prefix, err)
+		}
+	}
+	childEnd := os.NewFile(uintptr(pair[1]), prefix+"-child")
+	parentConn, err := wrapUnixConn(pair[0]) // consumes the raw parent end
+	if err != nil {
+		childEnd.Close()
+		return nil, nil, fmt.Errorf("%s: parent end: %w", prefix, err)
+	}
+	cmd := exec.Command(exe, argv...)
+	cmd.Env = env
+	if cmd.Env == nil {
+		cmd.Env = []string{} // nil would inherit the spawner's environment
+	}
+	cmd.ExtraFiles = []*os.File{childEnd} // lands as fd 3 in the child
+	cmd.SysProcAttr = attr
+	if err := cmd.Start(); err != nil {
+		parentConn.Close()
+		childEnd.Close()
+		return nil, nil, fmt.Errorf("%s: start: %w", prefix, err)
+	}
+	// The child has its own dup since Start. Drop ours.
+	childEnd.Close()
+	return cmd, parentConn, nil
+}
+
+// monEvent carries one inbound RPC frame from the reader goroutine to
+// the loop. An error ends the channel.
+type monEvent struct {
+	f   rpcFrame
+	fds []int
+	err error
+}
+
+// loop is the monitor's event loop. A reader goroutine blocks in
+// readFrame on the RPC channel. The loop itself waits on inbound
+// frames, external SIGHUP, and SIGCHLD, and runs the sole op handler,
+// reaper, and teardown.
+func (m *monitor) loop() error {
+	events := make(chan monEvent, 1)
+	go func() {
+		for {
+			f, fds, err := m.conn.readFrame()
+			events <- monEvent{f: f, fds: fds, err: err}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// Child exits arrive as SIGCHLD. The sweep below reaps the exiting
+	// children, so signal coalescing is safe.
+	sigchld := make(chan os.Signal, 1)
+	signal.Notify(sigchld, syscall.SIGCHLD)
+	defer signal.Stop(sigchld)
+
+	escalation := time.NewTimer(time.Hour)
+	defer escalation.Stop()
+	for {
+		escalation.Stop()
+		var next time.Time
+		for _, c := range m.children {
+			if !c.killAt.IsZero() && (next.IsZero() || c.killAt.Before(next)) {
+				next = c.killAt
+			}
+		}
+		var escalate <-chan time.Time
+		if !next.IsZero() {
+			escalation.Reset(time.Until(next))
+			escalate = escalation.C
+		}
+		select {
+		case <-escalate:
+			for _, c := range m.children {
+				if !c.killAt.IsZero() && !time.Now().Before(c.killAt) {
+					c.kill()
+				}
+			}
+			m.sweep(m.children, true)
+		case <-m.hup:
+			m.teardown()
+			return nil
+		case <-sigchld:
+			m.sweep(m.children, true)
+		case ev := <-events:
+			if ev.err != nil {
+				// EOF, an I/O error, or a protocol error means the
+				// connection is over.
+				m.teardown()
+				return nil
+			}
+			m.handle(ev.f, ev.fds)
+			if m.broken || m.gracefulClose {
+				m.teardown()
+				return nil
+			}
+		}
+	}
+}
+
+// handle dispatches one request frame. It runs on the loop goroutine.
+// Descriptors not consumed by the op are closed here.
+func (m *monitor) handle(f rpcFrame, fds []int) {
+	if f.ID == 0 {
+		// Unsolicited frames are dropped and their descriptors closed.
+		closeFds(fds)
+		return
+	}
+	switch f.Op {
+	case opPing:
+		closeFds(fds)
+		m.reply(rpcOKReply(f.ID, opPing))
+	case opExec:
+		m.handleExec(f, fds)
+	case opSignal:
+		closeFds(fds)
+		m.handleSignal(f)
+	case opTerminate:
+		closeFds(fds)
+		m.handleTerminate(f)
+	case opClose:
+		closeFds(fds)
+		m.gracefulClose = true
+		m.reply(rpcOKReply(f.ID, opClose))
+	case opKillAll:
+		closeFds(fds)
+		m.handleKillAll(f)
+	case opFdAck:
+		closeFds(fds)
+		if fds, ok := m.pendingFds[f.ID]; ok {
+			delete(m.pendingFds, f.ID)
+			closeFds(fds)
+		}
+	case opDial:
+		closeFds(fds)
+		m.handleDial(f)
+	case opListen:
+		closeFds(fds)
+		m.handleListen(f)
+	default:
+		closeFds(fds)
+		m.reply(rpcErrReply(f.ID, f.Op, fmt.Errorf("unknown op %q", f.Op)))
+	}
+}
+
+// incubatorArgv requires and normalizes identity flags to the connection's
+// bound identity. It accepts only the canonical --name=value spelling for
+// these flags, rejecting aliases that could override a normalized value.
+// The caller is trusted to supply the executable and remaining arguments.
+func (m *monitor) incubatorArgv(argv []string) ([]string, error) {
+	values := map[string]string{
+		"--uid=":        formatID(m.args.uid),
+		"--gid=":        formatID(m.args.gid),
+		"--groups=":     joinGids(m.args.gids),
+		"--local-user=": m.args.localUser,
+	}
+	out := slices.Clone(argv)
+	seen := make(map[string]bool, len(values))
+	for i, a := range argv[1:] {
+		name, _, _ := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if _, identity := values["--"+name+"="]; identity && !strings.HasPrefix(a, "--"+name+"=") {
+			return nil, fmt.Errorf("incubator exec: non-canonical identity flag %q", a)
+		}
+		for flag, val := range values {
+			if strings.HasPrefix(a, flag) {
+				out[i+1] = flag + val
+				seen[flag] = true
+			}
+		}
+	}
+	for flag := range values {
+		if !seen[flag] {
+			return nil, fmt.Errorf("incubator exec: argv has no %s flag", strings.TrimSuffix(flag, "="))
+		}
+	}
+	return out, nil
+}
+
+// joinGids renders a supplementary group list as the comma-separated
+// form the incubator's --groups flag takes.
+func joinGids(gids []uint32) string {
+	parts := make([]string, len(gids))
+	for i, g := range gids {
+		parts[i] = formatID(g)
+	}
+	return strings.Join(parts, ",")
+}
+
+// handleExec spawns one child, mapping the request's file descriptors to
+// the child's stdio. If cmd.Start returns after monExecOpDeadline, the
+// child is killed and the request fails.
+func (m *monitor) handleExec(f rpcFrame, fds []int) {
+	start := time.Now()
+	fail := func(err error) {
+		closeFds(fds)
+		m.reply(rpcErrReply(f.ID, opExec, err))
+	}
+	if len(f.Argv) == 0 {
+		fail(errors.New("exec: empty argv"))
+		return
+	}
+	// An envfd exec must carry exactly four descriptors, stdio plus
+	// the --env-fd pipe. This re-check catches the fourth fd without
+	// the flag, which the codec's count check cannot see.
+	if f.EnvFd != (len(fds) == 4) {
+		fail(fmt.Errorf("exec: %d fds with envfd=%v; want 4 fds with envfd, or up to 3 without", len(fds), f.EnvFd))
+		return
+	}
+	// argv[0] must be an absolute path.
+	if !filepath.IsAbs(f.Argv[0]) {
+		fail(fmt.Errorf("exec: argv[0] must be an absolute path, got %q", f.Argv[0]))
+		return
+	}
+	// The incubator starts with monitor credentials so it can run login
+	// or su and register the login session before dropping privileges.
+	// Normalize its identity flags to the connection's bound identity.
+	if f.Incubator {
+		argv, err := m.incubatorArgv(f.Argv)
+		if err != nil {
+			fail(err)
+			return
+		}
+		f.Argv = argv
+	}
+	cmd := exec.Command(f.Argv[0], f.Argv[1:]...)
+	// Env is used exactly as given. An exec request with no env gives
+	// the child an empty environment: the monitor's own environment
+	// belongs to tailscaled, and a privileged monitor must not leak it
+	// into connection children.
+	cmd.Env = f.Env
+	if cmd.Env == nil {
+		cmd.Env = []string{} // nil would inherit the monitor's environment
+	}
+	cmd.Dir = monChildDir(f.Dir)
+	// monStdio wraps the stdio descriptors, fds[:3], with /dev/null
+	// for any missing stream, and takes ownership of them. The env-fd
+	// descriptor, fds[3], present exactly when EnvFd is set, is
+	// wrapped separately below. A failure before ownership moves
+	// closes every descriptor exactly once.
+	files, err := monStdio(fds[:min(3, len(fds))])
+	if err != nil {
+		// monStdio's error path already closed every descriptor it was
+		// given. The env-fd descriptor beyond the sub-slice is still
+		// ours. Nil the slice so fail's closeFds is a no-op rather than
+		// a double close.
+		closeFds(fds[min(3, len(fds)):])
+		fds = nil
+		fail(err)
+		return
+	}
+	// From here the raw stdio ints are owned by files, each wrapped in
+	// an *os.File that closes it exactly once.
+	var envFile *os.File
+	if len(fds) == 4 {
+		envFile = os.NewFile(uintptr(fds[3]), "ssh-monitor-child-envfd")
+		defer envFile.Close()
+	}
+	// The files now own these descriptors; fail must not close them again.
+	fds = nil
+	if envFile != nil {
+		cmd.ExtraFiles = []*os.File{envFile}
+	}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = files[0], files[1], files[2]
+	cmd.SysProcAttr = monChildAttr(f.Ctty)
+	// Re-scrub before the fork: anything opened or received since entry
+	// that missed close-on-exec marking must not reach the child. The
+	// stdio descriptors below survive the scrub: the child receives
+	// fresh non-close-on-exec dups on 0, 1, and 2.
+	if err := scrubFds(); err != nil {
+		monCloseFiles(files)
+		fail(err)
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		monCloseFiles(files)
+		fail(err)
+		return
+	}
+	// Close our copies of the stdio descriptors. The child holds its
+	// own dups onto 0..2.
+	monCloseFiles(files)
+	if time.Since(start) > monExecOpDeadline {
+		// Kill the child and reply an error instead of ok. The kill is
+		// bounded by killGroupAndReap.
+		pid := cmd.Process.Pid
+		_ = killGroup(pid, unix.SIGKILL)
+		killGroupAndReap(pid)
+		fail(fmt.Errorf("exec: spawn-and-reply exceeded %s deadline", monExecOpDeadline))
+		return
+	}
+	// Its pgid is its pid. See monChildAttr.
+	m.children[cmd.Process.Pid] = &monChild{pgid: cmd.Process.Pid, id: f.ID}
+	m.reply(rpcExecReply(f.ID, cmd.Process.Pid))
+}
+
+// killGroupAndReap reaps a just-SIGKILLed child with wait4(WNOHANG) for
+// up to 500ms, surrendering after the budget. It returns whether the
+// child was reaped.
+func killGroupAndReap(pid int) (reaped bool) {
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		var ws unix.WaitStatus
+		wpid, err := unix.Wait4(pid, &ws, unix.WNOHANG, nil)
+		if err != nil || wpid == pid {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
+}
+
+// handleSignal validates both PID and generation before signaling a child group.
+func (m *monitor) handleSignal(f rpcFrame) {
+	replyErr := func(err error) { m.reply(rpcErrReply(f.ID, opSignal, err)) }
+	c, ok := m.children[f.Pid]
+	if !ok || f.ChildID == 0 || c.id != f.ChildID {
+		replyErr(fmt.Errorf("signal: pid %d with child ID %d is not a monitor child", f.Pid, f.ChildID))
+		return
+	}
+	sig := unix.SignalNum(f.Sig)
+	if sig == 0 {
+		replyErr(fmt.Errorf("signal: unknown signal %q", f.Sig))
+		return
+	}
+	if err := killGroup(c.pgid, sig); err != nil {
+		replyErr(err)
+		return
+	}
+	m.reply(rpcOKReply(f.ID, opSignal))
+}
+
+// handleTerminate schedules group termination before acknowledging the request.
+func (m *monitor) handleTerminate(f rpcFrame) {
+	c, ok := m.children[f.Pid]
+	if !ok || f.ChildID == 0 || c.id != f.ChildID {
+		m.reply(rpcErrReply(f.ID, opTerminate, fmt.Errorf("terminate: stale child handle")))
+		return
+	}
+	if f.Grace <= 0 {
+		m.reply(rpcErrReply(f.ID, opTerminate, fmt.Errorf("terminate: invalid grace period")))
+		return
+	}
+	c.beginTermination(f.Grace)
+	m.reply(rpcOKReply(f.ID, opTerminate))
+}
+
+// killGroup signals the process group pgid with kill(-pgid, sig), so
+// a child's descendants, such as a shell's subprocesses, die with it.
+func killGroup(pgid int, sig unix.Signal) error {
+	return unix.Kill(-pgid, sig)
+}
+
+// handleDial serves the dial op with the connection's bound identity.
+// Unix dials return a private data socket and lifetime pipe for a relay child;
+// TCP dials return the connected socket and the child exits after handoff.
+func (m *monitor) handleDial(f rpcFrame) {
+	if err := validateFwdDial(f.Net, f.Addr); err != nil {
+		m.reply(rpcErrReply(f.ID, opDial, err))
+		return
+	}
+	m.fwdOp(f.ID, opDial, fwdChildSpec{op: "dial", net: f.Net, addr: f.Addr}, func(string) rpcFrame {
+		return rpcOKReply(f.ID, opDial)
+	})
+}
+
+// handleListen serves the listen op. A one-shot listener child runs
+// with the bound identity. See fwdchild.go for the socket and dir
+// construction. The reply carries the resulting path or address.
+func (m *monitor) handleListen(f rpcFrame) {
+	spec := fwdChildSpec{op: "listen"}
+	switch {
+	case f.Agent:
+		spec.agent = true
+	case f.Net == "unix":
+		if f.Addr == "" || !filepath.IsAbs(f.Addr) {
+			m.reply(rpcErrReply(f.ID, opListen, errors.New("listen unix: addr must be an absolute socket path")))
+			return
+		}
+		spec.net, spec.addr, spec.unlink = "unix", f.Addr, f.Unlink
+	case f.Net == "tcp":
+		if f.Addr == "" {
+			m.reply(rpcErrReply(f.ID, opListen, errors.New("listen tcp: addr is required")))
+			return
+		}
+		spec.net, spec.addr = "tcp", f.Addr
+	default:
+		m.reply(rpcErrReply(f.ID, opListen, fmt.Errorf("listen: network %q not supported (unix, tcp, or agent)", f.Net)))
+		return
+	}
+	m.fwdOp(f.ID, opListen, spec, func(payload string) rpcFrame {
+		rl := rpcFrame{ID: f.ID, Op: opListen, OK: true}
+		switch {
+		case f.Agent:
+			// The path comes from the child, which runs as the
+			// connection's user, and tailscaled removes the socket's
+			// directory as root when the session closes. Only the shape
+			// the child is supposed to produce is acceptable.
+			if err := checkAgentSocketPath(payload); err != nil {
+				return rpcErrReply(f.ID, opListen, err)
+			}
+			rl.Path = payload // the agent socket path
+		case f.Net == "unix":
+			rl.Path = f.Addr // echo the bound path
+		case f.Net == "tcp":
+			rl.Addr = payload // echo the bound address (a 127.0.0.1:0 request yields the concrete port)
+		}
+		return rl
+	})
+}
+
+// checkAgentSocketPath validates the socket path a forwarding child
+// reports for the agent-forwarding listen op. The child runs as the
+// connection's user, and tailscaled removes the socket's directory as
+// root when the session closes, so a misbehaving child must not be able
+// to steer that removal elsewhere: the path must be a listener.sock
+// directly inside an auth-agent temp directory directly inside
+// agentDirRoot.
+func checkAgentSocketPath(p string) error {
+	if !filepath.IsAbs(p) {
+		return fmt.Errorf("agent socket path %q is not absolute", p)
+	}
+	if filepath.Base(p) != "listener.sock" {
+		return fmt.Errorf("agent socket path %q does not name listener.sock", p)
+	}
+	dir := filepath.Dir(p)
+	if filepath.Dir(dir) != agentDirRoot {
+		return fmt.Errorf("agent socket %q is not directly inside %s", p, agentDirRoot)
+	}
+	if base := filepath.Base(dir); !strings.HasPrefix(base, "auth-agent") {
+		return fmt.Errorf("agent socket %q is not inside an auth-agent directory", p)
+	}
+	return nil
+}
+
+// fwdOp runs one forwarding op. It spawns the child with the
+// bound identity, waits for its result under monFwdOpDeadline, and
+// relays the child's socket descriptor in the ok reply. The wait blocks
+// the loop for at most the deadline.
+func (m *monitor) fwdOp(id int64, op string, spec fwdChildSpec, reply func(payload string) rpcFrame) {
+	start := time.Now()
+	cmd, result, err := fwdSpawnChild(m, spec)
+	if err != nil {
+		m.reply(rpcErrReply(id, op, err))
+		return
+	}
+	child := &monChild{pgid: cmd.Process.Pid, oneshot: true}
+	m.children[cmd.Process.Pid] = child
+	wantFDs := 1
+	if op == opDial && spec.net == "unix" {
+		wantFDs = 2 // data socket and lifetime pipe writer
+	}
+	ok, payload, fds, rerr := fwdReadResult(result, start.Add(monFwdOpDeadline), wantFDs)
+	result.Close()
+	if rerr != nil {
+		m.killChild(child)
+		m.reply(rpcErrReply(id, op, fmt.Errorf("%s: %w", op, rerr)))
+		return
+	}
+	if !ok {
+		// The child's failure reason is preserved verbatim. It is the
+		// child's own error, e.g. the kernel's EACCES for the bound user.
+		m.reply(rpcErrReply(id, op, errors.New(payload)))
+		return
+	}
+	// Listener and TCP dial children exit after the handoff; Unix dial
+	// children relay until the connection closes. The sweep silently reaps
+	// each child after its SIGCHLD.
+	m.replyFD(reply(payload), fds...)
+}
+
+// killChild SIGKILLs a forwarding child's group and reaps it with
+// killGroupAndReap, a bounded non-blocking wait. A child that survives
+// SIGKILL for the budget is left in the table, reaped by the sweep
+// whenever it dies.
+func (m *monitor) killChild(c *monChild) {
+	_ = killGroup(c.pgid, unix.SIGKILL)
+	if killGroupAndReap(c.pgid) {
+		delete(m.children, c.pgid)
+	}
+}
+
+// replyFD writes a reply carrying descriptors and retains them in pendingFds
+// until tailscaled acknowledges receipt. See monitor_rpc.go for the Darwin
+// socket-lifetime requirement. A write failure closes the descriptors and
+// marks the RPC channel broken.
+func (m *monitor) replyFD(f rpcFrame, fds ...int) {
+	err := m.conn.writeFrame(f, fds...)
+	if err != nil {
+		closeFds(fds)
+		m.broken = true
+		return
+	}
+	m.pendingFds[f.ID] = fds
+}
+
+// sweep reaps exited children from the given set and removes them from both
+// the set and m.children. If notify is true, it reports session exit statuses.
+func (m *monitor) sweep(children map[int]*monChild, notify bool) {
+	for pid, c := range children {
+		if !c.killAt.IsZero() {
+			continue // Retain the leader until group SIGKILL.
+		}
+		var ws unix.WaitStatus
+		wpid, err := unix.Wait4(pid, &ws, unix.WNOHANG, nil)
+		switch {
+		case err != nil:
+			// ECHILD means not our child or already reaped. Forget it
+			// either way.
+			delete(children, pid)
+			delete(m.children, pid)
+		case wpid == pid:
+			if notify && !c.oneshot {
+				m.notifyExit(monitorProcess{PID: pid, ID: c.id}, monExitCode(ws))
+			}
+			delete(children, pid)
+			delete(m.children, pid)
+		}
+		// wpid == 0: still running.
+	}
+}
+
+// monExitCode maps a wait status to the exit notification's code. It
+// is the exit status for a normal exit, else the shell convention
+// 128+signal for a signaled death.
+func monExitCode(ws unix.WaitStatus) int {
+	if ws.Exited() {
+		return ws.ExitStatus()
+	}
+	return 128 + int(ws.Signal())
+}
+
+// scrubFdsByScan marks every open descriptor listed in dir, a
+// /proc-style self-fd directory, close-on-exec from 3 up. It is the
+// fallback path for platforms without close_range. Descriptors closed
+// concurrently between the directory read and the fcntl are ignored.
+func scrubFdsByScan(dir string) error {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, ent := range ents {
+		fd, err := strconv.Atoi(ent.Name())
+		if err != nil || fd < 3 {
+			continue
+		}
+		if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, unix.FD_CLOEXEC); err != nil && !errors.Is(err, syscall.EBADF) {
+			return err
+		}
+	}
+	return nil
+}
+
+// reply writes one frame on the loop goroutine. On write failure the
+// connection is marked broken and the loop tears down.
+func (m *monitor) reply(f rpcFrame) {
+	if err := m.conn.writeFrame(f); err != nil {
+		m.broken = true
+	}
+}
+
+func (m *monitor) notifyExit(child monitorProcess, code int) {
+	m.reply(rpcExitNotify(child, code))
+}
+
+// handleKillAll requires connection-wide termination at teardown.
+func (m *monitor) handleKillAll(f rpcFrame) {
+	m.killAll = true
+	m.reply(rpcOKReply(f.ID, opKillAll))
+}
+
+// teardown sends SIGHUP, waits for the grace period, then sends SIGKILL and reaps.
+// Graceful close targets forwarding children and sessions with pending termination.
+// RPC loss, external SIGHUP, and revocation target all children.
+// Leaders remain unreaped until SIGKILL to prevent PID and process-group reuse.
+func (m *monitor) teardown() {
+	// Close descriptors whose receipt has not been acknowledged.
+	for id, fds := range m.pendingFds {
+		closeFds(fds)
+		delete(m.pendingFds, id)
+	}
+	toKill := make(map[int]*monChild, len(m.children))
+	killAll := !m.gracefulClose || m.broken || m.killAll
+	for pid, c := range m.children {
+		if killAll || c.id == 0 || !c.killAt.IsZero() {
+			toKill[pid] = c
+		}
+	}
+	if len(toKill) > 0 {
+		deadline := time.Now().Add(monTeardownReap)
+		for _, c := range toKill {
+			c.beginTermination(monTeardownReap)
+			if c.killAt.Before(deadline) {
+				deadline = c.killAt
+			}
+		}
+		// Allow SIGHUP handlers to run before SIGKILL. Keep leaders
+		// unreaped during the grace period to reserve their process groups.
+		time.Sleep(time.Until(deadline))
+		for _, c := range toKill {
+			c.kill()
+		}
+		deadline = time.Now().Add(monTeardownReap)
+		for len(toKill) > 0 && time.Now().Before(deadline) {
+			m.sweep(toKill, false)
+			if len(toKill) > 0 {
+				time.Sleep(20 * time.Millisecond)
+			}
+		}
+	}
+	m.conn.c.Close()
+}
+
+// monStdio maps the request's descriptors onto the child's stdin,
+// stdout, and stderr, in order, taking ownership of all of them. On
+// success every descriptor in fds is wrapped in an *os.File which the
+// caller closes with monCloseFiles; on error every descriptor in fds
+// has already been closed and the caller must not touch fds again.
+// When fewer than three descriptors arrive, the missing streams map
+// to /dev/null so the child always has a valid 0..2.
+func monStdio(fds []int) ([]*os.File, error) {
+	files := make([]*os.File, 3)
+	for i := range files {
+		if i < len(fds) {
+			files[i] = os.NewFile(uintptr(fds[i]), fmt.Sprintf("ssh-monitor-child-fd%d", i))
+			continue
+		}
+		f, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+		if err != nil {
+			monCloseFiles(files[:i])
+			closeFds(fds[i:]) // never wrapped: close them raw, exactly once
+			return nil, err
+		}
+		files[i] = f
+	}
+	return files, nil
+}
+
+func monCloseFiles(files []*os.File) {
+	for _, f := range files {
+		f.Close()
+	}
+}
+
+// monChildDir returns the child's working directory, falling back to
+// "/" when dir is empty, missing, or not a directory. The check is
+// best-effort.
+func monChildDir(dir string) string {
+	if dir == "" {
+		return "/"
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return "/"
+	}
+	return dir
+}

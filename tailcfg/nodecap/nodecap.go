@@ -91,6 +91,15 @@ const (
 	// server, DERP servers, etc.)
 	DebugTSDNSResolution Cap = "https://tailscale.com/cap/debug-ts-dns-resolution"
 
+	// DisableHybridHandshakes indicates that the node should not use hybrid
+	// PQ wireguard handshakes to communicate with peers that support hybrid
+	// handshakes.
+	// 2026-11-03: This is a temporary panic disable attribute intended to reduce
+	// the risk of the initial rollout of hybrid handshakes. It will eventually
+	// be deleted to remove the control server's ability to downgrade hybrid
+	// handshakes.
+	DisableHybridHandshakes Cap = "https://tailscale.com/cap/disable-hybrid-handshakes"
+
 	// FunnelPorts specifies the ports that the Funnel is available on.
 	// The ports are specified as a comma-separated list of port numbers or port
 	// ranges (e.g. "80,443,8080-8090") in the ports query parameter.
@@ -190,6 +199,17 @@ const (
 	// LogExitFlows enables exit node destinations in network flow logs.
 	LogExitFlows Cap = "log-exit-flows"
 
+	// LogUploadAuth specifies the HTTP Authorization token
+	// to use when uploading logs. The CapMap value is a JSON string containing
+	// the token. Control pushes a refreshed token via netmap CapMap updates before
+	// the previous token expires. The client caches the latest value and
+	// does not fetch refreshes itself.
+	//
+	// The value is a secret. The client removes this capability from the netmap
+	// before publishing it, so the token does not appear in local status, WhoIs,
+	// netmap notifications, the on-disk netmap cache, or debug netmap dumps.
+	LogUploadAuth Cap = "log-upload-auth"
+
 	// AutoExitNode permits the automatic exit nodes feature.
 	AutoExitNode Cap = "auto-exit-node"
 
@@ -226,13 +246,12 @@ const (
 	// if needed.
 	DisableSplitDNSWhenNoCustomResolvers Cap = "disable-split-dns-when-no-custom-resolvers"
 
-	// ScopeQuad100OnMacOS makes sandboxed macOS clients scope quad-100
-	// to its match domains instead of installing it as the OS's primary
-	// (catch-all) resolver, so that public names fall through to the OS
-	// resolver -- e.g. a user's DoH system profile -- rather than being
-	// shadowed. It has no effect on any other platform. Without this attribute,
-	// sandboxed macOS keeps the older behavior of making quad-100 the default
-	// resolver, as iOS still does. See tailscale/corp#45534.
+	// ScopeQuad100OnMacOS lets sandboxed macOS scope quad-100 for simple DNS
+	// configs, so public queries can use the OS resolver (including DoH).
+	// Custom split resolvers or unrouted forward/PTR records still require
+	// quad-100 as primary. Without this attribute, quad-100 stays primary.
+	// Has no effect on other platforms. See tailscale/corp#45534 and
+	// tailscale/corp#48693.
 	ScopeQuad100OnMacOS Cap = "scope-quad100-macos"
 
 	// DisableLocalDNSOverrideViaNRPT indicates that the node's DNS manager should not
@@ -385,6 +404,10 @@ const (
 	// [tailscale.com/util/clientmetric]'s.
 	EmitRuntimeMetrics Cap = "emit-runtime-metrics"
 
+	// ConnReject enables the node's aggregated connection-rejection diagnostic
+	// buffers and the debug-rejects LocalAPI and GET /debug/rejects c2n endpoints.
+	ConnReject Cap = "debug-conn-reject"
+
 	// DisableUDPGRO disables UDP GRO (UDP_GRO socket option on Linux)
 	// on the magicsock UDP socket. It exists so control can mitigate kernel
 	// regressions that cause throughput or correctness issues with UDP GRO on
@@ -429,6 +452,11 @@ const (
 	// UDP headers or checksums for equal-length GSO batches, without requiring
 	// a client release. See https://github.com/tailscale/tailscale/issues/19777.
 	NeverGSOEqualTail Cap = "never-gso-equal-tail"
+
+	// Conn25Connector specifies which conn25 apps a peer is a connector for.
+	// Presence of this field means that this client may try to use the peer as
+	// a connector for the domains specified in the named app's configuration.
+	Conn25Connector Cap = "conn25-connector-apps"
 )
 
 const (

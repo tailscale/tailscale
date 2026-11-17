@@ -219,7 +219,7 @@ func BenchmarkTailchonkFSOpenLongChain(b *testing.B) {
 	// size does not depend on checkpoint cadence.
 	const targetAUMs = maxScanIterations
 
-	signer := key.NewNLPrivate()
+	signer := key.NewTLPrivate()
 	trustedKey := Key{Kind: Key25519, Public: signer.Public().Verifier(), Votes: 1}
 	storage := ChonkMem()
 	authority, _, err := Create(storage, CreateStateForTest(trustedKey), signer)
@@ -694,9 +694,9 @@ func TestCompact(t *testing.T) {
 }
 
 func TestCompactLongButYoung(t *testing.T) {
-	ourPriv := key.NewNLPrivate()
+	ourPriv := key.NewTLPrivate()
 	ourKey := Key{Kind: Key25519, Public: ourPriv.Public().Verifier(), Votes: 1}
-	someOtherKey := Key{Kind: Key25519, Public: key.NewNLPrivate().Public().Verifier(), Votes: 1}
+	someOtherKey := Key{Kind: Key25519, Public: key.NewTLPrivate().Public().Verifier(), Votes: 1}
 	state := CreateStateForTest(ourKey, someOtherKey)
 
 	storage := ChonkMem()

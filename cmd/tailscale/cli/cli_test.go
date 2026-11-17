@@ -1051,6 +1051,10 @@ func TestPrefFlagMapping(t *testing.T) {
 		case "AutoExitNode":
 			// Handled by tailscale {set,up} --exit-node=auto:any.
 			continue
+		case "Tailnet":
+			// Registration-only hint for the tailnet to join, consumed when
+			// building the RegisterRequest. Not editable via a CLI flag.
+			continue
 		}
 		t.Errorf("unexpected new ipn.Pref field %q is not handled by up.go (see addPrefFlagMapping and checkForAccidentalSettingReverts)", prefName)
 	}
@@ -1130,6 +1134,18 @@ func TestUpdatePrefs(t *testing.T) {
 			},
 			wantSimpleUp: false,
 			wantErrSubtr: "tailscale up --accept-dns=false",
+		},
+		{
+			name:  "just_up_running_with_tags",
+			flags: []string{},
+			curPrefs: &ipn.Prefs{
+				ControlURL:    ipn.DefaultControlURL,
+				Persist:       &persist.Persist{UserProfile: tailcfg.UserProfile{LoginName: "crawshaw.github"}},
+				AdvertiseTags: []string{"tag:dummy-test"},
+			},
+			env:            upCheckEnv{backendState: "Running"},
+			wantSimpleUp:   true,
+			wantJustEditMP: &ipn.MaskedPrefs{WantRunningSet: true},
 		},
 		{
 			name:  "just_edit",

@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -36,6 +37,7 @@ import (
 
 	"github.com/pires/go-proxyproto"
 	"go4.org/mem"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"
@@ -80,12 +82,23 @@ const (
 // current etag of a resource.
 var ErrETagMismatch = errors.New("etag mismatch")
 
-// ErrProxyToTailscaledSocket is returned when attempting to proxy
-// to the tailscaled socket itself, which would create a loop.
+// ErrProxyToTailscaledSocket is returned when attempting to proxy to the
+// tailscaled socket itself. The LocalAPI authorizes a unix-socket caller by
+// the peer credentials of the dialing process, which would be tailscaled
+// running as root, so such a proxy would hand a remote client a
+// root-authorized LocalAPI.
 var ErrProxyToTailscaledSocket = errors.New("cannot proxy to tailscaled socket")
 
 var serveHTTPContextKey ctxkey.Key[*serveHTTPContext]
 
+// appCapsContextKey holds the app capabilities accepted by the mount handling
+// the current request. It is per-request state: serveHTTPContext is shared by
+// all streams of a connection, so mount state must not be stored on it.
+var appCapsContextKey = ctxkey.New("ipnlocal.appCapsContextKey", views.Slice[peercap.Cap]{})
+
+// serveHTTPContext is connection-scoped: one value is shared by all requests on
+// the connection, including concurrent h2 streams. Do not add per-request state
+// to it, use a separate context key like appCapsContextKey instead.
 type serveHTTPContext struct {
 	SrcAddr       netip.AddrPort
 	ForVIPService tailcfg.ServiceName // "" means local
@@ -93,8 +106,6 @@ type serveHTTPContext struct {
 
 	// provides funnel-specific context, nil if not funneled
 	Funnel *funnelFlow
-	// AppCapabilities lists all PeerCapabilities that should be forwarded by serve
-	AppCapabilities views.Slice[peercap.Cap]
 }
 
 // funnelFlow represents a funneled connection initiated via IngressPeer
@@ -124,7 +135,21 @@ type localListener struct {
 
 	handler       func(net.Conn) error            // handler for inbound connections
 	closeListener syncs.AtomicValue[func() error] // Listener's Close method, if any
+
+	// allowAllInterfaces, if set, stops the listener from being bound to the
+	// Tailscale interface, so it answers traffic arriving on any interface.
+	// Only serve listeners set it, and only when serveAllowAllInterfaces is
+	// set; the web client listener always stays bound.
+	allowAllInterfaces bool
 }
+
+// serveAllowAllInterfaces, when set, stops serve's kernel listeners from
+// being bound to the Tailscale interface, so they answer traffic arriving on
+// any interface. It applies only to serve listeners, not the web client
+// listener. This re-exposes serve to the local network; it is set only by the
+// Kubernetes operator's experimental cluster-traffic ingress feature, which
+// forwards cluster traffic to the node's Tailscale IP via another interface.
+var serveAllowAllInterfaces = envknob.RegisterBool("TS_SERVE_ALLOW_ALL_INTERFACES")
 
 func (b *LocalBackend) newServeListener(ctx context.Context, ap netip.AddrPort, logf logger.Logf) *localListener {
 	ctx, cancel := context.WithCancel(ctx)
@@ -134,6 +159,8 @@ func (b *LocalBackend) newServeListener(ctx context.Context, ap netip.AddrPort, 
 		ctx:    ctx,
 		cancel: cancel,
 		logf:   logf,
+
+		allowAllInterfaces: serveAllowAllInterfaces(),
 
 		handler: func(conn net.Conn) error {
 			srcAddr := conn.RemoteAddr().(*net.TCPAddr).AddrPort()
@@ -169,7 +196,7 @@ func (s *localListener) Run() {
 		ipStr := ip.String()
 
 		var lc net.ListenConfig
-		if initListenConfig != nil {
+		if initListenConfig != nil && !s.allowAllInterfaces {
 			ifIndex, err := netmon.TailscaleInterfaceIndex()
 			if err != nil {
 				s.logf("localListener failed to get Tailscale interface index %v, backing off: %v", s.ap, err)
@@ -360,6 +387,10 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 		return err
 	}
 
+	if b.serveTargetsTailscaledSocket(config.View()) {
+		return errors.New("serving to the tailscaled socket is prohibited for security reasons")
+	}
+
 	var bs []byte
 	if config != nil {
 		j, err := json.Marshal(config)
@@ -396,14 +427,6 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 	}
 
 	return nil
-}
-
-// ServeConfig provides a view of the current serve mappings.
-// If serving is not configured, the returned view is not Valid.
-func (b *LocalBackend) ServeConfig() ipn.ServeConfigView {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.serveConfig
 }
 
 // ServeConfigETag provides a view of the current serve mappings and an ETag,
@@ -676,15 +699,17 @@ func (b *LocalBackend) tcpHandlerForServeTCP(tcph ipn.TCPPortHandlerView, dport 
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			var backConn net.Conn
 			var err error
-			if socketPath, ok := strings.CutPrefix(backDst, "unix:"); ok {
-				var d net.Dialer
-				backConn, err = d.DialContext(ctx, "unix", socketPath)
+			if socketPath, isUnix := strings.CutPrefix(backDst, "unix:"); isUnix {
+				backConn, err = b.dialServeUnixSocket(ctx, socketPath)
 			} else {
 				backConn, err = b.dialer.SystemDial(ctx, "tcp", backDst)
 			}
 			cancel()
 			if err != nil {
-				b.logf("localbackend: failed to TCP proxy port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
+				// dialServeUnixSocket already logged a refusal; don't double-log.
+				if !errors.Is(err, ErrProxyToTailscaledSocket) {
+					b.logf("localbackend: failed to TCP proxy port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
+				}
 				return nil
 			}
 			defer backConn.Close()
@@ -842,11 +867,16 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 		if host, _, err := net.SplitHostPort(hostname); err == nil {
 			hostname = host
 		}
+		// DNS names are case-insensitive, and a trailing dot marks a name
+		// as fully qualified. Serve config keys are lowercase with no
+		// trailing dot, so normalize the Host header to match.
+		hostname = strings.ToLower(strings.TrimSuffix(hostname, "."))
 		if !strings.HasSuffix(hostname, tcd) {
 			hostname += tcd
 		}
 	} else {
-		hostname = r.TLS.ServerName
+		// TLS rejects a trailing dot in SNI but does not lowercase it.
+		hostname = strings.ToLower(r.TLS.ServerName)
 	}
 
 	sctx, ok := serveHTTPContextKey.ValueOk(r.Context())
@@ -1026,18 +1056,69 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		p.Transport = rp.getTransport()
 	}
+	// Let the Transport keep reading the request body after the response
+	// starts. Otherwise the HTTP/1 server closes the body at that point and
+	// the Transport closes its backend connection under the response it is
+	// copying (golang/go#40747). The HTTP/2 server always allows this.
+	if err := http.NewResponseController(w).EnableFullDuplex(); err != nil {
+		rp.logf("serve: enable full duplex: %v", err)
+	}
 	p.ServeHTTP(w, r)
+}
+
+// dialServeUnixSocket dials a unix-socket serve/funnel backend. It returns
+// ErrProxyToTailscaledSocket if the backend is tailscaled's own socket,
+// which would give the caller a root-authorized LocalAPI.
+//
+// The configured path can be replaced by anyone who can write to its
+// directory, so the socket is re-checked on every dial, not only at
+// config time. dialServeUnixSocketSafe avoids re-resolving the path
+// where the platform allows it. On the remaining dials,
+// refuseIfConnectedToTailscaledSocket re-checks the connected peer.
+func (b *LocalBackend) dialServeUnixSocket(ctx context.Context, socketPath string) (net.Conn, error) {
+	if b.isTailscaledSocket(socketPath) {
+		b.logf("serve: refusing to proxy to the tailscaled socket %q", socketPath)
+		return nil, ErrProxyToTailscaledSocket
+	}
+	conn, err := b.dialServeUnixSocketSafe(ctx, socketPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := b.refuseIfConnectedToTailscaledSocket(conn); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+// refuseIfConnectedToTailscaledSocket returns ErrProxyToTailscaledSocket
+// if conn is a unix connection to the tailscaled socket. The peer address
+// is the path the listening socket was bound to, not the path that was
+// dialed, so the check still sees the tailscaled socket through a symlink
+// swapped in before the dial. This check is best-effort: connections
+// that have no determinable peer name are allowed.
+func (b *LocalBackend) refuseIfConnectedToTailscaledSocket(conn net.Conn) error {
+	ua, ok := conn.RemoteAddr().(*net.UnixAddr)
+	if !ok || ua.Name == "" {
+		return nil
+	}
+	if ua.Name == b.sys.SocketPath || b.isTailscaledSocket(ua.Name) {
+		b.logf("serve: refusing connected unix backend peer %q: it is the tailscaled socket", ua.Name)
+		return ErrProxyToTailscaledSocket
+	}
+	return nil
 }
 
 // getTransport returns the Transport used for regular (non-GRPC) requests
 // to the backend. The Transport gets created lazily, at most once.
 func (rp *reverseProxy) getTransport() *http.Transport {
 	return rp.httpTransport.Get(func() *http.Transport {
+		// Zero preserves http.Transport's default MaxIdleConnsPerHost value.
+		maxIdleConnsPerHost, _ := envknob.LookupInt("TS_DEBUG_SERVE_MAX_IDLE_CONNS_PER_HOST")
 		dial := rp.lb.dialer.SystemDial
 		if rp.socketPath != "" {
 			dial = func(ctx context.Context, _, _ string) (net.Conn, error) {
-				var d net.Dialer
-				return d.DialContext(ctx, "unix", rp.socketPath)
+				return rp.lb.dialServeUnixSocket(ctx, rp.socketPath)
 			}
 		}
 
@@ -1049,6 +1130,7 @@ func (rp *reverseProxy) getTransport() *http.Transport {
 			// Values for the following parameters have been copied from http.DefaultTransport.
 			ForceAttemptHTTP2:     true,
 			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   maxIdleConnsPerHost,
 			IdleConnTimeout:       90 * time.Second,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
@@ -1066,8 +1148,7 @@ func (rp *reverseProxy) getH2CTransport() http.RoundTripper {
 			Protocols: &p,
 			DialTLSContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
 				if rp.socketPath != "" {
-					var d net.Dialer
-					return d.DialContext(ctx, "unix", rp.socketPath)
+					return rp.lb.dialServeUnixSocket(ctx, rp.socketPath)
 				}
 				return rp.lb.dialer.SystemDial(ctx, "tcp", rp.url.Host)
 			},
@@ -1109,11 +1190,13 @@ func addProxyForwardedHeaders(r *httputil.ProxyRequest) {
 
 func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	// Clear any incoming values squatting in the headers.
-	r.Out.Header.Del("Tailscale-User-Login")
-	r.Out.Header.Del("Tailscale-User-Name")
-	r.Out.Header.Del("Tailscale-User-Profile-Pic")
-	r.Out.Header.Del("Tailscale-Funnel-Request")
-	r.Out.Header.Del("Tailscale-Headers-Info")
+	delHeaderVariants(r.Out.Header,
+		"Tailscale-User-Login",
+		"Tailscale-User-Name",
+		"Tailscale-User-Profile-Pic",
+		"Tailscale-Funnel-Request",
+		"Tailscale-Headers-Info",
+	)
 
 	c, ok := serveHTTPContextKey.ValueOk(r.Out.Context())
 	if !ok {
@@ -1138,6 +1221,25 @@ func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	r.Out.Header.Set("Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers")
 }
 
+// delHeaderVariants deletes each header in 'names' from 'h', along with any
+// header whose name matches case-insensitively after replacing '_' with '-'.
+//
+// Any backends that map headers to CGI-style variables (e.g. PHP;
+// HTTP_TAILSCALE_USER_LOGIN) would treat "Tailscale_User_Login" the same as
+// "Tailscale-User-Login". If we just used a plain [http.Header.Del], clients
+// could spoof the headers we set.
+func delHeaderVariants(h http.Header, names ...string) {
+	for k := range h {
+		norm := strings.ReplaceAll(k, "_", "-")
+		for _, name := range names {
+			if strings.EqualFold(norm, name) {
+				delete(h, k)
+				break
+			}
+		}
+	}
+}
+
 // encTailscaleHeaderValue cleans or encodes as necessary v, to be suitable in
 // an HTTP header value. See
 // https://github.com/tailscale/tailscale/issues/11603.
@@ -1155,14 +1257,14 @@ func encTailscaleHeaderValue(v string) string {
 
 func (b *LocalBackend) addAppCapabilitiesHeader(r *httputil.ProxyRequest) error {
 	const appCapabilitiesHeaderName = "Tailscale-App-Capabilities"
-	r.Out.Header.Del(appCapabilitiesHeaderName)
+	delHeaderVariants(r.Out.Header, appCapabilitiesHeaderName)
 
 	c, ok := serveHTTPContextKey.ValueOk(r.Out.Context())
 	if !ok || c.Funnel != nil {
 		return nil
 	}
-	acceptCaps := c.AppCapabilities
-	if acceptCaps.IsNil() {
+	acceptCaps, ok := appCapsContextKey.ValueOk(r.Out.Context())
+	if !ok || acceptCaps.IsNil() {
 		return nil
 	}
 	peerCaps := b.PeerCaps(c.SrcAddr.Addr())
@@ -1230,12 +1332,8 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unknown proxy destination", http.StatusInternalServerError)
 			return
 		}
-		// Inject app capabilities to forward into the request context
-		c, ok := serveHTTPContextKey.ValueOk(r.Context())
-		if !ok {
-			return
-		}
-		c.AppCapabilities = h.AcceptAppCaps()
+		// Mount-accepted capabilities are per-request state
+		r = r.WithContext(appCapsContextKey.WithValue(r.Context(), h.AcceptAppCaps()))
 		h := p.(http.Handler)
 		// Trim the mount point from the URL path before proxying. (#6571)
 		if r.URL.Path != "/" {
@@ -1249,7 +1347,20 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *LocalBackend) serveFileOrDirectory(w http.ResponseWriter, r *http.Request, fileOrDir, mountPoint string) {
-	fi, err := os.Stat(fileOrDir)
+	// The directory that contains fileOrDir, and fileOrDir itself if it's a
+	// directory, may be writable by users who can't configure Serve.
+	// os.Stat, os.Open and http.Dir all follow symlinks, so such a user could
+	// make tailscaled serve any file it can read. Instead, resolve fileOrDir
+	// through an os.Root of its parent directory, and serve a directory
+	// through an os.Root of its own. An os.Root refuses symlinks whose target
+	// leaves the root, and absolute symlinks, but still follows relative
+	// symlinks that stay inside it.
+	parent, name, err := openParentRoot(fileOrDir)
+	var fi os.FileInfo
+	if err == nil {
+		defer parent.Close()
+		fi, err = parent.Stat(name)
+	}
 	if err != nil {
 		if os.IsNotExist(err) {
 			http.NotFound(w, r)
@@ -1264,7 +1375,7 @@ func (b *LocalBackend) serveFileOrDirectory(w http.ResponseWriter, r *http.Reque
 			http.NotFound(w, r)
 			return
 		}
-		f, err := os.Open(fileOrDir)
+		f, err := parent.Open(name)
 		if err != nil {
 			b.logf("error opening %s: %v", fileOrDir, err)
 			http.Error(w, "an error occurred reading the file or directory", 500)
@@ -1283,27 +1394,107 @@ func (b *LocalBackend) serveFileOrDirectory(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	var fs http.Handler = http.FileServer(http.Dir(fileOrDir))
+	root, err := parent.OpenRoot(name)
+	if err != nil {
+		b.logf("error opening %s: %v", fileOrDir, err)
+		http.Error(w, "an error occurred reading the file or directory", 500)
+		return
+	}
+	defer root.Close()
+
+	var fs http.Handler = http.FileServer(confinedDir{root})
 	if mountPoint != "/" {
 		fs = http.StripPrefix(strings.TrimSuffix(mountPoint, "/"), fs)
 	}
 	fs.ServeHTTP(&fixLocationHeaderResponseWriter{
 		ResponseWriter: w,
 		mountPoint:     mountPoint,
+		reqPath:        r.URL.Path,
 	}, r)
 }
 
+// openParentRoot opens the directory that contains p as an os.Root, and
+// returns it with the name of p's last element inside it. A filesystem root
+// has no parent, so for one it returns an os.Root of p itself, and ".".
+func openParentRoot(p string) (parent *os.Root, name string, err error) {
+	p = filepath.Clean(p)
+	dir := filepath.Dir(p)
+	name = filepath.Base(p)
+	if dir == p {
+		name = "."
+	}
+	parent, err = os.OpenRoot(dir)
+	return parent, name, err
+}
+
+// confinedDir is an http.FileSystem like http.Dir, except that it opens files
+// through an os.Root, so a symlink whose target leaves the root, or an
+// absolute symlink, is refused instead of followed.
+//
+// It isn't http.FS(root.FS()) because that would report a refused symlink as
+// a server error rather than as not found.
+type confinedDir struct {
+	root *os.Root
+}
+
+// Open implements http.FileSystem.
+func (d confinedDir) Open(name string) (http.File, error) {
+	// Turn the name into a path relative to the root the same way http.Dir
+	// does, including its check for names that aren't valid local paths.
+	rel := path.Clean("/" + name)[1:]
+	if rel == "" {
+		rel = "."
+	}
+	rel, err := filepath.Localize(rel)
+	if err != nil {
+		// http.Dir reports these as not found, too.
+		return nil, os.ErrNotExist
+	}
+	f, err := d.root.Open(rel)
+	if err != nil {
+		// os.Root reports a path that leaves the root with an error that is
+		// neither ErrNotExist nor ErrPermission. Report that, and any other
+		// unexpected error, as not found, so a refused path is neither
+		// served nor confirmed to exist.
+		if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, os.ErrPermission) {
+			return nil, os.ErrNotExist
+		}
+		return nil, err
+	}
+	return f, nil
+}
+
 // fixLocationHeaderResponseWriter is an http.ResponseWriter wrapper that, upon
-// flushing HTTP headers, prefixes any Location header with the mount point.
+// flushing HTTP headers, rewrites any Location header to be under the mount
+// point. http.FileServer sends redirects relative to the (prefix-stripped)
+// request URL, so a relative Location is resolved against the original request
+// path.
 type fixLocationHeaderResponseWriter struct {
 	http.ResponseWriter
 	mountPoint string
+	reqPath    string    // original request path, before the mount point is stripped
 	fixOnce    sync.Once // guards call to fix
 }
 
 func (w *fixLocationHeaderResponseWriter) fix() {
 	h := w.ResponseWriter.Header()
 	if v := h.Get("Location"); v != "" {
+		if ref, err := url.Parse(v); err == nil && ref.Scheme == "" && ref.Host == "" && !strings.HasPrefix(v, "/") && strings.HasPrefix(w.reqPath, w.mountPoint) {
+			// Resolve against the original request path, which keeps any
+			// parent directories below the mount point and removes dot
+			// segments. The query string, if any, is carried along.
+			u := (&url.URL{Path: w.reqPath}).ResolveReference(ref)
+			loc := u.EscapedPath()
+			if u.RawQuery != "" {
+				loc += "?" + u.RawQuery
+			}
+			// Collapse leading slashes so a request path like "//foo"
+			// can't produce a protocol-relative Location.
+			h.Set("Location", "/"+strings.TrimLeft(loc, "/"))
+			return
+		}
+		// Not expected from http.FileServer, which only sends relative
+		// Locations; kept as a safety net.
 		h.Set("Location", w.mountPoint+v)
 	}
 }
@@ -1378,14 +1569,19 @@ func (b *LocalBackend) getTLSServeCertForPort(port uint16, forVIPService tailcfg
 		if cert, ok := b.getACMETLSALPNCert(hi); ok {
 			return cert, nil
 		}
-		_, ok := b.webServerConfig(hi.ServerName, forVIPService, port)
+		// Serve config keys and cert domains are lowercase; SNI is not
+		// guaranteed to be. The ACME challenge lookup above keeps the
+		// name as sent, since it is matched against the name the ACME
+		// server dials.
+		name := strings.ToLower(hi.ServerName)
+		_, ok := b.webServerConfig(name, forVIPService, port)
 		if !ok {
 			return nil, errors.New("no webserver configured for name/port")
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		pair, err := b.GetCertPEM(ctx, hi.ServerName)
+		pair, err := b.GetCertPEM(ctx, name)
 		if err != nil {
 			return nil, err
 		}
@@ -1763,6 +1959,47 @@ func vipServiceHash(logf logger.Logf, services []*tailcfg.VIPService) string {
 	var buf [sha256.Size]byte
 	h.Sum(buf[:0])
 	return hex.EncodeToString(buf[:])
+}
+
+// serveTargetsTailscaledSocket reports whether sc has any TCP-forward or web
+// handler that proxies to tailscaled's own socket.
+//
+// The local API authorizes a unix-socket caller by the peer credentials of the
+// dialing process, which is tailscaled itself, running as root. Proxying serve
+// to it would hand a tailnet peer a root-authorized local API, so it is
+// refused -- the same reason proxyHandlerForBackend and the TCP-forward dial
+// return ErrProxyToTailscaledSocket. Foreground and VIP-service handlers are as
+// exposed as background ones, so all are checked.
+func (b *LocalBackend) serveTargetsTailscaledSocket(sc ipn.ServeConfigView) bool {
+	if !sc.Valid() {
+		return false
+	}
+	isProhibitedSock := func(target string) bool {
+		p, ok := strings.CutPrefix(target, "unix:")
+		return ok && b.isTailscaledSocket(p)
+	}
+	// Webs covers top-level, foreground and service handlers; TCPs covers
+	// top-level and foreground but not services, so those are checked below.
+	for _, wc := range sc.Webs() {
+		for _, h := range wc.Handlers().All() {
+			if isProhibitedSock(h.Proxy()) {
+				return true
+			}
+		}
+	}
+	for _, h := range sc.TCPs() {
+		if isProhibitedSock(h.TCPForward()) {
+			return true
+		}
+	}
+	for _, svc := range sc.Services().All() {
+		for _, h := range svc.TCP().All() {
+			if isProhibitedSock(h.TCPForward()) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // validateServeConfigUpdate validates changes proposed by incoming serve

@@ -5,7 +5,6 @@ package portmapper
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"net/netip"
@@ -26,7 +25,9 @@ const (
 	pcpVersion     = 2
 	pcpDefaultPort = 5351
 
-	pcpMapLifetimeSec = 7200 // TODO does the RFC recommend anything? This is taken from PMP.
+	// Use the same lifetime as NAT-PMP given that we don't know how long
+	// the IP assignment is valid for.
+	pcpMapLifetimeSec = 7200
 
 	pcpCodeOK            pcpResultCode = 0
 	pcpCodeNotAuthorized pcpResultCode = 2
@@ -45,6 +46,10 @@ const (
 	pcpTCPMapping = 6  // portmap TCP
 )
 
+// A pcpNonce is a cookie assigned by the router when issuing a mapping, that
+// the client retains in order to release or update the mapping later.
+type pcpNonce [12]byte
+
 type pcpMapping struct {
 	c        *Client
 	gw       netip.AddrPort
@@ -55,6 +60,7 @@ type pcpMapping struct {
 	goodUntil  time.Time
 
 	epoch uint32
+	nonce pcpNonce
 }
 
 func (p *pcpMapping) MappingType() string      { return "pcp" }
@@ -62,9 +68,9 @@ func (p *pcpMapping) GoodUntil() time.Time     { return p.goodUntil }
 func (p *pcpMapping) RenewAfter() time.Time    { return p.renewAfter }
 func (p *pcpMapping) External() netip.AddrPort { return p.external }
 func (p *pcpMapping) MappingDebug() string {
-	return fmt.Sprintf("pcpMapping{gw:%v, external:%v, internal:%v, renewAfter:%d, goodUntil:%d}",
+	return fmt.Sprintf("pcpMapping{gw:%v, external:%v, internal:%v, renewAfter:%d, goodUntil:%d, nonce:%x}",
 		p.gw, p.external, p.internal,
-		p.renewAfter.Unix(), p.goodUntil.Unix())
+		p.renewAfter.Unix(), p.goodUntil.Unix(), p.nonce)
 }
 
 func (p *pcpMapping) Release(ctx context.Context) {
@@ -73,19 +79,29 @@ func (p *pcpMapping) Release(ctx context.Context) {
 		return
 	}
 	defer uc.Close()
-	pkt := buildPCPRequestMappingPacket(p.internal.Addr(), p.internal.Port(), p.external.Port(), 0, p.external.Addr())
+	// Per RFC 6887 section 15.1 (with Errata ID 3621), a mapping-delete
+	// request (lifetime 0) MUST set the Suggested External Port to zero and
+	// the Suggested External Address to the all-zeros address of the family
+	// being deleted: ::ffff:0.0.0.0 for IPv4, :: for IPv6.
+	zeroExtAddr := netip.IPv4Unspecified()
+	if p.external.Addr().Is6() {
+		zeroExtAddr = netip.IPv6Unspecified()
+	}
+	pkt := buildPCPRequestMappingPacket(p.internal.Addr(), p.internal.Port(), 0, 0, zeroExtAddr, p.nonce)
 	uc.WriteToUDPAddrPort(pkt, p.gw)
 }
 
 // buildPCPRequestMappingPacket generates a PCP packet with a MAP opcode.
-// To create a packet which deletes a mapping, lifetimeSec should be set to 0.
+// To create a packet which deletes a mapping, lifetimeSec, prevPort and prevExternalIP should be set to 0.
 // If prevPort is not known, it should be set to 0.
 // If prevExternalIP is not known, it should be set to 0.0.0.0.
+// Renewing or deleting a mapping must reuse the nonce from the original response.
 func buildPCPRequestMappingPacket(
 	myIP netip.Addr,
 	localPort, prevPort uint16,
 	lifetimeSec uint32,
 	prevExternalIP netip.Addr,
+	nonce pcpNonce,
 ) (pkt []byte) {
 	// 24 byte common PCP header + 36 bytes of MAP-specific fields
 	pkt = make([]byte, 24+36)
@@ -96,10 +112,8 @@ func buildPCPRequestMappingPacket(
 	copy(pkt[8:24], myIP16[:])
 
 	mapOp := pkt[24:]
-	rand.Read(mapOp[:12]) // 96 bit mapping nonce
+	copy(mapOp[:12], nonce[:])
 
-	// TODO: should this be a UDP mapping? It looks like it supports "all protocols" with 0, but
-	// also doesn't support a local port then.
 	mapOp[12] = pcpUDPMapping
 	binary.BigEndian.PutUint16(mapOp[16:18], localPort)
 	binary.BigEndian.PutUint16(mapOp[18:20], prevPort)
@@ -125,7 +139,6 @@ func parsePCPMapResponse(resp []byte) (*pcpMapping, error) {
 	if res.ResultCode != pcpCodeOK {
 		return nil, fmt.Errorf("PCP response not ok, code %d", res.ResultCode)
 	}
-	// TODO: don't ignore the nonce and make sure it's the same?
 	externalPort := binary.BigEndian.Uint16(resp[42:44])
 	externalIPBytes := [16]byte{}
 	copy(externalIPBytes[:], resp[44:])
@@ -141,6 +154,7 @@ func parsePCPMapResponse(resp []byte) (*pcpMapping, error) {
 		goodUntil:  now.Add(lifetime),
 		epoch:      res.Epoch,
 	}
+	copy(mapping.nonce[:], resp[24:36])
 
 	return mapping, nil
 }

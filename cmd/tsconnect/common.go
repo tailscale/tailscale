@@ -151,14 +151,16 @@ func runEsbuildServe(buildOptions esbuild.BuildOptions) {
 		log.Fatalf("Cannot create esbuild context: %v", err)
 	}
 	result, err := buildContext.Serve(esbuild.ServeOptions{
-		Port:     uint16(port),
+		Port:     int(port),
 		Host:     host,
 		Servedir: "./",
 	})
 	if err != nil {
 		log.Fatalf("Cannot start esbuild server: %v", err)
 	}
-	log.Printf("Listening on http://%s:%d\n", result.Host, result.Port)
+	for _, h := range result.Hosts {
+		log.Printf("Listening on http://%s\n", net.JoinHostPort(h, strconv.Itoa(int(result.Port))))
+	}
 	select {}
 }
 
@@ -244,7 +246,7 @@ func buildWasm(dev bool) ([]byte, error) {
 		}
 		// Omit long paths and debug symbols in release builds, to reduce the
 		// generated WASM binary size.
-		args = append(args, "-trimpath", "-ldflags", wasmbuild.ProdLDFlags)
+		args = append(args, "-trimpath", "-ldflags", wasmbuild.ProdLDFlags())
 	} else if *devControl != "" {
 		args = append(args, "-ldflags", fmt.Sprintf("-X 'main.ControlURL=%v'", *devControl))
 	}

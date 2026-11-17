@@ -4,7 +4,6 @@
 package health
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"maps"
@@ -48,6 +47,34 @@ func wantChange(c Change) func(c Change) (bool, error) {
 		}
 
 		return true, nil
+	}
+}
+
+func TestReceiveFuncStats(t *testing.T) {
+	tr := NewTracker(eventbustest.NewBus(t))
+	const v4, v6, derp = "ReceiveIPv4", "ReceiveIPv6", "ReceiveDERP"
+	names := []string{v4, v6, derp}
+	byName := map[string]*ReceiveFuncStats{}
+	for _, name := range names {
+		f := tr.ReceiveFuncStats(name)
+		if f == nil {
+			t.Fatalf("ReceiveFuncStats(%q) = nil", name)
+		}
+		if f.Name() != name {
+			t.Errorf("ReceiveFuncStats(%q).Name() = %q", name, f.Name())
+		}
+		for prev, prevStats := range byName {
+			if f == prevStats {
+				t.Errorf("ReceiveFuncStats(%q) and (%q) are the same tracker", prev, name)
+			}
+		}
+		byName[name] = f
+	}
+	// A second lookup returns the same tracker.
+	for _, name := range names {
+		if got := tr.ReceiveFuncStats(name); got != byName[name] {
+			t.Errorf("ReceiveFuncStats(%q) returned a different tracker on the second call", name)
+		}
 	}
 }
 
@@ -780,6 +807,7 @@ func TestControlHealthNotifies(t *testing.T) {
 				tw := eventbustest.NewWatcher(t, bus)
 
 				ht := NewTracker(bus)
+				ht.ReceiveFuncStats("TestReceiveFunc")
 				ht.SetIPNState("NeedsLogin", true)
 				ht.GotStreamedMapResponse()
 
@@ -854,20 +882,12 @@ func TestControlHealthIgnoredOutsideMapPoll(t *testing.T) {
 			t.Error("got a warning with code 'control-health', want none")
 		}
 
-		// An event is emitted when SetIPNState is run above,
-		// so only fail on the second event.
-		eventCounter := 0
-		expectOne := func(c *Change) error {
-			eventCounter++
-			if eventCounter == 1 {
-				return nil
-			}
-			return errors.New("saw more than 1 event")
-		}
-
+		// Other Warnables emit events above, but SetControlHealth must not
+		// emit a control health change outside of a map poll.
 		synctest.Wait()
-		if err := eventbustest.Expect(tw, expectOne); err == nil {
-			t.Error("event got emitted, want it to not be called")
+		controlHealthChanged := func(c Change) bool { return c.ControlHealthChanged }
+		if err := eventbustest.Expect(tw, controlHealthChanged); err == nil {
+			t.Error("got a ControlHealthChanged event, want none")
 		}
 	})
 }

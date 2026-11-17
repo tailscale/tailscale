@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"os"
 	"os/user"
 	"slices"
 	"strings"
@@ -18,8 +19,36 @@ import (
 	gliderssh "github.com/tailscale/gliderssh"
 	"golang.org/x/sys/unix"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/types/logger"
 )
+
+func TestMergeForwardedEnv(t *testing.T) {
+	defaults := []string{
+		"TERM=dumb",
+		"LANG=C",
+		"LC_TIME=C",
+		"TERM=xterm-256color",
+		"LANG=en_US.UTF-8",
+		"LC_TIME=en_US.UTF-8",
+		"HOME=/ignored",
+	}
+	for _, policyTerm := range []string{"", "policy-term"} {
+		var forwarded []string
+		wantTerm := "xterm-256color"
+		if policyTerm != "" {
+			forwarded = []string{"TERM=" + policyTerm}
+			wantTerm = policyTerm
+		}
+		got := mergeForwardedEnv(defaults, forwarded)
+		want := []string{"TERM=" + wantTerm, "LANG=en_US.UTF-8", "LC_TIME=en_US.UTF-8"}
+		slices.Sort(got)
+		slices.Sort(want)
+		if !slices.Equal(got, want) {
+			t.Errorf("mergeForwardedEnv = %q; want %q", got, want)
+		}
+	}
+}
 
 // fakeSession is a minimal gliderssh.Session for exercising the incubator
 // command/env construction. Only the methods used by newIncubatorCommand and
@@ -48,7 +77,7 @@ func newTestSession(t *testing.T, acceptEnv []string, clientEnviron []string) *s
 		logf: logger.Discard,
 		lb: &localState{
 			sshEnabled: true,
-			caps:       []tailcfg.NodeCapability{tailcfg.NodeAttrSSHEnvironmentVariables},
+			caps:       []nodecap.Cap{nodecap.SSHEnvironmentVariables},
 		},
 		// tailscaledPath must be non-empty to take the incubator (be-child)
 		// path rather than the direct-exec fallback.
@@ -149,9 +178,9 @@ func TestIncubatorEnvServerOnly(t *testing.T) {
 			}
 		}
 	}
-	// USER/HOME come from the server; TERM is the one client-controlled value
-	// allowed in (OpenSSH parity).
-	for _, want := range []string{"USER=alice", "HOME=/home/alice", "TERM=xterm-256color"} {
+	// USER/LOGNAME/HOME come from the server; TERM is the one client-controlled
+	// value allowed in (OpenSSH parity).
+	for _, want := range []string{"USER=alice", "LOGNAME=alice", "HOME=/home/alice", "TERM=xterm-256color"} {
 		if !slices.Contains(env, want) {
 			t.Errorf("%q missing from child environment: %q", want, env)
 		}
@@ -192,18 +221,26 @@ func TestForwardedEnvFileRoundTrip(t *testing.T) {
 		t.Errorf("forwardedEnv = %q, want %q", ia.forwardedEnv, pairs)
 	}
 
-	// forwardedEnviron applies the pairs to the user's environment and names
-	// them in the "su -w" allowlist, alongside SSH_AUTH_SOCK.
-	env, keys := ia.forwardedEnviron()
+	// forwardedEnviron applies the pairs to the user's environment (the
+	// in-process, post-drop path only).
+	env := ia.forwardedEnviron()
 	for _, p := range pairs {
 		if !slices.Contains(env, p) {
 			t.Errorf("pair %q missing from forwardedEnviron env", p)
 		}
 	}
-	for _, k := range []string{"SSH_AUTH_SOCK", "GITLAB_API_TOKEN", "PATH"} {
-		if !slices.Contains(keys, k) {
-			t.Errorf("allowlist missing %q: %q", k, keys)
+	// The su -w allowlist is SSH_AUTH_SOCK plus the forwarded keys. The
+	// pairs ride su's own environment. See
+	// TestRootExecEnvExcludesClientEnv for the TERM/LANG/LC_* exclusion
+	// from that environment.
+	want := []string{"SSH_AUTH_SOCK"}
+	for _, p := range pairs {
+		if k, _, ok := strings.Cut(p, "="); ok {
+			want = append(want, k)
 		}
+	}
+	if !slices.Equal(ia.suAllowEnvKeys(), want) {
+		t.Errorf("suAllowEnvKeys() = %q; want %q", ia.suAllowEnvKeys(), want)
 	}
 }
 
@@ -220,6 +257,34 @@ func TestParseIncubatorArgsEnvFD(t *testing.T) {
 	} {
 		if _, err := parseIncubatorArgs(args); err != nil {
 			t.Errorf("%v: got error %v, want nil", args, err)
+		}
+	}
+}
+
+// TestParseIncubatorArgsGroups verifies that --groups accepts an empty list,
+// which a user with no supplementary groups yields, but still rejects empty
+// entries within a list.
+func TestParseIncubatorArgsGroups(t *testing.T) {
+	for _, tt := range []struct {
+		groups string
+		want   []int
+	}{
+		{"", nil},
+		{"1000", []int{1000}},
+		{"1000,1001", []int{1000, 1001}},
+	} {
+		ia, err := parseIncubatorArgs([]string{"--groups=" + tt.groups})
+		if err != nil {
+			t.Errorf("--groups=%s: got error %v, want nil", tt.groups, err)
+			continue
+		}
+		if !slices.Equal(ia.gids, tt.want) {
+			t.Errorf("--groups=%s: got gids %v, want %v", tt.groups, ia.gids, tt.want)
+		}
+	}
+	for _, groups := range []string{"1000,x", "1000,,1001", "1000,"} {
+		if _, err := parseIncubatorArgs([]string{"--groups=" + groups}); err == nil {
+			t.Errorf("--groups=%s: got nil error, want rejection", groups)
 		}
 	}
 }
@@ -243,16 +308,17 @@ func TestLoadForwardedEnvLegacyEncodedEnv(t *testing.T) {
 		t.Errorf("forwardedEnv = %q, want %q", ia.forwardedEnv, pairs)
 	}
 
-	env, keys := ia.forwardedEnviron()
+	env := ia.forwardedEnviron()
 	for _, p := range pairs {
 		if !slices.Contains(env, p) {
 			t.Errorf("legacy pair %q missing from env", p)
 		}
 	}
-	for _, k := range []string{"SSH_AUTH_SOCK", "GITLAB_API_TOKEN", "OTHER"} {
-		if !slices.Contains(keys, k) {
-			t.Errorf("allowlist missing %q: %q", k, keys)
-		}
+	// The su -w allowlist names only the pairs that were forwarded plus
+	// the server-derived SSH_AUTH_SOCK.
+	empty := incubatorArgs{}
+	if keys := empty.suAllowEnvKeys(); !slices.Equal(keys, []string{"SSH_AUTH_SOCK"}) {
+		t.Errorf("suAllowEnvKeys() with no forwarded pairs = %q; want [SSH_AUTH_SOCK]", keys)
 	}
 
 	// Malformed values are rejected.
@@ -264,10 +330,14 @@ func TestLoadForwardedEnvLegacyEncodedEnv(t *testing.T) {
 
 // TestLoadForwardedEnvSanitizesPairs verifies the child-side integrity check:
 // pairs that would corrupt the "su -w" allowlist (empty or comma-carrying
-// names), truncate on exec (NUL bytes), or lack "=" are dropped when the
-// payload is loaded, even though a new parent would never send them.
+// names), truncate on exec (NUL bytes), or are dangerous env vars (which a
+// new parent also rejects in filterEnv) are dropped when the payload is
+// loaded, even though a new parent would never send them.
 func TestLoadForwardedEnvSanitizesPairs(t *testing.T) {
-	pairs := []string{"GOOD=1", "A,B=x", "C\x00D=2", "E=3\x004", "=x", "malformed", "MY VAR=6", "MY.VAR=7"}
+	pairs := []string{
+		"GOOD=1", "A,B=x", "C\x00D=2", "E=3\x004", "=x", "malformed", "MY VAR=6", "MY.VAR=7",
+		"LD_PRELOAD=/tmp/evil.so", "gconv_path=/tmp/evil", "RES_OPTIONS=attempts:1",
+	}
 	raw, _ := json.Marshal(pairs)
 	ia, err := parseIncubatorArgs([]string{"--groups=1000", "--encoded-env=" + fmt.Sprintf("%q", raw)})
 	if err != nil {
@@ -279,8 +349,119 @@ func TestLoadForwardedEnvSanitizesPairs(t *testing.T) {
 	if !slices.Equal(ia.forwardedEnv, []string{"GOOD=1"}) {
 		t.Errorf("forwardedEnv = %q, want [GOOD=1]", ia.forwardedEnv)
 	}
-	_, keys := ia.forwardedEnviron()
-	if !slices.Equal(keys, []string{"SSH_AUTH_SOCK", "GOOD"}) {
-		t.Errorf("allowlist = %q, want [SSH_AUTH_SOCK GOOD]", keys)
+}
+
+// TestRootExecEnvExcludesClientEnv is the structural env regression
+// test: the environment handed to root-exec'd login/su contains no
+// client-derived pair, neither the acceptEnvPair set, the only
+// client-controllable keys in the incubator's environment, nor
+// anything from the forwarded env, while the post-drop environment
+// from forwardedEnviron carries everything for the user's own session.
+func TestRootExecEnvExcludesClientEnv(t *testing.T) {
+	ia := incubatorArgs{forwardedEnv: []string{
+		"GITLAB_API_TOKEN=s3cr3t",
+		"LANG=xx_YY.UTF-8",
+		"LC_ALL=xx_YY.UTF-8",
+	}}
+	// The incubator's own environment is built by tailscaled (incubatorEnv:
+	// SHELL/USER/HOME/PATH/SSH_*, the server-set agent socket, and the
+	// client's acceptEnvPair'd pairs), so the test process's ambient
+	// TERM/LANG (if any) stands in for the client-derived ones. A daemon
+	// or root environment must never supply them to the user's process:
+	// they flow only through the forwarded pairs.
+	t.Setenv("TERM", "rootenv-xterm-256color")
+	root := ia.rootExecEnviron()
+	if len(root) == 0 && len(os.Environ()) > 0 {
+		t.Fatal("rootExecEnviron() = empty; want the server-derived environment")
+	}
+	for _, kv := range root {
+		k, _, _ := strings.Cut(kv, "=")
+		if clientDerivedEnvKey(k) {
+			t.Errorf("client-derived pair %q present in root-exec'd environment", kv)
+		}
+	}
+	// Every forwarded pair (secret or not) is absent from the root env but
+	// present in the post-drop env.
+	for _, pair := range ia.forwardedEnv {
+		if slices.Contains(root, pair) {
+			t.Errorf("forwarded pair %q present in root-exec'd environment", pair)
+		}
+	}
+	user := ia.forwardedEnviron()
+	for _, pair := range ia.forwardedEnv {
+		if !slices.Contains(user, pair) {
+			t.Errorf("forwarded pair %q missing from post-drop environment", pair)
+		}
+	}
+	// The post-drop environment takes TERM/LANG/LC_* only from the
+	// forwarded pairs: the ambient daemon-side TERM must not leak, and a
+	// client-derived key the client did not send stays absent.
+	got := map[string]string{}
+	for _, kv := range user {
+		k, v, _ := strings.Cut(kv, "=")
+		got[k] = v
+	}
+	if v, ok := got["TERM"]; ok {
+		t.Errorf("post-drop environment has TERM=%q; client sent none", v)
+	}
+	if got["LANG"] != "xx_YY.UTF-8" || got["LC_ALL"] != "xx_YY.UTF-8" {
+		t.Errorf("post-drop locale = LANG=%q LC_ALL=%q; want forwarded values",
+			got["LANG"], got["LC_ALL"])
+	}
+	for _, k := range []string{"TERM", "LANG", "LC_ALL"} {
+		if !clientDerivedEnvKey(k) {
+			t.Errorf("clientDerivedEnvKey(%q) = false; want true", k)
+		}
+	}
+	for _, k := range []string{"HOME", "PATH", "SSH_CONNECTION", "SSH_AUTH_SOCK", "USER"} {
+		if clientDerivedEnvKey(k) {
+			t.Errorf("clientDerivedEnvKey(%q) = true; want false (server-derived)", k)
+		}
+	}
+	// findSU's capability probe runs su as root too, and its
+	// environment must obey the same contract.
+	probe := suProbeCmd(ia, "/bin/su")
+	if len(probe.Env) == 0 && len(os.Environ()) > 0 {
+		t.Fatal("suProbeCmd env = empty; want the filtered root-exec environment")
+	}
+	for _, kv := range probe.Env {
+		if k, _, _ := strings.Cut(kv, "="); clientDerivedEnvKey(k) {
+			t.Errorf("client-derived pair %q present in findSU probe environment", kv)
+		}
+	}
+}
+
+// TestDirectExecRootFallbackRefused verifies that the direct-exec fallback
+// (no tailscaledPath) refuses to run a non-root local user's session when
+// tailscaled runs as root, since without the be-child incubator there is no
+// privilege drop and the session would run as root.
+func TestDirectExecRootFallbackRefused(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		euid int
+		uid  string
+		want bool
+	}{
+		{name: "root-euid-root-user", euid: 0, uid: "0", want: true},
+		{name: "root-euid-noncanonical-root-user", euid: 0, uid: "00", want: true},
+		{name: "root-euid-non-root-user", euid: 0, uid: "1000", want: false},
+		{name: "non-root-euid", euid: 1000, uid: "1000", want: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			lu := &userMeta{User: user.User{Username: "alice", Uid: tt.uid, Gid: tt.uid}}
+			if got := directExecAllowed(tt.euid, lu); got != tt.want {
+				t.Errorf("directExecAllowed(euid=%d, uid=%s) = %v; want %v", tt.euid, tt.uid, got, tt.want)
+			}
+		})
+	}
+
+	// Wiring: as root, the direct-exec fallback must refuse the session
+	// for the non-root local user (newTestSession's alice is uid 1000).
+	if os.Geteuid() == 0 {
+		ss := newTestSession(t, nil, nil)
+		ss.conn.srv.tailscaledPath = ""
+		if _, _, err := ss.newIncubatorCommand(logger.Discard); err == nil {
+			t.Error("newIncubatorCommand (direct exec, root euid, non-root local user) = nil error; want refusal")
+		}
 	}
 }

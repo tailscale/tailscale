@@ -31,14 +31,6 @@ var (
 // [*Conn25] is the only production implementation; the interface exists to let
 // datapath tests substitute a lightweight fake.
 type Conn25Datapath interface {
-	// ClientTransitIPForMagicIP returns a Transit IP for the given magicIP on a client.
-	// If the magicIP is within a configured Magic IP range for an app on the client,
-	// but not mapped to an active Transit IP, implementations should return [ErrUnmappedMagicIP].
-	// If magicIP is not within a configured Magic IP range, i.e. it is not actually a Magic IP,
-	// implementations should return a nil error, and a zero-value [netip.Addr] to indicate
-	// this potentially valid, non-app-connector traffic.
-	ClientTransitIPForMagicIP(magicIP netip.Addr) (netip.Addr, error)
-
 	// ConnectorRealIPForTransitIPConnection returns a real destination IP for the given
 	// srcIP and transitIP on a connector. If the transitIP is within a configured Transit IP
 	// range for an app on the connector, but not mapped to the client at srcIP, implementations
@@ -48,13 +40,18 @@ type Conn25Datapath interface {
 	// non-app-connector traffic.
 	ConnectorRealIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, error)
 
-	// ClientFlowCreated is called after a client-side flow for transitIP has
-	// been installed in the client flow table.
-	ClientFlowCreated(transitIP netip.Addr)
-	// ClientFlowRemoved is called after such a flow is removed. For each
-	// flow installed in the client flow table, ClientFlowCreated is called
-	// before any ClientFlowRemoved that fires for it.
-	ClientFlowRemoved(transitIP netip.Addr)
+	// ClientPrepareNewFlowForMagicIP is called before a client-side flow to
+	// magicIP is installed in the client flow table. It reports whether it
+	// counted the flow against an address assignment, and if so returns the
+	// reference that names the Transit IP to forward that flow to and keeps
+	// that address from being reclaimed.
+	//
+	// When ok is true, the caller must call Release on the reference exactly
+	// once: when the flow is removed, or right away if it ends up installing no
+	// flow at all. Implementations must count nothing and return ok false and
+	// the zero [ClientFlowRef] otherwise, including whenever they return a
+	// non-nil error, since the caller does not release on those paths.
+	ClientPrepareNewFlowForMagicIP(magicIP netip.Addr) (ref ClientFlowRef, ok bool, err error)
 }
 
 // datapathHandler handles packets from the datapath,
@@ -166,7 +163,13 @@ func (dh *datapathHandler) HandlePacketFromWireGuard(p *packet.Parsed, tun *tstu
 				Proto:  p.IPProto,
 				Reason: packet.RejectedDueToUnknownAppConnectorTransitIP,
 			}
-			if err := tun.InjectOutbound(packet.Generate(rj, nil)); err != nil {
+			// Queue-full drops are expected under saturation and are already
+			// counted in the outbound usermetric; only log the rest.
+			// (On platforms that define it, the error also matches
+			// syscall.ENOBUFS; tstun.ErrInjectionQueueFull is the portable
+			// form for code that builds where that errno is absent.)
+			if err := tun.TryInjectOutbound(packet.Generate(rj, nil)); err != nil &&
+				!errors.Is(err, tstun.ErrClosed) && !errors.Is(err, tstun.ErrInjectionQueueFull) {
 				dh.debugLogf("error sending TSMP flow rejection packet: %v", err)
 			}
 			return filter.Drop
@@ -229,9 +232,16 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed, tun *tstu
 	// tun device, it can only be a new client flow, other (non-app-connector) traffic,
 	// or broken return app-connector traffic on a connector, which needs to be re-established
 	// with a new outbound packet.
+	//
+	// Resolve the Magic IP and notify Conn25 that a flow for it is being
+	// established, before installing that flow in the flow table. Resolving and
+	// counting together keeps the assignment from expiring out from under the
+	// flow in between, and guarantees that ClientPrepareNewFlowForMagicIP for
+	// this flow precedes the cleanup that fires when it is removed.
 	magicIP := p.Dst.Addr()
-	transitIP, err := dh.conn25.ClientTransitIPForMagicIP(magicIP)
+	ref, ok, err := dh.conn25.ClientPrepareNewFlowForMagicIP(magicIP)
 	if err != nil {
+		// No reference to release: an error means nothing was counted.
 		if errors.Is(err, ErrUnmappedMagicIP) {
 			// Couldn't find a mapping. Tell the local application the host is
 			// unreachable so it can recover quickly instead of blackholing.
@@ -241,11 +251,12 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed, tun *tstu
 		dh.debugLogf("error mapping magic IP, passing packet unmodified: %v", err)
 		return filter.Accept
 	}
-
-	// If this is normal non-app-connector traffic, forward it along unmodified.
-	if !transitIP.IsValid() {
+	if !ok {
+		// This is normal non-app-connector traffic; forward it along
+		// unmodified. No reference to release: nothing was counted.
 		return filter.Accept
 	}
+	transitIP := ref.TransitIP()
 
 	// This is a new outbound client flow. Install a DNAT MagicIP-to-TransitIP action
 	// for the outgoing direction, and an SNAT TransitIP-to-MagicIP action for the
@@ -259,17 +270,10 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed, tun *tstu
 		Action: dh.snatAction(magicIP),
 	}
 
-	// Notify Conn25 that a flow for transitIP is being established before
-	// installing it in the flow table. This guarantees that ClientFlowCreated
-	// for this flow precedes any ClientFlowRemoved that fires for it.
-	dh.conn25.ClientFlowCreated(transitIP)
-
 	dh.clientFlowTable.NewFlow(FlowData{
-		FromTun: outgoing,
-		FromWG:  incoming,
-		OnRemove: func() {
-			dh.conn25.ClientFlowRemoved(transitIP)
-		},
+		FromTun:  outgoing,
+		FromWG:   incoming,
+		OnRemove: ref.Release,
 	})
 	outgoing.Action(p)
 	return filter.Accept

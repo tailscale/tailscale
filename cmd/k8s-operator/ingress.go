@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"tailscale.com/ipn"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/clientmetric"
@@ -82,11 +83,11 @@ func (a *IngressReconciler) Reconcile(ctx context.Context, req reconcile.Request
 	}
 
 	if err := a.maybeProvision(ctx, logger, ing); err != nil {
-		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
-			logger.Infof("optimistic lock error, retrying: %s", err)
-		} else {
-			return reconcile.Result{}, err
+		if reconciler.IsOptimisticLockError(err) {
+			logger.Debugf("update conflict, retrying: %v", err)
+			return reconcile.Result{RequeueAfter: shortRequeue}, nil
 		}
+		return reconcile.Result{}, err
 	}
 
 	return reconcile.Result{}, nil
@@ -384,7 +385,7 @@ func handlersForIngress(ctx context.Context, ing *networkingv1.Ingress, cl clien
 			if *p.PathType == networkingv1.PathTypeExact {
 				msg := "Exact path type strict matching is currently not supported and requests will be routed as for Prefix path type. This behaviour might change in the future."
 				logger.Warnf(fmt.Sprintf("Unsupported Path type exact for path %s. %s", p.Path, msg))
-				rec.Eventf(ing, corev1.EventTypeWarning, "UnsupportedPathTypeExact", msg)
+				rec.Event(ing, corev1.EventTypeWarning, "UnsupportedPathTypeExact", msg)
 			}
 			addIngressBackend(&p.Backend, p.Path)
 		}

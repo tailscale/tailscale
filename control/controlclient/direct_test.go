@@ -4,23 +4,125 @@
 package controlclient
 
 import (
+	"bytes"
+	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
+	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/types/persist"
 	"tailscale.com/util/eventbus/eventbustest"
 )
+
+func TestMapRequestWatchdogTimeoutMetric(t *testing.T) {
+	if !buildfeatures.HasClientMetrics {
+		t.Skip("client metrics disabled")
+	}
+	for _, tt := range []struct {
+		name         string
+		inBody       bool
+		cancel       bool
+		transportErr bool
+		want         int64
+	}{
+		{name: "initial_request", want: 1},
+		{name: "map_response", inBody: true, want: 1},
+		{name: "canceled_request", cancel: true},
+		{name: "canceled_response", inBody: true, cancel: true},
+		{name: "transport_error", transportErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				before := metricMapRequestWatchdogTimeout.Value()
+				bus := eventbustest.NewBus(t)
+				dialer := tsdial.NewDialer(netmon.NewStatic())
+				dialer.SetBus(bus)
+				defer dialer.Close()
+				transportErr := errors.New("transport failed")
+				httpc := &http.Client{Transport: mapWatchdogRoundTripper(func(r *http.Request) (*http.Response, error) {
+					if tt.transportErr {
+						return nil, transportErr
+					}
+					if tt.inBody {
+						return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(mapWatchdogReader{r.Context()}), Header: make(http.Header)}, nil
+					}
+					<-r.Context().Done()
+					return nil, r.Context().Err()
+				})}
+				machineKey := key.NewMachine()
+				c, err := NewDirect(Options{
+					ServerURL:            "https://control.example",
+					GetMachinePrivateKey: func() (key.MachinePrivate, error) { return machineKey, nil },
+					Persist:              persist.Persist{PrivateNodeKey: key.NewNode()},
+					Hostinfo:             &tailcfg.Hostinfo{BackendLogID: "test-backend-log-id"},
+					NoiseTestClient:      httpc,
+					HealthTracker:        health.NewTracker(bus),
+					Dialer:               dialer,
+					Bus:                  bus,
+					Logf:                 t.Logf,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				done := make(chan error, 1)
+				start := time.Now()
+				go func() { done <- c.sendMapRequest(ctx, true, &countingNetmapUpdater{}) }()
+				synctest.Wait()
+				if tt.cancel {
+					cancel()
+				}
+				err = <-done // advances fake time only if the watchdog is needed
+				if tt.transportErr {
+					if !errors.Is(err, transportErr) {
+						t.Fatalf("sendMapRequest error = %v; want transport error", err)
+					}
+				} else if !errors.Is(err, context.Canceled) {
+					t.Fatalf("sendMapRequest error = %v; want context.Canceled", err)
+				}
+				synctest.Wait() // let the canceled watchdog goroutine exit
+				if got := metricMapRequestWatchdogTimeout.Value() - before; got != tt.want {
+					t.Errorf("watchdog timeout delta = %d; want %d", got, tt.want)
+				}
+				wantElapsed := time.Duration(tt.want) * watchdogTimeout
+				if got := time.Since(start); got != wantElapsed {
+					t.Errorf("request elapsed = %v; want %v", got, wantElapsed)
+				}
+			})
+		})
+	}
+}
+
+type mapWatchdogRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f mapWatchdogRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type mapWatchdogReader struct{ ctx context.Context }
+
+func (r mapWatchdogReader) Read([]byte) (int, error) {
+	<-r.ctx.Done()
+	return 0, r.ctx.Err()
+}
 
 func TestSetDiscoPublicKey(t *testing.T) {
 	initialKey := key.NewDisco().Public()
@@ -220,6 +322,35 @@ func TestParseRateLimitError(t *testing.T) {
 	}
 }
 
+func TestIsRateLimitedResponse(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		retryAfter string
+		want       bool
+	}{
+		{name: "429-no-header", statusCode: 429, want: true},
+		{name: "429-with-header", statusCode: 429, retryAfter: "30", want: true},
+		{name: "503-with-header", statusCode: 503, retryAfter: "30", want: true},
+		{name: "503-no-header", statusCode: 503, want: false},
+		{name: "500-with-header", statusCode: 500, retryAfter: "30", want: false},
+		{name: "200", statusCode: 200, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			if tt.retryAfter != "" {
+				rec.Header().Set("Retry-After", tt.retryAfter)
+			}
+			rec.WriteHeader(tt.statusCode)
+
+			if got := isRateLimitedResponse(rec.Result()); got != tt.want {
+				t.Errorf("shouldHonorRetryAfter; got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRateLimitErrorIsError(t *testing.T) {
 	err := &rateLimitError{msg: "test", retryAfter: 5 * time.Second}
 	var target *rateLimitError
@@ -284,5 +415,53 @@ func TestTsmpPing(t *testing.T) {
 	err = postPingResult(now, t.Logf, c.httpc, pr, pingRes)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReadMapResponseMessage(t *testing.T) {
+	// Normal messages round-trip.
+	var buf bytes.Buffer
+	var siz [4]byte
+	binary.LittleEndian.PutUint32(siz[:], 4)
+	buf.Write(siz[:])
+	buf.WriteString("body")
+	msg, err := readMapResponseMessage(&buf, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(msg) != "body" {
+		t.Fatalf("got message %q, want %q", msg, "body")
+	}
+
+	// The size prefix is a uint32 chosen by the control server. A
+	// malicious server must not be able to make us allocate up to 4 GiB
+	// before any body bytes are read.
+	buf.Reset()
+	binary.LittleEndian.PutUint32(siz[:], math.MaxUint32)
+	buf.Write(siz[:])
+	if _, err := readMapResponseMessage(&buf, msg); err == nil || !strings.Contains(err.Error(), "exceeds max") {
+		t.Fatalf("readMapResponseMessage = %v, want size cap error", err)
+	}
+}
+
+func TestDecodeMsgMaxDecodedSize(t *testing.T) {
+	// A zstd frame whose header declares more decoded content than
+	// maxDecodedMapResponseSize. The decoder rejects such a frame before
+	// decoding any block, so a malicious control server can't make us
+	// expand a small frame into an unbounded amount of JSON, and the test
+	// doesn't need to allocate the decoded bytes either.
+	oversized := []byte{
+		0x28, 0xb5, 0x2f, 0xfd, // zstd frame magic
+		0xc0,                                           // 8-byte frame content size, no single segment, no checksum, no dict ID
+		0x00,                                           // window descriptor: 1 KiB window
+		0x01, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, // declared content size: 16 GiB + 1
+		0x21, 0x00, 0x00, // block header: last block, raw block, 4 bytes
+		'b', 'o', 'm', 'b',
+	}
+	ms := newMapSession(key.NewNode(), nil, nil)
+	var resp tailcfg.MapResponse
+	err := ms.decodeMsg(oversized, &resp)
+	if !errors.Is(err, zstd.ErrDecoderSizeExceeded) {
+		t.Fatalf("decodeMsg(oversized frame) = %v, want zstd.ErrDecoderSizeExceeded", err)
 	}
 }

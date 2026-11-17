@@ -4,12 +4,18 @@
 package logpolicy
 
 import (
+	"context"
 	"net/http"
+	"net/netip"
 	"os"
 	"reflect"
+	"sync/atomic"
 	"testing"
 
 	"tailscale.com/logtail"
+	"tailscale.com/net/dnscache"
+	"tailscale.com/net/memnet"
+	"tailscale.com/tstest"
 )
 
 func resetLogTarget() {
@@ -126,5 +132,49 @@ func TestInvalidLogTarget(t *testing.T) {
 				t.Errorf("got BaseURL=%q, want empty", config.BaseURL)
 			}
 		})
+	}
+}
+
+// TestDialSharesDNSCache verifies that repeated dials, including from
+// separate dial funcs (as used by separate log transports), share one DNS
+// lookup.
+func TestDialSharesDNSCache(t *testing.T) {
+	var mn memnet.Network
+	ln, err := mn.Listen("tcp", "127.0.0.1:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+
+	var lookups atomic.Int32
+	tstest.Replace(t, &logDNSCache, &dnscache.Resolver{
+		UseLastGood: true,
+		LookupIPForTest: func(ctx context.Context, host string) ([]netip.Addr, error) {
+			lookups.Add(1)
+			return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+		},
+	})
+
+	for range 2 {
+		dial := makeDialFunc(mn.Dial, nil, t.Logf)
+		for range 3 {
+			c, err := dial(t.Context(), "tcp", "log.example.com:443")
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.Close()
+		}
+	}
+	if got := lookups.Load(); got != 1 {
+		t.Errorf("got %d DNS lookups; want 1", got)
 	}
 }

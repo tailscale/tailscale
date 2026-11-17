@@ -328,6 +328,18 @@ func TestServeConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{reset: true})
+	add(step{ // support IPv6 localhost proxy
+		command: cmd("https / http://[::1]:3000"),
+		want: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: "http://[::1]:3000"},
+				}},
+			},
+		},
+	})
+	add(step{reset: true})
 	add(step{ // support path in proxy
 		command: cmd("https / http://127.0.0.1:3000/foo/bar"),
 		want: &ipn.ServeConfig{
@@ -364,6 +376,17 @@ func TestServeConfigMutations(t *testing.T) {
 			TCP: map[uint16]*ipn.TCPPortHandler{
 				443: {
 					TCPForward:   "127.0.0.1:5432",
+					TerminateTLS: "foo.test.ts.net",
+				},
+			},
+		},
+	})
+	add(step{
+		command: cmd("tls-terminated-tcp:443 tcp://[::1]:8443"),
+		want: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{
+				443: {
+					TCPForward:   "[::1]:8443",
 					TerminateTLS: "foo.test.ts.net",
 				},
 			},
@@ -859,6 +882,7 @@ func TestVerifyFunnelEnabled(t *testing.T) {
 type fakeLocalServeClient struct {
 	config               *ipn.ServeConfig
 	setCount             int                       // counts calls to SetServeConfig
+	setErr               error                     // if non-nil, returned by SetServeConfig
 	queryFeatureResponse *mockQueryFeatureResponse // mock response to QueryFeature calls
 	prefs                *ipn.Prefs                // fake preferences, used to test GetPrefs and SetPrefs
 	SOMarkInUse          bool                      // fake SO mark in use status
@@ -895,6 +919,9 @@ func (lc *fakeLocalServeClient) GetServeConfig(ctx context.Context) (*ipn.ServeC
 
 func (lc *fakeLocalServeClient) SetServeConfig(ctx context.Context, config *ipn.ServeConfig) error {
 	lc.setCount += 1
+	if lc.setErr != nil {
+		return lc.setErr
+	}
 	lc.config = config.Clone()
 	return nil
 }

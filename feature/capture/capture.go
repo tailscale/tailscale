@@ -20,7 +20,9 @@ import (
 )
 
 func init() {
-	feature.Register("capture")
+	if !feature.Register("capture") {
+		return
+	}
 	localapi.Register("debug-capture", serveLocalAPIDebugCapture)
 }
 

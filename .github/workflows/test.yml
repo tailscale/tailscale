@@ -3,18 +3,6 @@
 name: CI
 
 env:
-  # Our fuzz job, powered by OSS-Fuzz, fails periodically because we upgrade to
-  # new Go versions very eagerly. OSS-Fuzz is a little more conservative, and
-  # ends up being unable to compile our code.
-  #
-  # When this happens, we want to disable the fuzz target until OSS-Fuzz catches
-  # up. However, we also don't want to forget to turn it back on when OSS-Fuzz
-  # can once again build our code.
-  #
-  # This variable toggles the fuzz job between two modes:
-  #  - false: we expect fuzzing to be happy, and should report failure if it's not.
-  #  - true: we expect fuzzing is broken, and should report failure if it start working.
-  TS_FUZZ_CURRENTLY_BROKEN: false
   # GOMODCACHE is the same definition on all OSes. Within the workspace, we use
   # toplevel directories "src" (for the checked out source code), and "gomodcache"
   # and other caches as siblings to follow.
@@ -45,6 +33,7 @@ concurrency:
 jobs:
   gomod-cache:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     outputs:
       cache-key: ${{ steps.hash.outputs.key }}
     steps:
@@ -78,6 +67,7 @@ jobs:
 
   race-root-integration:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     needs: gomod-cache
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
@@ -124,6 +114,7 @@ jobs:
             shard: '3/3'
           - goarch: "386" # thanks yaml
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     needs: gomod-cache
     steps:
     - name: checkout
@@ -226,6 +217,7 @@ jobs:
     # and 32 GB of RAM. It is connected to a private Azure VNet that hosts cigocached.
     # https://github.com/organizations/tailscale/settings/actions/github-hosted-runners/5
     runs-on: ci-windows-github-1
+    timeout-minutes: 60
     needs: gomod-cache
     name: Windows (${{ matrix.name || matrix.shard}})
     strategy:
@@ -264,9 +256,21 @@ jobs:
       shell: bash
       if: matrix.key != 'win-bench' # skip on bench builder
       working-directory: src
-      run: ./tool/go run ./cmd/testwrapper sharded:${{ matrix.shard }}
+      # -count=1: a cached pass is never retried, so flakes can't be reported.
+      run: ./tool/go run ./cmd/testwrapper sharded:${{ matrix.shard }} -count=1
       env:
         NOPWSHDEBUG: "true" # to quiet tool/gocross/gocross-wrapper.ps1 in CI
+        TS_TESTWRAPPER_RESULTS_SUMMARY: "1"
+        TS_TESTWRAPPER_RESULTS_PKG: tailscale.com/tstest/integration
+        TS_TESTWRAPPER_RESULTS_JSON: ${{ github.workspace }}/windows-integration-results.json
+
+    - name: Upload Windows integration results
+      if: always() && matrix.key != 'win-bench'
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      with:
+        name: windows-integration-results-${{ matrix.key }}
+        path: ${{ github.workspace }}/windows-integration-results.json
+        if-no-files-found: ignore
 
     - name: bench all
       shell: bash
@@ -286,6 +290,7 @@ jobs:
 
   macos:
     runs-on: macos-latest
+    timeout-minutes: 30
     needs: gomod-cache
     steps:
     - name: checkout
@@ -344,6 +349,7 @@ jobs:
   privileged:
     needs: gomod-cache
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     container:
       image: golang:latest # zizmor: ignore[unpinned-images]
       options: --privileged
@@ -402,6 +408,7 @@ jobs:
             goarch: amd64
 
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
     - name: checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -462,6 +469,7 @@ jobs:
   ios: # similar to cross above, but iOS can't build most of the repo. So, just
        # make it build a few smoke packages.
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     needs: gomod-cache
     steps:
     - name: checkout
@@ -501,6 +509,7 @@ jobs:
             goarch: amd64
 
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
     - name: checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -556,6 +565,7 @@ jobs:
     # repo. We should fix those pieces, they're small, but as a stepping stone,
     # only test the subset of android that our past smoke test checked.
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     needs: gomod-cache
     steps:
     - name: checkout
@@ -581,6 +591,7 @@ jobs:
 
   wasm: # builds tsconnect, which is the only wasm build we support
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     needs: gomod-cache
     steps:
     - name: checkout
@@ -646,6 +657,7 @@ jobs:
 
   tailscale_go: # Subset of tests that depend on our custom Go toolchain.
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     needs: gomod-cache
     steps:
     - name: checkout
@@ -661,76 +673,9 @@ jobs:
     - name: test tailscale_go
       run: ./tool/go test -tags=tailscale_go,ts_enable_sockstats ./net/sockstats/...
 
-
-  fuzz:
-    # This target periodically breaks (see TS_FUZZ_CURRENTLY_BROKEN at the top
-    # of the file), so it's more complex than usual: the 'build fuzzers' step
-    # might fail, and depending on the value of 'TS_FUZZ_CURRENTLY_BROKEN', that
-    # might or might not be fine. The steps after the build figure out whether
-    # the success/failure is expected, and appropriately pass/fail the job
-    # overall accordingly.
-    #
-    # Practically, this means that all steps after 'build fuzzers' must have an
-    # explicit 'if' condition, because the default condition for steps is
-    # 'success()', meaning "only run this if no previous steps failed".
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
-    steps:
-    - name: build fuzzers
-      id: build
-      # As of 12 February 2026, this repo doesn't tag releases, so this commit
-      # hash is just the tip of master.
-      uses: google/oss-fuzz/infra/cifuzz/actions/build_fuzzers@f277aafb36f358582fdb24a41a9a52f2e097a2fd
-      # continue-on-error makes steps.build.conclusion be 'success' even if
-      # steps.build.outcome is 'failure'. This means this step does not
-      # contribute to the job's overall pass/fail evaluation.
-      continue-on-error: true
-      with:
-       oss-fuzz-project-name: 'tailscale'
-       dry-run: false
-       language: go
-    - name: report unexpectedly broken fuzz build
-      if: steps.build.outcome == 'failure' && env.TS_FUZZ_CURRENTLY_BROKEN != 'true'
-      run: |
-        echo "fuzzer build failed, see above for why"
-        echo "if the failure is due to OSS-Fuzz not being on the latest Go yet,"
-        echo "set TS_FUZZ_CURRENTLY_BROKEN=true in .github/workflows/test.yml"
-        echo "to temporarily disable fuzzing until OSS-Fuzz works again."
-        exit 1
-    - name: report unexpectedly working fuzz build
-      if: steps.build.outcome == 'success' && env.TS_FUZZ_CURRENTLY_BROKEN == 'true'
-      run: |
-        echo "fuzzer build succeeded, but we expect it to be broken"
-        echo "please set TS_FUZZ_CURRENTLY_BROKEN=false in .github/workflows/test.yml"
-        echo "to reenable fuzz testing"
-        exit 1
-    - name: run fuzzers
-      id: run
-      # Run the fuzzers whenever they're able to build, even if we're going to
-      # report a failure because TS_FUZZ_CURRENTLY_BROKEN is set to the wrong
-      # value.
-      if: steps.build.outcome == 'success'
-      # As of 12 February 2026, this repo doesn't tag releases, so this commit
-      # hash is just the tip of master.
-      uses: google/oss-fuzz/infra/cifuzz/actions/run_fuzzers@f277aafb36f358582fdb24a41a9a52f2e097a2fd
-      with:
-        oss-fuzz-project-name: 'tailscale'
-        fuzz-seconds: 150
-        dry-run: false
-        language: go
-    - name: Set artifacts_path in env (workaround for actions/upload-artifact#176)
-      if: steps.run.outcome != 'success' && steps.build.outcome == 'success'
-      run: |
-        echo "artifacts_path=$(realpath .)" >> $GITHUB_ENV
-    - name: upload crash
-      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-      if: steps.run.outcome != 'success' && steps.build.outcome == 'success'
-      with:
-        name: artifacts
-        path: ${{ env.artifacts_path }}/out/artifacts
-
   depaware:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     needs: gomod-cache
     steps:
     - name: checkout
@@ -751,6 +696,7 @@ jobs:
 
   go_generate:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     needs: gomod-cache
     steps:
     - name: checkout
@@ -783,6 +729,7 @@ jobs:
 
   make_tidy:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     needs: gomod-cache
     steps:
     - name: checkout
@@ -805,6 +752,7 @@ jobs:
 
   licenses:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     needs: gomod-cache
     steps:
     - name: checkout
@@ -825,6 +773,7 @@ jobs:
 
   staticcheck:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     needs: gomod-cache
     name: staticcheck (${{ matrix.name }})
     strategy:
@@ -892,13 +841,13 @@ jobs:
       - ios
       - wasm
       - tailscale_go
-      - fuzz
       - depaware
       - go_generate
       - make_tidy
       - licenses
       - staticcheck
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
     - name: notify  
       # Only notify slack for merged commits, not PR failures.
@@ -925,9 +874,49 @@ jobs:
             }]
           }
 
+  notify_windows:
+    if: always()
+    needs:
+      - windows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+    - name: checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        path: src
+        persist-credentials: false
+    - name: Download Windows integration results
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        pattern: windows-integration-results-*
+        path: results
+    - name: Build Slack payload
+      id: payload
+      uses: ./src/.github/actions/windows-slack-payload
+      with:
+        result: ${{ needs.windows.result }}
+        title: ${{ github.event.pull_request.title }}
+        header: "<${{ github.event.pull_request.html_url }}|PR #${{ github.event.pull_request.number }}> · `${{ github.event.pull_request.head.ref }}`"
+        status-label: Windows CI
+        tests-label: Windows Integration Tests
+        # One result file per non-bench leg of the windows matrix.
+        expected-files: "2"
+    - name: Send Slack notification
+      env:
+        WEBHOOK: ${{ secrets.WINDOWS_SLACK_WEBHOOK_URL }}
+      if: env.WEBHOOK != '' && github.event_name == 'pull_request' && needs.windows.result != 'cancelled'
+      continue-on-error: true
+      uses: slackapi/slack-github-action@91efab103c0de0a537f72a35f6b8cda0ee76bf0a # v2.1.1
+      with:
+        webhook: ${{ env.WEBHOOK }}
+        webhook-type: incoming-webhook
+        payload-file-path: payload.json
+
   merge_blocker:
     if: always()
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     needs:
       - android
       - test
@@ -937,7 +926,6 @@ jobs:
       - ios
       - wasm
       - tailscale_go
-      - fuzz
       - depaware
       - go_generate
       - make_tidy
@@ -956,6 +944,7 @@ jobs:
   check_mergeability_strict:
     if: always()
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     needs:
       - android
       - cross
@@ -977,13 +966,13 @@ jobs:
   check_mergeability:
     if: always()
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     needs:
       - check_mergeability_strict
       - test
       - windows
       - macos
       - wasm
-      - fuzz
       - race-root-integration
       - privileged
     steps:

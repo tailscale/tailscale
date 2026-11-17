@@ -24,7 +24,7 @@ func SetOf[T comparable](slice []T) Set[T] {
 
 // Of returns a new set constructed from the elements in slice.
 func Of[T comparable](slice ...T) Set[T] {
-	s := make(Set[T])
+	s := make(Set[T], len(slice))
 	s.AddSlice(slice)
 	return s
 }

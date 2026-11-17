@@ -963,11 +963,12 @@ func (up *Updater) updateLinuxBinary() error {
 		return err
 	}
 	up.Logf("Extracting %q", dlPath)
-	if err := up.unpackLinuxTarball(dlPath); err != nil {
-		return err
+	err = up.unpackLinuxTarball(dlPath)
+	if err := os.RemoveAll(filepath.Dir(dlPath)); err != nil {
+		up.Logf("failed to clean up: %v", err)
 	}
-	if err := os.Remove(dlPath); err != nil {
-		up.Logf("failed to clean up %q: %v", dlPath, err)
+	if err != nil {
+		return err
 	}
 
 	err = restartSystemdUnit(up.Logf)
@@ -1040,13 +1041,17 @@ func (up *Updater) downloadLinuxTarball(ver string) (string, error) {
 	if err != nil {
 		dlDir = os.TempDir()
 	}
-	dlDir = filepath.Join(dlDir, "tailscale-update")
 	if err := os.MkdirAll(dlDir, 0700); err != nil {
+		return "", err
+	}
+	dlDir, err = os.MkdirTemp(dlDir, "tailscale-update")
+	if err != nil {
 		return "", err
 	}
 	pkgsPath := fmt.Sprintf("%s/tailscale_%s_%s.tgz", up.Track, ver, runtime.GOARCH)
 	dlPath := filepath.Join(dlDir, path.Base(pkgsPath))
 	if err := up.downloadURLToFile(pkgsPath, dlPath); err != nil {
+		os.RemoveAll(dlDir)
 		return "", err
 	}
 	return dlPath, nil

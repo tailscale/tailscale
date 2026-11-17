@@ -6,7 +6,9 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -46,6 +48,12 @@ func fixTailscaledConnectErrorImpl(origErr error) error {
 		}
 	}
 	if foundProc == nil {
+		if !errors.Is(origErr, fs.ErrNotExist) {
+			// The socket is there, or something else went wrong, so the
+			// error itself is informative: a Windows named pipe owned by
+			// another user, for example. Don't hide it.
+			return fmt.Errorf("failed to connect to local tailscaled (no tailscaled process found): %w", origErr)
+		}
 		switch runtime.GOOS {
 		case "windows":
 			return fmt.Errorf("failed to connect to local tailscaled process; is the Tailscale service running?")

@@ -68,7 +68,7 @@ func (h *Handler) serveDebugDERPRegion(w http.ResponseWriter, r *http.Request) {
 	}
 	regStr := r.FormValue("region")
 	var reg *tailcfg.DERPRegion
-	if id, err := strconv.Atoi(regStr); err == nil {
+	if id, err := tailcfg.ParseDERPRegionID(regStr); err == nil {
 		reg = dm.Regions[id]
 	} else {
 		for _, r := range dm.Regions {

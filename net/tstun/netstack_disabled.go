@@ -9,8 +9,20 @@ type netstack_PacketBuffer struct {
 	GSOOptions netstack_GSO
 }
 
-func (*netstack_PacketBuffer) DecRef()   { panic("unreachable") }
-func (*netstack_PacketBuffer) Size() int { panic("unreachable") }
+func (*netstack_PacketBuffer) DecRef()         { panic("unreachable") }
+func (*netstack_PacketBuffer) Size() int       { panic("unreachable") }
+func (*netstack_PacketBuffer) HeaderSize() int { panic("unreachable") }
+func (*netstack_PacketBuffer) AsViewList() (netstack_ViewList, int) {
+	panic("unreachable")
+}
+
+type netstack_ViewList struct{}
+type netstack_View struct{}
+
+func (netstack_ViewList) Front() *netstack_View { panic("unreachable") }
+func (*netstack_View) Next() *netstack_View     { panic("unreachable") }
+func (*netstack_View) Size() int                { panic("unreachable") }
+func (*netstack_View) AsSlice() []byte          { panic("unreachable") }
 
 type netstack_GSOType int
 
@@ -67,3 +79,4 @@ func (s slicer) Slice() []byte { panic("unreachable") }
 type netstack_Buffer struct{}
 
 func (netstack_Buffer) Flatten() []byte { panic("unreachable") }
+func (netstack_Buffer) Release()        { panic("unreachable") }

@@ -34,6 +34,7 @@ import (
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
@@ -851,7 +852,7 @@ func numberPodsAdvertising(ctx context.Context, cl client.Client, tsNamespace, p
 
 	var count int
 	for _, secret := range secrets.Items {
-		prefs, ok, err := getDevicePrefs(&secret)
+		prefs, ok, err := tailscaled.PrefsFromStateSecret(&secret)
 		if err != nil {
 			return 0, fmt.Errorf("error getting node metadata: %w", err)
 		}
@@ -1010,6 +1011,30 @@ func cleanupCertResources(ctx context.Context, cl client.Client, tsNamespace str
 	}
 	if err := cl.DeleteAllOf(ctx, &corev1.Secret{}, client.InNamespace(tsNamespace), client.MatchingLabels(labels)); err != nil {
 		return fmt.Errorf("error deleting Secret for domain name %s: %w", domainName, err)
+	}
+	return nil
+}
+
+// cleanupAllCertResources deletes the TLS Secrets and associated RBAC
+// resources for every domain of the ProxyGroup. It finds them by label, so it
+// does not need the ProxyGroup's state Secrets to work out the domain names.
+func cleanupAllCertResources(ctx context.Context, cl client.Client, tsNamespace, pgName string) error {
+	opts := []client.DeleteAllOfOption{
+		client.InNamespace(tsNamespace),
+		client.MatchingLabels{
+			kubetypes.LabelManaged: "true",
+			labelProxyGroup:        pgName,
+		},
+		client.HasLabels{labelDomain},
+	}
+	if err := cl.DeleteAllOf(ctx, &rbacv1.RoleBinding{}, opts...); err != nil {
+		return fmt.Errorf("error deleting cert RoleBindings for ProxyGroup %s: %w", pgName, err)
+	}
+	if err := cl.DeleteAllOf(ctx, &rbacv1.Role{}, opts...); err != nil {
+		return fmt.Errorf("error deleting cert Roles for ProxyGroup %s: %w", pgName, err)
+	}
+	if err := cl.DeleteAllOf(ctx, &corev1.Secret{}, opts...); err != nil {
+		return fmt.Errorf("error deleting cert Secrets for ProxyGroup %s: %w", pgName, err)
 	}
 	return nil
 }

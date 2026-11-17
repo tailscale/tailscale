@@ -23,7 +23,9 @@ import (
 )
 
 func init() {
-	feature.Register("identityfederation")
+	if !feature.Register("identityfederation") {
+		return
+	}
 	tailscale.HookResolveAuthKeyViaWIF.Set(resolveAuthKey)
 	tailscale.HookExchangeJWTForTokenViaWIF.Set(exchangeJWTForToken)
 }

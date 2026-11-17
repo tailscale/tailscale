@@ -251,7 +251,7 @@ func makeNode(id tailcfg.NodeID, opts ...nodeOptFunc) *tailcfg.Node {
 		Name:              fmt.Sprintf("node%d", id),
 		Online:            new(true),
 		MachineAuthorized: true,
-		HomeDERP:          int(id),
+		HomeDERP:          tailcfg.DERPRegionID(id),
 		Addresses:         addresses,
 		AllowedIPs:        addresses,
 	}

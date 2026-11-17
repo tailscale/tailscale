@@ -75,7 +75,26 @@ type AppConnectorAttr struct {
 	// These can either be "*" to match any advertising connector, or a
 	// tag of the form tag:<tag-name>.
 	Connectors []string `json:"connectors,omitempty"`
+	// Mode is the mode of operation of this app connector.
+	// See the constants below for which modes are defined and how they work.
+	// If this field is empty, subnet mode is assumed.
+	Mode Mode `json:"mode,omitzero"`
 }
+
+// Mode is the mode of operation of an app connector.
+type Mode string
+
+const (
+	// A subnet app connector directly advertises the IP addresses as subnet
+	// routes corresponding to the app's domains. This is broadly compatible
+	// with older clients but too coarse-grained for certain situations (eg.
+	// the domains of multiple apps sharing an IP address).
+	Subnet Mode = "subnet"
+	// A MagicIP app connector adds a layer of indirection to allow finer
+	// control of such situations, but requires recent client versions on both
+	// the connector and the client (conn25).
+	MagicIP Mode = "magicip"
+)
 
 // RouteInfo is a data structure used to persist the in memory state of an AppConnector
 // so that we can know, even after a restart, which routes came from ACLs and which were
@@ -95,23 +114,6 @@ type RouteInfo struct {
 type RouteUpdate struct {
 	Advertise   []netip.Prefix
 	Unadvertise []netip.Prefix
-}
-
-type Conn25Attr struct {
-	// Name is the name of this collection of domains.
-	Name string `json:"name,omitempty"`
-	// Domains enumerates the domains serviced by the specified app connectors.
-	// Domains can be of the form: example.com, or *.example.com.
-	Domains []string `json:"domains,omitempty"`
-	// Connectors enumerates the app connectors which service these domains.
-	// These can either be "*" to match any advertising connector, or a
-	// tag of the form tag:<tag-name>.
-	Connectors []string `json:"connectors,omitempty"`
-	// TemporaryUnsafeBypassFilter indicates that the connector should not look
-	// for peer capabilities when determining authorization to use an app. This
-	// is a temporary measure during development and will be removed without
-	// warning.
-	TemporaryUnsafeBypassFilter bool `json:"temporaryUnsafeBypassFilter,omitzero"`
 }
 
 type Conn25PoolsAttr struct {
