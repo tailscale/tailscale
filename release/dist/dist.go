@@ -68,11 +68,6 @@ type Build struct {
 	// web client assets. If empty, BuildWebClientAssets looks for tool/pnpm in
 	// Repo, then pnpm in $PATH.
 	Pnpm string
-	// Yarn is the path to the yarn binary, if one is available.
-	//
-	// Deprecated: the web client is built with Pnpm. Yarn is no longer used by
-	// this package and will be removed along with tool/yarn.
-	Yarn string
 	// Version is the version info of the build.
 	Version mkversion.VersionInfo
 	// Time is the timestamp of the build.
@@ -115,14 +110,11 @@ func NewBuild(repo, out string) (*Build, error) {
 	if err != nil {
 		return nil, fmt.Errorf("finding go binary: %w", err)
 	}
-	// Best effort: Yarn is deprecated and only populated for existing callers.
-	yarnTool, _ := findTool(repo, "yarn")
 	b := &Build{
 		Repo:         repo,
 		Tmp:          tmp,
 		Out:          out,
 		Go:           goTool,
-		Yarn:         yarnTool,
 		Version:      mkversion.Info(),
 		Time:         time.Now().UTC(),
 		extra:        map[any]any{},
