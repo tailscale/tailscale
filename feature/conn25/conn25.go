@@ -310,13 +310,20 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 // that Transit IP and keeps it and its associated addresses from being removed
 // from Conn25's state and returned to their pools while the flow uses them.
 //
+// If m has an active address assignment whose Transit IP isn't routable yet, it
+// reports ok false and returns [ErrTransitIPNotRoutable].
+//
 // If m has no active address assignment, it reports ok false and returns
 // [ErrUnmappedMagicIP] when m falls in a configured Magic IP range, and a nil
 // error when it does not, since in that case m is not a Magic IP at all and the
 // traffic to it is potentially valid non-app-connector traffic.
 func (c *Conn25) ClientPrepareNewFlowForMagicIP(m netip.Addr) (ClientFlowRef, bool, error) {
-	if ref, ok := c.client.PrepareNewFlowForMagicIP(m); ok {
+	ref, err := c.client.prepareNewFlowForMagicIP(m)
+	if err == nil {
 		return ref, true, nil
+	}
+	if errors.Is(err, ErrTransitIPNotRoutable) {
+		return ClientFlowRef{}, false, err
 	}
 	cfg, ok := c.getConfig()
 	if !ok {
@@ -325,10 +332,6 @@ func (c *Conn25) ClientPrepareNewFlowForMagicIP(m netip.Addr) (ClientFlowRef, bo
 	if !cfg.ipSets.v4Magic.Contains(m) && !cfg.ipSets.v6Magic.Contains(m) {
 		return ClientFlowRef{}, false, nil
 	}
-	// TODO(tailscale/corp#50405): Just because there is a TransitIP associated with the MagicIP,
-	// that doesn't mean the TransitIP is ready to use. We should also make sure that the TransitIP
-	// is installed in WireGuard for the correct node, which happens after it is registered with the
-	// connector. Perhaps a different error message to represent that.
 	return ClientFlowRef{}, false, ErrUnmappedMagicIP
 }
 

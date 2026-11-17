@@ -42,6 +42,25 @@ type client struct {
 	byConnKey       map[key.NodePublic]set.Set[netip.Prefix]
 }
 
+// errNoMagicIPAssignment is returned by [client.PrepareNewFlowForMagicIP] when
+// this client holds no address assignment for the given Magic IP.
+var errNoMagicIPAssignment = errors.New("no address assignment for magic IP")
+
+// transitIPRoutableLocked reports whether as's Transit IP is registered under
+// its connector's node key, i.e. whether [client.extraWireGuardAllowedIPs]
+// will tell WireGuard to route packets for it to that connector. Until it is,
+// sending to the Transit IP would be a black hole: the assignment exists, but
+// no peer claims the address.
+// c.mu must be held.
+func (c *client) transitIPRoutableLocked(as *addrs) bool {
+	conn := as.connectorAddr.node
+	if !conn.Valid() || conn.Key().IsZero() {
+		return false
+	}
+	tip := as.connectorAddr.transit
+	return c.byConnKey[conn.Key()].Contains(netip.PrefixFrom(tip, tip.BitLen()))
+}
+
 // linkLocalAllow returns true if the provided packet with a link-local Dst address has a
 // Dst that is one of our transit IPs, and false otherwise.
 // Tailscale's wireguard filters drop link-local unicast packets (see [wgengine/filter/filter.go])
@@ -240,6 +259,7 @@ func (c *client) addTransitIPForConnector(as addrs) error {
 	if conn.Key().IsZero() {
 		return fmt.Errorf("node with stable ID %q does not have a key", conn.StableID())
 	}
+	conn.ID()
 	return c.insertTransitConnMapping(as, conn.Key())
 }
 
@@ -289,17 +309,24 @@ func (r ClientFlowRef) Release() {
 	}
 }
 
-// PrepareNewFlowForMagicIP resolves magicIP to the transit IP currently assigned
+// prepareNewFlowForMagicIP resolves magicIP to the transit IP currently assigned
 // to it and records that a flow is being established against that assignment,
 // returning the reference that both names that transit IP and keeps the
-// assignment from being reclaimed. It reports whether magicIP had an
-// assignment at all.
-func (c *client) PrepareNewFlowForMagicIP(magicIP netip.Addr) (ClientFlowRef, bool) {
+// assignment from being reclaimed.
+//
+// It returns [errNoMagicIPAssignment] if there is no assignment for magicIP, and
+// [ErrTransitIPNotRoutable] if there is one but its Transit IP can't carry
+// traffic yet. Nothing is counted on either error path, so the returned
+// reference is the zero value and must not be released.
+func (c *client) prepareNewFlowForMagicIP(magicIP netip.Addr) (ClientFlowRef, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.assignments.lookupByMagicIP(magicIP)
 	if !ok {
-		return ClientFlowRef{}, false
+		return ClientFlowRef{}, errNoMagicIPAssignment
+	}
+	if !c.transitIPRoutableLocked(entry) {
+		return ClientFlowRef{}, ErrTransitIPNotRoutable
 	}
 	transit := entry.connectorAddr.transit
 	entry.activeFlowCount++
@@ -319,7 +346,7 @@ func (c *client) PrepareNewFlowForMagicIP(magicIP netip.Addr) (ClientFlowRef, bo
 		if entry.activeFlowCount == 0 {
 			entry.zeroFlowTime = c.assignments.clock.Now()
 		}
-	}}, true
+	}}, nil
 }
 
 func (c *client) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {

@@ -482,6 +482,95 @@ func TestTransitIPConnMapping(t *testing.T) {
 	}
 }
 
+// registerTransitIPs registers each assignment's Transit IP with its connector,
+// as the PeerAPI round trip in sendLoop does in production, so that
+// [client.prepareNewFlowForMagicIP] considers the Transit IP routable. With no
+// assignments given it registers every assignment the client currently holds,
+// for tests that create them indirectly by running a DNS response through the
+// extension.
+func registerTransitIPs(t *testing.T, c *client, assignments ...*addrs) {
+	t.Helper()
+	if len(assignments) == 0 {
+		c.mu.Lock()
+		for _, as := range c.assignments.byMagicIP {
+			assignments = append(assignments, as)
+		}
+		c.mu.Unlock()
+	}
+	for _, as := range assignments {
+		if err := c.addTransitIPForConnector(*as); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestPrepareNewFlowForMagicIPRoutability checks that a Transit IP is only handed
+// to the datapath once it has been registered against its connector, which is
+// what puts it in that peer's WireGuard allowed IPs. Before that, and again
+// after a [client.reset] drops the registration, the mapping exists but
+// WireGuard would have nowhere to send the packets.
+func TestPrepareNewFlowForMagicIPRoutability(t *testing.T) {
+	magicIP := netip.MustParseAddr("100.64.0.1")
+	transitIP := netip.MustParseAddr("169.254.0.1")
+
+	c := newConn25(t.Logf).client
+	connector := (&tailcfg.Node{
+		ID:       tailcfg.NodeID(2),
+		Hostinfo: (&tailcfg.Hostinfo{AppConnector: opt.NewBool(true)}).View(),
+		Key:      key.NodePublicFromRaw32(mem.B([]byte{0: 0xff, 31: 0x02})),
+	}).View()
+	as := &addrs{
+		dst:           netip.MustParseAddr("1.2.3.1"),
+		magic:         magicIP,
+		generation:    c.currentGeneration(),
+		connectorAddr: connectorAddr{transit: transitIP, node: connector},
+		domain:        "woo.example.com.",
+		app:           "app1",
+	}
+
+	// No assignment at all yet.
+	if _, err := c.prepareNewFlowForMagicIP(magicIP); !errors.Is(err, errNoMagicIPAssignment) {
+		t.Errorf("before reserving: got error %v, want %v", err, errNoMagicIPAssignment)
+	}
+
+	// The assignment exists, but the connector hasn't acknowledged it, so the
+	// Transit IP isn't in WireGuard yet.
+	if err := c.assignments.insert(as); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.prepareNewFlowForMagicIP(magicIP); !errors.Is(err, ErrTransitIPNotRoutable) {
+		t.Errorf("before registering with the connector: got error %v, want %v", err, ErrTransitIPNotRoutable)
+	}
+	if got := as.activeFlowCount; got != 0 {
+		t.Errorf("unroutable Transit IP counted %d flows, want 0", got)
+	}
+
+	// Registering it with the connector makes it usable.
+	if err := c.addTransitIPForConnector(*as); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := c.prepareNewFlowForMagicIP(magicIP)
+	if err != nil {
+		t.Errorf("after registering with the connector: unexpected error %v", err)
+	}
+	if tip := ref.TransitIP(); tip != transitIP {
+		t.Errorf("after registering with the connector: got transit IP %v, want %v", tip, transitIP)
+	}
+	ref.Release()
+
+	// A reset clears the WireGuard registrations along with everything else.
+	c.reset()
+	fresh := *as
+	fresh.expiresAt = time.Time{}
+	fresh.generation = c.currentGeneration()
+	if err := c.assignments.insert(&fresh); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.prepareNewFlowForMagicIP(magicIP); !errors.Is(err, ErrTransitIPNotRoutable) {
+		t.Errorf("after reset: got error %v, want %v", err, ErrTransitIPNotRoutable)
+	}
+}
+
 func TestIsKnownTransitIP(t *testing.T) {
 	knownTip := netip.MustParseAddr("100.64.0.41")
 	unknownTip := netip.MustParseAddr("100.64.0.42")
@@ -773,6 +862,10 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 				dst:    ipOne,
 			}
 
+			// the connector acknowledges the assignment, which is what makes
+			// its Transit IP routable and so eligible to carry a flow
+			registerTransitIPs(t, c.client)
+
 			// there are client flows and time passes
 			tt.flowsAndTimeFx(c, clock, c.client.assignments.byDomainDst[ipOneDD].magic)
 
@@ -843,6 +936,7 @@ func TestFlowRemovedAfterTransitIPReassigned(t *testing.T) {
 		t.Fatal(err)
 	}
 	transit := before.connectorAddr.transit
+	registerTransitIPs(t, c.client, before)
 
 	// A flow is established against that assignment, and then the profile
 	// changes and the client's state is reset out from under the flow.
@@ -912,6 +1006,7 @@ func TestFlowRemovedDoesNotReclaimReissuedTransitIPInUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	transit := before.connectorAddr.transit
+	registerTransitIPs(t, c.client, before)
 
 	staleRef, ok, err := c.ClientPrepareNewFlowForMagicIP(before.magic)
 	if err != nil || !ok {
@@ -929,6 +1024,7 @@ func TestFlowRemovedDoesNotReclaimReissuedTransitIPInUse(t *testing.T) {
 	if after == before {
 		t.Fatal("expected a distinct assignment after reset")
 	}
+	registerTransitIPs(t, c.client, after)
 
 	// The reissued assignment picks up a flow of its own, which is still live
 	// when the pre-reset flow is torn down.
@@ -976,6 +1072,7 @@ func TestFlowCleanupRunsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	registerTransitIPs(t, c.client, as)
 
 	// Two flows over the same assignment. The first is torn down; the second
 	// stays live.
@@ -1053,6 +1150,7 @@ func TestClientPrepareNewFlowForMagicIPPinsAssignment(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		registerTransitIPs(t, c.client, as)
 		clock.Advance(ttl + deadFlowWaitTimeout + time.Minute)
 		return c, as
 	}
