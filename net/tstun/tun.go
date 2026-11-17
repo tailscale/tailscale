@@ -60,28 +60,9 @@ func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
 			cleanUpPlan9Interfaces()
 		}
 		maxQueues := envknob.MaxQueues()
-		// Try to create the TUN device up to two times. If it fails
-		// the first time and we're on Linux, try a desperate
-		// "modprobe tun" to load the tun module and try again.
-		for try := range 2 {
-			dev, err = tun.CreateTUN(
-				tunName,
-				int(DefaultTUNMTU()),
-				tun.WithQueues(maxQueues),
-			)
-			if err == nil || !modprobeTunHook.IsSet() {
-				if err == nil {
-					logf("opened %d of %d TUN queues", len(tun.QueuesOf(dev)), maxQueues)
-				}
-				if try > 0 {
-					logf("created TUN device %q after doing `modprobe tun`", tunName)
-				}
-				break
-			}
-			if modprobeTunHook.Get()() != nil {
-				// modprobe failed; no point trying again.
-				break
-			}
+		dev, err = createTUN(logf, tunName, int(DefaultTUNMTU()), maxQueues)
+		if err == nil {
+			logf("opened %d of %d TUN queues", len(tun.QueuesOf(dev)), maxQueues)
 		}
 	}
 	if err != nil {
@@ -104,6 +85,17 @@ func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
 		return nil, "", err
 	}
 	return dev, name, nil
+}
+
+func retryTUNAfterModprobe(logf logger.Logf, name string, create func() (tun.Device, error), createErr error, modprobe func() error) (tun.Device, error) {
+	if modprobe == nil || modprobe() != nil {
+		return nil, createErr
+	}
+	dev, err := create()
+	if err == nil {
+		logf("created TUN device %q after doing `modprobe tun`", name)
+	}
+	return dev, err
 }
 
 func cleanUpPlan9Interfaces() {
