@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build linux && !android
+
 package tstun
 
 import (
@@ -8,12 +10,26 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
+	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/types/logger"
 	"tailscale.com/version/distro"
 )
+
+func createTUN(logf logger.Logf, name string, mtu, queues int) (tun.Device, error) {
+	create := func() (tun.Device, error) {
+		return tun.CreateTUN(name, mtu, tun.WithQueues(queues), tun.WithAdoptExisting())
+	}
+	dev, err := create()
+	if err != nil && !errors.Is(err, syscall.EBUSY) {
+		return retryTUNAfterModprobe(logf, name, create, err, modprobeTunHook.GetOrNil())
+	}
+	return dev, err
+}
 
 func init() {
 	tunDiagnoseFailure = diagnoseLinuxTUNFailure
@@ -29,9 +45,9 @@ func modprobeTun() ([]byte, error) {
 
 func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf, createErr error) {
 	if errors.Is(createErr, syscall.EBUSY) {
-		logf("TUN device %s is busy; another process probably still has it open (from old version of Tailscale that had a bug)", tunName)
-		logf("To fix, kill the process that has it open. Find with:\n\n$ sudo lsof -n /dev/net/tun\n\n")
-		logf("... and then kill those PID(s)")
+		logf("TUN device %q already exists or has attached queues; automatic recovery failed: %v", tunName, createErr)
+		logLinuxTUNHolders(tunName, "/proc", logf)
+		logf("Verify any candidate holders before stopping a conflicting Tailscale instance and retrying")
 		return
 	}
 
@@ -115,6 +131,74 @@ func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf, createErr error) 
 			}
 		}
 	}
+}
+
+// logLinuxTUNHolders reports processes with an fdinfo iff field matching tunName.
+// Interface names may repeat across network namespaces.
+func logLinuxTUNHolders(tunName, procRoot string, logf logger.Logf) {
+	processes, err := os.ReadDir(procRoot)
+	if err != nil {
+		logf("Cannot scan %s for TUN holders: %v", procRoot, err)
+		return
+	}
+	matches, unreadable := 0, 0
+	for _, process := range processes {
+		pid := process.Name()
+		if n, err := strconv.Atoi(pid); err != nil || n <= 0 {
+			continue
+		}
+		pidDir := filepath.Join(procRoot, pid)
+		fds, err := os.ReadDir(filepath.Join(pidDir, "fdinfo"))
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				unreadable++
+			}
+			continue
+		}
+		for _, fd := range fds {
+			if n, err := strconv.Atoi(fd.Name()); err != nil || n < 0 {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(pidDir, "fdinfo", fd.Name()))
+			if err != nil {
+				if !errors.Is(err, os.ErrNotExist) {
+					unreadable++
+				}
+				continue
+			}
+			if !tunFDInfoMatches(data, tunName) {
+				continue
+			}
+			comm := "unknown"
+			if data, err := os.ReadFile(filepath.Join(pidDir, "comm")); err == nil {
+				comm = strings.TrimSuffix(string(data), "\n")
+			}
+			logf("TUN holder candidate for %q: pid=%s comm=%q fd=%s", tunName, pid, comm, fd.Name())
+			matches++
+		}
+	}
+	if unreadable != 0 {
+		logf("TUN holder scan could not read %d proc entries due to permissions or other errors", unreadable)
+	}
+	if matches == 0 {
+		logf("No visible process fdinfo entries name TUN device %q; this does not prove it is unused", tunName)
+		logf("Holders may be inaccessible, outside this PID namespace, or retained by kernel references; inspect from the host with access to /proc/<pid>/fdinfo")
+	} else {
+		logf("TUN holder candidates match by interface name; names can repeat across network namespaces")
+	}
+}
+
+func tunFDInfoMatches(data []byte, tunName string) bool {
+	if tunName == "" {
+		return false
+	}
+	for line := range strings.SplitSeq(string(data), "\n") {
+		key, value, ok := strings.Cut(line, ":")
+		if ok && key == "iff" && strings.TrimSpace(value) == tunName {
+			return true
+		}
+	}
+	return false
 }
 
 func utsReleaseField(u *syscall.Utsname) string {
