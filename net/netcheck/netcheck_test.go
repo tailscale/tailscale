@@ -303,9 +303,10 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 				{0, report("d1", 2, "d2", 3)},
 				{1 * time.Second, report("d1", 4, "d2", 3)},
 				{2 * time.Second, report("d2", 3)},
+				{3 * time.Second, report("d2", 3)},
 			},
-			wantPrevLen: 3,
-			wantDERP:    2, // only option
+			wantPrevLen: 4,
+			wantDERP:    2, // only option, once d1 has been missing for two rounds
 		},
 		{
 			name: "d1_is_back",
@@ -424,13 +425,14 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 				{0, report("d1", 2, "d2", 3)},               // (1) initially pick d1
 				{2 * time.Second, report("d1", 4, "d2", 3)}, // (2) still d1
 				{2 * time.Second, report("d2", 3)},          // (3) d1 gone, but have traffic
+				{2 * time.Second, report("d2", 3)},          // (4) d1 still gone
 			},
 			opts: &GetReportOpts{
 				GetLastDERPActivity: mkLDAFunc(map[tailcfg.DERPRegionID]time.Time{
 					1: startTime.Add(4*time.Second - PreferredDERPFrameTime - 1), // not within active window of (3)
 				}),
 			},
-			wantPrevLen: 3,
+			wantPrevLen: 4,
 			wantDERP:    2, // moved to d2 since d1 is gone
 		},
 		{
@@ -457,9 +459,10 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			steps: []step{
 				{time.Second, report("d1", 2, "d2", 1)},
 				{2 * time.Second, report("d1", 4)},
+				{3 * time.Second, report("d1", 4)},
 			},
 			forcedDERP:  2,
-			wantPrevLen: 2,
+			wantPrevLen: 3,
 			wantDERP:    1,
 		},
 		{
@@ -556,6 +559,35 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			lastRegions: []tailcfg.DERPRegionID{2, 3},
 			wantPrevLen: 2,
 			wantDERP:    0, // don't keep removed d1 as a no-data fallback
+		},
+		{
+			name: "home_missing_one_round_is_kept",
+			steps: []step{
+				{0, report("d1", 18*time.Millisecond, "d2", 20*time.Millisecond)},
+				{time.Second, report("d1", 18*time.Millisecond, "d2", 20*time.Millisecond)},
+				{2 * time.Second, report("d2", 20*time.Millisecond)},
+			},
+			wantPrevLen: 3,
+			wantDERP:    1, // d1 was measured last round, and d2 is not enough better to move
+		},
+		{
+			name: "home_missing_two_rounds_moves",
+			steps: []step{
+				{0, report("d1", 18*time.Millisecond, "d2", 20*time.Millisecond)},
+				{time.Second, report("d2", 20*time.Millisecond)},
+				{2 * time.Second, report("d2", 20*time.Millisecond)},
+			},
+			wantPrevLen: 3,
+			wantDERP:    2,
+		},
+		{
+			name: "home_missing_one_round_but_much_slower_than_best",
+			steps: []step{
+				{0, report("d1", 90*time.Millisecond, "d2", 100*time.Millisecond)},
+				{time.Second, report("d2", 10*time.Millisecond)},
+			},
+			wantPrevLen: 2,
+			wantDERP:    2,
 		},
 		{
 			name: "forced_removed",
