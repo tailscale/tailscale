@@ -135,6 +135,9 @@ const (
 	LogSCMInteractions      Key = "LogSCMInteractions"
 	FlushDNSOnSessionUnlock Key = "FlushDNSOnSessionUnlock"
 
+	// HideWindowedUI is a boolean policy that hides the Windows windowed UI.
+	// It does not close an already-open window.
+	HideWindowedUI Key = "HideWindowedUI"
 	// EncryptState is a boolean setting that specifies whether to encrypt the
 	// tailscaled state file.
 	// Windows and Linux use a TPM device, Apple uses the Keychain.

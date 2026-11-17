@@ -62,6 +62,7 @@ var implicitDefinitions = []*setting.Definition{
 	setting.NewDefinition(pkey.TestMenuVisibility, setting.UserSetting, setting.VisibilityValue),
 	setting.NewDefinition(pkey.UpdateMenuVisibility, setting.UserSetting, setting.VisibilityValue),
 	setting.NewDefinition(pkey.OnboardingFlowVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(pkey.HideWindowedUI, setting.UserSetting, setting.BooleanValue),
 }
 
 func init() {

@@ -351,6 +351,16 @@
         </boolean>
       </elements>
     </policy>
+    <policy name="HideWindowedUI" class="Both" displayName="$(string.HideWindowedUI)" explainText="$(string.HideWindowedUI_Help)" key="Software\Policies\Tailscale" valueName="HideWindowedUI">
+      <parentCategory ref="UI_Category" />
+      <supportedOn ref="SINCE_V1_106" />
+      <enabledValue>
+        <decimal value="1" />
+      </enabledValue>
+      <disabledValue>
+        <decimal value="0" />
+      </disabledValue>
+    </policy>
     <policy name="TestMenu" class="Both" displayName="$(string.TestMenu)" explainText="$(string.TestMenu_Help)" key="Software\Policies\Tailscale" valueName="TestMenu">
       <parentCategory ref="UI_Category" />
       <supportedOn ref="SINCE_V1_22" />
