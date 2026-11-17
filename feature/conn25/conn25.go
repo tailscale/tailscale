@@ -970,7 +970,8 @@ func makePeerAPIReq(ctx context.Context, httpClient *http.Client, urlBase string
 
 func (e *extension) pickConnectorURLBase(app appctype.AppConnectorAttr) string {
 	nb := e.host.NodeBackend()
-	peers := pickConnector(nb, app)
+	rp := e.getRouteCheckReport()
+	peers := pickConnector(nb, app, rp)
 	for _, p := range peers {
 		if urlBase := nb.PeerAPIBase(p); urlBase != "" {
 			return urlBase
@@ -1345,6 +1346,25 @@ func rewriteHTTPSResponse(hdr dnsmessage.Header, questions []dnsmessage.Question
 
 const packetFilterAllowReason = "app connector transit IP"
 
+func (e *extension) getRouteCheckReport() ipnlocal.RouteCheckReport {
+	b, ok := e.backend.(*ipnlocal.LocalBackend)
+	if !ok {
+		return nil
+	}
+	hook := ipnlocal.HookRouteCheckReport.GetOrNil()
+	if hook == nil {
+		return nil
+	}
+	return hook(b)
+}
+
+func peerIsReachable(rp ipnlocal.RouteCheckReport, n tailcfg.NodeView) bool {
+	if rp == nil {
+		return n.Online().Get()
+	}
+	return rp.IsReachable(n.ID()).IsReachable()
+}
+
 func isPeerEligibleConnector(peer tailcfg.NodeView) bool {
 	if !peer.Valid() || !peer.Hostinfo().Valid() {
 		return false
@@ -1365,13 +1385,13 @@ func sortByPreference(self tailcfg.NodeView, ns []tailcfg.NodeView) {
 
 // pickConnector returns peers the backend knows about that match the app, in order of preference to use as
 // a connector.
-func pickConnector(nb ipnext.NodeBackend, app appctype.AppConnectorAttr) []tailcfg.NodeView {
+func pickConnector(nb ipnext.NodeBackend, app appctype.AppConnectorAttr, routecheckReport ipnlocal.RouteCheckReport) []tailcfg.NodeView {
 	appTagsSet := set.SetOf(app.Connectors)
 	matches := nb.AppendMatchingPeers(nil, func(n tailcfg.NodeView) bool {
 		if !isPeerEligibleConnector(n) {
 			return false
 		}
-		if !n.Online().Get() {
+		if !peerIsReachable(routecheckReport, n) {
 			return false
 		}
 		for _, t := range n.Tags().All() {
