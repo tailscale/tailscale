@@ -7,6 +7,8 @@ package main
 import (
 	_ "embed"
 
+	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/analysis/suite/vet"
 	"golang.org/x/tools/go/analysis/unitchecker"
 	"tailscale.com/cmd/vet/jsontags"
 	"tailscale.com/cmd/vet/lowerell"
@@ -22,5 +24,11 @@ func init() {
 }
 
 func main() {
-	unitchecker.Main(jsontags.Analyzer, lowerell.Analyzer, subtestnames.Analyzer)
+	custom_checks := []*analysis.Analyzer{
+		jsontags.Analyzer,
+		lowerell.Analyzer,
+		subtestnames.Analyzer,
+	}
+	all_checks := append(custom_checks, vet.Suite...)
+	unitchecker.Main(all_checks...)
 }

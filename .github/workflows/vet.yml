@@ -32,6 +32,10 @@ jobs:
         with:
           path: src
 
+      - name: Build 'go vet' tool
+        working-directory: src
+        run: ./tool/go build -o /tmp/vettool tailscale.com/cmd/vet
+
       - name: Run 'go vet'
         working-directory: src
         # Use listpkgs --ignore-3p to skip tempfork/ packages, which
@@ -40,23 +44,4 @@ jobs:
         # include the v2 go client (tailscale.com/client/tailscale/v2) if it's
         # a dependency in our go.mod file. Possibly a go vet bug, but avoid
         # cross-repo vetting for now so we can safely add the dependency.
-        run: ./tool/go vet $(./tool/go run ./tool/listpkgs --ignore-3p ./...)
-
-  vet_custom:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-
-    steps:
-      - name: Check out code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          path: src
-
-      - name: Build 'go vet' tool
-        working-directory: src
-        run: ./tool/go build -o /tmp/vettool tailscale.com/cmd/vet
-
-      - name: Run 'go vet'
-        working-directory: src
-        # Use listpkgs --ignore-3p as documented for the vet job
         run: ./tool/go vet -vettool=/tmp/vettool $(./tool/go run ./tool/listpkgs --ignore-3p ./...)
