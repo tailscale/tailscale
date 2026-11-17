@@ -24,7 +24,7 @@ func TestClientAuthRestrictedPublicKeyAlgos(t *testing.T) {
 		wantError bool
 	}{
 		{"rsa", testSigners["rsa"], false},
-		{"dsa", testSigners["dsa"], true},
+		{"ecdsa", testSigners["ecdsa"], true},
 		{"ed25519", testSigners["ed25519"], true},
 	} {
 		c1, c2, err := netPipe()
@@ -313,7 +313,7 @@ func TestPublicKeyCallbackLastSeen(t *testing.T) {
 		PublicKeyCallback: func(conn ConnMetadata, key PublicKey) (*Permissions, error) {
 			lastSeenKey = key
 			fmt.Printf("seen %#v\n", key)
-			if _, ok := key.(*dsaPublicKey); !ok {
+			if _, ok := key.(*ecdsaPublicKey); !ok {
 				return nil, errors.New("nope")
 			}
 			return nil, nil
@@ -330,7 +330,7 @@ func TestPublicKeyCallbackLastSeen(t *testing.T) {
 	clientConf := ClientConfig{
 		User: "user",
 		Auth: []AuthMethod{
-			PublicKeys(testSigners["rsa"], testSigners["dsa"], testSigners["ed25519"]),
+			PublicKeys(testSigners["rsa"], testSigners["ecdsa"], testSigners["ed25519"]),
 		},
 		HostKeyCallback: InsecureIgnoreHostKey(),
 	}
@@ -341,10 +341,10 @@ func TestPublicKeyCallbackLastSeen(t *testing.T) {
 	}
 	<-done
 
-	expectedPublicKey := testSigners["dsa"].PublicKey().Marshal()
+	expectedPublicKey := testSigners["ecdsa"].PublicKey().Marshal()
 	lastSeenMarshalled := lastSeenKey.Marshal()
 	if !bytes.Equal(lastSeenMarshalled, expectedPublicKey) {
-		t.Errorf("unexpected key: got %#v, want %#v", lastSeenKey, testSigners["dsa"].PublicKey())
+		t.Errorf("unexpected key: got %#v, want %#v", lastSeenKey, testSigners["ecdsa"].PublicKey())
 	}
 }
 
