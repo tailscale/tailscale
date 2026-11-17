@@ -153,7 +153,7 @@ require (
 	golang.zx2c4.com/wireguard v0.0.0-20260522210424-ecfc5a8d5446
 	golang.zx2c4.com/wireguard/windows v1.0.1
 	gopkg.in/yaml.v3 v3.0.1
-	gvisor.dev/gvisor v0.0.0-20260915211658-a6f909f08a72
+	gvisor.dev/gvisor v0.0.0-20261117040555-0303b2605d5e
 	helm.sh/helm/v3 v3.21.4
 	honnef.co/go/tools v0.8.1
 	k8s.io/api v0.37.0
