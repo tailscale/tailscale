@@ -36,7 +36,7 @@ jobs:
         working-directory: src
         run: ./tool/go build -o /tmp/vettool tailscale.com/cmd/vet
 
-      - name: Run 'go vet'
+      - name: Run 'go vet' (custom checks)
         working-directory: src
         # Use listpkgs --ignore-3p to skip tempfork/ packages, which
         # intentionally match upstream and may not follow our style rules.
@@ -45,3 +45,7 @@ jobs:
         # a dependency in our go.mod file. Possibly a go vet bug, but avoid
         # cross-repo vetting for now so we can safely add the dependency.
         run: ./tool/go vet -vettool=/tmp/vettool $(./tool/go run ./tool/listpkgs --ignore-3p ./...)
+
+      - name: Run 'go vet' (standard checks)
+        working-directory: src
+        run: ./tool/go vet $(./tool/go run ./tool/listpkgs --ignore-3p ./...)
