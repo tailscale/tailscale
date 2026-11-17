@@ -310,7 +310,8 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool, m *usermetric.Registry,
 	// past vectorOutbound behaviour.
 	w.injectionQueue = &injectionQueue{w: w, ch: make(chan tunInjectedRead, 1)}
 
-	if buildfeatures.HasTUNDevStats {
+	// A fake TUN (userspace networking) has no kernel interface to poll.
+	if buildfeatures.HasTUNDevStats && !isFakeTUN(tdev) {
 		if f, ok := HookPollTUNDevStats.GetOk(); ok {
 			closer, err := f(tdev)
 			if err != nil {
@@ -327,6 +328,13 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool, m *usermetric.Registry,
 	w.noteActivity()
 
 	return w
+}
+
+// isFakeTUN reports whether tdev is a fake TUN, as returned by [NewFake],
+// which has no kernel network interface.
+func isFakeTUN(tdev tun.Device) bool {
+	ft, ok := tdev.(interface{ IsFakeTun() bool })
+	return ok && ft.IsFakeTun()
 }
 
 // HookPollTUNDevStats is the hook maybe set by feature/tundevstats.
