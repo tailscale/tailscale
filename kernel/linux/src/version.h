@@ -1,0 +1,2 @@
+#define WIREGUARD_VERSION "1.0.0"
+#define TSWG_VERSION "0.0.1"

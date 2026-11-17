@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-2.0
+
+ccflags-y := -D'pr_fmt(fmt)=KBUILD_MODNAME ": " fmt'
+ccflags-y += -I$(src)/include
+ccflags-y += -include $(src)/compat/compat.h
+ccflags-$(TSWG_DEBUG) += -DDEBUG
+tswg-y := main.o
+tswg-y += noise.o
+tswg-y += device.o
+tswg-y += peer.o
+tswg-y += timers.o
+tswg-y += queueing.o
+tswg-y += send.o
+tswg-y += receive.o
+tswg-y += socket.o
+tswg-y += peerlookup.o
+tswg-y += allowedips.o
+tswg-y += ratelimiter.o
+tswg-y += cookie.o
+tswg-y += mlkem.o
+tswg-y += netlink.o generated/netlink.o
+obj-m := tswg.o

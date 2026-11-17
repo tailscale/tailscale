@@ -65,6 +65,7 @@ type linuxRouter struct {
 	closed        atomic.Bool
 	logf          func(fmt string, args ...any)
 	tunname       string
+	svcTunName    string // if non-empty, the device for routes to the Tailscale service IPs; see serviceTUN
 	netMon        *netmon.Monitor
 	health        *health.Tracker
 	eventClient   *eventbus.Client
@@ -114,6 +115,15 @@ type linuxRouter struct {
 	magicsockPortV6   uint16
 }
 
+// serviceTUN is implemented by a tun.Device whose Name is a device that
+// doesn't hand tailscaled the packets routed to it, such as the tswg
+// kernel data plane's, and which has a second, real TUN device for the
+// packets tailscaled answers itself, to the Tailscale service IPs
+// (MagicDNS and so on). Routes to those go to the second device.
+type serviceTUN interface {
+	ServiceTUNName() string
+}
+
 func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus) (router.Router, error) {
 	tunname, err := tunDev.Name()
 	if err != nil {
@@ -124,7 +134,36 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Moni
 		ambientCapNetAdmin: useAmbientCaps(),
 	}
 
-	return newUserspaceRouterAdvanced(logf, tunname, netMon, cmd, health, bus)
+	rt, err := newUserspaceRouterAdvanced(logf, tunname, netMon, cmd, health, bus)
+	if err != nil {
+		return nil, err
+	}
+	if st, ok := tunDev.(serviceTUN); ok {
+		rt.(*linuxRouter).svcTunName = st.ServiceTUNName()
+	}
+	return rt, nil
+}
+
+// routeDev returns the device for the route to cidr.
+func (r *linuxRouter) routeDev(cidr netip.Prefix) string {
+	if r.svcTunName != "" && cidr.IsSingleIP() &&
+		(cidr.Addr() == tsaddr.TailscaleServiceIP() || cidr.Addr() == tsaddr.TailscaleServiceIPv6()) {
+		return r.svcTunName
+	}
+	return r.tunname
+}
+
+// routeLinkIndex returns the interface index of routeDev(cidr).
+func (r *linuxRouter) routeLinkIndex(cidr netip.Prefix) (int, error) {
+	dev := r.routeDev(cidr)
+	if dev == r.tunname {
+		return r.linkIndex()
+	}
+	link, err := netlink.LinkByName(dev)
+	if err != nil {
+		return 0, fmt.Errorf("failed to look up link %q: %w", dev, err)
+	}
+	return link.Attrs().Index, nil
 }
 
 func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon.Monitor, cmd commandRunner, health *health.Tracker, bus *eventbus.Bus) (router.Router, error) {
@@ -1192,9 +1231,9 @@ func (r *linuxRouter) addRoute(cidr netip.Prefix) error {
 		return nil
 	}
 	if r.useIPCommand() {
-		return r.addRouteDef([]string{normalizeCIDR(cidr), "dev", r.tunname}, cidr)
+		return r.addRouteDef([]string{normalizeCIDR(cidr), "dev", r.routeDev(cidr)}, cidr)
 	}
-	linkIndex, err := r.linkIndex()
+	linkIndex, err := r.routeLinkIndex(cidr)
 	if err != nil {
 		return err
 	}
@@ -1269,9 +1308,9 @@ func (r *linuxRouter) delRoute(cidr netip.Prefix) error {
 		return nil
 	}
 	if r.useIPCommand() {
-		return r.delRouteDef([]string{normalizeCIDR(cidr), "dev", r.tunname}, cidr)
+		return r.delRouteDef([]string{normalizeCIDR(cidr), "dev", r.routeDev(cidr)}, cidr)
 	}
-	linkIndex, err := r.linkIndex()
+	linkIndex, err := r.routeLinkIndex(cidr)
 	if err != nil {
 		return err
 	}

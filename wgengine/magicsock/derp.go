@@ -780,6 +780,10 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 
 	c.metrics.inboundPacketsDERPTotal.Add(1)
 	c.metrics.inboundBytesDERPTotal.Add(int64(n))
+	if c.kernelWGRecv != nil {
+		c.kernelWGRecv(ep.publicKey, b[:n])
+		return 0, nil
+	}
 	return n, ep
 }
 
