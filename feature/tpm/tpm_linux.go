@@ -20,5 +20,6 @@ func open() (transport.TPMCloser, error) {
 	if err == nil {
 		return tpm, nil
 	}
+	errs = append(errs, err)
 	return nil, errors.Join(errs...)
 }
