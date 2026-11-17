@@ -346,6 +346,24 @@ func (i *iptablesRunner) ClampMSSToPMTU(tun string, addr netip.Addr) error {
 	return table.Append("mangle", "FORWARD", "-i", tun, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu")
 }
 
+// AddTCPResetRule inserts, at the head of filter/FORWARD of each IP family,
+// rules that reject with a TCP RST every TCP segment leaving via tun or
+// arriving on tun. The head of the built-in chain rather than ts-forward, so
+// the rules win over the ACCEPTs that AddBase puts there and do not depend on
+// that chain existing in this network namespace. Both directions are matched
+// so the remote peer's side of each forwarded connection is reset too.
+func (i *iptablesRunner) AddTCPResetRule(tun string) error {
+	for _, ipt := range i.getTables() {
+		for _, dir := range []string{"-o", "-i"} {
+			args := []string{dir, tun, "-p", "tcp", "-j", "REJECT", "--reject-with", "tcp-reset"}
+			if err := ipt.Insert("filter", "FORWARD", 1, args...); err != nil {
+				return fmt.Errorf("adding %v in filter/FORWARD: %w", args, err)
+			}
+		}
+	}
+	return nil
+}
+
 // addBase6 adds some basic IPv6 processing rules to be
 // supplemented by later calls to other helpers.
 func (i *iptablesRunner) addBase6(tunname string) error {

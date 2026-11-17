@@ -21,6 +21,8 @@ type FakeNetfilterRunner struct {
 	}
 	// clampedAddrs tracks addresses passed to ClampMSSToPMTU.
 	clampedAddrs []netip.Addr
+	// tcpResetTuns tracks interfaces passed to AddTCPResetRule.
+	tcpResetTuns []string
 }
 
 // NewFakeNetfilterRunner creates a new FakeNetfilterRunner.
@@ -107,3 +109,13 @@ func (f *FakeNetfilterRunner) EnsurePortMapRuleForSvc(svc, tun string, targetIP 
 }
 func (f *FakeNetfilterRunner) AddExternalCGNATRules(mode CGNATMode, tunname string) error { return nil }
 func (f *FakeNetfilterRunner) DelExternalCGNATRules(mode CGNATMode, tunname string) error { return nil }
+
+func (f *FakeNetfilterRunner) AddTCPResetRule(tun string) error {
+	f.tcpResetTuns = append(f.tcpResetTuns, tun)
+	return nil
+}
+
+// GetTCPResetTuns returns the interfaces passed to AddTCPResetRule.
+func (f *FakeNetfilterRunner) GetTCPResetTuns() []string {
+	return f.tcpResetTuns
+}

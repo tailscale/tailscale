@@ -1475,3 +1475,48 @@ func TestGetOrCreateChainNilHooknum(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestNFTAddTCPResetRule(t *testing.T) {
+	conn := newSysConn(t)
+	runner := newFakeNftablesRunnerWithConn(t, conn, true)
+	if err := runner.AddTCPResetRule("testTunn"); err != nil {
+		t.Fatalf("AddTCPResetRule() failed: %v", err)
+	}
+	for _, fam := range []nftables.TableFamily{nftables.TableFamilyIPv4, nftables.TableFamilyIPv6} {
+		chains, err := conn.ListChainsOfTableFamily(fam)
+		if err != nil {
+			t.Fatalf("ListChainsOfTableFamily(%v) failed: %v", fam, err)
+		}
+		var chain *nftables.Chain
+		for _, c := range chains {
+			if c.Name == "ts-reset" {
+				chain = c
+				break
+			}
+		}
+		if chain == nil {
+			t.Fatalf("family %v: ts-reset chain not found", fam)
+		}
+		if chain.Hooknum == nil || *chain.Hooknum != *nftables.ChainHookForward {
+			t.Errorf("family %v: ts-reset chain is not on the forward hook", fam)
+		}
+		rules, err := conn.GetRules(chain.Table, chain)
+		if err != nil {
+			t.Fatalf("GetRules() failed: %v", err)
+		}
+		if len(rules) != 2 {
+			t.Fatalf("family %v: got %d rules in ts-reset, want 2", fam, len(rules))
+		}
+		for _, r := range rules {
+			var rejects bool
+			for _, e := range r.Exprs {
+				if rj, ok := e.(*expr.Reject); ok && rj.Type == unix.NFT_REJECT_TCP_RST {
+					rejects = true
+				}
+			}
+			if !rejects {
+				t.Errorf("family %v: rule %v does not reject with tcp reset", fam, r.Exprs)
+			}
+		}
+	}
+}
