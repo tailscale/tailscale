@@ -6,10 +6,12 @@
 package osuser
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"os/user"
 	"reflect"
@@ -188,7 +190,7 @@ func userLookupGetent(usernameOrUID string, std lookupStd) (*user.User, string, 
 func getentFallback(name string, std lookupStd, getentErr error) (*user.User, string, error) {
 	u, err := std(name)
 	if err == nil {
-		return u, "", nil
+		return u, shellFromPasswd(u), nil
 	}
 	// If getent is unavailable on this system, os/user is authoritative.
 	// Otherwise only exit 2 means the requested key was not found.
@@ -197,6 +199,35 @@ func getentFallback(name string, std lookupStd, getentErr error) (*user.User, st
 		return nil, "", err
 	}
 	return nil, "", fmt.Errorf("getent lookup failed: %w (os/user fallback: %v)", getentErr, err)
+}
+
+// passwdFile is the file read by shellFromPasswd. It's a variable for tests.
+var passwdFile = "/etc/passwd"
+
+// shellFromPasswd returns the login shell of u from the local passwd file,
+// or the empty string if u has no valid entry there. It's used when getent
+// isn't usable, as os/user doesn't expose the shell.
+func shellFromPasswd(u *user.User) string {
+	f, err := os.Open(passwdFile)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	s := bufio.NewScanner(f)
+	for s.Scan() {
+		line := s.Text()
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		pu, shell, err := parseGetentUser([]byte(line))
+		if err != nil {
+			continue
+		}
+		if pu.Username == u.Username && pu.Uid == u.Uid {
+			return shell
+		}
+	}
+	return ""
 }
 
 func probeGetentDoubleDashSupport() bool {
