@@ -322,7 +322,7 @@ func validateIngressClass(ctx context.Context, cl client.Client, ingressClassNam
 	return nil
 }
 
-func handlersForIngress(ctx context.Context, ing *networkingv1.Ingress, cl client.Client, rec record.EventRecorder, tlsHost string, logger *zap.SugaredLogger) (handlers map[string]*ipn.HTTPHandler, err error) {
+func handlersForIngress(ctx context.Context, ing *networkingv1.Ingress, cl client.Client, rec record.EventRecorder, tlsHost string, logger *zap.SugaredLogger, altHosts ...string) (handlers map[string]*ipn.HTTPHandler, err error) {
 	addIngressBackend := func(b *networkingv1.IngressBackend, path string) {
 		if path == "" {
 			path = "/"
@@ -372,8 +372,8 @@ func handlersForIngress(ctx context.Context, ing *networkingv1.Ingress, cl clien
 	addIngressBackend(ing.Spec.DefaultBackend, "/")
 	for _, rule := range ing.Spec.Rules {
 		// Host is optional, but if it's present it must match the TLS host
-		// otherwise we ignore the rule.
-		if rule.Host != "" && rule.Host != tlsHost {
+		// (or one of altHosts) otherwise we ignore the rule.
+		if rule.Host != "" && rule.Host != tlsHost && !slices.Contains(altHosts, rule.Host) {
 			rec.Eventf(ing, corev1.EventTypeWarning, "InvalidIngressBackend", "rule with host %q ignored, unsupported", rule.Host)
 			continue
 		}
