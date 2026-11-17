@@ -35,6 +35,11 @@ const (
 	prodMode = false
 )
 
+// pnpmPath is the repo's pinned pnpm (see tool/pnpm.rev). Like wasm-opt, it is
+// relative to cmd/tsconnect, which commonSetup makes the working directory
+// before any pnpm command runs.
+const pnpmPath = "../../tool/pnpm"
+
 // commonSetup performs setup that is common to both dev and build modes.
 func commonSetup(dev bool) (*esbuild.BuildOptions, error) {
 	// Change cwd to to where this file lives -- that's where all inputs for
@@ -42,9 +47,6 @@ func commonSetup(dev bool) (*esbuild.BuildOptions, error) {
 	root, err := findRepoRoot()
 	if err != nil {
 		return nil, err
-	}
-	if *yarnPath == "" {
-		*yarnPath = path.Join(root, "tool", "yarn")
 	}
 	tsConnectDir := filepath.Join(root, "cmd", "tsconnect")
 	if err := os.Chdir(tsConnectDir); err != nil {
@@ -318,13 +320,15 @@ func runWasmOpt(path string) error {
 }
 
 // installJSDeps installs the JavaScript dependencies specified by package.json
+// and pnpm-lock.yaml. The lockfile is never modified; to add or update
+// dependencies, run ./tool/pnpm in cmd/tsconnect directly.
 func installJSDeps() error {
 	log.Printf("Installing JS deps...\n")
-	return runYarn()
+	return runPnpm("install")
 }
 
-func runYarn(args ...string) error {
-	cmd := exec.Command(*yarnPath, args...)
+func runPnpm(args ...string) error {
+	cmd := exec.Command(pnpmPath, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -347,11 +351,11 @@ func setupEsbuildTailwind(build esbuild.PluginBuild, dev bool) {
 		Filter: "./src/.*\\.css$",
 	}, func(args esbuild.OnLoadArgs) (esbuild.OnLoadResult, error) {
 		start := time.Now()
-		yarnArgs := []string{"--silent", "tailwind", "-i", args.Path}
+		pnpmArgs := []string{"--silent", "exec", "tailwind", "-i", args.Path}
 		if !dev {
-			yarnArgs = append(yarnArgs, "--minify")
+			pnpmArgs = append(pnpmArgs, "--minify")
 		}
-		cmd := exec.Command(*yarnPath, yarnArgs...)
+		cmd := exec.Command(pnpmPath, pnpmArgs...)
 		tailwindOutput, err := cmd.Output()
 		log.Printf("Ran tailwind in %v\n", time.Since(start).Round(time.Millisecond))
 		if err != nil {
