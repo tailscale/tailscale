@@ -29,6 +29,7 @@ import (
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/routecheck"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
@@ -3679,12 +3680,21 @@ func TestPickConnector(t *testing.T) {
 		return nvWithConnectorSet(id, true, tags...)
 	}
 
+	makeReport := func(ids ...tailcfg.NodeID) *routecheck.Report {
+		rp := &routecheck.Report{Reachable: routecheck.NodeSet{}}
+		for _, id := range ids {
+			rp.Reachable[id] = routecheck.Node{ID: id}
+		}
+		return rp
+	}
+
 	self := (&tailcfg.Node{ID: 100}).View()
 
 	for _, tt := range []struct {
 		name       string
 		candidates []tailcfg.NodeView
 		app        appctype.AppConnectorAttr
+		report     ipnlocal.RouteCheckReport
 		want       []tailcfg.NodeView
 	}{
 		{
@@ -3796,9 +3806,37 @@ func TestPickConnector(t *testing.T) {
 			app:        exampleApp,
 			want:       []tailcfg.NodeView{nv(2, "tag:example")},
 		},
+		{
+			name:       "report-replaces-online",
+			candidates: []tailcfg.NodeView{nv(1, "tag:example"), nvWithOnlineSet(2, false, "tag:example")},
+			app:        exampleApp,
+			report:     makeReport(2),
+			want:       []tailcfg.NodeView{nvWithOnlineSet(2, false, "tag:example")},
+		},
+		{
+			name:       "report-drops-online-not-in-report",
+			candidates: []tailcfg.NodeView{nv(1, "tag:example"), nv(2, "tag:example")},
+			app:        exampleApp,
+			report:     makeReport(1),
+			want:       []tailcfg.NodeView{nv(1, "tag:example")},
+		},
+		{
+			name:       "report-empty-drops-all",
+			candidates: []tailcfg.NodeView{nv(1, "tag:example"), nv(2, "tag:example")},
+			app:        exampleApp,
+			report:     makeReport(),
+			want:       nil,
+		},
+		{
+			name:       "report-multiple-reachable",
+			candidates: []tailcfg.NodeView{nv(2, "tag:example"), nvWithOnlineSet(1, false, "tag:example")},
+			app:        exampleApp,
+			report:     makeReport(1, 2),
+			want:       []tailcfg.NodeView{nvWithOnlineSet(1, false, "tag:example"), nv(2, "tag:example")},
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got := pickConnector(&testNodeBackend{self: self, peers: tt.candidates}, tt.app)
+			got := pickConnector(&testNodeBackend{self: self, peers: tt.candidates}, tt.app, tt.report)
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Fatalf("PickConnectors (-want, +got):\n%s", diff)
 			}
