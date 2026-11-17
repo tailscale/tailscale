@@ -179,16 +179,21 @@ struct packet_context {
 	enum counter_key_prog_end prog_end;
 };
 
-static __always_inline int inc_counter(struct counters_key key, __u64 val) {
+static __always_inline void inc_counter(struct counters_key key, __u64 val) {
+	// inc_counter adds val to this CPU's slot for key in counters_map.
+	// The map is per-CPU, so the pointer from the lookup is already this
+	// CPU's value and can be incremented in place. Only a missing key,
+	// which happens once per key per map lifetime, needs the update call
+	// that takes the hash bucket lock.
 	__u64 *counter = bpf_map_lookup_elem(&counters_map, &key);
 	if (!counter) {
-		return bpf_map_update_elem(&counters_map, &key, &val, BPF_ANY);
+		bpf_map_update_elem(&counters_map, &key, &val, BPF_ANY);
+		return;
 	}
 	*counter += val;
-	return bpf_map_update_elem(&counters_map, &key, counter, BPF_ANY);
 }
 
-static __always_inline int handle_counters(struct xdp_md *ctx, int action, struct packet_context *pctx) {
+static __always_inline void handle_counters(struct xdp_md *ctx, int action, struct packet_context *pctx) {
 	void *data_end = (void *)(long)ctx->data_end;
 	void *data     = (void *)(long)ctx->data;
 
@@ -229,8 +234,6 @@ static __always_inline int handle_counters(struct xdp_md *ctx, int action, struc
 
 	inc_counter(packets_key, 1);
 	inc_counter(bytes_key, bytes);
-
-	return 0;
 }
 
 #define is_ipv6 (pctx->af == COUNTER_KEY_AF_IPV6)
