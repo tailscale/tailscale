@@ -64,7 +64,11 @@ func newOSMon(bus *eventbus.Bus, logf logger.Logf, m *Monitor) (osMon, error) {
 		// but all reachability would.
 		Groups: unix.RTMGRP_IPV4_IFADDR | unix.RTMGRP_IPV6_IFADDR |
 			unix.RTMGRP_IPV4_ROUTE | unix.RTMGRP_IPV6_ROUTE |
-			unix.RTMGRP_IPV4_RULE, // no IPV6_RULE in x/sys/unix
+			unix.RTMGRP_IPV4_RULE |
+			// x/sys/unix has no RTMGRP_IPV6_RULE bitmask constant; derive
+			// it from the group number. Without this, deletions of our
+			// IPv6 ip rules (e.g. by systemd-networkd) go unnoticed.
+			1<<(unix.RTNLGRP_IPV6_RULE-1),
 	})
 	if err != nil {
 		// Google Cloud Run does not implement NETLINK_ROUTE RTMGRP support
@@ -235,7 +239,14 @@ func (c *nlConn) Receive() (message, error) {
 		if err != nil {
 			c.logf("ip rule deleted; failed to parse netlink message: %v", err)
 		} else {
-			c.logf("ip rule deleted: %+v", rmsg)
+			if rmsg.Family == unix.AF_INET6 {
+				// Logged only verbosely: we started watching IPv6 rule
+				// deletions recently, and other software (Cilium,
+				// mwan3, ip -6 rule flush) deletes them routinely.
+				c.logf("[v1] ip rule deleted: %+v", rmsg)
+			} else {
+				c.logf("ip rule deleted: %+v", rmsg)
+			}
 			// On `ip -4 rule del pref 5210 table main`, logs:
 			// monitor: ip rule deleted: {Family:2 DstLength:0 SrcLength:0 Tos:0 Table:254 Protocol:0 Scope:0 Type:1 Flags:0 Attributes:{Dst:<nil> Src:<nil> Gateway:<nil> OutIface:0 Priority:5210 Table:254 Mark:4294967295 Expires:<nil> Metrics:<nil> Multipath:[]}}
 		}

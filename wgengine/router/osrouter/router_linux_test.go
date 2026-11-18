@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/tailscale/netlink"
@@ -47,6 +48,36 @@ ip rule add -4 pref 5270 table 52
 ip rule add -6 pref 5210 fwmark 0x80000/0xff0000 table main
 ip rule add -6 pref 5230 fwmark 0x80000/0xff0000 table default
 ip rule add -6 pref 5250 fwmark 0x80000/0xff0000 type unreachable
+ip rule add -6 pref 5270 table 52
+`
+	// basicExitV4 is basic plus the rp_filter underlay source rules for the
+	// IPv4 addresses returned by testUnderlayAddrs, installed while an IPv4
+	// exit route is present.
+	basicExitV4 := `
+ip rule add -4 pref 5210 fwmark 0x80000/0xff0000 table main
+ip rule add -4 pref 5230 fwmark 0x80000/0xff0000 table default
+ip rule add -4 pref 5250 fwmark 0x80000/0xff0000 type unreachable
+ip rule add -4 pref 5260 from 10.1.2.3 table main
+ip rule add -4 pref 5260 from 192.168.1.5 table main
+ip rule add -4 pref 5270 table 52
+ip rule add -6 pref 5210 fwmark 0x80000/0xff0000 table main
+ip rule add -6 pref 5230 fwmark 0x80000/0xff0000 table default
+ip rule add -6 pref 5250 fwmark 0x80000/0xff0000 type unreachable
+ip rule add -6 pref 5270 table 52
+`
+	// basicExitDual is basicExitV4 plus the IPv6 underlay source rules.
+	basicExitDual := `
+ip rule add -4 pref 5210 fwmark 0x80000/0xff0000 table main
+ip rule add -4 pref 5230 fwmark 0x80000/0xff0000 table default
+ip rule add -4 pref 5250 fwmark 0x80000/0xff0000 type unreachable
+ip rule add -4 pref 5260 from 10.1.2.3 table main
+ip rule add -4 pref 5260 from 192.168.1.5 table main
+ip rule add -4 pref 5270 table 52
+ip rule add -6 pref 5210 fwmark 0x80000/0xff0000 table main
+ip rule add -6 pref 5230 fwmark 0x80000/0xff0000 table default
+ip rule add -6 pref 5250 fwmark 0x80000/0xff0000 type unreachable
+ip rule add -6 pref 5260 from 2001:db8::5 table main
+ip rule add -6 pref 5260 from fe80::5 table main
 ip rule add -6 pref 5270 table 52
 `
 	states := []struct {
@@ -357,7 +388,7 @@ up
 ip addr add 100.101.102.104/10 dev tailscale0
 ip route add 0.0.0.0/0 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52
-ip route add throw 10.0.0.0/8 table 52` + basic +
+ip route add throw 10.0.0.0/8 table 52` + basicExitV4 +
 				`v4/filter/FORWARD -j ts-forward
 v4/filter/INPUT -j ts-input
 v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
@@ -394,7 +425,44 @@ ip addr add 100.101.102.104/10 dev tailscale0
 ip route add 0.0.0.0/0 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52
 ip route add throw 10.0.0.0/8 table 52
-ip route add throw 192.168.0.0/24 table 52` + basic,
+ip route add throw 192.168.0.0/24 table 52` + basicExitV4,
+		},
+		{
+			name: "exit-node-dual-stack-no-netfilter",
+			in: &Config{
+				LocalAddrs:    mustCIDRs("100.101.102.104/10", "fd7a:115c:a1e0::104/128"),
+				Routes:        mustCIDRs("100.100.100.100/32", "0.0.0.0/0", "::/0"),
+				NetfilterMode: netfilterOff,
+			},
+			want: `
+up
+ip addr add 100.101.102.104/10 dev tailscale0
+ip addr add fd7a:115c:a1e0::104/128 dev tailscale0
+ip route add 0.0.0.0/0 dev tailscale0 table 52
+ip route add 100.100.100.100/32 dev tailscale0 table 52
+ip route add ::/0 dev tailscale0 table 52` + basicExitDual,
+		},
+		{
+			name: "exit-node-v6-only-route",
+			in: &Config{
+				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
+				Routes:        mustCIDRs("::/0"),
+				NetfilterMode: netfilterOff,
+			},
+			want: `
+up
+ip addr add 100.101.102.104/10 dev tailscale0
+ip route add ::/0 dev tailscale0 table 52
+ip rule add -4 pref 5210 fwmark 0x80000/0xff0000 table main
+ip rule add -4 pref 5230 fwmark 0x80000/0xff0000 table default
+ip rule add -4 pref 5250 fwmark 0x80000/0xff0000 type unreachable
+ip rule add -4 pref 5270 table 52
+ip rule add -6 pref 5210 fwmark 0x80000/0xff0000 table main
+ip rule add -6 pref 5230 fwmark 0x80000/0xff0000 table default
+ip rule add -6 pref 5250 fwmark 0x80000/0xff0000 type unreachable
+ip rule add -6 pref 5260 from 2001:db8::5 table main
+ip rule add -6 pref 5260 from fe80::5 table main
+ip rule add -6 pref 5270 table 52`,
 		},
 		{
 			name: "subnet-routes-connmark-for-rp_filter",
@@ -523,15 +591,14 @@ v6/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
 
 	fake := NewFakeOS(t)
 	ht := health.NewTracker(bus)
-	router, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", mon, fake, ht, bus)
-	router.(*linuxRouter).nfr = fake.nfr
-	// Don't consult the live /proc for the tun's IPv6 state in tests; the
-	// fake netfilter runner's HasIPV6 (noV6) is the authoritative v6 signal
-	// here. See #20447.
-	router.(*linuxRouter).interfaceV6Usable = func() bool { return true }
-	if err != nil {
-		t.Fatalf("failed to create router: %v", err)
-	}
+	router := newTestRouter(t.Logf, "tailscale0", mon, fake, ht, bus, func(r *linuxRouter) {
+		r.nfr = fake.nfr
+		// Don't consult the live /proc for the tun's IPv6 state in tests; the
+		// fake netfilter runner's HasIPV6 (noV6) is the authoritative v6 signal
+		// here. See #20447.
+		r.interfaceV6Usable = func() bool { return true }
+		r.underlayAddrs = func() []netip.Addr { return slices.Clone(testUnderlayAddrs) }
+	})
 	if err := router.Up(); err != nil {
 		t.Fatalf("failed to up router: %v", err)
 	}
@@ -1246,7 +1313,7 @@ func (lt *linuxTest) Close() error {
 	return nil
 }
 
-func newLinuxRootTest(t *testing.T) (*linuxTest, *eventbus.Bus) {
+func newLinuxRootTest(t *testing.T, nfr linuxfw.NetfilterRunner) (*linuxTest, *eventbus.Bus) {
 	tstest.RequireRoot(t)
 
 	lt := new(linuxTest)
@@ -1264,12 +1331,14 @@ func newLinuxRootTest(t *testing.T) (*linuxTest, *eventbus.Bus) {
 	mon.Start()
 	lt.mon = mon
 
-	r, err := newUserspaceRouter(logf, lt.tun, mon, nil, bus)
+	tunname, err := lt.tun.Name()
 	if err != nil {
 		lt.Close()
 		t.Fatal(err)
 	}
-	lr := r.(*linuxRouter)
+	lr := newTestRouter(logf, tunname, mon, osCommandRunner{ambientCapNetAdmin: useAmbientCaps()}, nil, bus, func(r *linuxRouter) {
+		r.nfr = nfr
+	})
 	if err := lr.upInterface(); err != nil {
 		lt.Close()
 		t.Fatal(err)
@@ -1280,8 +1349,7 @@ func newLinuxRootTest(t *testing.T) (*linuxTest, *eventbus.Bus) {
 
 func TestRuleDeletedEvent(t *testing.T) {
 	fake := NewFakeOS(t)
-	lt, bus := newLinuxRootTest(t)
-	lt.r.nfr = fake.nfr
+	lt, bus := newLinuxRootTest(t, fake.nfr)
 	defer lt.Close()
 	event := netmon.RuleDeleted{
 		Table:    52,
@@ -1300,8 +1368,7 @@ func TestRuleDeletedEvent(t *testing.T) {
 
 func TestDelRouteIdempotent(t *testing.T) {
 	fake := NewFakeOS(t)
-	lt, _ := newLinuxRootTest(t)
-	lt.r.nfr = fake.nfr
+	lt, _ := newLinuxRootTest(t, fake.nfr)
 	defer lt.Close()
 
 	for _, s := range []string{
@@ -1328,8 +1395,7 @@ func TestDelRouteIdempotent(t *testing.T) {
 
 func TestAddRemoveRules(t *testing.T) {
 	fake := NewFakeOS(t)
-	lt, _ := newLinuxRootTest(t)
-	lt.r.nfr = fake.nfr
+	lt, _ := newLinuxRootTest(t, fake.nfr)
 	defer lt.Close()
 	r := lt.r
 
@@ -1617,15 +1683,12 @@ func TestSetSkipsNetfilterAddonsWhenSetupFails(t *testing.T) {
 
 	fake := NewFakeOS(t)
 	ht := health.NewTracker(bus)
-	r, err := newUserspaceRouterAdvanced(logger.Discard, "tailscale0", mon, fake, ht, bus)
-	if err != nil {
-		t.Fatalf("newUserspaceRouterAdvanced: %v", err)
-	}
-	lr := r.(*linuxRouter)
-	lr.nfr = nfr
-	// Keep the fake netfilter runner's HasIPV6 the sole v6 signal; don't
-	// consult the live /proc for the tun's IPv6 state. See #20447.
-	lr.interfaceV6Usable = func() bool { return true }
+	lr := newTestRouter(logger.Discard, "tailscale0", mon, fake, ht, bus, func(r *linuxRouter) {
+		r.nfr = nfr
+		// Keep the fake netfilter runner's HasIPV6 the sole v6 signal; don't
+		// consult the live /proc for the tun's IPv6 state. See #20447.
+		r.interfaceV6Usable = func() bool { return true }
+	})
 	if err := lr.Up(); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
@@ -1652,9 +1715,23 @@ func TestSetSkipsNetfilterAddonsWhenSetupFails(t *testing.T) {
 	}
 }
 
+// newTestRouter builds a router as newUserspaceRouterAdvanced does, but runs
+// configure on it before it subscribes to the eventbus. Tests must set
+// fields marked "fixed after construction" (see linuxRouter) there, never
+// after construction; see subscribeEvents.
+func newTestRouter(logf logger.Logf, tunname string, mon *netmon.Monitor, cmd commandRunner, ht *health.Tracker, bus *eventbus.Bus, configure ...func(*linuxRouter)) *linuxRouter {
+	r := newLinuxRouter(logf, tunname, mon, cmd, ht)
+	for _, f := range configure {
+		f(r)
+	}
+	r.subscribeEvents(bus)
+	return r
+}
+
 // newTestLinuxRouter builds a linuxRouter backed by a fakeOS, brought up and
-// ready for Set, mirroring TestSetSkipsNetfilterAddonsWhenSetupFails.
-func newTestLinuxRouter(t *testing.T) (*linuxRouter, *fakeOS) {
+// ready for Set, mirroring TestSetSkipsNetfilterAddonsWhenSetupFails. Any
+// configure funcs run after the defaults and before eventbus subscription.
+func newTestLinuxRouter(t *testing.T, configure ...func(*linuxRouter)) (*linuxRouter, *fakeOS) {
 	t.Helper()
 	bus := eventbus.New()
 	t.Cleanup(bus.Close)
@@ -1667,15 +1744,18 @@ func newTestLinuxRouter(t *testing.T) (*linuxRouter, *fakeOS) {
 
 	fake := NewFakeOS(t)
 	ht := health.NewTracker(bus)
-	r, err := newUserspaceRouterAdvanced(logger.Discard, "tailscale0", mon, fake, ht, bus)
-	if err != nil {
-		t.Fatalf("newUserspaceRouterAdvanced: %v", err)
+	defaults := func(r *linuxRouter) {
+		r.nfr = fake.nfr
+		// Keep the fake netfilter runner's HasIPV6 (noV6) the sole v6
+		// signal; don't consult the live /proc for the tun's IPv6 state.
+		// See #20447.
+		r.interfaceV6Usable = func() bool { return true }
+		// Don't let the host's real interface addresses leak into
+		// rp_filter underlay source rules; tests opt in with
+		// setTestUnderlayAddrs.
+		r.underlayAddrs = func() []netip.Addr { return nil }
 	}
-	lr := r.(*linuxRouter)
-	lr.nfr = fake.nfr
-	// Keep the fake netfilter runner's HasIPV6 (noV6) the sole v6 signal;
-	// don't consult the live /proc for the tun's IPv6 state. See #20447.
-	lr.interfaceV6Usable = func() bool { return true }
+	lr := newTestRouter(logger.Discard, "tailscale0", mon, fake, ht, bus, append([]func(*linuxRouter){defaults}, configure...)...)
 	if err := lr.Up(); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
@@ -1958,10 +2038,11 @@ func TestSetSkipsV6OrphansWhenV6Unavailable(t *testing.T) {
 // is the #20447 scenario: historically the v6 addAddress errored, aborting the
 // whole router pass, which in turn suppressed DNS configuration.
 func TestSetSkipsV6WhenInterfaceV6Unusable(t *testing.T) {
-	lr, fake := newTestLinuxRouter(t)
 	// Global v6 is fine (fake nfr HasIPV6 defaults true), but the tun
 	// interface has no usable v6.
-	lr.interfaceV6Usable = func() bool { return false }
+	lr, fake := newTestLinuxRouter(t, func(r *linuxRouter) {
+		r.interfaceV6Usable = func() bool { return false }
+	})
 
 	cfg := &Config{
 		LocalAddrs:    mustCIDRs("100.64.0.1/32", "fd7a:115c:a1e0::1/128"),
@@ -1985,12 +2066,14 @@ func TestSetSkipsV6WhenInterfaceV6Unusable(t *testing.T) {
 // per-interface IPv6 check (which reads /proc) once, rather than once per
 // address and route, even though many getV6Available calls happen within it.
 func TestSetSnapshotsV6Usable(t *testing.T) {
-	lr, _ := newTestLinuxRouter(t)
-	var calls int
-	lr.interfaceV6Usable = func() bool {
-		calls++
-		return true
-	}
+	var calls atomic.Int32
+	lr, _ := newTestLinuxRouter(t, func(r *linuxRouter) {
+		r.interfaceV6Usable = func() bool {
+			calls.Add(1)
+			return true
+		}
+	})
+	calls.Store(0) // ignore calls made by Up
 
 	cfg := &Config{
 		LocalAddrs:    mustCIDRs("100.64.0.1/32", "fd7a:115c:a1e0::1/128"),
@@ -2000,8 +2083,8 @@ func TestSetSnapshotsV6Usable(t *testing.T) {
 	if err := lr.Set(cfg); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	if calls != 1 {
-		t.Errorf("interfaceV6Usable called %d times during one Set; want 1 (snapshotted)", calls)
+	if n := calls.Load(); n != 1 {
+		t.Errorf("interfaceV6Usable called %d times during one Set; want 1 (snapshotted)", n)
 	}
 }
 
@@ -2111,4 +2194,74 @@ func TestCleanUpOnlyTouchesTunInterface(t *testing.T) {
 	if !slices.Contains(fake.ips, "100.64.0.5/32 dev eth0") {
 		t.Errorf("non-Tailscale CGNAT addr on eth0 was wrongly removed; ips=%q", fake.ips)
 	}
+}
+
+// TestSubscribeEventsAfterInit enforces the subscribeEvents contract: the
+// constructor must finish writing every field marked "fixed after
+// construction" before it subscribes to the eventbus, because callbacks
+// read those fields without holding mu.
+//
+// A publisher floods the bus with events whose callbacks read those fields
+// (RuleDeleted at our priority reads ipPolicyPrefBase and ipRuleAvailable
+// without mu; ChangeDelta reads ipRuleAvailable under mu, which the
+// constructor never takes). If a future change subscribes earlier, or
+// writes such a field after subscribing, the race detector reports it. It
+// can only do so under -race; without it this is a smoke test.
+func TestSubscribeEventsAfterInit(t *testing.T) {
+	bus := eventbus.New()
+	defer bus.Close()
+	pubc := bus.Client("test-publisher")
+	ruleDeleted := eventbus.Publish[netmon.RuleDeleted](pubc)
+	netChange := eventbus.Publish[netmon.ChangeDelta](pubc)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			// At the underlay source rule priority, onIPRuleDeleted
+			// takes the add-only repair path, which never runs ip
+			// commands on the fake OS.
+			ruleDeleted.Publish(netmon.RuleDeleted{
+				Table:    uint8(mainRouteTable.Num),
+				Priority: uint32(defaultIPPolicyPrefBase + underlaySrcRuleOffset),
+			})
+			netChange.Publish(netmon.ChangeDelta{})
+		}
+	})
+	defer func() {
+		close(stop)
+		wg.Wait()
+	}()
+
+	for range 20 {
+		r, err := newUserspaceRouterAdvanced(logger.Discard, "tailscale0", nil, NewFakeOS(t), nil, bus)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lr := r.(*linuxRouter)
+		// Let events reach the new router's callbacks before this
+		// goroutine does anything else on the bus (which would add a
+		// happens-before edge and hide a late write).
+		time.Sleep(2 * time.Millisecond)
+		lr.closed.Store(true)
+		lr.eventClient.Close()
+	}
+}
+
+func TestSubscribeEventsTwicePanics(t *testing.T) {
+	bus := eventbus.New()
+	defer bus.Close()
+	lr := newTestRouter(logger.Discard, "tailscale0", nil, NewFakeOS(t), nil, bus)
+	defer lr.eventClient.Close()
+	defer func() {
+		if recover() == nil {
+			t.Error("second subscribeEvents didn't panic")
+		}
+	}()
+	lr.subscribeEvents(bus)
 }

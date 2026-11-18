@@ -61,29 +61,36 @@ const (
 	netfilterOn       = preftype.NetfilterOn
 )
 
+// linuxRouter is the Linux implementation of router.Router.
+//
+// Fields marked "fixed after construction" are written only by
+// newLinuxRouter (or by tests before they call subscribeEvents) and never
+// afterwards. eventbus callbacks read them without holding mu; see
+// subscribeEvents for the contract that makes that safe.
 type linuxRouter struct {
 	closed        atomic.Bool
-	logf          func(fmt string, args ...any)
-	tunname       string
-	netMon        *netmon.Monitor
-	health        *health.Tracker
-	eventClient   *eventbus.Client
-	rulesAddedPub *eventbus.Publisher[AddIPRules]
+	logf          func(fmt string, args ...any)   // fixed after construction
+	tunname       string                          // fixed after construction
+	netMon        *netmon.Monitor                 // fixed after construction
+	health        *health.Tracker                 // fixed after construction
+	eventClient   *eventbus.Client                // set by subscribeEvents
+	rulesAddedPub *eventbus.Publisher[AddIPRules] // set by subscribeEvents
 	unregNetMon   func()
 
 	// ruleRestorePending is whether a timer has been started to
 	// restore deleted ip rules.
 	ruleRestorePending atomic.Bool
-	ipRuleFixLimiter   *rate.Limiter
+	ipRuleFixLimiter   *rate.Limiter // fixed after construction
 
 	// Various feature checks for the network stack.
-	ipRuleAvailable bool     // whether kernel was built with IP_MULTIPLE_TABLES
+	ipRuleAvailable bool     // whether kernel was built with IP_MULTIPLE_TABLES; fixed after construction
 	fwmaskWorksLazy opt.Bool // whether we can use 'ip rule...fwmark <mark>/<mask>'; set lazily
 
 	// interfaceV6Usable reports whether the kernel has IPv6 enabled on the
 	// tunnel interface specifically (distinct from global IPv6 support,
 	// which the netfilter runner tracks). Always set: the constructor wires
-	// it to interfaceV6UsableForTun; tests override it. See #20447.
+	// it to interfaceV6UsableForTun; tests override it before
+	// subscribeEvents. Fixed after construction. See #20447.
 	interfaceV6Usable func() bool
 
 	// interfaceV6UsableMemo memoizes interfaceV6Usable for the duration of a
@@ -93,10 +100,11 @@ type linuxRouter struct {
 	// justAddIPRules; the unset value there means "read live". See #20447.
 	interfaceV6UsableMemo atomic.Int32
 
-	// ipPolicyPrefBase is the base priority at which ip rules are installed.
+	// ipPolicyPrefBase is the base priority at which ip rules are
+	// installed. Fixed after construction.
 	ipPolicyPrefBase int
 
-	cmd commandRunner
+	cmd commandRunner // fixed after construction
 	nfr linuxfw.NetfilterRunner
 
 	mu                sync.Mutex
@@ -112,7 +120,34 @@ type linuxRouter struct {
 	cgnatMode         linuxfw.CGNATMode
 	magicsockPortV4   uint16
 	magicsockPortV6   uint16
+
+	// underlaySrcRules is the set of local underlay addresses for which we
+	// have installed a "from <addr> lookup main" ip rule so that strict
+	// reverse path filtering keeps working while using an exit node. See
+	// rpfilter_linux.go.
+	underlaySrcRules set.Set[netip.Addr]
+	// underlaySrcRulesCapped is whether the last reconcile hit
+	// maxUnderlaySrcRulesPerFamily; used to log only on transitions.
+	underlaySrcRulesCapped bool
+	// underlayAddrs returns the host's candidate underlay source addresses.
+	// It defaults to reading the netmon interface state; tests override it
+	// before subscribeEvents, or later with mu held. Read with mu held.
+	underlayAddrs func() []netip.Addr
+	// underlaySrcRepairPending is whether a repair of externally deleted
+	// underlay source rules is scheduled.
+	underlaySrcRepairPending atomic.Bool
+	// netChangePending is whether an underlay source rule reconcile for a
+	// network change is queued but hasn't yet acquired mu.
+	netChangePending atomic.Bool
 }
+
+const (
+	// defaultIPPolicyPrefBase is the default base priority for our ip rules.
+	defaultIPPolicyPrefBase = 5200
+	// mwan3IPPolicyPrefBase is the base priority used when OpenWrt mwan3 is
+	// detected; see newUserspaceRouterAdvanced.
+	mwan3IPPolicyPrefBase = 1300
+)
 
 func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus) (router.Router, error) {
 	tunname, err := tunDev.Name()
@@ -128,6 +163,16 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Moni
 }
 
 func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon.Monitor, cmd commandRunner, health *health.Tracker, bus *eventbus.Bus) (router.Router, error) {
+	r := newLinuxRouter(logf, tunname, netMon, cmd, health)
+	// Must be last; see subscribeEvents.
+	r.subscribeEvents(bus)
+	return r, nil
+}
+
+// newLinuxRouter builds a fully initialized linuxRouter that isn't yet
+// connected to the eventbus. Callers must finish setting any "fixed after
+// construction" fields (see linuxRouter) and then call subscribeEvents.
+func newLinuxRouter(logf logger.Logf, tunname string, netMon *netmon.Monitor, cmd commandRunner, health *health.Tracker) *linuxRouter {
 	r := &linuxRouter{
 		logf:          logf,
 		tunname:       tunname,
@@ -138,22 +183,10 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 		cmd: cmd,
 
 		ipRuleFixLimiter: rate.NewLimiter(rate.Every(5*time.Second), 10),
-		ipPolicyPrefBase: 5200,
+		ipPolicyPrefBase: defaultIPPolicyPrefBase,
 	}
 	r.interfaceV6Usable = func() bool { return interfaceV6UsableForTun(r.tunname) }
-	ec := bus.Client("router-linux")
-	r.rulesAddedPub = eventbus.Publish[AddIPRules](ec)
-	eventbus.SubscribeFunc(ec, func(rs netmon.RuleDeleted) {
-		r.onIPRuleDeleted(rs.Table, rs.Priority)
-	})
-	eventbus.SubscribeFunc(ec, func(pu router.PortUpdate) {
-		r.logf("portUpdate(port=%v, network=%s)", pu.UDPPort, pu.EndpointNetwork)
-		if err := r.updateMagicsockPort(pu.UDPPort, pu.EndpointNetwork); err != nil {
-			r.logf("updateMagicsockPort(port=%v, network=%s) failed: %v", pu.UDPPort, pu.EndpointNetwork, err)
-		}
-	})
-	r.eventClient = ec
-
+	r.underlayAddrs = r.underlayAddrsFromNetMon
 	if r.useIPCommand() {
 		r.ipRuleAvailable = (cmd.run("ip", "rule") == nil)
 	} else {
@@ -185,13 +218,44 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 	if err != nil {
 		r.logf("error checking mwan3 installation: %v", err)
 	} else if isMWAN3 {
-		r.ipPolicyPrefBase = 1300
+		r.ipPolicyPrefBase = mwan3IPPolicyPrefBase
 		r.logf("mwan3 on openWRT detected, switching policy base priority to 1300")
 	}
 
 	r.fixupWSLMTU()
+	return r
+}
 
-	return r, nil
+// subscribeEvents connects r to the eventbus. From the first SubscribeFunc
+// on, callbacks run concurrently on eventbus goroutines and read the
+// linuxRouter fields marked "fixed after construction" without holding mu.
+// Those reads are race-free only because every write to those fields
+// happens before this call; eventbus registration provides the
+// happens-before edge. So:
+//
+//   - call subscribeEvents exactly once, as the last step of construction;
+//   - never write a fixed-after-construction field after calling it.
+//
+// TestSubscribeEventsAfterInit enforces this under the race detector.
+func (r *linuxRouter) subscribeEvents(bus *eventbus.Bus) {
+	if r.eventClient != nil {
+		panic("linuxRouter.subscribeEvents called twice")
+	}
+	ec := bus.Client("router-linux")
+	r.eventClient = ec
+	r.rulesAddedPub = eventbus.Publish[AddIPRules](ec)
+	eventbus.SubscribeFunc(ec, func(rs netmon.RuleDeleted) {
+		r.onIPRuleDeleted(rs.Table, rs.Priority)
+	})
+	eventbus.SubscribeFunc(ec, func(pu router.PortUpdate) {
+		r.logf("portUpdate(port=%v, network=%s)", pu.UDPPort, pu.EndpointNetwork)
+		if err := r.updateMagicsockPort(pu.UDPPort, pu.EndpointNetwork); err != nil {
+			r.logf("updateMagicsockPort(port=%v, network=%s) failed: %v", pu.UDPPort, pu.EndpointNetwork, err)
+		}
+	})
+	eventbus.SubscribeFunc(ec, func(netmon.ChangeDelta) {
+		r.queueNetworkChange()
+	})
 }
 
 // ipCmdSupportsFwmask returns true if the system 'ip' binary supports using a
@@ -347,6 +411,16 @@ func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
 		// Not our rule.
 		return
 	}
+	if int(priority) == r.underlaySrcRulePriority() {
+		// rp_filter underlay source rules are added and removed by us
+		// as addresses come and go, so don't run the full restore
+		// (which would feed back into ourselves). Instead do an
+		// add-only repair in case another process deleted one of ours.
+		// An external flush (systemd-networkd) also deletes the base
+		// rules, whose events run the full restore below.
+		r.scheduleUnderlaySrcRuleRepair()
+		return
+	}
 	if r.ruleRestorePending.Swap(true) {
 		// Another timer is already pending.
 		return
@@ -363,6 +437,7 @@ func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
 		if r.ruleRestorePending.Swap(false) && !r.closed.Load() {
 			r.logf("somebody (likely systemd-networkd) deleted ip rules; restoring Tailscale's")
 			r.justAddIPRules()
+			r.restoreUnderlaySrcRules()
 		}
 	})
 }
@@ -376,6 +451,9 @@ func (r *linuxRouter) Up() error {
 	if err := r.addIPRules(); err != nil {
 		return fmt.Errorf("adding IP rules: %w", err)
 	}
+	// Remove rp_filter underlay source rules left by a previous instance
+	// that didn't shut down cleanly. Set installs fresh ones as needed.
+	r.sweepStaleUnderlaySrcRulesLocked()
 	if err := r.upInterface(); err != nil {
 		return fmt.Errorf("bringing interface up: %w", err)
 	}
@@ -395,6 +473,10 @@ func (r *linuxRouter) Close() error {
 	// Clean up connmark rules
 	if err := r.nfr.DelConnmarkSaveRule(); err != nil {
 		r.logf("warning: failed to delete connmark rules: %v", err)
+	}
+
+	if err := r.removeUnderlaySrcRulesLocked(); err != nil {
+		r.logf("warning: %v", err)
 	}
 
 	if err := r.downInterface(); err != nil {
@@ -516,6 +598,13 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 		}
 	}
 
+	// Keep strict rp_filter working for replies to tailscaled's own
+	// sockets while table 52 holds an exit-node default route. Runs after
+	// r.routes and r.addrs are updated, as it depends on both.
+	if err := r.updateUnderlaySrcRulesLocked(); err != nil {
+		errs = append(errs, err)
+	}
+
 	// Ensure that the SNAT rule is added or removed as needed.
 	switch {
 	case cfg.SNATSubnetRoutes == r.snatSubnetRoutes:
@@ -548,8 +637,11 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 	r.updateStatefulFilteringWithDockerWarning(cfg)
 
 	// Connmark rules for rp_filter compatibility.
-	// Always enabled when netfilter is ON to handle all rp_filter=1 scenarios
-	// (normal operation, exit nodes, subnet routers, and clients using exit nodes).
+	// Restoring the bypass mark on replies lets mark-aware reverse path
+	// checks (e.g. nftables "fib saddr . mark . iif oif", as used by NixOS)
+	// pass. The kernel's own rp_filter only consults the mark when
+	// src_valid_mark=1, which we deliberately don't set (see #19796); for
+	// that case, see the underlay source rules in rpfilter_linux.go.
 	// Gate on r.netfilterMode (actual state) rather than cfg.NetfilterMode
 	// (desired state) so we don't call into the runner when chain setup failed.
 	netfilterOn := r.netfilterMode == netfilterOn
@@ -1938,6 +2030,7 @@ func cleanUp(logf logger.Logf, interfaceName string) {
 		linuxfw.NfTablesCleanUp(logf)
 	}
 	removeOrphanedAddrsForCleanup(logf, osCommandRunner{ambientCapNetAdmin: useAmbientCaps()}, interfaceName)
+	removeUnderlaySrcRulesForCleanup(logger.WithPrefix(logf, "router: "))
 }
 
 // removeOrphanedAddrsForCleanup removes every Tailscale-range address from
