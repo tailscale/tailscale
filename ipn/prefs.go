@@ -654,6 +654,9 @@ func (p *Prefs) pretty(goos string) string {
 	if buildfeatures.HasAppConnectors {
 		sb.WriteString(p.AppConnector.Pretty())
 	}
+	if p.PostureChecking {
+		fmt.Fprintf(&sb, "posture=%t ", p.PostureChecking)
+	}
 	if buildfeatures.HasRelayServer && p.RelayServerPort != nil {
 		fmt.Fprintf(&sb, "relayServerPort=%d ", *p.RelayServerPort)
 	}
