@@ -32,9 +32,10 @@ type NetLogSource interface {
 	NodeByAddr(addr netip.Addr) (node tailcfg.NodeView, user tailcfg.UserProfileView, ok bool)
 
 	// NetLogIDs returns the audit logging IDs from the current netmap,
-	// along with whether exit node flows should be logged.
+	// along with whether exit node flows should be logged and the base
+	// URL to upload them to (empty for Tailscale's log service).
 	// ok is false if network flow logging should not run.
-	NetLogIDs() (nodeID, domainID logid.PrivateID, logExitFlows bool, ok bool)
+	NetLogIDs() (nodeID, domainID logid.PrivateID, logExitFlows bool, target string, ok bool)
 
 	// LogUploadAuth returns the opaque auth ID and a token function for
 	// authenticated log uploads (see logtail.Logger.SetAuthID and

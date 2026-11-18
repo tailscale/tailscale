@@ -11202,3 +11202,43 @@ func TestExtensionStateHooksWhileBlocked(t *testing.T) {
 		t.Errorf("network configuration events = %v, want [false]", configured)
 	}
 }
+
+func TestNetLogIDsTarget(t *testing.T) {
+	nodeID := must.Get(logid.NewPrivateID())
+	domainID := must.Get(logid.NewPrivateID())
+	tests := []struct {
+		name       string
+		target     []tailcfg.RawMessage // nil means cap absent
+		wantTarget string
+		wantOK     bool
+	}{
+		{name: "absent", wantOK: true},
+		{name: "https", target: []tailcfg.RawMessage{`"https://logs.example.com/"`}, wantTarget: "https://logs.example.com", wantOK: true},
+		{name: "http-with-path", target: []tailcfg.RawMessage{`"http://10.0.0.1:8080/netlog"`}, wantTarget: "http://10.0.0.1:8080/netlog", wantOK: true},
+		{name: "no-value", target: []tailcfg.RawMessage{}},
+		{name: "empty", target: []tailcfg.RawMessage{`""`}},
+		{name: "not-a-string", target: []tailcfg.RawMessage{`42`}},
+		{name: "bad-scheme", target: []tailcfg.RawMessage{`"ftp://logs.example.com"`}},
+		{name: "no-host", target: []tailcfg.RawMessage{`"https://"`}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			caps := tailcfg.NodeCapMap{nodecap.DataPlaneAuditLogs: nil}
+			if tt.target != nil {
+				caps[nodecap.LogFlowsTarget] = tt.target
+			}
+			b := newTestLocalBackend(t)
+			b.currentNode().SetNetMap(&netmap.NetworkMap{
+				SelfNode:         (&tailcfg.Node{DataPlaneAuditLogID: nodeID.String(), CapMap: caps}).View(),
+				DomainAuditLogID: domainID.String(),
+			})
+			gotNode, gotDomain, _, gotTarget, gotOK := netLogNodeSource{b}.NetLogIDs()
+			if gotOK != tt.wantOK || gotTarget != tt.wantTarget {
+				t.Fatalf("NetLogIDs() target, ok = %q, %v; want %q, %v", gotTarget, gotOK, tt.wantTarget, tt.wantOK)
+			}
+			if gotOK && (gotNode != nodeID || gotDomain != domainID) {
+				t.Errorf("NetLogIDs() IDs = %v, %v; want %v, %v", gotNode, gotDomain, nodeID, domainID)
+			}
+		})
+	}
+}

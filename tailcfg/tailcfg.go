@@ -201,7 +201,8 @@ type CapabilityVersion int
 //   - 150: 2026-10-13: Client handles app connectors with "mode": "magicip" as conn25.
 //   - 151: 2026-11-13: Client understands [nodecap.LogUploadAuth] for authenticated log uploads
 //   - 152: 2026-11-17: Client supports hybrid post-quantum handshakes
-const CurrentCapabilityVersion CapabilityVersion = 152
+//   - 153: 2026-11-18: Client understands [nodecap.LogFlowsTarget]
+const CurrentCapabilityVersion CapabilityVersion = 153
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.

@@ -8548,9 +8548,9 @@ func (s netLogNodeSource) NodeByAddr(addr netip.Addr) (_ tailcfg.NodeView, _ tai
 }
 
 // NetLogIDs implements [wgengine.NetLogSource], returning the network
-// flow logging identity from the current netmap. ok is false if the
-// netmap does not enable network flow logging for this node.
-func (s netLogNodeSource) NetLogIDs() (nodeID, domainID logid.PrivateID, logExitFlows bool, ok bool) {
+// flow logging identity and upload target from the current netmap. ok is
+// false if the netmap does not enable network flow logging for this node.
+func (s netLogNodeSource) NetLogIDs() (nodeID, domainID logid.PrivateID, logExitFlows bool, target string, ok bool) {
 	nm := s.b.NetMapNoPeers()
 	if nm == nil || !nm.SelfNode.Valid() {
 		return
@@ -8570,9 +8570,34 @@ func (s netLogNodeSource) NetLogIDs() (nodeID, domainID logid.PrivateID, logExit
 		s.b.logf("[v1] netlog: unable to parse domain audit log ID: %v", errDomain)
 	}
 	if errNode != nil || errDomain != nil {
-		return logid.PrivateID{}, logid.PrivateID{}, false, false
+		return logid.PrivateID{}, logid.PrivateID{}, false, "", false
 	}
-	return nodeID, domainID, nm.SelfNode.HasCap(nodecap.LogExitFlows), true
+	// A control server that names a target wants flow logs kept away from
+	// the default log service, so any doubt about the target disables
+	// logging instead of falling back to the default.
+	if nm.SelfNode.HasCap(nodecap.LogFlowsTarget) {
+		targets, err := tailcfg.UnmarshalNodeCapViewJSON[string](nm.SelfNode.CapMap(), nodecap.LogFlowsTarget)
+		if err == nil && len(targets) > 0 {
+			target = parseNetLogTarget(targets[0])
+		}
+		if target == "" {
+			// Client logs may go to Tailscale's log service; never log the
+			// value (or a parse error quoting it).
+			s.b.logf("netlog: invalid %s; not logging", nodecap.LogFlowsTarget)
+			return logid.PrivateID{}, logid.PrivateID{}, false, "", false
+		}
+	}
+	return nodeID, domainID, nm.SelfNode.HasCap(nodecap.LogExitFlows), target, true
+}
+
+// parseNetLogTarget returns v without trailing slashes, as logtail appends
+// paths to it, or "" if v is not an http or https URL with a host.
+func parseNetLogTarget(v string) string {
+	u, err := url.Parse(v)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return ""
+	}
+	return strings.TrimRight(v, "/")
 }
 
 // LogUploadAuth implements [wgengine.NetLogSource].

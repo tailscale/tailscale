@@ -199,6 +199,13 @@ const (
 	// LogExitFlows enables exit node destinations in network flow logs.
 	LogExitFlows Cap = "log-exit-flows"
 
+	// LogFlowsTarget overrides the base URL network flow logs are uploaded
+	// to, for control servers that collect them somewhere other than
+	// Tailscale's log service. The CapMap value is a JSON string holding an
+	// http or https URL. If present but malformed, network flow logging does
+	// not run, rather than falling back to the default log service.
+	LogFlowsTarget Cap = "log-flows-target"
+
 	// LogUploadAuth specifies the HTTP Authorization token
 	// to use when uploading logs. The CapMap value is a JSON string containing
 	// the token. Control pushes a refreshed token via netmap CapMap updates before
