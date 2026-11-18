@@ -693,12 +693,9 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		return false
 	}
 
-	return p.ControlURL == p2.ControlURL &&
-		p.RouteAll == p2.RouteAll &&
-		p.ExitNodeID == p2.ExitNodeID &&
-		p.ExitNodeIP == p2.ExitNodeIP &&
-		p.AutoExitNode == p2.AutoExitNode &&
-		p.InternalExitNodePrior == p2.InternalExitNodePrior &&
+	// These comparisons are ordered to do cheap comparisons first
+	// in the short-circuits.
+	return p.RouteAll == p2.RouteAll &&
 		p.ExitNodeAllowLANAccess == p2.ExitNodeAllowLANAccess &&
 		p.CorpDNS == p2.CorpDNS &&
 		p.RunSSH == p2.RunSSH &&
@@ -708,25 +705,31 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.LoggedOut == p2.LoggedOut &&
 		p.NotepadURLs == p2.NotepadURLs &&
 		p.ShieldsUp == p2.ShieldsUp &&
+		p.ForceDaemon == p2.ForceDaemon &&
+		p.Egg == p2.Egg &&
 		p.NoSNAT == p2.NoSNAT &&
 		p.NoStatefulFiltering == p2.NoStatefulFiltering &&
 		p.NetfilterMode == p2.NetfilterMode &&
-		p.OperatorUser == p2.OperatorUser &&
-		p.Hostname == p2.Hostname &&
-		p.ForceDaemon == p2.ForceDaemon &&
-		slices.Equal(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
-		slices.Equal(p.AdvertiseTags, p2.AdvertiseTags) &&
-		slices.Equal(p.AdvertiseServices, p2.AdvertiseServices) &&
-		p.Persist.Equals(p2.Persist) &&
-		p.ProfileName == p2.ProfileName &&
-		p.AutoUpdate.Equals(p2.AutoUpdate) &&
-		p.AppConnector == p2.AppConnector &&
 		p.PostureChecking == p2.PostureChecking &&
-		slices.EqualFunc(p.DriveShares, p2.DriveShares, drive.SharesEqual) &&
-		p.NetfilterKind == p2.NetfilterKind &&
-		p.Tailnet == p2.Tailnet &&
 		p.RemoteConfig == p2.RemoteConfig &&
 		compareUint16Ptrs(p.RelayServerPort, p2.RelayServerPort) &&
+		p.ControlURL == p2.ControlURL &&
+		p.ExitNodeID == p2.ExitNodeID &&
+		p.ExitNodeIP == p2.ExitNodeIP &&
+		p.AutoExitNode == p2.AutoExitNode &&
+		p.InternalExitNodePrior == p2.InternalExitNodePrior &&
+		p.Hostname == p2.Hostname &&
+		p.OperatorUser == p2.OperatorUser &&
+		p.ProfileName == p2.ProfileName &&
+		p.NetfilterKind == p2.NetfilterKind &&
+		p.Tailnet == p2.Tailnet &&
+		slices.Equal(p.AdvertiseTags, p2.AdvertiseTags) &&
+		slices.Equal(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
+		slices.Equal(p.AdvertiseServices, p2.AdvertiseServices) &&
+		p.Persist.Equals(p2.Persist) &&
+		p.AutoUpdate.Equals(p2.AutoUpdate) &&
+		p.AppConnector == p2.AppConnector &&
+		slices.EqualFunc(p.DriveShares, p2.DriveShares, drive.SharesEqual) &&
 		slices.Equal(p.RelayServerStaticEndpoints, p2.RelayServerStaticEndpoints)
 }
 

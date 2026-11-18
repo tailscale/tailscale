@@ -401,6 +401,16 @@ func TestPrefsEqual(t *testing.T) {
 			&Prefs{RelayServerStaticEndpoints: aps("[2001:db8::1]:40000", "192.0.2.1:40000")},
 			false,
 		},
+		{
+			&Prefs{Egg: true},
+			&Prefs{Egg: true},
+			true,
+		},
+		{
+			&Prefs{Egg: true},
+			&Prefs{Egg: false},
+			false,
+		},
 	}
 	for i, tt := range tests {
 		got := tt.a.Equals(tt.b)
