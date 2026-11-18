@@ -1,9 +1,12 @@
 name: "Kubernetes manifests"
 on:
   pull_request:
-   paths: 
+   paths:
    - 'cmd/k8s-operator/**'
+   - 'cmd/k8s-proxy/**'
+   - 'cmd/k8s-nameserver/**'
    - 'k8s-operator/**'
+   - 'build_docker.sh'
    - '.github/workflows/kubemanifests.yaml'
 
 # Cancel workflow run if there is a newer push to the same PR for which it is
@@ -29,3 +32,42 @@ jobs:
         echo
         echo
         git diff --name-only --exit-code || (echo "Generated files for Tailscale Kubernetes operator are out of date. Please run 'make kube-generate-all' and commit the diff."; exit 1)
+
+  images:
+    runs-on: [ ubuntu-latest ]
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [ k8s-operator, k8s-proxy, k8s-nameserver ]
+        variant: [ alpine, distroless ]
+    steps:
+    - name: Check out code
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
+    - name: Build image
+      env:
+        TARGET: ${{ matrix.target }}
+        BASE_VARIANT: ${{ matrix.variant }}
+      run: |
+        # Local images are single-platform.
+        GOARCH=amd64 PLATFORM=local PUSH=true REPOS="local/${TARGET}" TAGS=ci ./build_docker.sh
+    - name: Check the image's user and shell
+      env:
+        IMAGE: local/${{ matrix.target }}:ci
+        BASE_VARIANT: ${{ matrix.variant }}
+      run: |
+        user="$(docker image inspect --format '{{.Config.User}}' "${IMAGE}")"
+        if docker run --rm --entrypoint /bin/sh "${IMAGE}" -c true; then has_shell=true; else has_shell=false; fi
+        echo "${IMAGE} (${BASE_VARIANT}): user='${user}' shell=${has_shell}"
+        case "${BASE_VARIANT}" in
+          distroless)
+            if [ "${user}" != "65532" ]; then echo "distroless image must run as uid 65532"; exit 1; fi
+            if [ "${has_shell}" != "false" ]; then echo "distroless image must not contain /bin/sh"; exit 1; fi
+            ;;
+          alpine)
+            if [ "${has_shell}" != "true" ]; then echo "alpine image should still contain /bin/sh"; exit 1; fi
+            ;;
+        esac

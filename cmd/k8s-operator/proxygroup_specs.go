@@ -675,3 +675,41 @@ func hepPings(pg *tsapi.ProxyGroup) int {
 	// practice, we cannot assume that the requests will be load balanced perfectly.
 	return int(rc) * 3
 }
+
+const (
+	tmpVolumeName = "tmp"
+	tmpMountPath  = "/tmp"
+	nonRootUID    = 65532 // distroless nonroot
+)
+
+// applyRestrictedPodSecurity sets the k8s-proxy container (not the Pod, which a ProxyClass replaces) to Pod Security "restricted".
+func applyRestrictedPodSecurity(ss *appsv1.StatefulSet) {
+	spec := &ss.Spec.Template.Spec
+	spec.Volumes = append(spec.Volumes, corev1.Volume{
+		Name: tmpVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			EmptyDir: &corev1.EmptyDirVolumeSource{},
+		},
+	})
+	for i := range spec.Containers {
+		c := &spec.Containers[i]
+		if c.Name != mainContainerName {
+			continue
+		}
+		c.Env = append(c.Env, corev1.EnvVar{Name: "XDG_CONFIG_HOME", Value: tmpMountPath}) // tsnet's state dir
+		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: tmpVolumeName, MountPath: tmpMountPath})
+		c.SecurityContext = &corev1.SecurityContext{
+			AllowPrivilegeEscalation: new(false),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			ReadOnlyRootFilesystem: new(true),
+			RunAsNonRoot:           new(true),
+			RunAsUser:              new(int64(nonRootUID)), // also covers root-based images
+			RunAsGroup:             new(int64(nonRootUID)),
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
+			},
+		}
+	}
+}

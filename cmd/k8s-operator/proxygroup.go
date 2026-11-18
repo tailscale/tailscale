@@ -94,6 +94,8 @@ type ProxyGroupReconciler struct {
 	loginServer       string
 	logLevel          zapcore.Level // kube-apiserver proxies log at this level
 
+	k8sProxyRestrictedPodSecurity bool // opt-in, see applyRestrictedPodSecurity
+
 	reissuer *tailscaled.Reissuer
 
 	mu                   sync.Mutex           // protects following
@@ -441,6 +443,9 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, tsClient tscl
 	ss, err := pgStatefulSet(pg, r.tsNamespace, defaultImage, r.tsFirewallMode, tailscaledPort, proxyClass, r.sharedACMEAccountEnabledFor(pg))
 	if err != nil {
 		return r.notReadyErrf(pg, logger, "error generating StatefulSet spec: %w", err)
+	}
+	if r.k8sProxyRestrictedPodSecurity && pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
+		applyRestrictedPodSecurity(ss)
 	}
 	cfg := &tailscaleSTSConfig{
 		proxyType: string(pg.Spec.Type),

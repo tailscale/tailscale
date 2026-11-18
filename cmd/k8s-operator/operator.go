@@ -94,6 +94,7 @@ func main() {
 		tslogging             = defaultEnv("OPERATOR_LOGGING", "info")
 		image                 = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
 		k8sProxyImage         = defaultEnv("K8S_PROXY_IMAGE", "tailscale/k8s-proxy:latest")
+		k8sProxyRestricted    = defaultBool("K8S_PROXY_RESTRICTED_POD_SECURITY", false)
 		priorityClassName     = defaultEnv("PROXY_PRIORITY_CLASS_NAME", "")
 		tags                  = defaultEnv("PROXY_TAGS", "tag:k8s")
 		tsFirewallMode        = defaultEnv("PROXY_FIREWALL_MODE", "")
@@ -171,6 +172,7 @@ func main() {
 		restConfig:                    restConfig,
 		proxyImage:                    image,
 		k8sProxyImage:                 k8sProxyImage,
+		k8sProxyRestrictedPodSecurity: k8sProxyRestricted,
 		proxyPriorityClassName:        priorityClassName,
 		proxyActAsDefaultLoadBalancer: isDefaultLoadBalancer,
 		proxyTags:                     tags,
@@ -754,7 +756,8 @@ func runReconcilers(opts reconcilerOpts) {
 			logLevel:          opts.logLevel,
 			reissuer:          tailscaled.NewReissuer(),
 
-			sharedACMEAccountKey: opts.sharedACMEAccountKey,
+			sharedACMEAccountKey:          opts.sharedACMEAccountKey,
+			k8sProxyRestrictedPodSecurity: opts.k8sProxyRestrictedPodSecurity,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create ProxyGroup reconciler: %v", err)
@@ -767,14 +770,15 @@ func runReconcilers(opts reconcilerOpts) {
 }
 
 type reconcilerOpts struct {
-	log                *zap.SugaredLogger
-	logLevel           zapcore.Level // configured level; log's own level is debug while log uploads are on
-	tsServer           *tsnet.Server
-	tsClient           *tailscale.Client
-	tailscaleNamespace string       // namespace in which operator resources will be deployed
-	restConfig         *rest.Config // config for connecting to the kube API server
-	proxyImage         string       // <proxy-image-repo>:<proxy-image-tag>
-	k8sProxyImage      string       // <k8s-proxy-image-repo>:<k8s-proxy-image-tag>
+	log                           *zap.SugaredLogger
+	logLevel                      zapcore.Level // configured level; log's own level is debug while log uploads are on
+	tsServer                      *tsnet.Server
+	tsClient                      *tailscale.Client
+	tailscaleNamespace            string       // namespace in which operator resources will be deployed
+	restConfig                    *rest.Config // config for connecting to the kube API server
+	proxyImage                    string       // <proxy-image-repo>:<proxy-image-tag>
+	k8sProxyImage                 string       // <k8s-proxy-image-repo>:<k8s-proxy-image-tag>
+	k8sProxyRestrictedPodSecurity bool
 	// proxyPriorityClassName isPriorityClass to be set for proxy Pods. This
 	// is a legacy mechanism for cluster resource configuration options -
 	// going forward use ProxyClass.

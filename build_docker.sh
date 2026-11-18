@@ -16,6 +16,8 @@
 # To build a Tailscale image and push to a remote docker registry:
 #
 #   $ REPO=<your-registry>/<your-repo>/tailscale TAGS=v0.0.1  make publishdevimage
+#
+# BASE_VARIANT=distroless builds k8s-operator, k8s-proxy and k8s-nameserver on distroless (no shell, uid 65532).
 
 set -eu
 
@@ -27,6 +29,7 @@ eval "$(./build_dist.sh shellvars)"
 DEFAULT_TARGET="client"
 DEFAULT_TAGS="v${VERSION_SHORT},v${VERSION_MINOR}"
 DEFAULT_BASE="tailscale/alpine-base:3.22"
+DISTROLESS_BASE="gcr.io/distroless/static-debian13:nonroot"
 # Set a few pre-defined OCI annotations. The source annotation is used by tools such as Renovate that scan the linked
 # Github repo to find release notes for any new image tags. Note that for official Tailscale images the default
 # annotations defined here will be overriden by release scripts that call this script.
@@ -35,6 +38,28 @@ DEFAULT_ANNOTATIONS="org.opencontainers.image.source=https://github.com/tailscal
 
 PUSH="${PUSH:-false}"
 TARGET="${TARGET:-${DEFAULT_TARGET}}"
+BASE_VARIANT="${BASE_VARIANT:-alpine}" # or distroless
+case "$BASE_VARIANT" in
+  alpine)
+    ;;
+  distroless)
+    case "$TARGET" in
+      k8s-operator|k8s-proxy|k8s-nameserver)
+        DEFAULT_BASE="${DISTROLESS_BASE}"
+        # Suffixed so both variants can be published side by side.
+        DEFAULT_TAGS="v${VERSION_SHORT}-distroless,v${VERSION_MINOR}-distroless"
+        ;;
+      *)
+        echo "BASE_VARIANT=distroless is not supported for target: $TARGET"
+        exit 1
+        ;;
+    esac
+    ;;
+  *)
+    echo "unknown BASE_VARIANT: $BASE_VARIANT"
+    exit 1
+    ;;
+esac
 TAGS="${TAGS:-${DEFAULT_TAGS}}"
 BASE="${BASE:-${DEFAULT_BASE}}"
 PLATFORM="${PLATFORM:-}" # default to all platforms
