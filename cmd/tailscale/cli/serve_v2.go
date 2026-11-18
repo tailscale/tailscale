@@ -702,12 +702,18 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 			})
 		}
 
+		unrepresentable := func(port uint16, what string) error {
+			return fmt.Errorf("service %q: port %d: the config file format cannot represent %s", svcName, port, what)
+		}
 		// In port order, so the same port fails every time.
 		for _, port := range slices.Sorted(maps.Keys(serviceConfig.TCP)) {
 			config := serviceConfig.TCP[port]
 			sniName := fmt.Sprintf("%s.%s", svcName.WithoutPrefix(), magicDNSSuffix)
 			ppr := tailcfg.ProtoPortRange{Proto: int(ipproto.TCP), Ports: tailcfg.PortRange{First: port, Last: port}}
 			if config.TCPForward != "" {
+				if config.ProxyProtocol != 0 {
+					return nil, unrepresentable(port, "--proxy-protocol")
+				}
 				var proto conffile.ServiceProtocol
 				if config.TerminateTLS != "" {
 					proto = conffile.ProtoTLSTerminatedTCP
@@ -740,9 +746,17 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 				if !ok {
 					return nil, fmt.Errorf("service %q: HTTP/HTTPS is set but no handlers in config", svcName)
 				}
+				for _, mount := range slices.Sorted(maps.Keys(handlers.Handlers)) {
+					if mount != "/" {
+						return nil, unrepresentable(port, fmt.Sprintf("mount point %q", mount))
+					}
+				}
 				defaultHandler, ok := handlers.Handlers["/"]
 				if !ok {
 					return nil, fmt.Errorf("service %q: root handler not set", svcName)
+				}
+				if len(defaultHandler.AcceptAppCaps) > 0 {
+					return nil, unrepresentable(port, "--accept-app-caps")
 				}
 				if defaultHandler.Path != "" {
 					mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
@@ -763,26 +777,23 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 							Destination: defaultHandler.Proxy,
 						})
 					} else {
-						proto, rest, ok := strings.Cut(defaultHandler.Proxy, "://")
-						if !ok {
-							return nil, fmt.Errorf("service %q: invalid proxy handler %q", svcName, defaultHandler.Proxy)
-						}
+						proto, rest, _ := strings.Cut(defaultHandler.Proxy, "://")
 						host, portStr, err := net.SplitHostPort(rest)
-						if err != nil {
-							return nil, fmt.Errorf("service %q: invalid proxy handler %q: %w", svcName, defaultHandler.Proxy, err)
-						}
-
-						port, err := strconv.ParseUint(portStr, 10, 16)
-						if err != nil {
-							return nil, fmt.Errorf("service %q: parse port %q: %w", svcName, portStr, err)
+						destPort, perr := strconv.ParseUint(portStr, 10, 16)
+						if err != nil || perr != nil {
+							return nil, unrepresentable(port, fmt.Sprintf("proxy %q, only <scheme>://<host>:<port>", defaultHandler.Proxy))
 						}
 
 						mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
 							Protocol:         conffile.ServiceProtocol(proto),
 							Destination:      host,
-							DestinationPorts: tailcfg.PortRange{First: uint16(port), Last: uint16(port)},
+							DestinationPorts: tailcfg.PortRange{First: uint16(destPort), Last: uint16(destPort)},
 						})
 					}
+				} else if defaultHandler.Text != "" {
+					return nil, unrepresentable(port, "a text handler")
+				} else {
+					return nil, unrepresentable(port, "a handler that is neither a path nor a proxy")
 				}
 			}
 		}

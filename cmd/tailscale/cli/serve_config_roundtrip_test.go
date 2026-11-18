@@ -223,6 +223,22 @@ func setConfig(t *testing.T, lc *fakeLocalServeClient, flag, body string) {
 	runServeCmd(t, lc, "set-config", flag, writeTmpServeConfig(t, body))
 }
 
+// checkRefused checks that get-config fails with exactly wantErr and writes
+// nothing. It runs get-config several times, since the state's maps iterate in
+// a different order each time.
+func checkRefused(t *testing.T, lc *fakeLocalServeClient, flag, wantErr string) {
+	t.Helper()
+	for range 10 {
+		stdout, _, err := serveRun(lc, "get-config", flag)
+		if err == nil || err.Error() != wantErr {
+			t.Fatalf("get-config %s err = %v\nwant: %s", flag, err, wantErr)
+		}
+		if stdout != "" {
+			t.Fatalf("get-config %s wrote:\n%s\nwant nothing", flag, stdout)
+		}
+	}
+}
+
 // buildState runs tailscale serve commands against a fresh service host.
 func buildState(t *testing.T, dir string, cmds []string) *fakeLocalServeClient {
 	t.Helper()
