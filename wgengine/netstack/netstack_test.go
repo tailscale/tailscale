@@ -24,6 +24,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
 	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
@@ -505,7 +506,7 @@ func TestShouldProcessInbound(t *testing.T) {
 
 				i.atomicIsLocalIPFunc.Store(looksLikeATailscaleSelfAddress)
 			},
-			want: true,
+			want: buildfeatures.HasServe,
 		},
 		{
 			name: "udp-on-service-vip-no-listener-ipv4",
@@ -575,7 +576,7 @@ func TestShouldProcessInbound(t *testing.T) {
 
 				i.atomicIsLocalIPFunc.Store(looksLikeATailscaleSelfAddress)
 			},
-			want: true,
+			want: buildfeatures.HasServe,
 		},
 		{
 			name: "udp-on-service-vip-no-listener-ipv6",
@@ -1231,7 +1232,8 @@ func TestAcceptTCPLoopbackForwardVsRST(t *testing.T) {
 	const serviceName = "svc:test"
 
 	cases := []struct {
-		name string
+		name          string
+		requiresServe bool
 		// configure runs inside makeNetstack, before Start.
 		configure func(*Impl)
 		// afterStart runs after Start, for state that requires the backend to be
@@ -1268,7 +1270,8 @@ func TestAcceptTCPLoopbackForwardVsRST(t *testing.T) {
 			wantForward: false,
 		},
 		{
-			name: "VIPServiceUnservedPortIsRST",
+			name:          "VIPServiceUnservedPortIsRST",
+			requiresServe: true,
 			configure: func(impl *Impl) {
 				impl.ProcessSubnets = false
 				impl.ProcessLocalIPs = false
@@ -1321,6 +1324,9 @@ func TestAcceptTCPLoopbackForwardVsRST(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.requiresServe && !buildfeatures.HasServe {
+				t.Skip("Serve is excluded by build tag")
+			}
 			impl := makeNetstack(t, tc.configure)
 			if tc.afterStart != nil {
 				tc.afterStart(t, impl)
@@ -1700,13 +1706,13 @@ func TestShouldSendToHost(t *testing.T) {
 			name: "from_service_ip_to_local_ip",
 			src:  netip.AddrPortFrom(tailscaleServiceIP4, 80),
 			dst:  netip.AddrPortFrom(selfIP4, 12345),
-			want: true,
+			want: buildfeatures.HasServe,
 		},
 		{
 			name: "from_service_ip_to_local_ip_v6",
 			src:  netip.AddrPortFrom(tailscaleServiceIP6, 80),
 			dst:  netip.AddrPortFrom(selfIP6, 12345),
-			want: true,
+			want: buildfeatures.HasServe,
 		},
 		// Traffic from remote IPs to Tailscale Service IPs should be sent over WireGuard.
 		{
