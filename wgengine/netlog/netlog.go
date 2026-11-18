@@ -134,7 +134,9 @@ var testClient *http.Client
 //
 // source provides on-demand node lookups for connections seen by the logger.
 // It must be non-nil.
-func (nl *Logger) Startup(logf logger.Logf, source NodeSource, nodeLogID, domainLogID logid.PrivateID, tun, sock Device, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus, logExitFlowEnabledEnabled bool) error {
+//
+// baseURL is the logtail server to upload to; empty means Tailscale's.
+func (nl *Logger) Startup(logf logger.Logf, source NodeSource, nodeLogID, domainLogID logid.PrivateID, baseURL string, tun, sock Device, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus, logExitFlowEnabledEnabled bool) error {
 	nl.mu.Lock()
 	defer nl.mu.Unlock()
 
@@ -146,7 +148,7 @@ func (nl *Logger) Startup(logf logger.Logf, source NodeSource, nodeLogID, domain
 	}
 	nl.source = source
 
-	// Startup a log stream to Tailscale's logging service.
+	// Startup a log stream to baseURL, or Tailscale's logging service if empty.
 	if logf == nil {
 		logf = log.Printf
 	}
@@ -155,6 +157,7 @@ func (nl *Logger) Startup(logf logger.Logf, source NodeSource, nodeLogID, domain
 		httpc = testClient
 	}
 	logger := logtail.NewLogger(logtail.Config{
+		BaseURL:       baseURL,
 		Collection:    "tailtraffic.log.tailscale.io",
 		PrivateID:     nodeLogID,
 		CopyPrivateID: domainLogID,

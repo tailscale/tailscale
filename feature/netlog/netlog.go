@@ -87,7 +87,7 @@ func (nl *netLogger) Reconfig(routerCfg *router.Config, routerChanged bool) (cha
 	// that it captures initial packets.
 	if nl.shouldRun && !nl.logger.Running() {
 		logf("wgengine: Reconfig: starting up network logger (node:%s tailnet:%s)", nodeID.Public(), domainID.Public())
-		if err := nl.logger.Startup(logf, src, nodeID, domainID, nl.deps.Tun, nl.deps.Sock, nl.deps.NetMon, nl.deps.Health, nl.deps.Bus, logExitFlows); err != nil {
+		if err := nl.logger.Startup(logf, src, nodeID, domainID, "", nl.deps.Tun, nl.deps.Sock, nl.deps.NetMon, nl.deps.Health, nl.deps.Bus, logExitFlows); err != nil {
 			logf("wgengine: Reconfig: error starting up network logger: %v", err)
 		}
 		nl.logger.ReconfigRoutes(routerCfg)

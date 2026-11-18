@@ -6,8 +6,12 @@
 package netlog
 
 import (
+	"context"
 	"encoding/binary"
+	"io"
 	"math/rand/v2"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"sync"
 	"testing"
@@ -18,9 +22,13 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest"
 	"tailscale.com/types/bools"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/types/logid"
 	"tailscale.com/types/netlogtype"
+	"tailscale.com/util/eventbus/eventbustest"
+	"tailscale.com/util/must"
 	"tailscale.com/wgengine/router"
 )
 
@@ -289,5 +297,45 @@ func BenchmarkUpdateNewConns(b *testing.B) {
 	b.ReportAllocs()
 	for i := range b.N {
 		logger.updateVirtConn(0, netip.AddrPortFrom(netip.Addr{}, uint16(i)), netip.AddrPort{}, 1, 1, false)
+	}
+}
+
+func TestStartupBaseURL(t *testing.T) {
+	t.Setenv("IN_TS_TEST", "1") // upload each entry at once, before Shutdown cuts the flush delay short
+
+	var mu sync.Mutex
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		mu.Lock()
+		got = append(got, r.URL.RequestURI())
+		mu.Unlock()
+	}))
+	defer srv.Close()
+	tstest.Replace(t, &testClient, srv.Client())
+
+	nodeID := must.Get(logid.NewPrivateID())
+	domainID := must.Get(logid.NewPrivateID())
+	var nl Logger
+	if err := nl.Startup(t.Logf, &fakeNodeSource{}, nodeID, domainID, srv.URL+"/base", nil, nil, nil, nil, eventbustest.NewBus(t), false); err != nil {
+		t.Fatal(err)
+	}
+	nl.updateVirtConn(ipproto.TCP, netip.MustParseAddrPort("100.64.0.1:1"), netip.MustParseAddrPort("100.64.0.2:80"), 1, 100, false)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := nl.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	want := "/base/c/tailtraffic.log.tailscale.io/" + nodeID.String() + "?copyId=" + domainID.String()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) == 0 {
+		t.Fatal("no uploads reached the base URL")
+	}
+	for _, g := range got {
+		if g != want {
+			t.Errorf("upload = %q, want %q", g, want)
+		}
 	}
 }
