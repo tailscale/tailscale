@@ -79,7 +79,6 @@ require (
 	github.com/hashicorp/raft-boltdb/v2 v2.3.1
 	github.com/hdevalence/ed25519consensus v0.2.0
 	github.com/huin/goupnp v1.3.0
-	github.com/illarion/gonotify/v3 v3.0.2
 	github.com/inetaf/tcpproxy v0.0.0-20260515195445-c159a6051109
 	github.com/insomniacslk/dhcp v0.0.0-20260901064844-234b97448fae
 	github.com/jellydator/ttlcache/v3 v3.4.1
