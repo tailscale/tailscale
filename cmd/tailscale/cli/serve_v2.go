@@ -1000,6 +1000,12 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 			servicesList = append(prefs.AdvertiseServices, e.service.String())
 			changed = true
 		}
+	} else {
+		// The file replaces the Service's state, whatever it was, so
+		// "advertised": false drains it.
+		if err := e.removeServiceFromPrefs(ctx, e.service); err != nil {
+			return err
+		}
 	}
 	if changed {
 		_, err = e.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
