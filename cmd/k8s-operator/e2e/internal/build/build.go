@@ -109,6 +109,46 @@ func Tag(dir string) (tag string, dirty bool, err error) {
 	return tag, dirty, nil
 }
 
+// WorktreeForRef creates a detached git worktree of ref under a temp dir and
+// returns its path plus a cleanup func. Point Opts.Dir at it to build that ref's
+// images, chart, and CRDs; repoRoot may be any path inside the repository.
+func WorktreeForRef(ctx context.Context, repoRoot, ref string) (dir string, cleanup func(), err error) {
+	dir, err = os.MkdirTemp("", "ts-e2e-worktree-")
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to create worktree temp dir: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, "git", "worktree", "add", "--detach", dir, ref)
+	cmd.Dir = repoRoot
+	if out, err := cmd.CombinedOutput(); err != nil {
+		os.RemoveAll(dir)
+		return "", nil, fmt.Errorf("git worktree add %s at %q: %w: %s", ref, dir, err, out)
+	}
+	cleanup = func() {
+		// --force because the e2e build writes into the worktree (generated
+		// CRDs, chart artifacts), leaving it dirty.
+		rm := exec.Command("git", "worktree", "remove", "--force", dir)
+		rm.Dir = repoRoot
+		if _, err := rm.CombinedOutput(); err != nil {
+			// Best-effort: fall back to removing the dir and pruning the
+			// stale worktree registration.
+			os.RemoveAll(dir)
+			prune := exec.Command("git", "worktree", "prune")
+			prune.Dir = repoRoot
+			prune.Run()
+		}
+	}
+	return dir, cleanup, nil
+}
+
+// PruneWorktrees removes stale worktree registrations from repoRoot's .git, to
+// self-heal leaks from a prior interrupted run that would otherwise accumulate
+// ts-e2e-worktree-* entries.
+func PruneWorktrees(ctx context.Context, repoRoot string) {
+	prune := exec.CommandContext(ctx, "git", "worktree", "prune")
+	prune.Dir = repoRoot
+	prune.Run() // best-effort
+}
+
 // ImageRepo returns the image repository for name: <registry>/<name>, or
 // local/<name> when no registry is configured.
 func ImageRepo(registry, name string) string {

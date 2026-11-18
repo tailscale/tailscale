@@ -76,15 +76,16 @@ const (
 )
 
 var (
-	tsClient           *tailscale.Client // For API calls to control.
-	tnClient           *tsnet.Server     // For testing real tailnet traffic on first tailnet.
-	secondTSClient     *tailscale.Client // For API calls to the secondary tailnet (_second_tailnet).
-	secondTNClient     *tsnet.Server     // For testing real tailnet traffic on second tailnet.
-	restCfg            *rest.Config      // For constructing a client-go client if necessary.
-	kubeClient         client.WithWatch  // For k8s API calls.
-	clusterLoginServer string
-	clusterIPv4Support bool // whether the test cluster supports IPv4.
-	clusterIPv6Support bool // whether the test cluster supports IPv6.
+	tsClient             *tailscale.Client // For API calls to control.
+	tnClient             *tsnet.Server     // For testing real tailnet traffic on first tailnet.
+	secondTSClient       *tailscale.Client // For API calls to the secondary tailnet (_second_tailnet).
+	secondTNClient       *tsnet.Server     // For testing real tailnet traffic on second tailnet.
+	restCfg              *rest.Config      // For constructing a client-go client if necessary.
+	kubeClient           client.WithWatch  // For k8s API calls.
+	clusterLoginServer   string
+	clusterIPv4Support   bool            // whether the test cluster supports IPv4.
+	clusterIPv6Support   bool            // whether the test cluster supports IPv6.
+	clusterPrimaryFamily corev1.IPFamily // the cluster's primary IP family (Service.spec.ipFamilies[0]).
 
 	//go:embed certs/pebble.minica.crt
 	pebbleMiniCACert []byte
@@ -115,6 +116,27 @@ var (
 	fBuild       = flag.Bool("build", false, "if true, build and deploy the operator and container images from the current checkout; otherwise assume the operator is already running and the required images are available in the registry")
 	fBaseImage   = flag.String("base-image", "", "if set, use this image as the base for all images built by --build, instead of the default base image in build_docker.sh")
 	fRegistry    = flag.String("registry", "", `if set, use images from this registry instead of loading them into a kind node. Required with --build when testing against a remote cluster.`)
+	fFromVersion = flag.String("from-version", "", "git ref to install first; its presence enables the operator version-change test. \"HEAD\" means the current checkout")
+	fToVersion   = flag.String("to-version", "", "git ref to change the operator to (upgrade or downgrade, by version order). \"HEAD\" means the current checkout")
+	fRoundTrip   = flag.Bool("round-trip", false, "after changing from --from-version to --to-version, change back to --from-version on the same resources")
+)
+
+func upgradeMode() bool { return *fFromVersion != "" }
+
+// Install plumbing shared between runTests (normal mode) and
+// TestOperatorVersionChange. These are populated by runTests once the
+// cluster and tailnet credentials are ready, so the test can install the operator
+// stack from an arbitrary git ref.
+var (
+	repoRoot            string // top-level dir of the current checkout.
+	e2eLogger           *zap.SugaredLogger
+	helmCfg             *action.Configuration
+	kindProvider        *cluster.Provider // non-nil when --cluster side-loads images.
+	kubeconfig          string
+	operatorCreds       oauthCreds             // operator OAuth client for the first tailnet.
+	secondOperatorCreds oauthCreds             // operator OAuth client for the second tailnet (empty unless the second tailnet was set up).
+	imageCAPaths        []string               // extra CA cert paths baked into built images.
+	relName             = "tailscale-operator" // helm release name.
 )
 
 func runTests(m *testing.M) (int, error) {
@@ -128,12 +150,23 @@ func runTests(m *testing.M) (int, error) {
 		return 0, fmt.Errorf("--cluster side-loads images into the kind node and doesn't take --registry")
 	case *fBuild && !*fCluster && *fRegistry == "":
 		return 0, fmt.Errorf("--build without --cluster needs --registry to push images to; there is no kind node to side-load into")
+	case *fRoundTrip && !upgradeMode():
+		return 0, fmt.Errorf("--round-trip requires --from-version (it is only meaningful for the version-change test)")
+	case upgradeMode() && *fToVersion == "":
+		return 0, fmt.Errorf("--from-version requires --to-version")
+	case upgradeMode() && !*fBuild:
+		return 0, fmt.Errorf("--from-version requires --build to build images from each ref's worktree")
+	case upgradeMode() && !*fCluster && *fRegistry == "":
+		return 0, fmt.Errorf("--from-version needs --cluster (side-load images into the kind node) or --registry (push images) to deliver each ref's built images")
 	}
 
 	ossDir, err := build.RepoRoot()
 	if err != nil {
 		return 0, err
 	}
+
+	repoRoot = ossDir
+	e2eLogger = logger
 
 	if err = os.MkdirAll(tmp, 0755); err != nil {
 		return 0, fmt.Errorf("failed to create temp dir: %w", err)
@@ -142,10 +175,6 @@ func runTests(m *testing.M) (int, error) {
 	logger.Infof("temp dir: %q", tmp)
 	logger.Infof("oss dir: %q", ossDir)
 
-	var (
-		kubeconfig   string
-		kindProvider *cluster.Provider
-	)
 	if *fCluster {
 		kubeconfig = filepath.Join(tmp, "kubeconfig")
 		kindProvider = cluster.NewProvider(
@@ -196,13 +225,7 @@ func runTests(m *testing.M) (int, error) {
 		return 0, fmt.Errorf("error detecting cluster IP families: %w", err)
 	}
 
-	var (
-		operatorCreds       oauthCreds // Operator's OAuth client for the first tailnet.
-		secondOperatorCreds oauthCreds // Operator's OAuth client for the second tailnet.
-
-		imageCAPaths  []string // Extra CAs the image needs in its system trust store to issue certs; it is only populated for pebble.
-		pebbleCAChain []byte
-	)
+	var pebbleCAChain []byte
 	if *fDevcontrol {
 		// Deploy pebble and get its certs.
 		if err = applyPebbleResources(ctx, kubeClient); err != nil {
@@ -404,19 +427,134 @@ func runTests(m *testing.M) (int, error) {
 	}
 	defer kubeClient.Delete(context.Background(), caCM)
 
-	var ossTag string
+	settings := cli.New()
+	settings.KubeConfig = kubeconfig
+	settings.SetNamespace("tailscale")
+	helmCfg = &action.Configuration{}
+	if err := helmCfg.Init(settings.RESTClientGetter(), "tailscale", "", logger.Infof); err != nil {
+		return 0, fmt.Errorf("failed to initialize helm action configuration: %w", err)
+	}
+
+	// Provision the operator from the current checkout, unless running
+	// upgrade/downgrade mode, where TestOperatorVersionChange handles installation.
+	if !upgradeMode() {
+		cleanup, err := provisionOperatorStack(ctx, logger, ossDir)
+		if err != nil {
+			return 0, err
+		}
+		defer cleanup()
+	}
+
+	caps := tailscale.KeyCapabilities{}
+	caps.Devices.Create.Preauthorized = true
+	caps.Devices.Create.Ephemeral = true
+	caps.Devices.Create.Tags = []string{"tag:k8s"}
+
+	authKey, err := tsClient.Keys().CreateAuthKey(ctx, tailscale.CreateKeyRequest{Capabilities: caps})
+	if err != nil {
+		return 0, fmt.Errorf("failed to create auth key for first tailnet: %w", err)
+	}
+	defer tsClient.Keys().Delete(context.Background(), authKey.ID)
+
+	tnClient = &tsnet.Server{
+		ControlURL: tsClient.BaseURL.String(),
+		Hostname:   "test-proxy",
+		Ephemeral:  true,
+		Store:      &mem.Store{},
+		AuthKey:    authKey.Key,
+	}
+	_, err = tnClient.Up(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tnClient.Close()
+
+	// The second tailnet is absent in upgrade mode (skipped above); its tsnet
+	// client is only needed by the multi-tailnet functional tests.
+	if secondTSClient != nil {
+		secondAuthKey, err := secondTSClient.Keys().CreateAuthKey(ctx, tailscale.CreateKeyRequest{Capabilities: caps})
+		if err != nil {
+			return 0, fmt.Errorf("failed to create auth key for second tailnet: %w", err)
+		}
+		defer secondTSClient.Keys().Delete(context.Background(), secondAuthKey.ID)
+
+		secondTNClient = &tsnet.Server{
+			ControlURL: secondTSClient.BaseURL.String(),
+			Hostname:   "test-proxy",
+			Ephemeral:  true,
+			Store:      &mem.Store{},
+			AuthKey:    secondAuthKey.Key,
+		}
+		_, err = secondTNClient.Up(ctx)
+		if err != nil {
+			return 0, err
+		}
+		defer secondTNClient.Close()
+	}
+
+	// In upgrade/downgrade mode the operator isn't installed yet, so the
+	// multi-tailnet resource creates these itself after it installs the
+	// operator.
+	if !upgradeMode() {
+		secret := secondTailnetCredentialsSecret()
+		if err := createOrUpdate(ctx, kubeClient, secret); err != nil {
+			return 0, fmt.Errorf("failed to create second-tailnet-credentials Secret: %w", err)
+		}
+		defer kubeClient.Delete(context.Background(), secret)
+
+		tn := secondTailnetCR()
+		if err := createOrUpdate(ctx, kubeClient, tn); err != nil {
+			return 0, fmt.Errorf("failed to create second-tailnet Tailnet: %w", err)
+		}
+		defer kubeClient.Delete(context.Background(), tn)
+	}
+
+	return m.Run(), nil
+}
+
+// secondTailnetCredentialsSecret returns the Secret the operator reads to join
+// the second tailnet, built from secondOperatorCreds.
+func secondTailnetCredentialsSecret() *corev1.Secret {
+	data := map[string][]byte{"client_id": []byte(secondOperatorCreds.clientID)}
+	if secondOperatorCreds.audience != "" {
+		data["audience"] = []byte(secondOperatorCreds.audience)
+	} else {
+		data["client_secret"] = []byte(secondOperatorCreds.clientSecret)
+	}
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "second-tailnet-credentials", Namespace: "tailscale"},
+		Data:       data,
+	}
+}
+
+// secondTailnetCR returns the Tailnet CR naming the second tailnet, referencing
+// the Secret from [secondTailnetCredentialsSecret].
+func secondTailnetCR() *tsapi.Tailnet {
+	return &tsapi.Tailnet{
+		ObjectMeta: metav1.ObjectMeta{Name: "second-tailnet"},
+		Spec: tsapi.TailnetSpec{
+			LoginURL:    clusterLoginServer,
+			Credentials: tsapi.TailnetCredentials{SecretName: "second-tailnet-credentials"},
+		},
+	}
+}
+
+// installOrUpgradeOperatorStack builds+loads the e2e images from ossDir (with
+// --build), generates the CRDs, and helm install-or-upgrades the operator from
+// ossDir's chart. It returns the deployed image tag, or "" when nothing built.
+func installOrUpgradeOperatorStack(ctx context.Context, logger *zap.SugaredLogger, ossDir string) (ossTag string, err error) {
 	if *fBuild || *fRegistry != "" {
 		var dirty bool
 		ossTag, dirty, err = build.Tag(ossDir)
 		if err != nil {
-			return 0, err
+			return "", err
 		}
-		logger.Infof("using OSS image tag: %q", ossTag)
+		logger.Infof("using OSS image tag: %q (from %q)", ossTag, ossDir)
 		if !*fBuild && dirty {
 			// Without --build the images must already exist in the registry,
 			// but a dirty tree gets a random tag suffix that nothing has
 			// pushed.
-			return 0, fmt.Errorf("--registry without --build derives the image tag from the current commit, which requires a clean working tree")
+			return "", fmt.Errorf("--registry without --build derives the image tag from the current commit, which requires a clean working tree")
 		}
 	}
 	if *fBuild {
@@ -437,31 +575,31 @@ func runTests(m *testing.M) (int, error) {
 		if *fRegistry != "" {
 			opts.Arch, err = detectNodeArch(ctx, kubeClient)
 			if err != nil {
-				return 0, fmt.Errorf("failed to detect node architecture: %w", err)
+				return "", fmt.Errorf("failed to detect node architecture: %w", err)
 			}
 			logger.Infof("building images for node architecture %q, pushing to %q", opts.Arch, *fRegistry)
 			if err := build.EnsurePushed(ctx, opts); err != nil {
-				return 0, err
+				return "", err
 			}
 		} else {
 			for imgName := range build.Targets {
 				if err := build.Build(ctx, opts, imgName); err != nil {
-					return 0, err
+					return "", err
 				}
 				nodes, err := kindProvider.ListInternalNodes(kindClusterName)
 				if err != nil {
-					return 0, fmt.Errorf("failed to list kind nodes: %w", err)
+					return "", fmt.Errorf("failed to list kind nodes: %w", err)
 				}
 				// TODO(tomhjp): can be made more efficient and portable if we
 				// stream built image tarballs straight to the node rather than
 				// going via the daemon.
 				imgRef, err := name.ParseReference(fmt.Sprintf("%s:%s", build.ImageRepo("", imgName), ossTag))
 				if err != nil {
-					return 0, fmt.Errorf("failed to parse image reference: %w", err)
+					return "", fmt.Errorf("failed to parse image reference: %w", err)
 				}
 				img, err := daemon.Image(imgRef)
 				if err != nil {
-					return 0, fmt.Errorf("failed to get image from daemon: %w", err)
+					return "", fmt.Errorf("failed to get image from daemon: %w", err)
 				}
 				pr, pw := io.Pipe()
 				go func() {
@@ -472,7 +610,7 @@ func runTests(m *testing.M) (int, error) {
 				}()
 				for _, n := range nodes {
 					if err := nodeutils.LoadImageArchive(n, pr); err != nil {
-						return 0, fmt.Errorf("failed to load image into node %q: %w", n.String(), err)
+						return "", fmt.Errorf("failed to load image into node %q: %w", n.String(), err)
 					}
 				}
 			}
@@ -484,13 +622,13 @@ func runTests(m *testing.M) (int, error) {
 	cmd.Dir = ossDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return 0, fmt.Errorf("failed to generate CRD: %v: %s", err, out)
+		return "", fmt.Errorf("failed to generate CRD: %v: %s", err, out)
 	}
 
 	// Load and install helm chart.
 	chart, err := loader.Load(filepath.Join(ossDir, "cmd", "k8s-operator", "deploy", "chart"))
 	if err != nil {
-		return 0, fmt.Errorf("failed to load helm chart: %w", err)
+		return "", fmt.Errorf("failed to load helm chart: %w", err)
 	}
 	// Image repo/tag are left empty unless we built or were given prebuilt
 	// images (ossTag is set), so the chart uses the 'stable' defaults.
@@ -537,125 +675,52 @@ func runTests(m *testing.M) (int, error) {
 		},
 	}
 
-	settings := cli.New()
-	settings.KubeConfig = kubeconfig
-	settings.SetNamespace("tailscale")
-	helmCfg := &action.Configuration{}
-	if err := helmCfg.Init(settings.RESTClientGetter(), "tailscale", "", logger.Infof); err != nil {
-		return 0, fmt.Errorf("failed to initialize helm action configuration: %w", err)
-	}
-
-	const relName = "tailscale-operator" // TODO(tomhjp): maybe configurable if others use a different value.
 	f := upgraderOrInstaller(helmCfg, relName)
 	if _, err := f(ctx, relName, chart, values); err != nil {
-		return 0, fmt.Errorf("failed to install %q via helm: %w", relName, err)
+		return "", fmt.Errorf("failed to install %q via helm: %w", relName, err)
 	}
+	return ossTag, nil
+}
 
-	if err := applyDefaultProxyClass(ctx, logger, kubeClient); err != nil {
-		return 0, fmt.Errorf("failed to apply default ProxyClass: %w", err)
-	}
-
-	// Leave the nameserver image unset when nothing was built so
-	// the operator falls back to the default.
-	nameserverImg := &tsapi.NameserverImage{}
-	if ossTag != "" {
-		nameserverImg.Repo = build.ImageRepo(*fRegistry, build.ImgNameserver)
-		nameserverImg.Tag = ossTag
-	}
-	dnsConfig, err := deployNameserver(ctx, logger, kubeClient, nameserverImg)
+// provisionOperatorStack fully brings up the operator from ossDir: install +
+// default ProxyClass + nameserver + the cluster-DNS patch for *.ts.net, returning
+// a cleanup.
+func provisionOperatorStack(ctx context.Context, logger *zap.SugaredLogger, ossDir string) (cleanup func(), err error) {
+	tag, err := installOrUpgradeOperatorStack(ctx, logger, ossDir)
 	if err != nil {
-		return 0, fmt.Errorf("failed to deploy nameserver: %w", err)
+		return nil, err
 	}
-	defer kubeClient.Delete(context.Background(), dnsConfig)
-
+	if err := applyDefaultProxyClass(ctx, logger, kubeClient); err != nil {
+		return nil, fmt.Errorf("applying default ProxyClass: %w", err)
+	}
+	dnsConfig, err := deployNameserver(ctx, logger, kubeClient, nameserverImage(*fRegistry, tag))
+	if err != nil {
+		return nil, fmt.Errorf("deploying nameserver: %w", err)
+	}
 	restoreClusterDNS, err := patchClusterDNS(ctx, logger, dnsConfig.Status.Nameserver.IP)
 	if err != nil {
-		return 0, fmt.Errorf("failed to patch cluster DNS: %w", err)
+		kubeClient.Delete(context.Background(), dnsConfig)
+		return nil, fmt.Errorf("patching cluster DNS: %w", err)
 	}
-	defer restoreClusterDNS()
+	return func() {
+		restoreClusterDNS()
+		// Wait for the delete to finish so it isn't stuck in Terminating
+		// which otherwise blocks the next run against a reused cluster.
+		if err := deleteDNSConfigAndWait(context.Background(), logger, kubeClient); err != nil {
+			logger.Infof("cleaning up DNSConfig: %v", err)
+		}
+	}, nil
+}
 
-	caps := tailscale.KeyCapabilities{}
-	caps.Devices.Create.Preauthorized = true
-	caps.Devices.Create.Ephemeral = true
-	caps.Devices.Create.Tags = []string{"tag:k8s"}
-
-	authKey, err := tsClient.Keys().CreateAuthKey(ctx, tailscale.CreateKeyRequest{Capabilities: caps})
-	if err != nil {
-		return 0, fmt.Errorf("failed to create auth key for first tailnet: %w", err)
+// nameserverImage returns the NameserverImage for the given registry and image
+// tag.
+func nameserverImage(registry, tag string) *tsapi.NameserverImage {
+	img := &tsapi.NameserverImage{}
+	if tag != "" {
+		img.Repo = build.ImageRepo(registry, build.ImgNameserver)
+		img.Tag = tag
 	}
-	defer tsClient.Keys().Delete(context.Background(), authKey.ID)
-
-	secondAuthKey, err := secondTSClient.Keys().CreateAuthKey(ctx, tailscale.CreateKeyRequest{Capabilities: caps})
-	if err != nil {
-		return 0, fmt.Errorf("failed to create auth key for second tailnet: %w", err)
-	}
-	defer secondTSClient.Keys().Delete(context.Background(), secondAuthKey.ID)
-
-	tnClient = &tsnet.Server{
-		ControlURL: tsClient.BaseURL.String(),
-		Hostname:   "test-proxy",
-		Ephemeral:  true,
-		Store:      &mem.Store{},
-		AuthKey:    authKey.Key,
-	}
-	_, err = tnClient.Up(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer tnClient.Close()
-
-	secondTNClient = &tsnet.Server{
-		ControlURL: secondTSClient.BaseURL.String(),
-		Hostname:   "test-proxy",
-		Ephemeral:  true,
-		Store:      &mem.Store{},
-		AuthKey:    secondAuthKey.Key,
-	}
-	_, err = secondTNClient.Up(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer secondTNClient.Close()
-
-	// Create the tailnet Secret in the tailscale namespace.
-	secretData := map[string][]byte{
-		"client_id": []byte(secondOperatorCreds.clientID),
-	}
-	if secondOperatorCreds.audience != "" {
-		secretData["audience"] = []byte(secondOperatorCreds.audience)
-	} else {
-		secretData["client_secret"] = []byte(secondOperatorCreds.clientSecret)
-	}
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "second-tailnet-credentials",
-			Namespace: "tailscale",
-		},
-		Data: secretData,
-	}
-	if err := createOrUpdate(ctx, kubeClient, secret); err != nil {
-		return 0, fmt.Errorf("failed to create second-tailnet-credentials Secret: %w", err)
-	}
-	defer kubeClient.Delete(context.Background(), secret)
-
-	// Create the Tailnet resource.
-	tn := &tsapi.Tailnet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "second-tailnet",
-		},
-		Spec: tsapi.TailnetSpec{
-			LoginURL: clusterLoginServer,
-			Credentials: tsapi.TailnetCredentials{
-				SecretName: "second-tailnet-credentials",
-			},
-		},
-	}
-	if err := createOrUpdate(ctx, kubeClient, tn); err != nil {
-		return 0, fmt.Errorf("failed to create second-tailnet Tailnet: %w", err)
-	}
-	defer kubeClient.Delete(context.Background(), tn)
-
-	return m.Run(), nil
+	return img
 }
 
 func clientIDFromSecret(clientSecret string) (string, error) {
@@ -852,11 +917,16 @@ func applyDefaultProxyClass(ctx context.Context, logger *zap.SugaredLogger, cl c
 }
 
 func deployNameserver(ctx context.Context, logger *zap.SugaredLogger, cl client.Client, img *tsapi.NameserverImage) (*tsapi.DNSConfig, error) {
+	// Delete any DNSConfig left behind by a previous run that didn't reach cleanup.
+	if err := deleteDNSConfigAndWait(ctx, logger, cl); err != nil {
+		return nil, err
+	}
+
 	dc := &tsapi.DNSConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "dns"},
 		Spec:       tsapi.DNSConfigSpec{Nameserver: &tsapi.Nameserver{Image: img}},
 	}
-	if err := createOrUpdate(ctx, cl, dc); err != nil {
+	if err := cl.Create(ctx, dc); err != nil {
 		return nil, fmt.Errorf("failed to create DNSConfig: %w", err)
 	}
 
@@ -877,6 +947,35 @@ func deployNameserver(ctx context.Context, logger *zap.SugaredLogger, cl client.
 				return dc, nil
 			}
 			logger.Info("waiting for nameserver to be ready...")
+		}
+	}
+}
+
+func deleteDNSConfigAndWait(ctx context.Context, logger *zap.SugaredLogger, cl client.Client) error {
+	dc := &tsapi.DNSConfig{ObjectMeta: metav1.ObjectMeta{Name: "dns"}}
+	if err := cl.Delete(ctx, dc); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("deleting stale DNSConfig: %w", err)
+	}
+	logger.Info("deleting stale DNSConfig from a previous run; waiting for it to be removed...")
+
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for stale DNSConfig to be deleted (likely a stuck operator finalizer): %w", ctx.Err())
+		case <-ticker.C:
+			switch err := cl.Get(ctx, client.ObjectKeyFromObject(dc), dc); {
+			case apierrors.IsNotFound(err):
+				return nil
+			case err != nil:
+				return fmt.Errorf("waiting for stale DNSConfig deletion: %w", err)
+			}
 		}
 	}
 }
@@ -1136,6 +1235,7 @@ func detectClusterIPFamilies(ctx context.Context, logger *zap.SugaredLogger, cl 
 	if !clusterIPv4Support && !clusterIPv6Support {
 		return fmt.Errorf("Service %s/%s reported no IP families", svc.Namespace, svc.Name)
 	}
+	clusterPrimaryFamily = svc.Spec.IPFamilies[0]
 	return nil
 }
 

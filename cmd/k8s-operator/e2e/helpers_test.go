@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/netip"
 	"slices"
@@ -19,7 +20,9 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"tailscale.com/client/tailscale/v2"
 	"tailscale.com/ipn/store/mem"
@@ -28,6 +31,13 @@ import (
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tsnet"
 	"tailscale.com/tstest"
+)
+
+const (
+	tsNamespace          = "tailscale"
+	LabelParentType      = "tailscale.com/parent-resource-type"
+	LabelParentName      = "tailscale.com/parent-resource"
+	LabelParentNamespace = "tailscale.com/parent-resource-ns"
 )
 
 func generateName(prefix string) string {
@@ -342,6 +352,110 @@ func waitForProxyClassReady(t *testing.T, name string) {
 		return nil
 	}); err != nil {
 		t.Fatalf("waiting for ProxyClass %s to be ready: %v", name, err)
+	}
+}
+
+// proxyGroupReady fetches the named ProxyGroup and returns it only if it reports
+// Ready. It does not poll itself, so callers control timing.
+func proxyGroupReady(ctx context.Context, name string) (*tsapi.ProxyGroup, error) {
+	pg := &tsapi.ProxyGroup{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	if err := get(ctx, kubeClient, pg); err != nil {
+		return nil, err
+	}
+	if !tsoperator.ProxyGroupIsReady(pg) {
+		if ready := meta.FindStatusCondition(pg.Status.Conditions, string(tsapi.ProxyGroupReady)); ready != nil {
+			return nil, fmt.Errorf("ProxyGroup %s not ready: reason=%s message=%q", name, ready.Reason, ready.Message)
+		}
+		return nil, fmt.Errorf("ProxyGroup %s has no %s condition yet", name, tsapi.ProxyGroupReady)
+	}
+	return pg, nil
+}
+
+// waitForProxyGroupReady waits until the named ProxyGroup reports Ready.
+func waitForProxyGroupReady(t *testing.T, name string) {
+	t.Helper()
+	trigger := triggerReconcile(t, client.ObjectKey{Name: name}, &tsapi.ProxyGroup{}, 30*time.Second)
+	if err := tstest.WaitFor(5*time.Minute, func() error {
+		trigger()
+		_, err := proxyGroupReady(t.Context(), name)
+		return err
+	}); err != nil {
+		t.Fatalf("waiting for ProxyGroup %s to become ready: %v", name, err)
+	}
+}
+
+func apiServerProxyClient(proxyURL string) (client.Client, error) {
+	return client.New(&rest.Config{Host: proxyURL}, client.Options{
+		HTTPClient: newHTTPClient(tnClient),
+	})
+}
+
+// proxyDeviceIPForService returns the proxy device IP matching the family of the
+// named Service's primary ClusterIP, read from the proxy's state Secret.
+func proxyDeviceIPForService(t *testing.T, svcName string) string {
+	t.Helper()
+	var proxyIP string
+	if err := tstest.WaitFor(2*time.Minute, func() error {
+		var secrets corev1.SecretList
+		if err := kubeClient.List(t.Context(), &secrets,
+			client.InNamespace(tsNamespace),
+			client.MatchingLabels{LabelParentName: svcName, LabelParentNamespace: ns},
+		); err != nil {
+			return err
+		}
+		if len(secrets.Items) == 0 {
+			return fmt.Errorf("no state Secret for Service %s yet", svcName)
+		}
+		var deviceIPs []string
+		if err := json.Unmarshal(secrets.Items[0].Data[kubetypes.KeyDeviceIPs], &deviceIPs); err != nil {
+			return fmt.Errorf("decoding device IPs: %w", err)
+		}
+		svc := &corev1.Service{ObjectMeta: objectMeta(ns, svcName)}
+		if err := get(t.Context(), kubeClient, svc); err != nil {
+			return err
+		}
+		proxyIP = ipMatchingFamily(deviceIPs, svc.Spec.ClusterIP)
+		if proxyIP == "" {
+			return fmt.Errorf("device has no IP matching Service %s ClusterIP family", svcName)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("waiting for matching-family proxy IP for Service %s: %v", svcName, err)
+	}
+	return proxyIP
+}
+
+// requireL3ProxyReachable curls the singleton L3 ingress proxy over the tailnet
+// using the proxy device IP matching the Service's primary ClusterIP family.
+func requireL3ProxyReachable(t *testing.T, svcName string) {
+	t.Helper()
+	proxyIP := proxyDeviceIPForService(t, svcName)
+	if err := testIngressIsReachable(t, newHTTPClient(tnClient), "http://"+net.JoinHostPort(proxyIP, "80")); err != nil {
+		t.Fatalf("L3 ingress %s not reachable: %v", svcName, err)
+	}
+}
+
+// waitForL3HAIngressReady waits until the L3 ingress Service is
+// IngressSvcConfigured and has a LoadBalancer IP assigned.
+func waitForL3HAIngressReady(t *testing.T, svcName string) {
+	t.Helper()
+	forceReconcile := triggerReconcile(t, client.ObjectKey{Namespace: ns, Name: svcName}, &corev1.Service{}, 30*time.Second)
+	if err := tstest.WaitFor(5*time.Minute, func() error {
+		forceReconcile()
+		svc := &corev1.Service{ObjectMeta: objectMeta(ns, svcName)}
+		if err := get(t.Context(), kubeClient, svc); err != nil {
+			return err
+		}
+		c := meta.FindStatusCondition(svc.Status.Conditions, string(tsapi.IngressSvcConfigured))
+		if c == nil || c.Status != metav1.ConditionTrue {
+			return fmt.Errorf("Service %s not IngressSvcConfigured yet", svcName)
+		}
+		if len(svc.Status.LoadBalancer.Ingress) == 0 {
+			return fmt.Errorf("Service %s has no LoadBalancer IP yet", svcName)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("waiting for L3 HA ingress %s: %v", svcName, err)
 	}
 }
 

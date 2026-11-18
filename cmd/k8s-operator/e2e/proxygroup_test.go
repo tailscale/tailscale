@@ -14,7 +14,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"tailscale.com/client/tailscale/v2"
-	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/tstest"
 )
@@ -192,12 +191,9 @@ func waitForProxyGroupDevices(t *testing.T, name string, replicas int, wantStati
 	var devices []staticEndpointsDevice
 	if err := tstest.WaitFor(5*time.Minute, func() error {
 		trigger()
-		pg := &tsapi.ProxyGroup{ObjectMeta: metav1.ObjectMeta{Name: name}}
-		if err := get(t.Context(), kubeClient, pg); err != nil {
+		pg, err := proxyGroupReady(t.Context(), name)
+		if err != nil {
 			return err
-		}
-		if !tsoperator.ProxyGroupIsReady(pg) {
-			return fmt.Errorf("ProxyGroup %s not ready: %v", name, pg.Status.Conditions)
 		}
 		devices = devices[:0]
 		for _, d := range pg.Status.Devices {
