@@ -18,12 +18,10 @@ yourself to the `kvm` group to avoid QEMU falling back to software emulation.
 ## Running locally
 
 ```
-go test ./tstest/natlab/vmtest/ --run-vm-tests -v -timeout=15
+go test ./tstest/natlab/vmtest/ --run-vm-tests -v -timeout=0
 ```
 
-`go test`'s default timeout (10 min) is likely not enough to cover the whole
-package. You may need to raise it further or disable the timeout entirely
-(`-timeout=0`) when running the full suite.
+`go test`'s default timeout (10 min) is not enough to cover the full suite.
 
 Alternatively, select individual tests with the usual `-run`.
 
