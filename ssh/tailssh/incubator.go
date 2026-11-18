@@ -1180,6 +1180,27 @@ var opcodeShortName = map[uint8]string{
 	ssh.TTY_OP_OSPEED: "tty_op_ospeed",
 }
 
+// setPTYOwner gives the tty to the user the session will run as, matching
+// OpenSSH's pty_setowner behavior. pty.Open creates it as root:tty with mode
+// 0620. Without this, a command that opens its own terminal by path gets
+// EACCES even though the command itself runs as the user.
+func setPTYOwner(tty *os.File, localUser *userMeta) error {
+	if os.Geteuid() != 0 || localUser == nil {
+		return nil
+	}
+	uid, err := strconv.Atoi(localUser.Uid)
+	if err != nil {
+		return fmt.Errorf("parsing local user uid %q: %w", localUser.Uid, err)
+	}
+	if err := tty.Chown(uid, -1); err != nil {
+		return fmt.Errorf("chown pty: %w", err)
+	}
+	if err := tty.Chmod(0o620); err != nil {
+		return fmt.Errorf("chmod pty: %w", err)
+	}
+	return nil
+}
+
 // startWithPTY starts the session with a pseudo-terminal as its stdio.
 // On the monitor path, the PTY child descriptors are passed via SCM_RIGHTS.
 func (ss *sshSession) startWithPTY(envFile *os.File) (ptyFile, tty *os.File, err error) {
@@ -1203,6 +1224,9 @@ func (ss *sshSession) startWithPTY(envFile *os.File) (ptyFile, tty *os.File, err
 			tty.Close()
 		}
 	}()
+	if err := setPTYOwner(tty, ss.conn.localUser); err != nil {
+		return nil, nil, err
+	}
 	ptyRawConn, err := tty.SyscallConn()
 	if err != nil {
 		return nil, nil, fmt.Errorf("SyscallConn: %w", err)
