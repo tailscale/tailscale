@@ -25,9 +25,9 @@ import (
 // !stack.PacketBuffer.RXChecksumValidated, i.e. it satisfies
 // stack.CapabilityRXChecksumOffload. Other protocols with checksum fields,
 // e.g. ICMP{v6}, are still validated by gVisor regardless of rx checksum
-// offloading capabilities. IPv4 fragments cannot have their L4 checksums
-// validated before reassembly, so only their IPv4 header checksum is validated
-// here.
+// offloading capabilities. IPv4 and IPv6 fragments cannot have their L4
+// checksums validated before reassembly, so only their IPv4 header checksum (if
+// any) is validated here.
 func RXChecksumOffload(p *packet.Parsed) *stack.PacketBuffer {
 	var (
 		pn        tcpip.NetworkProtocolNumber
@@ -60,10 +60,16 @@ func RXChecksumOffload(p *packet.Parsed) *stack.PacketBuffer {
 		}
 		csumStart = header.IPv6FixedHeaderSize
 		pn = header.IPv6ProtocolNumber
-		if p.IPProto != ipproto.ICMPv6 && p.IPProto != ipproto.TCP && p.IPProto != ipproto.UDP {
+		// packet.Parsed.Decode steps over a Fragment header that directly
+		// follows the fixed header, and reports the real sub-protocol for the
+		// first fragment. So p.IPProto alone can't tell us the L4 header isn't
+		// at csumStart; check the base header's Next Header too.
+		hasFragHdr := buf[6] == uint8(header.IPv6FragmentExtHdrIdentifier)
+		if hasFragHdr || (p.IPProto != ipproto.ICMPv6 && p.IPProto != ipproto.TCP && p.IPProto != ipproto.UDP) {
 			// buf could have extension headers before a UDP or TCP header, but
-			// packet.Parsed.IPProto will be set to the ext header type, so we
-			// have to look deeper. We are still responsible for validating the
+			// packet.Parsed.IPProto will be set to the ext header type (or, for
+			// a fragment, not reflect that the header is there), so we have to
+			// look deeper. We are still responsible for validating the
 			// L4 checksum in this case. So, make use of gVisor's existing
 			// extension header parsing via parse.IPv6() in order to unpack the
 			// L4 csumStart index. This is not particularly efficient as we have
@@ -76,7 +82,13 @@ func RXChecksumOffload(p *packet.Parsed) *stack.PacketBuffer {
 			defer packetBuf.DecRef()
 			// The rightmost bool returns false only if packetBuf is too short,
 			// which we've already accounted for above.
-			transportProto, _, _, _, _ := parse.IPv6(packetBuf)
+			transportProto, _, _, fragMore, _ := parse.IPv6(packetBuf)
+			// As with IPv4, later fragments arrive here with p.IPProto ==
+			// ipproto.Fragment, so they already skip the L4 checksum check
+			// below. We only need to catch the first fragment, which still has
+			// its real IPProto. An atomic fragment (offset 0, no more
+			// fragments) is complete on its own, so it is still validated.
+			fragment = fragMore
 			if transportProto == header.TCPProtocolNumber || transportProto == header.UDPProtocolNumber {
 				csumLen := packetBuf.Data().Size()
 				if len(buf) < csumLen {
