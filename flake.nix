@@ -154,7 +154,6 @@
           graphviz
           perl
           go_1_27
-          yarn
 
           # qemu and e2fsprogs are needed for natlab
           qemu
