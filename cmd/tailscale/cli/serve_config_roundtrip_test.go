@@ -55,6 +55,180 @@ func TestServeConfigRoundTrip(t *testing.T) {
 		services   services
 		advertised []string
 	}{
+		// Web. A string endpoint's scheme names both the listener and the
+		// back-end, with https+insecure and file served over HTTPS. Where the
+		// listener is not the one the string implies, the endpoint is an
+		// object naming it.
+		{
+			name: "https_to_http",
+			cli:  []string{"--service=svc:foo --https=443 http://localhost:3000"},
+			file: `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:443": {"front": "https", "backend": "http://localhost:3000"}}}}}`,
+			services: services{"svc:foo": {
+				TCP: tcp{443: {HTTPS: true}},
+				Web: web{"foo.test.ts.net:443": {Handlers: handlers{"/": {Proxy: "http://localhost:3000"}}}},
+			}},
+			advertised: []string{"svc:foo"},
+		},
+		{
+			name: "https_to_https",
+			cli:  []string{"--service=svc:foo --https=443 https://localhost:8443"},
+			file: `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:443": "https://localhost:8443"}}}}`,
+			services: services{"svc:foo": {
+				TCP: tcp{443: {HTTPS: true}},
+				Web: web{"foo.test.ts.net:443": {Handlers: handlers{"/": {Proxy: "https://localhost:8443"}}}},
+			}},
+			advertised: []string{"svc:foo"},
+		},
+		{
+			name: "https_to_https_insecure",
+			cli:  []string{"--service=svc:foo --https=443 https+insecure://localhost:8443"},
+			file: `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:443": "https+insecure://localhost:8443"}}}}`,
+			services: services{"svc:foo": {
+				TCP: tcp{443: {HTTPS: true}},
+				Web: web{"foo.test.ts.net:443": {Handlers: handlers{"/": {Proxy: "https+insecure://localhost:8443"}}}},
+			}},
+			advertised: []string{"svc:foo"},
+		},
+		{
+			name: "https_to_file",
+			cli:  []string{"--service=svc:foo --https=443 $DIR/index.html"},
+			file: `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:443": "file://$DIR/index.html"}}}}`,
+			services: services{"svc:foo": {
+				TCP: tcp{443: {HTTPS: true}},
+				Web: web{"foo.test.ts.net:443": {Handlers: handlers{"/": {Path: "$DIR/index.html"}}}},
+			}},
+			advertised: []string{"svc:foo"},
+		},
+		{
+			name: "https_to_unix",
+			cli:  []string{"--service=svc:foo --https=443 unix:/run/app.sock"},
+			file: `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:443": "https://unix:/run/app.sock"}}}}`,
+			services: services{"svc:foo": {
+				TCP: tcp{443: {HTTPS: true}},
+				Web: web{"foo.test.ts.net:443": {Handlers: handlers{"/": {Proxy: "unix:/run/app.sock"}}}},
+			}},
+			advertised: []string{"svc:foo"},
+		},
+		{
+			name: "http_to_http",
+			cli:  []string{"--service=svc:foo --http=80 http://localhost:3000"},
+			file: `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:80": "http://localhost:3000"}}}}`,
+			services: services{"svc:foo": {
+				TCP: tcp{80: {HTTP: true}},
+				Web: web{"foo.test.ts.net:80": {Handlers: handlers{"/": {Proxy: "http://localhost:3000"}}}},
+			}},
+			advertised: []string{"svc:foo"},
+		},
+		{
+			name: "http_to_https",
+			cli:  []string{"--service=svc:foo --http=80 https://localhost:8443"},
+			file: `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:80": {"front": "http", "backend": "https://localhost:8443"}}}}}`,
+			services: services{"svc:foo": {
+				TCP: tcp{80: {HTTP: true}},
+				Web: web{"foo.test.ts.net:80": {Handlers: handlers{"/": {Proxy: "https://localhost:8443"}}}},
+			}},
+			advertised: []string{"svc:foo"},
+		},
+		{
+			name: "http_to_https_insecure",
+			cli:  []string{"--service=svc:foo --http=80 https+insecure://localhost:8443"},
+			file: `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:80": {"front": "http", "backend": "https+insecure://localhost:8443"}}}}}`,
+			services: services{"svc:foo": {
+				TCP: tcp{80: {HTTP: true}},
+				Web: web{"foo.test.ts.net:80": {Handlers: handlers{"/": {Proxy: "https+insecure://localhost:8443"}}}},
+			}},
+			advertised: []string{"svc:foo"},
+		},
+		{
+			name: "http_to_file",
+			cli:  []string{"--service=svc:foo --http=80 $DIR/index.html"},
+			file: `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:80": {"front": "http", "backend": "file://$DIR/index.html"}}}}}`,
+			services: services{"svc:foo": {
+				TCP: tcp{80: {HTTP: true}},
+				Web: web{"foo.test.ts.net:80": {Handlers: handlers{"/": {Path: "$DIR/index.html"}}}},
+			}},
+			advertised: []string{"svc:foo"},
+		},
+		{
+			name: "http_to_unix",
+			cli:  []string{"--service=svc:foo --http=80 unix:/run/app.sock"},
+			file: `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:80": "http://unix:/run/app.sock"}}}}`,
+			services: services{"svc:foo": {
+				TCP: tcp{80: {HTTP: true}},
+				Web: web{"foo.test.ts.net:80": {Handlers: handlers{"/": {Proxy: "unix:/run/app.sock"}}}},
+			}},
+			advertised: []string{"svc:foo"},
+		},
+		{
+			// The CLI's default: HTTPS on 443 to a local plain-HTTP port.
+			name: "bare_port",
+			cli:  []string{"--service=svc:foo 3000"},
+			file: `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:443": {"front": "https", "backend": "http://127.0.0.1:3000"}}}}}`,
+			services: services{"svc:foo": {
+				TCP: tcp{443: {HTTPS: true}},
+				Web: web{"foo.test.ts.net:443": {Handlers: handlers{"/": {Proxy: "http://127.0.0.1:3000"}}}},
+			}},
+			advertised: []string{"svc:foo"},
+		},
+		{
+			// The listener is not implied by the port number.
+			name: "https_on_80",
+			cli:  []string{"--service=svc:foo --https=80 http://localhost:3000"},
+			file: `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:80": {"front": "https", "backend": "http://localhost:3000"}}}}}`,
+			services: services{"svc:foo": {
+				TCP: tcp{80: {HTTPS: true}},
+				Web: web{"foo.test.ts.net:80": {Handlers: handlers{"/": {Proxy: "http://localhost:3000"}}}},
+			}},
+			advertised: []string{"svc:foo"},
+		},
+		{
+			name: "http_on_443",
+			cli:  []string{"--service=svc:foo --http=443 http://localhost:3000"},
+			file: `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:443": "http://localhost:3000"}}}}`,
+			services: services{"svc:foo": {
+				TCP: tcp{443: {HTTP: true}},
+				Web: web{"foo.test.ts.net:443": {Handlers: handlers{"/": {Proxy: "http://localhost:3000"}}}},
+			}},
+			advertised: []string{"svc:foo"},
+		},
+
+		// TCP forwarding.
+		{
+			name:       "tcp",
+			cli:        []string{"--service=svc:foo --tcp=5432 tcp://localhost:5432"},
+			file:       `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:5432": "tcp://localhost:5432"}}}}`,
+			services:   services{"svc:foo": {TCP: tcp{5432: {TCPForward: "localhost:5432"}}}},
+			advertised: []string{"svc:foo"},
+		},
+		{
+			name:       "tcp_bare_port",
+			cli:        []string{"--service=svc:foo --tcp=5432 5432"},
+			file:       `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:5432": "tcp://127.0.0.1:5432"}}}}`,
+			services:   services{"svc:foo": {TCP: tcp{5432: {TCPForward: "127.0.0.1:5432"}}}},
+			advertised: []string{"svc:foo"},
+		},
+		{
+			name:       "tcp_to_unix",
+			cli:        []string{"--service=svc:foo --tcp=2222 unix:/run/ssh.sock"},
+			file:       `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:2222": "tcp://unix:/run/ssh.sock"}}}}`,
+			services:   services{"svc:foo": {TCP: tcp{2222: {TCPForward: "unix:/run/ssh.sock"}}}},
+			advertised: []string{"svc:foo"},
+		},
+		{
+			name:       "tls_terminated_tcp",
+			cli:        []string{"--service=svc:foo --tls-terminated-tcp=443 tcp://localhost:9481"},
+			file:       `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:443": "tls-terminated-tcp://localhost:9481"}}}}`,
+			services:   services{"svc:foo": {TCP: tcp{443: {TCPForward: "localhost:9481", TerminateTLS: "foo.test.ts.net"}}}},
+			advertised: []string{"svc:foo"},
+		},
+		{
+			name:       "tls_terminated_tcp_to_unix",
+			cli:        []string{"--service=svc:foo --tls-terminated-tcp=443 unix:/run/app.sock"},
+			file:       `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:443": "tls-terminated-tcp://unix:/run/app.sock"}}}}`,
+			services:   services{"svc:foo": {TCP: tcp{443: {TCPForward: "unix:/run/app.sock", TerminateTLS: "foo.test.ts.net"}}}},
+			advertised: []string{"svc:foo"},
+		},
+
 		// Host spelling: IPv6 hosts are bracketed, and case is kept.
 		{
 			name:       "tcp_ipv6",
@@ -74,6 +248,16 @@ func TestServeConfigRoundTrip(t *testing.T) {
 			advertised: []string{"svc:foo"},
 		},
 		{
+			name: "web_ipv6_object",
+			cli:  []string{"--service=svc:foo --https=443 http://[::1]:3000"},
+			file: `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:443": {"front": "https", "backend": "http://[::1]:3000"}}}}}`,
+			services: services{"svc:foo": {
+				TCP: tcp{443: {HTTPS: true}},
+				Web: web{"foo.test.ts.net:443": {Handlers: handlers{"/": {Proxy: "http://[::1]:3000"}}}},
+			}},
+			advertised: []string{"svc:foo"},
+		},
+		{
 			name: "mixed_case_host",
 			cli:  []string{"--service=svc:foo --http=80 http://App.example.com:3000"},
 			file: `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:80": "http://App.example.com:3000"}}}}`,
@@ -81,6 +265,15 @@ func TestServeConfigRoundTrip(t *testing.T) {
 				TCP: tcp{80: {HTTP: true}},
 				Web: web{"foo.test.ts.net:80": {Handlers: handlers{"/": {Proxy: "http://App.example.com:3000"}}}},
 			}},
+			advertised: []string{"svc:foo"},
+		},
+
+		// TUN mode.
+		{
+			name:       "tun",
+			cli:        []string{"--service=svc:foo --tun"},
+			file:       `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"*": "TUN"}}}}`,
+			services:   services{"svc:foo": {Tun: true}},
 			advertised: []string{"svc:foo"},
 		},
 
@@ -109,6 +302,57 @@ func TestServeConfigRoundTrip(t *testing.T) {
 			},
 			file:       `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {}}}}`,
 			advertised: []string{"svc:foo"},
+		},
+
+		// More than one endpoint or Service.
+		{
+			name: "multiple_ports",
+			cli: []string{
+				"--service=svc:foo --https=443 http://localhost:3000",
+				"--service=svc:foo --http=80 http://localhost:3000",
+				"--service=svc:foo --https=8443 https://localhost:8443",
+				"--service=svc:foo --tcp=5432 tcp://localhost:5432",
+			},
+			file: `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {
+				"tcp:443": {"front": "https", "backend": "http://localhost:3000"},
+				"tcp:80": "http://localhost:3000",
+				"tcp:8443": "https://localhost:8443",
+				"tcp:5432": "tcp://localhost:5432"
+			}}}}`,
+			services: services{"svc:foo": {
+				TCP: tcp{443: {HTTPS: true}, 80: {HTTP: true}, 8443: {HTTPS: true}, 5432: {TCPForward: "localhost:5432"}},
+				Web: web{
+					"foo.test.ts.net:443":  {Handlers: handlers{"/": {Proxy: "http://localhost:3000"}}},
+					"foo.test.ts.net:80":   {Handlers: handlers{"/": {Proxy: "http://localhost:3000"}}},
+					"foo.test.ts.net:8443": {Handlers: handlers{"/": {Proxy: "https://localhost:8443"}}},
+				},
+			}},
+			advertised: []string{"svc:foo"},
+		},
+		{
+			name: "multiple_services",
+			cli: []string{
+				"--service=svc:foo --https=443 http://localhost:3000",
+				"--service=svc:bar --tcp=5432 tcp://localhost:5432",
+				"--service=svc:baz --tun",
+				"drain svc:bar",
+				"advertise svc:qux",
+			},
+			file: `{"version": "0.0.1", "services": {
+				"svc:foo": {"endpoints": {"tcp:443": {"front": "https", "backend": "http://localhost:3000"}}},
+				"svc:bar": {"endpoints": {"tcp:5432": "tcp://localhost:5432"}, "advertised": false},
+				"svc:baz": {"endpoints": {"*": "TUN"}},
+				"svc:qux": {"endpoints": {}}
+			}}`,
+			services: services{
+				"svc:foo": {
+					TCP: tcp{443: {HTTPS: true}},
+					Web: web{"foo.test.ts.net:443": {Handlers: handlers{"/": {Proxy: "http://localhost:3000"}}}},
+				},
+				"svc:bar": {TCP: tcp{5432: {TCPForward: "localhost:5432"}}},
+				"svc:baz": {Tun: true},
+			},
+			advertised: []string{"svc:baz", "svc:foo", "svc:qux"},
 		},
 	}
 

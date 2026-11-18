@@ -180,7 +180,7 @@ func serveTypeFromConfString(sp conffile.ServiceProtocol) (st serveType, ok bool
 	switch sp {
 	case conffile.ProtoHTTP:
 		return serveTypeHTTP, true
-	case conffile.ProtoHTTPS, conffile.ProtoHTTPSInsecure, conffile.ProtoFile:
+	case conffile.ProtoHTTPS:
 		return serveTypeHTTPS, true
 	case conffile.ProtoTCP:
 		return serveTypeTCP, true
@@ -696,9 +696,10 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 
 		if serviceConfig.Tun {
 			mak.Set(&sdf.Endpoints, &tailcfg.ProtoPortRange{Ports: tailcfg.PortRangeAny}, &conffile.Target{
+				Front:            conffile.ProtoTUN,
 				Protocol:         conffile.ProtoTUN,
 				Destination:      "",
-				DestinationPorts: tailcfg.PortRange{},
+				DestinationPorts: tailcfg.PortRangeAny,
 			})
 		}
 
@@ -722,6 +723,7 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 				}
 				if strings.HasPrefix(config.TCPForward, "unix:") {
 					mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
+						Front:       proto,
 						Protocol:    proto,
 						Destination: config.TCPForward,
 					})
@@ -735,6 +737,7 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 						return nil, fmt.Errorf("parse port %q: %w", destPortStr, err)
 					}
 					mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
+						Front:            proto,
 						Protocol:         proto,
 						Destination:      destHost,
 						DestinationPorts: tailcfg.PortRange{First: uint16(destPort), Last: uint16(destPort)},
@@ -758,8 +761,13 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 				if len(defaultHandler.AcceptAppCaps) > 0 {
 					return nil, unrepresentable(port, "--accept-app-caps")
 				}
+				front := conffile.ProtoHTTP
+				if config.HTTPS {
+					front = conffile.ProtoHTTPS
+				}
 				if defaultHandler.Path != "" {
 					mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
+						Front:            front,
 						Protocol:         conffile.ProtoFile,
 						Destination:      defaultHandler.Path,
 						DestinationPorts: tailcfg.PortRange{},
@@ -767,16 +775,14 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 				} else if defaultHandler.Proxy != "" {
 					if strings.HasPrefix(defaultHandler.Proxy, "unix:") {
 						// HTTP over unix socket: h.Proxy is "unix:/path" without "://".
-						// The inbound protocol is HTTP(S); infer from useTLS.
-						httpProto := conffile.ProtoHTTP
-						if config.HTTPS {
-							httpProto = conffile.ProtoHTTPS
-						}
+						// The string names the listener; the socket gets plain HTTP.
 						mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
-							Protocol:    httpProto,
+							Front:       front,
+							Protocol:    front,
 							Destination: defaultHandler.Proxy,
 						})
 					} else {
+						// Neither form has a path, a query or a default port.
 						proto, rest, _ := strings.Cut(defaultHandler.Proxy, "://")
 						host, portStr, err := net.SplitHostPort(rest)
 						destPort, perr := strconv.ParseUint(portStr, 10, 16)
@@ -785,6 +791,7 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 						}
 
 						mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
+							Front:            front,
 							Protocol:         conffile.ServiceProtocol(proto),
 							Destination:      host,
 							DestinationPorts: tailcfg.PortRange{First: uint16(destPort), Last: uint16(destPort)},
@@ -962,7 +969,7 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 			if ppr.Proto != int(ipproto.TCP) {
 				return fmt.Errorf("service %q: source ports must be TCP", name)
 			}
-			serveType, _ := serveTypeFromConfString(ep.Protocol)
+			serveType, _ := serveTypeFromConfString(ep.Front)
 			for port := ppr.Ports.First; port <= ppr.Ports.Last; port++ {
 				var target string
 				if ep.Protocol == conffile.ProtoFile {

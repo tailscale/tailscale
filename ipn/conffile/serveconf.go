@@ -56,6 +56,8 @@ type ServiceDetailsFile struct {
 	// localhost).
 	// For example, "tcp:443" -> "tcp://localhost:8000" is an endpoint definition
 	// mapping traffic on the TCP port 443 of the Service to port 8080 on localhost.
+	// "tcp:443" -> {"front": "https", "backend": "http://localhost:8000"}
+	// instead terminates HTTPS on port 443 in front of it; see [Target].
 	// The Proto in the key must be populated.
 	// As a special case, if the only mapping provided is "*" -> "TUN", that
 	// enables TUN/L3 mode, where packets are delivered to the Tailscale network
@@ -83,7 +85,17 @@ const (
 
 // Target is a destination for traffic to go to when it arrives at a Tailscale
 // Service host.
+//
+// In a file it is a string, "<proto>://<destination>", whose scheme names
+// both the listener and how to reach the destination. Where the listener is
+// not the one the string implies, such as HTTPS in front of a plain-HTTP
+// back-end, it is an object, {"front": "<listener>", "backend": "<string>"}.
 type Target struct {
+	// Front is the listener's protocol: ProtoHTTP, ProtoHTTPS, ProtoTCP,
+	// ProtoTLSTerminatedTCP or ProtoTUN. A string implies its scheme, except
+	// that ProtoHTTPSInsecure and ProtoFile are served over ProtoHTTPS.
+	Front ServiceProtocol
+
 	// The protocol over which to communicate with the Destination.
 	// Protocol == ProtoTUN is a special case, activating "TUN mode" where
 	// packets are delivered to the Tailscale TUN interface and then manually
@@ -105,6 +117,12 @@ type Target struct {
 	DestinationPorts tailcfg.PortRange
 }
 
+// targetObject is the object form of a [Target].
+type targetObject struct {
+	Front   ServiceProtocol `json:"front"`
+	Backend string          `json:"backend"`
+}
+
 // UnmarshalJSON implements [jsonv1.Unmarshaler].
 func (t *Target) UnmarshalJSON(buf []byte) error {
 	return jsonv2.Unmarshal(buf, t)
@@ -112,14 +130,27 @@ func (t *Target) UnmarshalJSON(buf []byte) error {
 
 // UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
 func (t *Target) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if dec.PeekKind() == '{' {
+		var o targetObject
+		// Fail on members a later format adds rather than drop them.
+		if err := jsonv2.UnmarshalDecode(dec, &o, jsonv2.RejectUnknownMembers(true)); err != nil {
+			return err
+		}
+		return t.parseObject(o)
+	}
 	var str string
 	if err := jsonv2.UnmarshalDecode(dec, &str); err != nil {
 		return err
 	}
+	return t.parseString(str)
+}
 
+// parseString reads the string form.
+func (t *Target) parseString(str string) error {
 	// The TUN case does not look like a standard <url>://<proto> arrangement,
 	// so handled separately.
 	if str == "TUN" {
+		t.Front = ProtoTUN
 		t.Protocol = ProtoTUN
 		t.Destination = ""
 		t.DestinationPorts = tailcfg.PortRangeAny
@@ -166,9 +197,67 @@ func (t *Target) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 		return errors.New("unsupported protocol")
 	}
 
+	t.Front = t.Protocol
+	if t.Protocol == ProtoHTTPSInsecure || t.Protocol == ProtoFile {
+		t.Front = ProtoHTTPS
+	}
 	return nil
 }
 
+// parseObject reads the object form: backend in the string form, served
+// behind the listener front names.
+func (t *Target) parseObject(o targetObject) error {
+	var b Target
+	if err := b.parseString(o.Backend); err != nil {
+		return err
+	}
+	switch o.Front {
+	case ProtoHTTP, ProtoHTTPS:
+		switch b.Protocol {
+		case ProtoHTTP, ProtoHTTPS, ProtoHTTPSInsecure, ProtoFile:
+		default:
+			return fmt.Errorf("front protocol %q cannot proxy to a %q back-end", o.Front, b.Protocol)
+		}
+		// tailscaled speaks plain HTTP to a Unix socket.
+		if strings.HasPrefix(b.Destination, "unix:") && b.Protocol != ProtoHTTP {
+			return fmt.Errorf("unix socket %q must use the %q back-end protocol", b.Destination, ProtoHTTP)
+		}
+	case ProtoTCP, ProtoTLSTerminatedTCP:
+		if b.Protocol != ProtoTCP {
+			return fmt.Errorf("front protocol %q cannot proxy to a %q back-end", o.Front, b.Protocol)
+		}
+	default:
+		return fmt.Errorf("invalid front protocol %q", o.Front)
+	}
+	*t = b
+	t.Front = o.Front
+	return nil
+}
+
+// MarshalJSON writes t as the string form if the loader reads that back as t,
+// and otherwise as the object form, which it must then read back as t.
+func (t *Target) MarshalJSON() ([]byte, error) {
+	s, err := t.MarshalText()
+	if err != nil {
+		return nil, err
+	}
+	var back Target
+	if back.parseString(string(s)) == nil && back == *t {
+		return jsonv2.Marshal(string(s))
+	}
+	o := targetObject{Front: t.Front, Backend: string(s)}
+	back = Target{}
+	if err := back.parseObject(o); err != nil {
+		return nil, err
+	}
+	if back != *t {
+		return nil, fmt.Errorf("endpoint %q does not read back as written", s)
+	}
+	return jsonv2.Marshal(o)
+}
+
+// MarshalText writes t's Protocol and destination in the string form, which
+// does not say Front; [Target.MarshalJSON] writes the endpoint.
 func (t *Target) MarshalText() ([]byte, error) {
 	var out string
 	switch t.Protocol {
