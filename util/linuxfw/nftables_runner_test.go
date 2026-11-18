@@ -1258,6 +1258,9 @@ func TestNFTAddAndDelConnmarkRules(t *testing.T) {
 	if prerouting4After == nil || output4After == nil {
 		t.Fatal("IPv4 mangle chains not created")
 	}
+	if output4After.Type != nftables.ChainTypeRoute {
+		t.Errorf("IPv4 OUTPUT chain type = %q, want %q", output4After.Type, nftables.ChainTypeRoute)
+	}
 
 	prerouting4Rules, err := conn.GetRules(prerouting4After.Table, prerouting4After)
 	if err != nil {
@@ -1384,6 +1387,51 @@ func TestCleanupConnmarkRules(t *testing.T) {
 				t.Errorf("family %v chain %s: got %d rules after cleanup, want 0", fam, ch.Name, len(rules))
 			}
 		}
+	}
+}
+
+// TestCleanupIncompatibleMangleOutputChain checks that the cleanup deletes a
+// mangle/OUTPUT chain of type filter, as AddConnmarkSaveRule used to create
+// it, and keeps one of type route.
+func TestCleanupIncompatibleMangleOutputChain(t *testing.T) {
+	conn := newSysConn(t)
+	polAccept := nftables.ChainPolicyAccept
+	addOutput := func(fam nftables.TableFamily, typ nftables.ChainType) *nftables.Table {
+		mangle := conn.AddTable(&nftables.Table{Family: fam, Name: "mangle"})
+		ch := conn.AddChain(&nftables.Chain{
+			Name:     "OUTPUT",
+			Table:    mangle,
+			Type:     typ,
+			Hooknum:  nftables.ChainHookOutput,
+			Priority: nftables.ChainPriorityMangle,
+			Policy:   &polAccept,
+		})
+		conn.AddRule(&nftables.Rule{Table: mangle, Chain: ch, Exprs: makeConnmarkSaveExprs(), UserData: []byte("ts-connmark-save")})
+		conn.AddRule(&nftables.Rule{Table: mangle, Chain: ch, Exprs: []expr.Any{&expr.Verdict{Kind: expr.VerdictAccept}}})
+		return mangle
+	}
+	filter := addOutput(nftables.TableFamilyIPv4, nftables.ChainTypeFilter)
+	route := addOutput(nftables.TableFamilyIPv6, nftables.ChainTypeRoute)
+	if err := conn.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanupIncompatibleMangleOutputChain(t.Logf, conn, filter)
+	cleanupIncompatibleMangleOutputChain(t.Logf, conn, route)
+
+	if _, err := getChainFromTable(conn, filter, "OUTPUT"); !errors.Is(err, errorChainNotFound{"mangle", "OUTPUT"}) {
+		t.Errorf("filter-type OUTPUT chain: got err %v, want it deleted", err)
+	}
+	ch, err := getChainFromTable(conn, route, "OUTPUT")
+	if err != nil {
+		t.Fatalf("route-type OUTPUT chain: %v, want it kept", err)
+	}
+	rules, err := conn.GetRules(route, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 2 {
+		t.Errorf("route-type OUTPUT chain: got %d rules, want both kept", len(rules))
 	}
 }
 
