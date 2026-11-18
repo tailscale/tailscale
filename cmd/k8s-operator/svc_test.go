@@ -7,10 +7,14 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -21,6 +25,7 @@ import (
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
+	"tailscale.com/types/lazy"
 )
 
 func TestService_DefaultProxyClassInitiallyNotReady(t *testing.T) {
@@ -219,5 +224,49 @@ func TestProxyClassHandlerForSvc(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func Test_retrieveClusterDomain_cached(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "resolv.conf")
+	writeResolvConf := func(content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeResolvConf("search foo.svc.example.local svc.example.local example.local\nnameserver 10.0.0.10\n")
+
+	oldPath := resolvConfPath
+	resolvConfPath = path
+	cachedClusterDomain = lazy.SyncValue[string]{}
+	t.Cleanup(func() {
+		resolvConfPath = oldPath
+		cachedClusterDomain = lazy.SyncValue[string]{}
+	})
+
+	core, logs := observer.New(zapcore.DebugLevel)
+	logger := zap.New(core).Sugar()
+
+	const want = "example.local"
+	if got := retrieveClusterDomain("foo", logger); got != want {
+		t.Fatalf("retrieveClusterDomain() = %q, want %q", got, want)
+	}
+
+	// The cluster domain of the Pod cannot change during the process
+	// lifetime, so subsequent calls must return the cached value without
+	// re-parsing the resolver config.
+	writeResolvConf("search unrelated.example.com\nnameserver 10.0.0.10\n")
+	for i := range 5 {
+		if got := retrieveClusterDomain("foo", logger); got != want {
+			t.Errorf("call %d: retrieveClusterDomain() = %q, want cached %q", i+2, got, want)
+		}
+	}
+
+	if n := logs.FilterMessageSnippet("attempting to retrieve cluster domain").Len(); n != 1 {
+		t.Errorf("resolver config parsed %d times, want 1", n)
+	}
+	if n := logs.FilterLevelExact(zapcore.InfoLevel).Len(); n != 0 {
+		t.Errorf("got %d log entries at info level, want 0: %v", n, logs.FilterLevelExact(zapcore.InfoLevel).All())
 	}
 }
