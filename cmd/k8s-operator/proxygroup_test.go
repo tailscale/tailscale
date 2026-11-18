@@ -2130,6 +2130,130 @@ func TestProxyGroupGetAuthKey(t *testing.T) {
 	}
 }
 
+func TestProxyGroupGetAuthKeyKubeAPIServer(t *testing.T) {
+	pg := &tsapi.ProxyGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test",
+			Finalizers: []string{"tailscale.com/finalizer"},
+		},
+		Spec: tsapi.ProxyGroupSpec{
+			Type:     tsapi.ProxyGroupTypeKubernetesAPIServer,
+			Replicas: new(int32(1)),
+		},
+	}
+	tsClient := &fakeTSClient{}
+
+	existingAuthKey := new("existing-auth-key")
+	reissuedAuthKey := new("reissued-auth-key")
+	newAuthKey := new("new-authkey") // What fakeTSClient hands out.
+	configWith := func(authKey *string) map[string][]byte {
+		value := []byte("{}")
+		if authKey != nil {
+			value = fmt.Appendf(nil, `{"Version": "v1alpha1", "AuthKey": "%s"}`, *authKey)
+		}
+		return map[string][]byte{kubetypes.KubeAPIServerConfigFile: value}
+	}
+
+	for name, tc := range map[string]struct {
+		configData      map[string][]byte
+		stateData       map[string][]byte
+		expectedAuthKey *string
+		expectReissue   bool
+	}{
+		"config_with_key_no_state_keeps_existing": {
+			configData:      configWith(existingAuthKey),
+			expectedAuthKey: existingAuthKey,
+		},
+		"config_with_key_state_with_reissue_existing_key_needs_new": {
+			configData: configWith(existingAuthKey),
+			stateData: map[string][]byte{
+				kubetypes.KeyDeviceID:       []byte("nodeid-0"),
+				kubetypes.KeyReissueAuthkey: []byte(*existingAuthKey),
+			},
+			expectedAuthKey: newAuthKey,
+			expectReissue:   true,
+		},
+		"config_with_reissued_key_marker_still_pending_retains_key": {
+			// The operator already wrote a fresh key, but the replica hasn't
+			// picked it up yet, so the reissue marker still holds the old key.
+			configData: configWith(reissuedAuthKey),
+			stateData: map[string][]byte{
+				kubetypes.KeyDeviceID:       []byte("nodeid-0"),
+				kubetypes.KeyReissueAuthkey: []byte(*existingAuthKey),
+			},
+			expectedAuthKey: reissuedAuthKey,
+		},
+		"config_with_key_state_authed_removes_key": {
+			configData: configWith(existingAuthKey),
+			stateData: map[string][]byte{
+				kubetypes.KeyDeviceID: []byte("nodeid-0"),
+			},
+			expectedAuthKey: nil,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tsClient.deleted = tsClient.deleted[:0]
+			fc := fake.NewClientBuilder().
+				WithScheme(tsapi.GlobalScheme).
+				WithObjects(pg).
+				WithStatusSubresource(pg).
+				Build()
+			zl, _ := zap.NewDevelopment()
+			reconciler := &ProxyGroupReconciler{
+				tsNamespace:    tsNamespace,
+				tsProxyImage:   testProxyImage,
+				defaultTags:    []string{"tag:test-tag"},
+				tsFirewallMode: "auto",
+
+				Client:   fc,
+				clients:  tsclient.NewProvider(tsClient),
+				recorder: record.NewFakeRecorder(1),
+				log:      zl.Sugar(),
+				clock:    tstest.NewClock(tstest.ClockOpts{}),
+				reissuer: tailscaled.NewReissuer(),
+			}
+			reconciler.ensureStateAddedForProxyGroup(pg)
+
+			cfgSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      pgConfigSecretName(pg.Name, 0),
+					Namespace: tsNamespace,
+				},
+				Data: tc.configData,
+			}
+			if tc.stateData != nil {
+				mustCreate(t, fc, &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      pgStateSecretName(pg.Name, 0),
+						Namespace: tsNamespace,
+					},
+					Data: tc.stateData,
+				})
+			}
+
+			authKey, err := reconciler.getAuthKey(t.Context(), tsClient, pg, cfgSecret, 0, reconciler.log.With("TestName", t.Name()))
+			if err != nil {
+				t.Fatalf("unexpected error getting auth key: %v", err)
+			}
+			if !reflect.DeepEqual(authKey, tc.expectedAuthKey) {
+				deref := func(s *string) string {
+					if s == nil {
+						return "<nil>"
+					}
+					return *s
+				}
+				t.Errorf("expected auth key %v, got %v", deref(tc.expectedAuthKey), deref(authKey))
+			}
+			switch {
+			case tc.expectReissue && len(tsClient.deleted) != 1:
+				t.Errorf("expected 1 deleted device, got %v", tsClient.deleted)
+			case !tc.expectReissue && len(tsClient.deleted) != 0:
+				t.Errorf("expected no deleted devices, got %v", tsClient.deleted)
+			}
+		})
+	}
+}
+
 func proxyClassesForLEStagingTest() (*tsapi.ProxyClass, *tsapi.ProxyClass, *tsapi.ProxyClass) {
 	pcLEStaging := &tsapi.ProxyClass{
 		ObjectMeta: metav1.ObjectMeta{
