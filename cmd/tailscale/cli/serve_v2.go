@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"math"
 	"net"
 	"net/url"
@@ -701,7 +702,9 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 			})
 		}
 
-		for port, config := range serviceConfig.TCP {
+		// In port order, so the same port fails every time.
+		for _, port := range slices.Sorted(maps.Keys(serviceConfig.TCP)) {
+			config := serviceConfig.TCP[port]
 			sniName := fmt.Sprintf("%s.%s", svcName.WithoutPrefix(), magicDNSSuffix)
 			ppr := tailcfg.ProtoPortRange{Proto: int(ipproto.TCP), Ports: tailcfg.PortRange{First: port, Last: port}}
 			if config.TCPForward != "" {
@@ -800,8 +803,9 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 				mak.Set(&sc.Services, tailcfg.ServiceName(svc), new(ipn.ServiceConfig))
 			}
 		}
-		for svcName, serviceConfig := range sc.Services {
-			sdf, err := handleService(svcName, serviceConfig)
+		// In name order, so the same Service fails every time.
+		for _, svcName := range slices.Sorted(maps.Keys(sc.Services)) {
+			sdf, err := handleService(svcName, sc.Services[svcName])
 			if err != nil {
 				return err
 			}
