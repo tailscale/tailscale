@@ -146,9 +146,17 @@ func (t *Target) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 			t.Destination = rest
 			t.DestinationPorts = tailcfg.PortRange{}
 		} else {
-			host, portRange, err := tailcfg.ParseHostPortRange(rest)
+			_, portRange, err := tailcfg.ParseHostPortRange(rest)
 			if err != nil {
 				return err
+			}
+			// ParseHostPortRange lowercases the host and keeps IPv6 brackets.
+			// Keep it as written, unbracketed as net.JoinHostPort expects. An
+			// unbracketed IPv6 host, which SplitHostPort rejects, splits at
+			// the last colon as ParseHostPortRange does.
+			host, _, err := net.SplitHostPort(rest)
+			if err != nil {
+				host = rest[:strings.LastIndexByte(rest, ':')]
 			}
 			t.Protocol = ServiceProtocol(proto)
 			t.Destination = host
