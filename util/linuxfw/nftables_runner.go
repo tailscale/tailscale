@@ -2322,7 +2322,7 @@ func (n *nftablesRunner) AddConnmarkSaveRule() error {
 			outputChain = conn.AddChain(&nftables.Chain{
 				Name:     "OUTPUT",
 				Table:    mangleTable,
-				Type:     nftables.ChainTypeFilter,
+				Type:     nftables.ChainTypeRoute,
 				Hooknum:  nftables.ChainHookOutput,
 				Priority: nftables.ChainPriorityMangle,
 			})
@@ -2431,12 +2431,56 @@ func cleanupConnmarkRules(logf logger.Logf, conn *nftables.Conn, table *nftables
 		}
 		for _, rule := range rules {
 			if string(rule.UserData) == tag {
-				conn.DelRule(rule)
+				if err := conn.DelRule(rule); err != nil {
+					logf("cleanup: delete rule in chain %s: %s", chainName, err)
+				}
 			}
 		}
 	}
 	if err := conn.Flush(); err != nil {
 		logf("cleanup: flush delete connmark rules: %s", err)
+	}
+}
+
+// cleanupIncompatibleMangleOutputChain deletes the OUTPUT chain of an ip or
+// ip6 mangle table if it looks like the one AddConnmarkSaveRule used to create:
+// of type filter, with an accept policy, and holding no rules but Tailscale's.
+// iptables-nft creates it with type route, and can't add rules to it
+// otherwise. A filter chain holding other rules, or with another policy, may
+// not be Tailscale's, so it's kept and a warning is logged. Errors are logged.
+func cleanupIncompatibleMangleOutputChain(logf logger.Logf, conn *nftables.Conn, table *nftables.Table) {
+	if table.Family != nftables.TableFamilyIPv4 && table.Family != nftables.TableFamilyIPv6 {
+		return
+	}
+	chain, err := getChainFromTable(conn, table, "OUTPUT")
+	if err != nil {
+		if !errors.Is(err, errorChainNotFound{table.Name, "OUTPUT"}) {
+			logf("cleanup: get mangle OUTPUT chain: %s", err)
+		}
+		return
+	}
+	if chain.Type != nftables.ChainTypeFilter {
+		return
+	}
+	rules, err := conn.GetRules(table, chain)
+	if err != nil {
+		logf("cleanup: list rules of mangle OUTPUT chain: %s", err)
+		return
+	}
+	ours := chain.Policy != nil && *chain.Policy == nftables.ChainPolicyAccept
+	for _, rule := range rules {
+		if string(rule.UserData) != "ts-connmark-save" {
+			ours = false
+		}
+	}
+	if !ours {
+		logf("cleanup: mangle OUTPUT chain has type filter, which iptables-nft can't add rules to; recreate it with type route")
+		return
+	}
+	conn.FlushChain(chain)
+	conn.DelChain(chain)
+	if err := conn.Flush(); err != nil {
+		logf("cleanup: delete mangle OUTPUT chain: %s", err)
 	}
 }
 
@@ -2471,6 +2515,7 @@ func NfTablesCleanUp(logf logger.Logf) {
 		}
 		if table.Name == "mangle" {
 			cleanupConnmarkRules(logf, conn, table)
+			cleanupIncompatibleMangleOutputChain(logf, conn, table)
 		}
 	}
 }
