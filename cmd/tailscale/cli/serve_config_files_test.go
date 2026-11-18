@@ -53,6 +53,60 @@ func TestServeConfigExistingFiles(t *testing.T) {
 			file:  `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:5432": "tcp://DB.Example.com:5432"}}}}`,
 			means: []string{"--service=svc:foo --tcp=5432 tcp://DB.Example.com:5432"},
 		},
+
+		// Advertisement.
+		{
+			name: "advertised_false",
+			file: `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:5432": "tcp://localhost:5432"}, "advertised": false}}}`,
+			means: []string{
+				"--service=svc:foo --tcp=5432 tcp://localhost:5432",
+				"drain svc:foo",
+			},
+		},
+		{
+			name:   "advertised_true_is_default",
+			file:   `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:5432": "tcp://localhost:5432"}, "advertised": true}}}`,
+			means:  []string{"--service=svc:foo --tcp=5432 tcp://localhost:5432"},
+			export: `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:5432": "tcp://localhost:5432"}}}}`,
+		},
+		{
+			name:  "no_endpoints",
+			file:  `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {}}}}`,
+			means: []string{"advertise svc:foo"},
+		},
+		{
+			name:   "no_endpoints_not_advertised",
+			file:   `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {}, "advertised": false}}}`,
+			export: `{"version": "0.0.1"}`,
+		},
+		{
+			name:   "no_services",
+			file:   `{"version": "0.0.1", "services": {}}`,
+			export: `{"version": "0.0.1"}`,
+		},
+		{
+			name: "version_only",
+			file: `{"version": "0.0.1"}`,
+		},
+
+		// One Service.
+		{
+			name:  "service",
+			flag:  "--service=svc:foo",
+			file:  `{"version": "0.0.1", "endpoints": {"tcp:443": "https://localhost:8443"}}`,
+			means: []string{"--service=svc:foo --https=443 https://localhost:8443"},
+		},
+		{
+			name:  "service_no_endpoints",
+			flag:  "--service=svc:foo",
+			file:  `{"version": "0.0.1", "endpoints": {}}`,
+			means: []string{"advertise svc:foo"},
+		},
+		{
+			name: "service_no_endpoints_not_advertised",
+			flag: "--service=svc:foo",
+			file: `{"version": "0.0.1", "endpoints": {}, "advertised": false}`,
+		},
 	})
 }
 
