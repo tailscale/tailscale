@@ -1218,12 +1218,12 @@ func (ss *sshSession) startWithPTY(envFile *os.File) (ptyFile, tty *os.File, err
 		err = fmt.Errorf("pty.Open: %w", err)
 		return
 	}
-	defer func() {
+	defer func(ptyFile, tty *os.File) {
 		if err != nil {
 			ptyFile.Close()
 			tty.Close()
 		}
-	}()
+	}(ptyFile, tty)
 	if err := setPTYOwner(tty, ss.conn.localUser); err != nil {
 		return nil, nil, err
 	}
