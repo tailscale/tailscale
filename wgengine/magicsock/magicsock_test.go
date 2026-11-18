@@ -3843,6 +3843,20 @@ func Test_packetLooksLike(t *testing.T) {
 
 	nakedWireGuardInitiation := make([]byte, len(geneveEncapDisco))
 	binary.LittleEndian.PutUint32(nakedWireGuardInitiation, device.MessageInitiationType)
+	nakedWireGuardInitiationRetry := make([]byte, len(geneveEncapDisco))
+	binary.LittleEndian.PutUint32(nakedWireGuardInitiationRetry, device.MessageInitiationType)
+	nakedWireGuardInitiationRetry[3] |= 0x80
+	nakedWireGuardResponseRetry := make([]byte, len(geneveEncapDisco))
+	binary.LittleEndian.PutUint32(nakedWireGuardResponseRetry, device.MessageResponseType)
+	nakedWireGuardResponseRetry[3] |= 0x80
+	t.Run("retry-fixtures-packet-is-retry", func(t *testing.T) {
+		if !device.PacketIsRetry(nakedWireGuardInitiationRetry) {
+			t.Fatal("device.PacketIsRetry returned false for initiation message retry fixture")
+		}
+		if !device.PacketIsRetry(nakedWireGuardResponseRetry) {
+			t.Fatal("device.PacketIsRetry returned false for response message retry fixture")
+		}
+	})
 	nakedWireGuardResponse := make([]byte, len(geneveEncapDisco))
 	binary.LittleEndian.PutUint32(nakedWireGuardResponse, device.MessageResponseType)
 	nakedWireGuardCookieReply := make([]byte, len(geneveEncapDisco))
@@ -3967,6 +3981,18 @@ func Test_packetLooksLike(t *testing.T) {
 		{
 			name:                    "naked-WireGuard-Response-type",
 			msg:                     nakedWireGuardResponse,
+			wantPacketLooksLikeType: packetLooksLikeWireGuard,
+			wantIsGeneveEncap:       false,
+		},
+		{
+			name:                    "naked-WireGuard-Initiation-type-retry-set",
+			msg:                     nakedWireGuardInitiationRetry,
+			wantPacketLooksLikeType: packetLooksLikeWireGuard,
+			wantIsGeneveEncap:       false,
+		},
+		{
+			name:                    "naked-WireGuard-Response-type-retry-set",
+			msg:                     nakedWireGuardResponseRetry,
 			wantPacketLooksLikeType: packetLooksLikeWireGuard,
 			wantIsGeneveEncap:       false,
 		},
