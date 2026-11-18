@@ -23,6 +23,7 @@ var validUpFlags = set.Of(
 	"advertise-routes",
 	"advertise-tags",
 	"auth-key",
+	"enable-login-beacon", // Invocation-only authentication option, not a stored preference.
 	"exit-node",
 	"exit-node-allow-lan-access",
 	"force-reauth",

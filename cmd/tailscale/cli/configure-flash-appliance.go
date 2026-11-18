@@ -8,6 +8,7 @@ package cli
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -35,6 +36,8 @@ var flashApplianceArgs struct {
 	yes                  bool
 	gaf                  string
 	addSSHAuthorizedKeys string
+	enableLoginBeacon    bool
+	loginBeaconHostname  string
 }
 
 func flashApplianceCmd() *ffcli.Command {
@@ -62,6 +65,8 @@ partition. On macOS, 'brew install e2fsprogs' provides it.
 			fs.BoolVar(&flashApplianceArgs.yes, "yes", false, "skip the destructive-write confirmation prompt")
 			fs.StringVar(&flashApplianceArgs.gaf, "gaf", "", "use a local GAF file instead of downloading (skips signature verification)")
 			fs.StringVar(&flashApplianceArgs.addSSHAuthorizedKeys, "add-ssh-authorized-keys", "", "path to an authorized_keys file to include on the appliance for breakglass SSH access")
+			fs.BoolVar(&flashApplianceArgs.enableLoginBeacon, "enable-login-beacon", false, "enable the LAN login-beacon feature so an already-signed-in Tailscale node on the same network can approve this appliance's login")
+			fs.StringVar(&flashApplianceArgs.loginBeaconHostname, "login-beacon-hostname", "", "display name the beacon advertises to approvers (defaults to the appliance's system hostname)")
 			return fs
 		})(),
 		Exec: runFlashAppliance,
@@ -132,6 +137,23 @@ func runFlashAppliance(ctx context.Context, args []string) error {
 			Content: keys,
 		})
 		printf("Including SSH authorized_keys for breakglass access.\n")
+	}
+	if flashApplianceArgs.enableLoginBeacon {
+		payload, err := json.Marshal(struct {
+			Enabled  bool   `json:"enabled"`
+			Hostname string `json:"hostname,omitempty"`
+		}{
+			Enabled:  true,
+			Hostname: flashApplianceArgs.loginBeaconHostname,
+		})
+		if err != nil {
+			return fmt.Errorf("marshaling loginbeacon config: %w", err)
+		}
+		permFiles = append(permFiles, mkfs.PermFile{
+			Path:    "loginbeacon.json",
+			Content: payload,
+		})
+		printf("Enabling LAN login-beacon (hostname=%q).\n", flashApplianceArgs.loginBeaconHostname)
 	}
 	if err := formatPermExt4(disk.Path, permFiles); err != nil {
 		return fmt.Errorf("formatting perm: %w", err)

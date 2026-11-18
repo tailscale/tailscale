@@ -705,6 +705,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			goos: "linux",
 			args: upArgsFromOSArgs("linux"),
 			want: &ipn.Prefs{
+				AcceptLoginRequests: true,
 				ControlURL:          ipn.DefaultControlURL,
 				WantRunning:         true,
 				NoSNAT:              false,
@@ -721,6 +722,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			goos: "windows",
 			args: upArgsFromOSArgs("windows"),
 			want: &ipn.Prefs{
+				AcceptLoginRequests: true,
 				ControlURL:          ipn.DefaultControlURL,
 				WantRunning:         true,
 				CorpDNS:             true,
@@ -737,9 +739,10 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			name: "advertise_default_route",
 			args: upArgsFromOSArgs("linux", "--advertise-exit-node"),
 			want: &ipn.Prefs{
-				ControlURL:  ipn.DefaultControlURL,
-				WantRunning: true,
-				CorpDNS:     true,
+				AcceptLoginRequests: true,
+				ControlURL:          ipn.DefaultControlURL,
+				WantRunning:         true,
+				CorpDNS:             true,
 				AdvertiseRoutes: []netip.Prefix{
 					netip.MustParsePrefix("0.0.0.0/0"),
 					netip.MustParsePrefix("::/0"),
@@ -805,6 +808,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			name: "tag_auto_prefix",
 			args: upArgsFromOSArgs("linux", "--advertise-tags=foo,bar"),
 			want: &ipn.Prefs{
+				AcceptLoginRequests: true,
 				ControlURL:          ipn.DefaultControlURL,
 				WantRunning:         true,
 				CorpDNS:             true,
@@ -821,6 +825,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			name: "tag_mixed_prefix",
 			args: upArgsFromOSArgs("linux", "--advertise-tags=tag:foo,bar"),
 			want: &ipn.Prefs{
+				AcceptLoginRequests: true,
 				ControlURL:          ipn.DefaultControlURL,
 				WantRunning:         true,
 				CorpDNS:             true,
@@ -879,6 +884,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			},
 			wantWarn: "netfilter=nodivert; add iptables calls to ts-* chains manually.",
 			want: &ipn.Prefs{
+				AcceptLoginRequests: true,
 				WantRunning:         true,
 				NetfilterMode:       preftype.NetfilterNoDivert,
 				NoSNAT:              true,
@@ -896,6 +902,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			},
 			wantWarn: "netfilter=off; configure iptables yourself.",
 			want: &ipn.Prefs{
+				AcceptLoginRequests: true,
 				WantRunning:         true,
 				NetfilterMode:       preftype.NetfilterOff,
 				NoSNAT:              true,
@@ -913,6 +920,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				netfilterMode:   "off",
 			},
 			want: &ipn.Prefs{
+				AcceptLoginRequests: true,
 				WantRunning:         true,
 				NoSNAT:              true,
 				NoStatefulFiltering: "true",
@@ -932,6 +940,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				netfilterMode:   "off",
 			},
 			want: &ipn.Prefs{
+				AcceptLoginRequests: true,
 				WantRunning:         true,
 				NoSNAT:              true,
 				NoStatefulFiltering: "true",
