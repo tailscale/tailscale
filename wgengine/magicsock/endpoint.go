@@ -1652,6 +1652,10 @@ func (de *endpoint) updateTSMPDiscoKey(key key.DiscoPublic) bool {
 }
 
 func (de *endpoint) logKeyChange(oldDisco, newDisco *endpointDisco, reason string) {
+	if oldDisco.key().IsZero() {
+		return
+	}
+
 	de.c.logf("[v1] magicsock: disco: node %s changed key from %s to %s, tsmpActive=%t -> %t, reason=%s",
 		de.publicKey.ShortString(), oldDisco.key(), newDisco.key(),
 		oldDisco.tsmpIsActive(), newDisco.tsmpIsActive(), reason)
