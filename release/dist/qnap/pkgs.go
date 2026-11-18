@@ -54,11 +54,11 @@ func (t *target) Build(b *dist.Build) ([]string, error) {
 	return t.buildQPKG(b, qnapBuilds, inner)
 }
 
-const (
-	qnapTag = "1" // currently static, we don't seem to bump this
-)
-
 func (t *target) buildQPKG(b *dist.Build, qnapBuilds *qnapBuilds, inner *innerPkg) ([]string, error) {
+	// qbuild truncates QPKG_VER to 10 characters (the qpkg header's version field).
+	if len(b.Version.Short) > 10 {
+		return nil, fmt.Errorf("version %q is longer than the 10 characters QDK allows for QPKG_VER", b.Version.Short)
+	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		return nil, fmt.Errorf("docker not found, cannot build: %w", err)
 	}
@@ -67,14 +67,13 @@ func (t *target) buildQPKG(b *dist.Build, qnapBuilds *qnapBuilds, inner *innerPk
 		return nil, fmt.Errorf("makeDockerImage: %w", err)
 	}
 
-	filename := fmt.Sprintf("Tailscale_%s-%s_%s.qpkg", b.Version.Short, qnapTag, t.arch)
+	filename := fmt.Sprintf("Tailscale_%s_%s.qpkg", b.Version.Short, t.arch)
 	filePath := filepath.Join(b.Out, filename)
 
 	args := []string{"run", "--rm",
 		"--network=host",
 		"-e", fmt.Sprintf("ARCH=%s", t.arch),
 		"-e", fmt.Sprintf("TSTAG=%s", b.Version.Short),
-		"-e", fmt.Sprintf("QNAPTAG=%s", qnapTag),
 		"-v", fmt.Sprintf("%s:/tailscale", inner.tailscalePath),
 		"-v", fmt.Sprintf("%s:/tailscaled", inner.tailscaledPath),
 		// Tailscale folder has QNAP package setup files needed for building.

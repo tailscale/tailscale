@@ -694,10 +694,10 @@ func (de *endpoint) DstToBytes() []byte  { return packIPPort(de.fakeWGAddr) }
 // de.mu must be held.
 //
 // TODO(val): Rewrite the addrFor*Locked() variations to share code.
-func (de *endpoint) addrForSendLocked(now mono.Time) (udpAddr epAddr, derpAddr netip.AddrPort, sendWGPing bool) {
+func (de *endpoint) addrForSendLocked(now mono.Time, forceMirror bool) (udpAddr epAddr, derpAddr netip.AddrPort, sendWGPing bool) {
 	udpAddr = de.bestAddr.epAddr
 
-	if udpAddr.ap.IsValid() && !now.After(de.trustBestAddrUntil) {
+	if udpAddr.ap.IsValid() && !now.After(de.trustBestAddrUntil) && !forceMirror {
 		return udpAddr, netip.AddrPort{}, false
 	}
 
@@ -708,8 +708,8 @@ func (de *endpoint) addrForSendLocked(now mono.Time) (udpAddr epAddr, derpAddr n
 		return udpAddr, netip.AddrPort{}, shouldPing
 	}
 
-	// We had a bestAddr but it expired so send both to it
-	// and DERP.
+	// udpAddr is nil, or untrusted, or caller forced mirroring. Send over DERP and
+	// also UDP if available.
 	return udpAddr, de.derpAddr, false
 }
 
@@ -780,7 +780,7 @@ func (de *endpoint) addrForWireGuardSendLocked(now mono.Time) (udpAddr epAddr, s
 // de.mu must be held.
 func (de *endpoint) addrForPingSizeLocked(now mono.Time, size int) (udpAddr epAddr, derpAddr netip.AddrPort) {
 	if size == 0 {
-		udpAddr, derpAddr, _ = de.addrForSendLocked(now)
+		udpAddr, derpAddr, _ = de.addrForSendLocked(now, false)
 		return
 	}
 
@@ -990,7 +990,7 @@ func (de *endpoint) heartbeat() {
 		return
 	}
 
-	udpAddr, _, _ := de.addrForSendLocked(now)
+	udpAddr, _, _ := de.addrForSendLocked(now, false)
 	if udpAddr.ap.IsValid() {
 		// We have a preferred path. Ping that every 'heartbeatInterval'.
 		de.startDiscoPingLocked(udpAddr, now, pingHeartbeat, 0, nil)
@@ -1171,7 +1171,7 @@ var (
 	errPingTooBig  = errors.New("ping size too big")
 )
 
-func (de *endpoint) send(flow int, buffs [][]byte, offset int) error {
+func (de *endpoint) send(flow int, buffs [][]byte, offset int, forceMirror bool) error {
 	de.mu.Lock()
 	if de.expired {
 		de.mu.Unlock()
@@ -1613,18 +1613,23 @@ func (de *endpoint) setLastPing(ipp netip.AddrPort, now mono.Time) {
 }
 
 // updateDiscoKey replaces the controlClient learned disco key for de.
-// Update only the control-provided key, leaving any existing TSMP key as-is.
-// If the new control key is zero, switch back to using the TSMP key if it
-// exists; otherwise mark the new control key as preferred.
-// Should both keys be zero, nil out the saved key.
-// The loop here ensures another update did not occur during the interval
-// between load and store (based on pointer identity).
+// It updates only the control-provided key and keeps any TSMP-provided key material.
 //
-// It reports whether the active disco key changed. If it reports true, the
-// caller must call [changeActiveDIscoLocked] to reset the state of the
-// disco connection.
+// Active-key precedence is recomputed from the snapshot loaded on each CAS
+// attempt:
+//   - an unchanged nonzero control key, with control already active, is a no-op
+//   - a zero control key falls back to the TSMP key as active
+//   - a distinct TSMP key that is already active stays preferred
+//   - a changed nonzero control key that replaces an old control key equal to
+//     the active TSMP key becomes active (that advertisement is the restarted
+//     peer's previous key)
+//   - otherwise the new control key is preferred
+//
+// Should both keys be zero, nil out the saved key.
+//
+// It reports whether the stored disco state changed. If it reports true, the
+// caller must call [changedActiveDiscoLocked] to reset the disco connection.
 func (de *endpoint) updateDiscoKey(key key.DiscoPublic) bool {
-	epDisco := &endpointDisco{}
 	for {
 		old := de.disco.Load()
 		// Nothing to update
@@ -1635,10 +1640,23 @@ func (de *endpoint) updateDiscoKey(key key.DiscoPublic) bool {
 		if old.keyFromControl() == key && !old.tsmpIsActive() && !key.IsZero() {
 			return false
 		}
+		// Fresh snapshot each attempt so a failed CAS cannot reuse a decision
+		// computed from a replaced disco state.
+		epDisco := &endpointDisco{}
 		if old != nil {
 			epDisco.tsmpKey = old.tsmpKey
 			epDisco.tsmpShort = old.tsmpShort
-			epDisco.tsmpActive = old.tsmpActive || key.IsZero()
+			switch {
+			case key.IsZero():
+				// Control was removed; send with the TSMP key if we have one.
+				epDisco.tsmpActive = true
+			case old.tsmpActive && old.controlKey == old.tsmpKey && key != old.controlKey:
+				// Peer restarted. The active TSMP key is the retired control
+				// key, so elect the new control key as the active one.
+				epDisco.tsmpActive = false
+			default:
+				epDisco.tsmpActive = old.tsmpActive
+			}
 		}
 		if !key.IsZero() {
 			epDisco.controlKey = key
@@ -2327,7 +2345,7 @@ func (de *endpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
 	ps.LastWrite = de.lastSendExt.WallTime()
 	ps.Active = now.Sub(de.lastSendExt) < sessionActiveTimeout
 
-	if udpAddr, derpAddr, _ := de.addrForSendLocked(now); udpAddr.ap.IsValid() && !derpAddr.IsValid() {
+	if udpAddr, derpAddr, _ := de.addrForSendLocked(now, false); udpAddr.ap.IsValid() && !derpAddr.IsValid() {
 		if udpAddr.vni.IsSet() {
 			ps.PeerRelay = udpAddr.String()
 		} else {

@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -425,14 +426,6 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 	}
 
 	return nil
-}
-
-// ServeConfig provides a view of the current serve mappings.
-// If serving is not configured, the returned view is not Valid.
-func (b *LocalBackend) ServeConfig() ipn.ServeConfigView {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.serveConfig
 }
 
 // ServeConfigETag provides a view of the current serve mappings and an ETag,
@@ -1322,7 +1315,20 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *LocalBackend) serveFileOrDirectory(w http.ResponseWriter, r *http.Request, fileOrDir, mountPoint string) {
-	fi, err := os.Stat(fileOrDir)
+	// The directory that contains fileOrDir, and fileOrDir itself if it's a
+	// directory, may be writable by users who can't configure Serve.
+	// os.Stat, os.Open and http.Dir all follow symlinks, so such a user could
+	// make tailscaled serve any file it can read. Instead, resolve fileOrDir
+	// through an os.Root of its parent directory, and serve a directory
+	// through an os.Root of its own. An os.Root refuses symlinks whose target
+	// leaves the root, and absolute symlinks, but still follows relative
+	// symlinks that stay inside it.
+	parent, name, err := openParentRoot(fileOrDir)
+	var fi os.FileInfo
+	if err == nil {
+		defer parent.Close()
+		fi, err = parent.Stat(name)
+	}
 	if err != nil {
 		if os.IsNotExist(err) {
 			http.NotFound(w, r)
@@ -1337,7 +1343,7 @@ func (b *LocalBackend) serveFileOrDirectory(w http.ResponseWriter, r *http.Reque
 			http.NotFound(w, r)
 			return
 		}
-		f, err := os.Open(fileOrDir)
+		f, err := parent.Open(name)
 		if err != nil {
 			b.logf("error opening %s: %v", fileOrDir, err)
 			http.Error(w, "an error occurred reading the file or directory", 500)
@@ -1356,7 +1362,15 @@ func (b *LocalBackend) serveFileOrDirectory(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	var fs http.Handler = http.FileServer(http.Dir(fileOrDir))
+	root, err := parent.OpenRoot(name)
+	if err != nil {
+		b.logf("error opening %s: %v", fileOrDir, err)
+		http.Error(w, "an error occurred reading the file or directory", 500)
+		return
+	}
+	defer root.Close()
+
+	var fs http.Handler = http.FileServer(confinedDir{root})
 	if mountPoint != "/" {
 		fs = http.StripPrefix(strings.TrimSuffix(mountPoint, "/"), fs)
 	}
@@ -1365,6 +1379,57 @@ func (b *LocalBackend) serveFileOrDirectory(w http.ResponseWriter, r *http.Reque
 		mountPoint:     mountPoint,
 		reqPath:        r.URL.Path,
 	}, r)
+}
+
+// openParentRoot opens the directory that contains p as an os.Root, and
+// returns it with the name of p's last element inside it. A filesystem root
+// has no parent, so for one it returns an os.Root of p itself, and ".".
+func openParentRoot(p string) (parent *os.Root, name string, err error) {
+	p = filepath.Clean(p)
+	dir := filepath.Dir(p)
+	name = filepath.Base(p)
+	if dir == p {
+		name = "."
+	}
+	parent, err = os.OpenRoot(dir)
+	return parent, name, err
+}
+
+// confinedDir is an http.FileSystem like http.Dir, except that it opens files
+// through an os.Root, so a symlink whose target leaves the root, or an
+// absolute symlink, is refused instead of followed.
+//
+// It isn't http.FS(root.FS()) because that would report a refused symlink as
+// a server error rather than as not found.
+type confinedDir struct {
+	root *os.Root
+}
+
+// Open implements http.FileSystem.
+func (d confinedDir) Open(name string) (http.File, error) {
+	// Turn the name into a path relative to the root the same way http.Dir
+	// does, including its check for names that aren't valid local paths.
+	rel := path.Clean("/" + name)[1:]
+	if rel == "" {
+		rel = "."
+	}
+	rel, err := filepath.Localize(rel)
+	if err != nil {
+		// http.Dir reports these as not found, too.
+		return nil, os.ErrNotExist
+	}
+	f, err := d.root.Open(rel)
+	if err != nil {
+		// os.Root reports a path that leaves the root with an error that is
+		// neither ErrNotExist nor ErrPermission. Report that, and any other
+		// unexpected error, as not found, so a refused path is neither
+		// served nor confirmed to exist.
+		if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, os.ErrPermission) {
+			return nil, os.ErrNotExist
+		}
+		return nil, err
+	}
+	return f, nil
 }
 
 // fixLocationHeaderResponseWriter is an http.ResponseWriter wrapper that, upon

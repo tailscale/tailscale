@@ -186,6 +186,7 @@ import (
 	"tailscale.com/client/local"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	_ "tailscale.com/feature/c2n"
 	_ "tailscale.com/feature/condregister/netlog"
@@ -207,6 +208,7 @@ import (
 	"tailscale.com/logtail/filch"
 	"tailscale.com/net/memnet"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netx"
 	"tailscale.com/net/proxymux"
 	"tailscale.com/net/socks5"
 	"tailscale.com/net/tsdial"
@@ -323,6 +325,17 @@ type Server struct {
 	// If empty, it defaults to the TS_CONTROL_URL environment variable.
 	// If that is also empty, the Tailscale default is used.
 	ControlURL string
+
+	// SystemDial, if non-nil, replaces the default dialer for
+	// connections that go over the host network rather than the
+	// tailnet, such as those to the control server. It is not used for
+	// DERP or WireGuard traffic. Hostnames may already be resolved to
+	// IP addresses before SystemDial is called.
+	//
+	// This field must be set before calling Start. If it is not set,
+	// host network dials use a [netns.Dialer] constructed from the server's
+	// network monitor, if available; otherwise host network dials fail.
+	SystemDial netx.DialFunc
 
 	// RunWebClient, if true, runs a client for managing this node over
 	// its Tailscale interface on port 5252.
@@ -617,8 +630,10 @@ func (s *Server) Up(ctx context.Context) (*ipnstate.Status, error) {
 				var srvCfgErr error
 				var svcAdErr error
 				s.resetServeStateOnce.Do(func() {
-					if err := lc.SetServeConfig(ctx, new(ipn.ServeConfig)); err != nil {
-						srvCfgErr = fmt.Errorf("clearing serve config: %w", err)
+					if buildfeatures.HasServe {
+						if err := lc.SetServeConfig(ctx, new(ipn.ServeConfig)); err != nil {
+							srvCfgErr = fmt.Errorf("clearing serve config: %w", err)
+						}
 					}
 					_, err := s.lb.EditPrefs(&ipn.MaskedPrefs{
 						AdvertiseServicesSet: true,
@@ -904,6 +919,7 @@ func (s *Server) start() (reterr error) {
 
 	s.dialer = &tsdial.Dialer{Logf: tsLogf} // mutated below (before used)
 	s.dialer.SetBus(sys.Bus.Get())
+	s.dialer.SetSystemDialer(s.SystemDial)
 	// LookupIP handles names not resolved by the MagicDNS hook.
 	if buildfeatures.HasDNS {
 		s.dialer.SetUserDialResolver(s.userDialResolve)
@@ -998,6 +1014,10 @@ func (s *Server) start() (reterr error) {
 	}
 	lb.SetTCPHandlerForFunnelFlow(s.getTCPHandlerForFunnelFlow)
 	lb.SetVarRoot(s.rootPath)
+	if s.logtail != nil {
+		lb.SetLogUploader(s.logtail)
+		lb.SetLogFlusher(s.logtail.StartFlush)
+	}
 	s.logf("tsnet starting with hostname %q, varRoot %q", s.hostname, s.rootPath)
 	s.lb = lb
 	if err := ns.Start(lb); err != nil {
@@ -1114,7 +1134,7 @@ func (s *Server) resolveAuthKey() (string, error) {
 }
 
 func (s *Server) startLogger(closePool *closeOnErrorPool, health *health.Tracker, tsLogf logger.Logf) error {
-	if testenv.InTest() {
+	if !buildfeatures.HasLogTail || testenv.InTest() {
 		return nil
 	}
 	cfgPath := filepath.Join(s.rootPath, "tailscaled.log.conf")
@@ -1514,18 +1534,6 @@ func (s *Server) RegisterFallbackTCPHandler(cb FallbackTCPHandler) func() {
 	}
 }
 
-// getCert is the GetCertificate function used by ListenTLS.
-//
-// It calls GetCertificate on the localClient, passing in the ClientHelloInfo.
-// For testing, if s.getCertForTesting is set, it will call that instead.
-func (s *Server) getCert(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-	lc, err := s.LocalClient()
-	if err != nil {
-		return nil, err
-	}
-	return lc.GetCertificate(hi)
-}
-
 // FunnelOption is an option passed to ListenFunnel to configure the listener.
 type FunnelOption interface {
 	funnelOption()
@@ -1575,6 +1583,9 @@ func FunnelTLSConfig(conf *tls.Config) FunnelOption {
 //
 // It will start the server if it has not been started yet.
 func (s *Server) ListenFunnel(network, addr string, opts ...FunnelOption) (net.Listener, error) {
+	if !buildfeatures.HasServe {
+		return nil, feature.ErrUnavailable
+	}
 	if network != "tcp" {
 		return nil, fmt.Errorf("ListenFunnel(%q, %q): only tcp is supported", network, addr)
 	}
@@ -1936,6 +1947,9 @@ func (s *Server) decrementServiceAdvertisementLocked(name tailcfg.ServiceName) e
 //
 // This function will start the server if it is not already started.
 func (s *Server) ListenService(name string, mode ServiceMode) (*ServiceListener, error) {
+	if !buildfeatures.HasServe {
+		return nil, feature.ErrUnavailable
+	}
 	svcName := tailcfg.ServiceName(name)
 	if err := svcName.Validate(); err != nil {
 		return nil, err

@@ -11,6 +11,7 @@ package rate
 
 import (
 	"math"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -155,4 +156,55 @@ func BenchmarkAllowN(b *testing.B) {
 			lim.allow(now)
 		}
 	})
+}
+
+// TestAllowFastPath checks that allow's lock-free denials (see
+// [Limiter.next]) decide the same as the token bucket alone would,
+// including when callers' timestamps arrive out of order.
+func TestAllowFastPath(t *testing.T) {
+	for _, tc := range []struct {
+		limit Limit
+		burst int
+	}{
+		{Every(10 * time.Second), 3},
+		{Every(time.Millisecond), 10},
+		{Every(time.Second), 1},
+		{1e6, 5},
+	} {
+		lim := NewLimiter(tc.limit, tc.burst)
+		// The bucket alone, as allow is without the fast path.
+		tokens, last := 0.0, mono.Time(0)
+		ref := func(now mono.Time) bool {
+			elapsed := max(now.Sub(last), 0)
+			tok := math.Min(tokens+float64(tc.limit)*elapsed.Seconds(), float64(tc.burst)) - 1
+			if tok < 0 {
+				return false
+			}
+			tokens, last = tok, now
+			return true
+		}
+		rng := rand.New(rand.NewPCG(1, 2))
+		now := mono.Time(0)
+		allowed := 0
+		for i := range 100000 {
+			// Events about 4x as often as the limit, on average.
+			interval := float64(time.Second) / float64(tc.limit)
+			now = now.Add(time.Duration(rng.Int64N(int64(interval / 2))))
+			// Sometimes a caller that read the time earlier arrives late.
+			at := now
+			if rng.IntN(10) == 0 {
+				at = now.Add(-time.Duration(rng.Int64N(int64(3 * interval))))
+			}
+			got, want := lim.allow(at), ref(at)
+			if got != want {
+				t.Fatalf("limit %v burst %d: event %d at %v: allow = %v, want %v", tc.limit, tc.burst, i, at, got, want)
+			}
+			if got {
+				allowed++
+			}
+		}
+		if allowed == 0 {
+			t.Errorf("limit %v burst %d: nothing allowed", tc.limit, tc.burst)
+		}
+	}
 }

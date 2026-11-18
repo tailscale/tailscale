@@ -11,14 +11,6 @@ import (
 	"testing"
 )
 
-func TestIsUDPReadFeedback(t *testing.T) {
-	for _, err := range []error{nil, errors.New("unknown error"), fs.ErrClosed, io.ErrClosedPipe} {
-		if IsUDPReadFeedback(err) {
-			t.Errorf("IsUDPReadFeedback(%v) = true, want false", err)
-		}
-	}
-}
-
 func TestIsClosedPipeError(t *testing.T) {
 	for _, tt := range []struct {
 		err  error
@@ -34,6 +26,14 @@ func TestIsClosedPipeError(t *testing.T) {
 		}
 		if got := IsClosedPipeError(fmt.Errorf("wrapped: %w", tt.err)); got != tt.want {
 			t.Errorf("IsClosedPipeError(wrapped %v) = %v, want %v", tt.err, got, tt.want)
+		}
+	}
+}
+
+func TestIsBadSocketError(t *testing.T) {
+	for _, err := range []error{nil, errors.New("unknown error"), fs.ErrClosed} {
+		if IsBadSocketError(err) {
+			t.Errorf("IsBadSocketError(%v) = true, want false", err)
 		}
 	}
 }

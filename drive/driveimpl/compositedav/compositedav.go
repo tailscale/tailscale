@@ -202,7 +202,7 @@ func (h *Handler) SetChildren(staticRoot string, children ...*Child) {
 	})
 
 	h.childrenMu.Lock()
-	oldChildren := children
+	oldChildren := h.children
 	h.children = children
 	h.staticRoot = staticRoot
 	h.childrenMu.Unlock()

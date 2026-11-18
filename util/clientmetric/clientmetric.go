@@ -51,14 +51,6 @@ type scanEntry struct {
 	lastLogged int64        // last logged value
 }
 
-// Type is a metric type: counter or gauge.
-type Type uint8
-
-const (
-	TypeGauge Type = iota
-	TypeCounter
-)
-
 // MetricUpdate requests that a client metric value be updated.
 //
 // This is the request body sent to /localapi/v0/upload-client-metrics.

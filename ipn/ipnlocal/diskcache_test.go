@@ -5,19 +5,25 @@ package ipnlocal
 
 import (
 	"net/netip"
+	"os"
 	"testing"
 
+	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnlocal/netmapcache"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tstest"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/eventbus"
+	"tailscale.com/util/set"
 	"tailscale.com/wgengine/magicsock"
 )
 
 // newCacheTestNetmap returns a minimal valid netmap suitable for testing disk
-// cache operations.
+// cache operations, for a node that is allowed to cache netmaps.
 func newCacheTestNetmap() *netmap.NetworkMap {
 	return &netmap.NetworkMap{
+		AllCaps: set.Of(nodecap.CacheNetworkMaps),
 		SelfNode: (&tailcfg.Node{
 			Name: "test-node.ts.net",
 			User: tailcfg.UserID(1),
@@ -108,6 +114,34 @@ func TestOnHomeDERPUpdate(t *testing.T) {
 		}
 		if got := loaded.SelfNode.HomeDERP(); got != wantDERP {
 			t.Errorf("cached SelfNode.HomeDERP() = %d, want %d", got, wantDERP)
+		}
+	})
+	t.Run("no_cache_cap", func(t *testing.T) {
+		b := newTestBackend(t)
+		done := make(chan struct{})
+		tstest.Replace(t, &testOnlyHomeDERPUpdate, func() { close(done) })
+
+		nm := newCacheTestNetmap()
+		nm.AllCaps = nil
+		b.currentNode().SetNetMap(nm)
+
+		bus := b.Sys().Bus.Get()
+		ec := bus.Client("test.TestOnHomeDERPUpdate")
+		pub := eventbus.Publish[magicsock.HomeDERPChanged](ec)
+
+		const wantDERP = 11
+		pub.Publish(magicsock.HomeDERPChanged{Old: 0, New: wantDERP})
+		<-done
+
+		if got := b.currentNode().homeDERP.Load(); got != wantDERP {
+			t.Errorf("b.homeDERP = %d, want %d", got, wantDERP)
+		}
+
+		// Without the capability, the update must not create a cache.
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if _, ok := b.loadDiskCacheLocked(); ok {
+			t.Fatal("loadDiskCacheLocked returned ok=true; want no cache without the CacheNetworkMaps capability")
 		}
 	})
 	t.Run("old_does_not_match", func(t *testing.T) {
@@ -202,6 +236,115 @@ func TestOnHomeDERPUpdate(t *testing.T) {
 			t.Errorf("cached SelfNode.HomeDERP() = %d after rejected event, want original %d", got, wantDERP)
 		}
 	})
+}
+
+func TestDiscardDiskCacheLocked(t *testing.T) {
+	b := newTestBackend(t)
+	nm := newCacheTestNetmap()
+	b.currentNode().SetNetMap(nm)
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if err := b.writeNetmapToDiskLockedWithPeers(nm); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, ok := b.loadDiskCacheLocked(); !ok {
+		t.Fatal("expected cache to be loadable after write")
+	}
+
+	b.discardDiskCacheLocked()
+
+	if _, ok := b.loadDiskCacheLocked(); ok {
+		t.Fatal("expected cache to be gone after discard")
+	}
+}
+
+func TestClearNetmapCache(t *testing.T) {
+	b := newTestBackend(t)
+	nm := newCacheTestNetmap()
+	b.currentNode().SetNetMap(nm)
+
+	// Add the current profile to knownProfiles so ClearNetmapCache can iterate
+	// over it later.
+	cp := b.pm.CurrentProfile()
+	b.pm.knownProfiles[cp.ID()] = cp
+
+	b.mu.Lock()
+	if err := b.writeNetmapToDiskLockedWithPeers(nm); err != nil {
+		b.mu.Unlock()
+		t.Fatalf("write: %v", err)
+	}
+	b.mu.Unlock()
+
+	if err := b.ClearNetmapCache(t.Context()); err != nil {
+		t.Fatalf("ClearNetmapCache: %v", err)
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, ok := b.loadDiskCacheLocked(); ok {
+		t.Error("expected cache to be gone after ClearNetmapCache")
+	}
+}
+
+func TestClearNetmapCacheMultiProfile(t *testing.T) {
+	b := newTestBackend(t)
+	nm := newCacheTestNetmap()
+	b.currentNode().SetNetMap(nm)
+
+	// Register two profiles so ClearNetmapCache sees both.
+	profile2 := (&ipn.LoginProfile{ID: "id-extra"}).View()
+
+	// Add the profiles to knownProfiles so ClearNetmapCache can iterate
+	// over them later.
+	cp := b.pm.CurrentProfile()
+	b.pm.knownProfiles[cp.ID()] = cp
+	b.pm.knownProfiles[profile2.ID()] = profile2
+
+	b.mu.Lock()
+
+	// Write netmap for the active profile.
+	if err := b.writeNetmapToDiskLockedWithPeers(nm); err != nil {
+		b.mu.Unlock()
+		t.Fatalf("write profile1: %v", err)
+	}
+
+	// Seed the second profile's cache directory directly emulating another
+	// configured profile.
+	dir2, err := b.profileMkdirAllLocked(profile2.ID(), "netmap-cache")
+	if err != nil {
+		b.mu.Unlock()
+		t.Fatalf("mkdir profile2: %v", err)
+	}
+	store2 := netmapcache.FileStore(dir2)
+	if err := store2.Store(t.Context(), "self", []byte(`{"Node":{}}`)); err != nil {
+		b.mu.Unlock()
+		t.Fatalf("seed profile2: %v", err)
+	}
+
+	b.mu.Unlock()
+
+	if err := b.ClearNetmapCache(t.Context()); err != nil {
+		t.Fatalf("ClearNetmapCache: %v", err)
+	}
+
+	// Verify that the active profile is cleared.
+	b.mu.Lock()
+	_, ok := b.loadDiskCacheLocked()
+	b.mu.Unlock()
+	if ok {
+		t.Error("profile1 cache still present after ClearNetmapCache")
+	}
+
+	// Verify that the directory for the simulated cached profile is empty.
+	entries, err := os.ReadDir(dir2)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ReadDir cached profile: %v", err)
+	}
+	if len(entries) > 0 {
+		t.Errorf("directory for cached profile not cleared: %d entries remain", len(entries))
+	}
 }
 
 func TestWriteNetmapDoesNotMutateOriginal(t *testing.T) {

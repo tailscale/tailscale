@@ -38,6 +38,7 @@ import (
 	"tailscale.com/drive/driveimpl"
 	"tailscale.com/feature"
 	_ "tailscale.com/feature/condregister/portmapper"
+	_ "tailscale.com/feature/guivisibility"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
@@ -3315,6 +3316,41 @@ func TestNotifyForSessionUserProfilesDedupResetsOnSelfChange(t *testing.T) {
 	}
 }
 
+// TestNotifyForSessionUserProfilesDedupResetsOnProfileChange tests that
+// user profiles are resent after switching to a profile that never gets
+// a self node, such as a logged out one, and back.
+func TestNotifyForSessionUserProfilesDedupResetsOnProfileChange(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	sess := &watchSession{
+		sessionID: "test-session",
+		ctx:       t.Context(),
+		mask:      ipn.NotifyPeerChanges,
+		ch:        make(chan *ipn.Notify, 100),
+	}
+	self := &tailcfg.Node{ID: 1, StableID: "self", User: 10}
+	profiles := map[tailcfg.UserID]tailcfg.UserProfileView{
+		10: (&tailcfg.UserProfile{ID: 10, LoginName: "alice@example.com", DisplayName: "Alice"}).View(),
+		11: (&tailcfg.UserProfile{ID: 11, LoginName: "tagged-devices", DisplayName: "Tagged Devices"}).View(),
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	mak.Set(&b.notifyWatchers, sess.sessionID, sess)
+
+	n := b.notifyForSessionLocked(sess, &ipn.Notify{SelfChange: self, UserProfiles: profiles})
+	if got, want := len(n.UserProfiles), len(profiles); got != want {
+		t.Fatalf("initial UserProfiles len = %d; want %d", got, want)
+	}
+	if err := b.resetForProfileChangeLocked(); err != nil {
+		t.Fatal(err)
+	}
+	n = b.notifyForSessionLocked(sess, &ipn.Notify{SelfChange: self, UserProfiles: profiles})
+	if got, want := len(n.UserProfiles), len(profiles); got != want {
+		t.Fatalf("UserProfiles len after profile change = %d; want %d", got, want)
+	}
+}
+
 // tests LocalBackend.updateNetmapDeltaLocked
 func TestUpdateNetmapDelta(t *testing.T) {
 	b := newTestLocalBackend(t)
@@ -6307,6 +6343,38 @@ func deterministicNodeForTest(t testing.TB, want views.Slice[tailcfg.StableNodeI
 	}
 }
 
+func TestMutationsAreWorthyOfRecalculatingSuggestedExitNode(t *testing.T) {
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+	nb.SetNetMap(&netmap.NetworkMap{Peers: []tailcfg.NodeView{
+		(&tailcfg.Node{ID: 1, StableID: "exit", AllowedIPs: tsaddr.ExitRoutes()}).View(),
+		(&tailcfg.Node{ID: 2, StableID: "other"}).View(),
+	}})
+
+	tests := []struct {
+		name   string
+		change tailcfg.PeerChange
+		sid    tailcfg.StableNodeID
+		want   bool
+	}{
+		{"exit-online", tailcfg.PeerChange{NodeID: 1, Online: new(true)}, "", true},
+		{"exit-derp", tailcfg.PeerChange{NodeID: 1, DERPRegion: 2}, "", true},
+		{"exit-lastseen", tailcfg.PeerChange{NodeID: 1, LastSeen: new(time.Now())}, "", false},
+		{"other-derp", tailcfg.PeerChange{NodeID: 2, DERPRegion: 2}, "", false},
+		{"suggested-lastseen", tailcfg.PeerChange{NodeID: 2, LastSeen: new(time.Now())}, "other", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			muts, ok := netmap.NodeMutationsFromPatch(&tt.change)
+			if !ok {
+				t.Fatal("NodeMutationsFromPatch failed")
+			}
+			if got := mutationsAreWorthyOfRecalculatingSuggestedExitNode(muts, nb, tt.sid); got != tt.want {
+				t.Errorf("got %v; want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSuggestExitNode(t *testing.T) {
 	t.Parallel()
 
@@ -9290,7 +9358,7 @@ func TestOnClientVersionRespectsAutoUpdateCheck(t *testing.T) {
 
 	nw := newNotificationWatcher(t, lb, ipnauth.Self)
 	nw.watch(0, nil, unexpectedClientVersion)
-	lb.onClientVersion(cv)
+	lb.onClientVersion(*cv)
 	nw.check()
 
 	// Verify it was cached despite not being broadcast.
@@ -9309,7 +9377,7 @@ func TestOnClientVersionRespectsAutoUpdateCheck(t *testing.T) {
 	nw.watch(0, []wantedNotification{
 		wantClientVersionNotify("1.96.0"),
 	})
-	lb.onClientVersion(cv)
+	lb.onClientVersion(*cv)
 	nw.check()
 }
 
@@ -9432,6 +9500,54 @@ func TestPolicyChangeNotifiesWatcher(t *testing.T) {
 	store.SetStrings(source.TestSettingOf(pkey.AdminConsoleVisibility, "hide"))
 
 	nw.check()
+}
+
+func TestSysPolicyChangeSuspendsSlowConsumer(t *testing.T) {
+	sys := tsd.NewSystem()
+	sys.PolicyClient.Set(testPolicyClient{})
+	b := newTestLocalBackendWithSys(t, sys)
+
+	sess := &watchSession{
+		sessionID: "test-session",
+		ctx:       t.Context(),
+		mask:      ipn.NotifySysPolicyChanges | ipn.NotifySuspendWhenBehind,
+		ch:        make(chan *ipn.Notify, 1),
+	}
+
+	func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+
+		if b.notifyWatchers == nil {
+			b.notifyWatchers = make(map[string]*watchSession)
+		}
+		b.notifyWatchers[sess.sessionID] = sess
+	}()
+
+	sess.ch <- &ipn.Notify{} // sess.ch is 1-buffered; fill it before sending the policy changed notification
+
+	b.sysPolicyChangedForSession(sess) // shouldn't block
+
+	b.mu.Lock()
+	suspended := sess.suspended
+	numWatchers := len(b.notifyWatchers)
+	b.mu.Unlock()
+
+	if !suspended {
+		t.Error("watcher was not suspended after policy notification")
+	}
+	if numWatchers != 1 {
+		t.Errorf("watchers after suspension = %d; want 1", numWatchers)
+	}
+
+	select {
+	case n := <-sess.ch:
+		if n == nil || !n.Suspended {
+			t.Errorf("notification = %v; want Suspended", n)
+		}
+	default:
+		t.Fatal("no suspension notification received")
+	}
 }
 
 func TestPolicyNotifyPerUser(t *testing.T) {
@@ -9568,7 +9684,7 @@ func TestHiddenNetworkDevicesNotifyPerUser(t *testing.T) {
 	userStoreA.SetStringLists(
 		source.TestSettingOf(
 			pkey.HiddenNetworkDevices,
-			[]string{hiddenNetworkDevicesOtherUsers},
+			[]string{"other-users"},
 		),
 	)
 	rsop.RegisterStoreForTest(t, "UserStoreA", setting.UserScopeOf(uidA), userStoreA)
@@ -9579,6 +9695,7 @@ func TestHiddenNetworkDevicesNotifyPerUser(t *testing.T) {
 	sys := tsd.NewSystem()
 	sys.PolicyClient.Set(testPolicyClient{})
 	lb := newTestLocalBackendWithSys(t, sys)
+	lb.extHost.Init()
 
 	lb.currentNode().SetNetMap(&netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{
@@ -9602,16 +9719,11 @@ func TestHiddenNetworkDevicesNotifyPerUser(t *testing.T) {
 		return wantedNotification{
 			name: fmt.Sprintf("NodeGUIVisibility-hidden=%v", wantHidden),
 			cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
-				if n.NodeGUIVisibility == nil {
+				if n.Policy == nil {
 					return false
 				}
 
-				got, ok := n.NodeGUIVisibility["peer-10"]
-				if !ok {
-					t.Errorf("NodeGUIVisibility missing peer-10")
-					return true
-				}
-
+				got := n.NodeGUIVisibility["peer-10"]
 				if got.HideInGUI != wantHidden {
 					t.Errorf(
 						"NodeGUIVisibility[peer-10].HideInGUI = %v; want %v",
@@ -9647,14 +9759,13 @@ func TestHiddenNetworkDevicesPolicyChangeUpdatesVisibility(t *testing.T) {
 	)
 
 	uid := "S-1-5-21-1001"
-
 	userStore := source.NewTestStore(t)
 	rsop.RegisterStoreForTest(t, "UserStore", setting.UserScopeOf(uid), userStore)
 
 	sys := tsd.NewSystem()
 	sys.PolicyClient.Set(testPolicyClient{})
 	lb := newTestLocalBackendWithSys(t, sys)
-
+	lb.extHost.Init()
 	lb.currentNode().SetNetMap(&netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{
 			ID:       1,
@@ -9672,30 +9783,25 @@ func TestHiddenNetworkDevicesPolicyChangeUpdatesVisibility(t *testing.T) {
 
 	actor := &ipnauth.TestActor{UID: ipn.WindowsUserID(uid)}
 	nw := newNotificationWatcher(t, lb, actor)
-
 	nw.watch(ipn.NotifySysPolicyChanges, []wantedNotification{
 		{
 			name: "initially visible",
 			cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
-				if n.NodeGUIVisibility == nil {
+				if n.Policy == nil {
 					return false
 				}
-				got, ok := n.NodeGUIVisibility["peer-10"]
-				return ok && !got.HideInGUI
+				if len(n.NodeGUIVisibility) != 0 {
+					t.Errorf("NodeGUIVisibility = %v; want empty", n.NodeGUIVisibility)
+				}
+				return true
 			},
 		},
 		{
 			name: "hidden after policy change",
 			cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
-				if n.NodeGUIVisibility == nil {
+				if n.Policy == nil || !n.NodeGUIVisibility["peer-10"].HideInGUI {
 					return false
 				}
-
-				got, ok := n.NodeGUIVisibility["peer-10"]
-				if !ok || !got.HideInGUI {
-					return false
-				}
-
 				if len(n.PeersChanged) != 0 {
 					t.Errorf("PeersChanged = %v; want none", n.PeersChanged)
 				}
@@ -9705,7 +9811,6 @@ func TestHiddenNetworkDevicesPolicyChangeUpdatesVisibility(t *testing.T) {
 				if len(n.PeerChangedPatch) != 0 {
 					t.Errorf("PeerChangedPatch = %v; want none", n.PeerChangedPatch)
 				}
-
 				return true
 			},
 		},
@@ -9714,9 +9819,199 @@ func TestHiddenNetworkDevicesPolicyChangeUpdatesVisibility(t *testing.T) {
 	userStore.SetStringLists(
 		source.TestSettingOf(
 			pkey.HiddenNetworkDevices,
-			[]string{hiddenNetworkDevicesOtherUsers},
+			[]string{"other-users"},
 		),
 	)
+
+	nw.check()
+}
+
+func TestHiddenNetworkDevicesPolicyRemovalUpdatesVisibility(t *testing.T) {
+	setting.SetDefinitionsForTest(t,
+		setting.NewDefinition(
+			pkey.HiddenNetworkDevices,
+			setting.UserSetting,
+			setting.StringListValue,
+		),
+	)
+
+	uid := "S-1-5-21-1001"
+	userStore := source.NewTestStore(t)
+	userStore.SetStringLists(
+		source.TestSettingOf(
+			pkey.HiddenNetworkDevices,
+			[]string{"other-users"},
+		),
+	)
+	rsop.RegisterStoreForTest(t, "UserStore", setting.UserScopeOf(uid), userStore)
+
+	sys := tsd.NewSystem()
+	sys.PolicyClient.Set(testPolicyClient{})
+	lb := newTestLocalBackendWithSys(t, sys)
+	lb.extHost.Init()
+	lb.currentNode().SetNetMap(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			ID:       1,
+			StableID: "self",
+			User:     1,
+		}).View(),
+		Peers: []tailcfg.NodeView{
+			(&tailcfg.Node{
+				ID:       10,
+				StableID: "peer-10",
+				User:     2,
+			}).View(),
+		},
+	})
+
+	actor := &ipnauth.TestActor{UID: ipn.WindowsUserID(uid)}
+	nw := newNotificationWatcher(t, lb, actor)
+	nw.watch(ipn.NotifySysPolicyChanges, []wantedNotification{
+		{
+			name: "initially hidden",
+			cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+				if n.Policy == nil {
+					return false
+				}
+				if !n.NodeGUIVisibility["peer-10"].HideInGUI {
+					t.Errorf("NodeGUIVisibility = %v; want peer-10 hidden", n.NodeGUIVisibility)
+				}
+				return true
+			},
+		},
+		{
+			name: "visible after policy removal",
+			cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+				if n.Policy == nil {
+					return false
+				}
+				if len(n.NodeGUIVisibility) != 0 {
+					t.Errorf("NodeGUIVisibility = %v; want empty", n.NodeGUIVisibility)
+				}
+				if len(n.PeersChanged) != 0 {
+					t.Errorf("PeersChanged = %v; want none", n.PeersChanged)
+				}
+				if len(n.PeersRemoved) != 0 {
+					t.Errorf("PeersRemoved = %v; want none", n.PeersRemoved)
+				}
+				if len(n.PeerChangedPatch) != 0 {
+					t.Errorf("PeerChangedPatch = %v; want none", n.PeerChangedPatch)
+				}
+				return true
+			},
+		},
+	})
+
+	userStore.SetStringLists(
+		source.TestSettingOf(
+			pkey.HiddenNetworkDevices,
+			[]string{},
+		),
+	)
+
+	nw.check()
+}
+
+func TestHiddenNetworkDevicesIncrementalPeerUpdates(t *testing.T) {
+	setting.SetDefinitionsForTest(t,
+		setting.NewDefinition(
+			pkey.HiddenNetworkDevices,
+			setting.UserSetting,
+			setting.StringListValue,
+		),
+	)
+
+	uid := "S-1-5-21-1001"
+	userStore := source.NewTestStore(t)
+	userStore.SetStringLists(
+		source.TestSettingOf(
+			pkey.HiddenNetworkDevices,
+			[]string{"other-users"},
+		),
+	)
+	rsop.RegisterStoreForTest(t, "UserStore", setting.UserScopeOf(uid), userStore)
+
+	sys := tsd.NewSystem()
+	sys.PolicyClient.Set(testPolicyClient{})
+	lb := newTestLocalBackendWithSys(t, sys)
+	lb.extHost.Init()
+
+	lb.currentNode().SetNetMap(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			ID:       1,
+			StableID: "self",
+			User:     1,
+		}).View(),
+		Peers: []tailcfg.NodeView{
+			(&tailcfg.Node{
+				ID:       10,
+				StableID: "peer-10",
+				User:     2,
+			}).View(),
+		},
+	})
+
+	// wantVisibility matches a peer-change notification and checks that
+	// its NodeGUIVisibility hides exactly the given peers.
+	wantVisibility := func(name string, hidden ...tailcfg.StableNodeID) wantedNotification {
+		return wantedNotification{
+			name: name,
+			cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+				if len(n.PeersChanged) == 0 && len(n.PeersRemoved) == 0 {
+					return false
+				}
+				want := make(map[tailcfg.StableNodeID]ipn.NodeGUIVisibility)
+				for _, id := range hidden {
+					want[id] = ipn.NodeGUIVisibility{HideInGUI: true}
+				}
+				if got := n.NodeGUIVisibility; !maps.Equal(got, want) {
+					t.Errorf("%s: NodeGUIVisibility = %v; want %v", name, got, want)
+				}
+				return true
+			},
+		}
+	}
+
+	actor := &ipnauth.TestActor{UID: ipn.WindowsUserID(uid)}
+	nw := newNotificationWatcher(t, lb, actor)
+	nw.watch(ipn.NotifySysPolicyChanges|ipn.NotifyPeerChanges, []wantedNotification{
+		{
+			name: "initial visibility snapshot",
+			cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+				if n.Policy == nil {
+					return false
+				}
+				if len(n.NodeGUIVisibility) != 1 || !n.NodeGUIVisibility["peer-10"].HideInGUI {
+					t.Errorf("unexpected initial visibility: %v", n.NodeGUIVisibility)
+				}
+				return true
+			},
+		},
+		wantVisibility("hidden peer added", "peer-20"),
+		wantVisibility("hidden peer becomes visible"),
+		wantVisibility("hidden peer removed"),
+	}, func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+		if n.NodeGUIVisibility != nil {
+			t.Errorf("unexpected visibility update: %v", n.NodeGUIVisibility)
+		}
+		return false
+	})
+
+	lb.SendNotify(ipn.Notify{
+		PeersChanged: []*tailcfg.Node{
+			{ID: 20, StableID: "peer-20", User: 2},
+		},
+	})
+
+	lb.SendNotify(ipn.Notify{
+		PeersChanged: []*tailcfg.Node{
+			{ID: 20, StableID: "peer-20", User: 1},
+		},
+	})
+
+	lb.SendNotify(ipn.Notify{
+		PeersRemoved: []tailcfg.NodeID{10},
+	})
 
 	nw.check()
 }

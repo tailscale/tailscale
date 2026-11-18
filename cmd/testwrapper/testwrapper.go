@@ -29,6 +29,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -58,6 +59,16 @@ const (
 	// their own logs — for example, this package's own race tests,
 	// which exec a child testwrapper and dump its captured output.
 	raceDetectorMarkerLine = "WARNING: DATA RACE\n"
+
+	// defaultGoTestTimeout is go test's default -timeout.
+	defaultGoTestTimeout = 10 * time.Minute
+	// goToolTimeout bounds go commands other than tests, such as "go list".
+	goToolTimeout = 10 * time.Minute
+	// retryBuildSlack is extra time allowed beyond a retry attempt's -timeout
+	// for go test to rebuild the test binary.
+	retryBuildSlack = 5 * time.Minute
+	// waitDelay is how long to wait for a killed go command's I/O to finish.
+	waitDelay = 10 * time.Second
 )
 
 // Tunables for the per-test retry budget. These default to production values
@@ -76,6 +87,11 @@ var (
 	// doesn't block for an unreasonable amount of time. Override via
 	// TS_TESTWRAPPER_MAX_RETRY_TIME (a time.Duration string).
 	maxRetryTime = envDuration("TS_TESTWRAPPER_MAX_RETRY_TIME", 10*time.Minute)
+	// idleMargin is how much longer than the go test -timeout we wait for
+	// any output from go test before deciding it's hung. The -timeout only
+	// bounds running test binaries, not compiling and linking them.
+	// Override via TS_TESTWRAPPER_IDLE_MARGIN (a time.Duration string).
+	idleMargin = envDuration("TS_TESTWRAPPER_IDLE_MARGIN", 5*time.Minute)
 )
 
 func envDuration(key string, def time.Duration) time.Duration {
@@ -194,7 +210,11 @@ func testsForShard(ctx context.Context, pkg, shardSpec string) ([]string, error)
 		return nil, nil
 	}
 
-	out, err := exec.CommandContext(ctx, "go", "list", "-json", pkg).Output()
+	ctx, cancel := context.WithTimeout(ctx, goToolTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "list", "-json", pkg)
+	cmd.WaitDelay = waitDelay
+	out, err := cmd.Output()
 	if err != nil {
 		// Errors will be surfaced by the main test run.
 		return nil, nil
@@ -299,13 +319,30 @@ func runTests(ctx context.Context, attempt int, patterns []string, goTestArgs, t
 	if debug {
 		fmt.Println("running", strings.Join(args, " "))
 	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	cmd := exec.CommandContext(ctx, "go", args...)
+	cmd.WaitDelay = waitDelay
 	r, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Printf("error creating stdout pipe: %v", err)
 	}
 	defer r.Close()
 	cmd.Stderr = os.Stderr
+
+	// Kill go test if it goes quiet for longer than any single test binary
+	// may run. That means something else, like the linker, is stuck.
+	var watchdog *time.Timer
+	var idle time.Duration
+	if t := goTestTimeout(goTestArgs, testArgs); t > 0 {
+		idle = t + idleMargin
+		watchdog = time.AfterFunc(idle, func() {
+			log.Printf("testwrapper: no output from go test in %v; killing it", idle)
+			dumpProcesses()
+			cancel(fmt.Errorf("go test produced no output for %v", idle))
+		})
+		defer watchdog.Stop()
+	}
 
 	cmd.Env = slices.DeleteFunc(os.Environ(), func(s string) bool {
 		return strings.HasPrefix(s, "TS_TEST_SHARD=")
@@ -322,6 +359,9 @@ func runTests(ctx context.Context, attempt int, patterns []string, goTestArgs, t
 	s := bufio.NewScanner(r)
 	resultMap := make(map[string]map[string]*testAttempt) // pkg -> test -> testAttempt
 	for s.Scan() {
+		if watchdog != nil && ctx.Err() == nil {
+			watchdog.Reset(idle)
+		}
 		var goOutput goTestOutput
 		if err := json.Unmarshal(s.Bytes(), &goOutput); err != nil {
 			return fmt.Errorf("failed to parse go test output %q: %w", s.Bytes(), err)
@@ -454,12 +494,83 @@ func runTests(ctx context.Context, attempt int, patterns []string, goTestArgs, t
 		}
 	}
 	if err := cmd.Wait(); err != nil {
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
 		return err
 	}
 	if err := s.Err(); err != nil {
 		return fmt.Errorf("reading go test stdout: %w", err)
 	}
 	return nil
+}
+
+// goTestTimeout returns the go test -timeout set in any of argLists, or go
+// test's default if none is set. Zero means no timeout.
+func goTestTimeout(argLists ...[]string) time.Duration {
+	t := defaultGoTestTimeout
+	for _, args := range argLists {
+		for i := 0; i < len(args); i++ {
+			name, val, hasEq := strings.Cut(strings.TrimLeft(args[i], "-"), "=")
+			if name != "timeout" && name != "test.timeout" {
+				continue
+			}
+			if !hasEq && i+1 < len(args) {
+				i++
+				val = args[i]
+			}
+			if d, err := time.ParseDuration(val); err == nil {
+				t = d
+			}
+		}
+	}
+	return t
+}
+
+// listShardPackages returns the packages in shard nOfM (e.g. "1/2") of ./...
+func listShardPackages(ctx context.Context, nOfM string) []string {
+	ctx, cancel := context.WithTimeout(ctx, goToolTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "run", "tailscale.com/tool/listpkgs", "-shard", nOfM, "./...")
+	cmd.WaitDelay = waitDelay
+	out, err := cmd.Output()
+	if err != nil {
+		log.Fatalf("failed to list packages for sharded test: %v", err)
+	}
+	return strings.Split(strings.TrimSpace(string(out)), "\n")
+}
+
+// dumpProcesses logs testwrapper's descendant processes on Linux, to show
+// what a hung go test was waiting on.
+func dumpProcesses() {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	children := map[string][]string{} // ppid -> pids
+	stats, _ := filepath.Glob("/proc/[0-9]*/stat")
+	for _, f := range stats {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		// The fields after the parenthesized command name are state, then ppid.
+		_, rest, ok := bytes.Cut(b, []byte(") "))
+		if fields := strings.Fields(string(rest)); ok && len(fields) > 1 {
+			children[fields[1]] = append(children[fields[1]], filepath.Base(filepath.Dir(f)))
+		}
+	}
+	var pids []string
+	queue := []string{strconv.Itoa(os.Getpid())}
+	for len(queue) > 0 {
+		p := queue[0]
+		queue = queue[1:]
+		pids = append(pids, p)
+		queue = append(queue, children[p]...)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ps", "--forest", "-o", "pid,etime,stat,args", "-p", strings.Join(pids, ",")).CombinedOutput()
+	log.Printf("testwrapper: process tree (err=%v):\n%s", err, out)
 }
 
 // runOneTest runs a single test in a single package via `go test -run` with a
@@ -482,7 +593,10 @@ func runOneTest(ctx context.Context, pkg, testName string, perAttemptTimeout tim
 	if debug {
 		fmt.Println("running", strings.Join(args, " "))
 	}
+	ctx, cancel := context.WithTimeout(ctx, perAttemptTimeout+retryBuildSlack)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, "go", args...)
+	cmd.WaitDelay = waitDelay
 	// Strip TS_TEST_SHARD so the child doesn't try to shard inside a
 	// single-test retry — we are telling it exactly what to run.
 	cmd.Env = slices.DeleteFunc(os.Environ(), func(s string) bool {
@@ -829,17 +943,14 @@ func main() {
 		return
 	}
 
+	ctx := context.Background()
+
 	// As a special case, if the packages looks like "sharded:1/2" then shell out to
 	// ./tool/listpkgs to cut up the package list pieces for each sharded builder.
 	if nOfM, ok := strings.CutPrefix(packages[0], "sharded:"); ok && len(packages) == 1 {
-		out, err := exec.Command("go", "run", "tailscale.com/tool/listpkgs", "-shard", nOfM, "./...").Output()
-		if err != nil {
-			log.Fatalf("failed to list packages for sharded test: %v", err)
-		}
-		packages = strings.Split(strings.TrimSpace(string(out)), "\n")
+		packages = listShardPackages(ctx, nOfM)
 	}
 
-	ctx := context.Background()
 	repo := detectRepo()
 
 	printPkgOutcome := func(pkg string, outcome testOutcome, cached bool, testDur time.Duration) {
@@ -948,11 +1059,13 @@ func main() {
 		}
 		failed = append(failed, pkgFailedTests...)
 		if err := <-runErrCh; err != nil {
-			if exit, ok := errors.AsType[*exec.ExitError](err); ok {
-				if code := exit.ExitCode(); code > -1 && len(pkgFailedTests) == 0 {
+			// ExitCode is -1 if go test was killed by a signal, which
+			// must not be mistaken for success.
+			if exit, ok := errors.AsType[*exec.ExitError](err); ok && exit.ExitCode() > -1 {
+				if len(pkgFailedTests) == 0 {
 					// Pure exec failure with no test-level failures to retry:
 					// honor the original exit code.
-					os.Exit(code)
+					os.Exit(exit.ExitCode())
 				}
 			} else {
 				log.Printf("testwrapper: %s", err)

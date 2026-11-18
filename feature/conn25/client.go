@@ -32,7 +32,8 @@ type client struct {
 
 	// Remember to add new fields to [client.reset] if needed.
 	mu              sync.Mutex // protects the fields below
-	generation      uint64     // Current generation ID
+	closed          bool
+	generation      uint64 // Current generation ID
 	v4MagicIPPool   *ippool
 	v4TransitIPPool *ippool
 	v6MagicIPPool   *ippool
@@ -41,16 +42,23 @@ type client struct {
 	byConnKey       map[key.NodePublic]set.Set[netip.Prefix]
 }
 
-// transitIPForMagicIP is part of the implementation of the [Conn25Datapath] interface for dataflow lookups.
-// See also [Conn25Datapath.ClientTransitIPForMagicIP].
-func (c *client) transitIPForMagicIP(magicIP netip.Addr) (netip.Addr, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	v, ok := c.assignments.lookupByMagicIP(magicIP)
-	if ok {
-		return v.connectorAddr.transit, true
+// errNoMagicIPAssignment is returned by [client.PrepareNewFlowForMagicIP] when
+// this client holds no address assignment for the given Magic IP.
+var errNoMagicIPAssignment = errors.New("no address assignment for magic IP")
+
+// transitIPRoutableLocked reports whether as's Transit IP is registered under
+// its connector's node key, i.e. whether [client.extraWireGuardAllowedIPs]
+// will tell WireGuard to route packets for it to that connector. Until it is,
+// sending to the Transit IP would be a black hole: the assignment exists, but
+// no peer claims the address.
+// c.mu must be held.
+func (c *client) transitIPRoutableLocked(as *addrs) bool {
+	conn := as.connectorAddr.node
+	if !conn.Valid() || conn.Key().IsZero() {
+		return false
 	}
-	return netip.Addr{}, false
+	tip := as.connectorAddr.transit
+	return c.byConnKey[conn.Key()].Contains(netip.PrefixFrom(tip, tip.BitLen()))
 }
 
 // linkLocalAllow returns true if the provided packet with a link-local Dst address has a
@@ -103,6 +111,23 @@ func (c *client) reset() {
 	// Drop any assignments still waiting to be sent. They describe the state
 	// we just cleared, so delivering them would register transit IPs with
 	// connectors that this client no longer knows anything about.
+	c.drainAddrsLocked()
+}
+
+// shutdown stops the client from accepting further address assignments and
+// drops any that are still queued.
+func (c *client) shutdown() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.closed = true
+	c.drainAddrsLocked()
+	close(c.addrsCh)
+}
+
+// drainAddrsLocked empties the send queue. c.mu must be held, which is what
+// makes the drain complete: senders can't refill the queue behind it.
+func (c *client) drainAddrsLocked() {
 	for {
 		select {
 		case _, ok := <-c.addrsCh:
@@ -234,6 +259,7 @@ func (c *client) addTransitIPForConnector(as addrs) error {
 	if conn.Key().IsZero() {
 		return fmt.Errorf("node with stable ID %q does not have a key", conn.StableID())
 	}
+	conn.ID()
 	return c.insertTransitConnMapping(as, conn.Key())
 }
 
@@ -241,7 +267,16 @@ func (c *client) addTransitIPForConnector(as addrs) error {
 // the assignment was dropped. It's backpressure, not a hard failure.
 var errQueueFull = errors.New("queue full")
 
+// errClientShutdown is returned once [client.shutdown] has run and the client
+// no longer accepts address assignments.
+var errClientShutdown = errors.New("conn25 client shut down")
+
+// enqueueAddressAssignment queues addrs to be registered with its connector by
+// sendLoop. c.mu must be held.
 func (c *client) enqueueAddressAssignment(addrs *addrs) error {
+	if c.closed {
+		return errClientShutdown
+	}
 	select {
 	// TODO(fran) investigate the value of waiting for multiple addresses and sending them
 	// in one ConnectorTransitIPRequest
@@ -253,27 +288,65 @@ func (c *client) enqueueAddressAssignment(addrs *addrs) error {
 	}
 }
 
-func (c *client) flowCreated(transit netip.Addr) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	entry, ok := c.assignments.byTransitIP[transit]
-	if !ok {
-		return
-	}
-	entry.activeFlowCount++
+// ClientFlowRef is a client-side flow's reference to the address assignment it was counted against.
+type ClientFlowRef struct {
+	transit netip.Addr
+	release func()
 }
 
-func (c *client) flowRemoved(transit netip.Addr) {
+// TransitIP returns the Transit IP of the assignment the flow was counted
+// against, which is the address its packets should be forwarded to.
+func (r ClientFlowRef) TransitIP() netip.Addr {
+	return r.transit
+}
+
+// Release gives up the flow's claim on the address assignment, letting the
+// assignment be reclaimed once nothing else holds it. It must be called once
+// the flow is gone, or right away if the caller ends up installing no flow at all.
+func (r ClientFlowRef) Release() {
+	if r.release != nil {
+		r.release()
+	}
+}
+
+// prepareNewFlowForMagicIP resolves magicIP to the transit IP currently assigned
+// to it and records that a flow is being established against that assignment,
+// returning the reference that both names that transit IP and keeps the
+// assignment from being reclaimed.
+//
+// It returns [errNoMagicIPAssignment] if there is no assignment for magicIP, and
+// [ErrTransitIPNotRoutable] if there is one but its Transit IP can't carry
+// traffic yet. Nothing is counted on either error path, so the returned
+// reference is the zero value and must not be released.
+func (c *client) prepareNewFlowForMagicIP(magicIP netip.Addr) (ClientFlowRef, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	entry, ok := c.assignments.byTransitIP[transit]
+	entry, ok := c.assignments.lookupByMagicIP(magicIP)
 	if !ok {
-		return
+		return ClientFlowRef{}, errNoMagicIPAssignment
 	}
-	entry.activeFlowCount--
-	if entry.activeFlowCount == 0 {
-		entry.zeroFlowTime = c.assignments.clock.Now()
+	if !c.transitIPRoutableLocked(entry) {
+		return ClientFlowRef{}, ErrTransitIPNotRoutable
 	}
+	transit := entry.connectorAddr.transit
+	entry.activeFlowCount++
+	var released bool
+	return ClientFlowRef{transit: transit, release: func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if released {
+			return
+		}
+		released = true
+		if entry.activeFlowCount <= 0 {
+			c.logf("flow removed for transit %v with no active flows", transit)
+			return
+		}
+		entry.activeFlowCount--
+		if entry.activeFlowCount == 0 {
+			entry.zeroFlowTime = c.assignments.clock.Now()
+		}
+	}}, nil
 }
 
 func (c *client) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {

@@ -734,6 +734,21 @@ var HookReplyToDNSQueries = feature.Hooks[func(PeerAPIHandler, *http.Request) (s
 	offersExitNodeOrAppConnectorAndPeerHasAutogroupInternet,
 }
 
+// PeerAPIDNSResponse carries a PeerAPI DoH response to the
+// [HookPeerAPIDNSResponse] hooks.
+type PeerAPIDNSResponse struct {
+	// Raw is the bytes of the response. Hooks must not modify it.
+	Raw []byte
+	// Header is the HTTP response header the DoH reply will be sent with.
+	// Hooks may add headers to it.
+	Header http.Header
+}
+
+// HookPeerAPIDNSResponse allows extensions to observe a PeerAPI DoH response
+// just before it is returned to the querying peer, and to add response headers
+// based on what the answer contains.
+var HookPeerAPIDNSResponse feature.Hooks[func(PeerAPIHandler, *http.Request, *PeerAPIDNSResponse)]
+
 // isPeerAPIDNSAllowed determines if any of the default or extension hooks
 // permit PeerAPI DNS lookups for the current request.
 // nameAllowed will never be nil when sourceAllowed is true, as required by
@@ -904,12 +919,22 @@ func (h *peerAPIHandler) handleDNSQuery(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	// Let extensions inspect the response and add headers before we commit to
+	// the Content-* headers and body.
+	if len(HookPeerAPIDNSResponse) > 0 {
+		pr := &PeerAPIDNSResponse{Raw: res, Header: w.Header()}
+		for _, hook := range HookPeerAPIDNSResponse {
+			hook(h, r, pr)
+		}
+	}
+
 	if pretty {
 		// Non-standard response for interactive debugging.
 		w.Header().Set("Content-Type", "application/json")
 		writePrettyDNSReply(w, res)
 		return
 	}
+
 	w.Header().Set("Content-Type", "application/dns-message")
 	w.Header().Set("Content-Length", strconv.Itoa(len(res)))
 	w.Write(res)

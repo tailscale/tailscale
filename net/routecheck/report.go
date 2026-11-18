@@ -82,6 +82,23 @@ func (rp Report) RoutablePrefixes() RoutablePrefixes {
 	return out
 }
 
+// RoutableApps returns a map of conn25 apps associated with each app’s
+// connectors that were reachable by the current host,
+// at the time the report was finished.
+// Each slice of connectors are ordered by their node ID.
+func (rp Report) RoutableApps() RoutableApps {
+	var out map[string][]Node
+	for _, n := range rp.Reachable {
+		for _, app := range n.Apps {
+			mak.Set(&out, app, append(out[app], n))
+		}
+	}
+	for app := range out {
+		slices.SortFunc(out[app], Node.Compare)
+	}
+	return out
+}
+
 // Node represents a node in the reachability report.
 type Node struct {
 	ID tailcfg.NodeID `json:"id"`
@@ -97,6 +114,9 @@ type Node struct {
 
 	// Routes are the subnets that the node will route.
 	Routes []netip.Prefix `json:"routes"`
+
+	// Apps are the conn25 apps that the node is a connector for.
+	Apps []string `json:"apps,omitempty"`
 }
 
 // Compare returns an integer comparing two nodes, ordered by their node ID.
@@ -159,6 +179,23 @@ func (rt RoutablePrefixes) Sorted() iter.Seq2[netip.Prefix, []Node] {
 		prefixes := slices.SortedFunc(maps.Keys(rt), netip.Prefix.Compare)
 		for _, p := range prefixes {
 			if !yield(p, rt[p]) {
+				return
+			}
+		}
+	}
+}
+
+// RoutableApps is a map of conn25 connectors,
+// keyed by the app for which they are a connector.
+type RoutableApps map[string][]Node
+
+// Sorted returns an iterator over the map of connectors,
+// ordered by the app name.
+func (ra RoutableApps) Sorted() iter.Seq2[string, []Node] {
+	return func(yield func(string, []Node) bool) {
+		apps := slices.Sorted(maps.Keys(ra))
+		for _, app := range apps {
+			if !yield(app, ra[app]) {
 				return
 			}
 		}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,6 +31,10 @@ import (
 // rather than as a single REG_MULTI_SZ value under the group key.
 // This is the same format as ADMX use for string lists.
 type subkeyStrings []string
+
+// subkeyBooleans is a string list stored as checkbox DWORD values under a subkey.
+// The value name is the item, and a nonzero DWORD includes it.
+type subkeyBooleans map[string]bool
 
 type testPolicyValue struct {
 	name  pkey.Key
@@ -191,6 +196,8 @@ func TestReadPolicyStore(t *testing.T) {
 		{name: "StringListPolicy_Empty", newValue: []string{}, want: []string{}},
 		{name: "StringListPolicy_SubKey", newValue: subkeyStrings{"Value1", "Value2"}, want: []string{"Value1", "Value2"}},
 		{name: "StringListPolicy_SubKey_Empty", newValue: subkeyStrings{}, want: []string{}},
+		{name: "StringListPolicy_Checkboxes", newValue: subkeyBooleans{"current-user": true, "other-users": false, "tagged-devices": true}, want: []string{"current-user", "tagged-devices"}},
+		{name: "StringListPolicy_Checkboxes_Empty", newValue: subkeyBooleans{"current-user": false, "other-users": false, "tagged-devices": false}, want: []string{}},
 	}
 
 	runTests := func(t *testing.T, userStore bool, token windows.Token) {
@@ -275,6 +282,9 @@ func TestReadPolicyStore(t *testing.T) {
 					}
 					if err != nil {
 						t.Fatal(err)
+					}
+					if _, ok := tt.newValue.(subkeyBooleans); ok {
+						slices.Sort(got.([]string))
 					}
 					if !reflect.DeepEqual(got, tt.want) {
 						t.Errorf("got %v; want %v", got, tt.want)
@@ -459,6 +469,22 @@ func createTestPolicyValues(hive registry.Key, keyName string, values []testPoli
 			mak.Set(&valuesToDelete, strings.Trim(path+`\`+valueName, `\`), nil)
 			for i, value := range value {
 				if err := key.SetStringValue(strconv.Itoa(i), value); err != nil {
+					return nil, err
+				}
+			}
+		case subkeyBooleans:
+			subkey, _, err := registry.CreateKey(key, valueName, windows.KEY_ALL_ACCESS)
+			if err != nil {
+				return nil, err
+			}
+			defer subkey.Close()
+			mak.Set(&valuesToDelete, strings.Trim(path+`\`+valueName, `\`), nil)
+			for item, enabled := range value {
+				var dword uint32
+				if enabled {
+					dword = 1
+				}
+				if err := subkey.SetDWordValue(item, dword); err != nil {
 					return nil, err
 				}
 			}

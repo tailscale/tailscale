@@ -35,6 +35,12 @@ type NetLogSource interface {
 	// along with whether exit node flows should be logged.
 	// ok is false if network flow logging should not run.
 	NetLogIDs() (nodeID, domainID logid.PrivateID, logExitFlows bool, ok bool)
+
+	// LogUploadAuth returns the opaque auth ID and a token function for
+	// authenticated log uploads (see logtail.Logger.SetAuthID and
+	// RegisterAuthToken). authID is empty when there is no self node;
+	// authToken may be nil.
+	LogUploadAuth() (authID string, authToken func() string)
 }
 
 // NetLogger is the engine's handle on the network flow logger

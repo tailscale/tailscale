@@ -402,7 +402,9 @@ Tests come in three flavors:
 - `cmd/featuretags` constructs valid sets of Go omit build tags. Start
   from a minimal build and add features with `--min --add=...`, or start
   from a full build and remove with `--remove=...`; either way it
-  respects the declared dependency DAG.
+  respects the declared dependency DAG. Add `--tsnet` to keep the
+  features `tsnet` requires (`featuretags.TSNetMin`); tsnet's
+  `TestTypeCheckFeatureSets` locks in that tsnet builds with them.
 - `build_dist.sh` uses `cmd/featuretags` under the hood, so you do not
   need to hand-maintain its build-tag lists as new features are added.
 

@@ -33,6 +33,7 @@ concurrency:
 jobs:
   gomod-cache:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     outputs:
       cache-key: ${{ steps.hash.outputs.key }}
     steps:
@@ -66,6 +67,7 @@ jobs:
 
   race-root-integration:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     needs: gomod-cache
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
@@ -112,6 +114,7 @@ jobs:
             shard: '3/3'
           - goarch: "386" # thanks yaml
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     needs: gomod-cache
     steps:
     - name: checkout
@@ -214,6 +217,7 @@ jobs:
     # and 32 GB of RAM. It is connected to a private Azure VNet that hosts cigocached.
     # https://github.com/organizations/tailscale/settings/actions/github-hosted-runners/5
     runs-on: ci-windows-github-1
+    timeout-minutes: 60
     needs: gomod-cache
     name: Windows (${{ matrix.name || matrix.shard}})
     strategy:
@@ -286,6 +290,7 @@ jobs:
 
   macos:
     runs-on: macos-latest
+    timeout-minutes: 30
     needs: gomod-cache
     steps:
     - name: checkout
@@ -344,6 +349,7 @@ jobs:
   privileged:
     needs: gomod-cache
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     container:
       image: golang:latest # zizmor: ignore[unpinned-images]
       options: --privileged
@@ -402,6 +408,7 @@ jobs:
             goarch: amd64
 
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
     - name: checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -462,6 +469,7 @@ jobs:
   ios: # similar to cross above, but iOS can't build most of the repo. So, just
        # make it build a few smoke packages.
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     needs: gomod-cache
     steps:
     - name: checkout
@@ -501,6 +509,7 @@ jobs:
             goarch: amd64
 
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
     - name: checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -556,6 +565,7 @@ jobs:
     # repo. We should fix those pieces, they're small, but as a stepping stone,
     # only test the subset of android that our past smoke test checked.
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     needs: gomod-cache
     steps:
     - name: checkout
@@ -581,6 +591,7 @@ jobs:
 
   wasm: # builds tsconnect, which is the only wasm build we support
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     needs: gomod-cache
     steps:
     - name: checkout
@@ -646,6 +657,7 @@ jobs:
 
   tailscale_go: # Subset of tests that depend on our custom Go toolchain.
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     needs: gomod-cache
     steps:
     - name: checkout
@@ -663,6 +675,7 @@ jobs:
 
   depaware:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     needs: gomod-cache
     steps:
     - name: checkout
@@ -683,6 +696,7 @@ jobs:
 
   go_generate:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     needs: gomod-cache
     steps:
     - name: checkout
@@ -715,6 +729,7 @@ jobs:
 
   make_tidy:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     needs: gomod-cache
     steps:
     - name: checkout
@@ -737,6 +752,7 @@ jobs:
 
   licenses:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     needs: gomod-cache
     steps:
     - name: checkout
@@ -757,6 +773,7 @@ jobs:
 
   staticcheck:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     needs: gomod-cache
     name: staticcheck (${{ matrix.name }})
     strategy:
@@ -830,6 +847,7 @@ jobs:
       - licenses
       - staticcheck
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
     - name: notify  
       # Only notify slack for merged commits, not PR failures.
@@ -861,6 +879,7 @@ jobs:
     needs:
       - windows
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
     - name: checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -897,6 +916,7 @@ jobs:
   merge_blocker:
     if: always()
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     needs:
       - android
       - test
@@ -924,6 +944,7 @@ jobs:
   check_mergeability_strict:
     if: always()
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     needs:
       - android
       - cross
@@ -945,6 +966,7 @@ jobs:
   check_mergeability:
     if: always()
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     needs:
       - check_mergeability_strict
       - test

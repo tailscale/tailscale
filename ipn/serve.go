@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/nodecap"
@@ -620,7 +621,7 @@ func (v ServeConfigView) IsFunnelOn() bool { return v.ж.IsFunnelOn() }
 
 // IsFunnelOn reports whether any funnel endpoint is currently enabled for this node.
 func (sc *ServeConfig) IsFunnelOn() bool {
-	if sc == nil {
+	if !buildfeatures.HasServe || sc == nil {
 		return false
 	}
 	for _, b := range sc.AllowFunnel {

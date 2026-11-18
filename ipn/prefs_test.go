@@ -653,6 +653,11 @@ func TestPrefsPretty(t *testing.T) {
 			`Prefs{ra=false dns=false want=false routes=[] nf=off update=off Persist=nil}`,
 		},
 		{
+			Prefs{PostureChecking: true},
+			"linux",
+			`Prefs{ra=false dns=false want=false routes=[] nf=off update=off posture=true Persist=nil}`,
+		},
+		{
 			Prefs{
 				NetfilterKind: "iptables",
 			},

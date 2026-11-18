@@ -483,9 +483,9 @@ func resetDialCancels() {
 	}
 }
 
-func connect() (net.Conn, error) {
-	d := net.Dialer{
-		Control: bypassControlFunc,
+func driverDialer() *net.Dialer {
+	return &net.Dialer{
+		ControlContext: bypassControlFunc,
 		KeepAliveConfig: net.KeepAliveConfig{
 			Enable:   true,
 			Idle:     5 * time.Second,
@@ -493,6 +493,10 @@ func connect() (net.Conn, error) {
 			Count:    3,
 		},
 	}
+}
+
+func connect() (net.Conn, error) {
+	d := driverDialer()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	h := registerDialCancel(cancel)
 	defer func() {

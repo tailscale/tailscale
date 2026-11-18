@@ -25,20 +25,23 @@ import (
 )
 
 type testConn25 struct {
-	clientTransitIPForMagicIPFn             func(netip.Addr) (netip.Addr, error)
+	clientPrepareNewFlowForMagicIPFn        func(netip.Addr) (netip.Addr, error)
 	connectorRealIPForTransitIPConnectionFn func(netip.Addr, netip.Addr) (netip.Addr, error)
 }
 
-func (tc *testConn25) ClientTransitIPForMagicIP(magicIP netip.Addr) (netip.Addr, error) {
-	return tc.clientTransitIPForMagicIPFn(magicIP)
+// ClientPrepareNewFlowForMagicIP counts a flow, and so reports ok, exactly when
+// clientPrepareNewFlowForMagicIPFn resolves magicIP to a Transit IP.
+func (tc *testConn25) ClientPrepareNewFlowForMagicIP(magicIP netip.Addr) (ClientFlowRef, bool, error) {
+	transitIP, err := tc.clientPrepareNewFlowForMagicIPFn(magicIP)
+	if err != nil || !transitIP.IsValid() {
+		return ClientFlowRef{}, false, err
+	}
+	return ClientFlowRef{transit: transitIP}, true, nil
 }
 
 func (tc *testConn25) ConnectorRealIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, error) {
 	return tc.connectorRealIPForTransitIPConnectionFn(srcIP, transitIP)
 }
-
-func (tc *testConn25) ClientFlowCreated(transitIP netip.Addr) {}
-func (tc *testConn25) ClientFlowRemoved(transitIP netip.Addr) {}
 
 // testNet is the cast of addresses the datapath tests run against: a client,
 // the Magic and Transit IPs it talks through, and the real server behind them,
@@ -48,12 +51,13 @@ type testNet struct {
 	name      string
 	ipVersion uint8
 
-	clientSrcIP   netip.Addr // a client's Tailscale IP
-	unknownSrcIP  netip.Addr // a Tailscale IP with no mapping on the connector
-	magicIP       netip.Addr // a Magic IP mapped to transitIP
-	unusedMagicIP netip.Addr // a Magic IP with no active Transit IP mapping
-	transitIP     netip.Addr
-	realIP        netip.Addr // the internet-facing address behind transitIP
+	clientSrcIP       netip.Addr // a client's Tailscale IP
+	unknownSrcIP      netip.Addr // a Tailscale IP with no mapping on the connector
+	magicIP           netip.Addr // a Magic IP mapped to transitIP
+	unusedMagicIP     netip.Addr // a Magic IP with no active Transit IP mapping
+	unroutableMagicIP netip.Addr // a Magic IP whose Transit IP isn't installed in WireGuard yet
+	transitIP         netip.Addr
+	realIP            netip.Addr // the internet-facing address behind transitIP
 }
 
 var testNets = []testNet{
@@ -61,23 +65,25 @@ var testNets = []testNet{
 		name:      "ipv4",
 		ipVersion: 4,
 
-		clientSrcIP:   netip.MustParseAddr("100.70.0.1"),
-		unknownSrcIP:  netip.MustParseAddr("100.99.99.99"),
-		magicIP:       netip.MustParseAddr("10.64.0.1"),
-		unusedMagicIP: netip.MustParseAddr("10.64.0.2"),
-		transitIP:     netip.MustParseAddr("169.254.0.1"),
-		realIP:        netip.MustParseAddr("240.64.0.1"),
+		clientSrcIP:       netip.MustParseAddr("100.70.0.1"),
+		unknownSrcIP:      netip.MustParseAddr("100.99.99.99"),
+		magicIP:           netip.MustParseAddr("10.64.0.1"),
+		unusedMagicIP:     netip.MustParseAddr("10.64.0.2"),
+		unroutableMagicIP: netip.MustParseAddr("10.64.0.3"),
+		transitIP:         netip.MustParseAddr("169.254.0.1"),
+		realIP:            netip.MustParseAddr("240.64.0.1"),
 	},
 	{
 		name:      "ipv6",
 		ipVersion: 6,
 
-		clientSrcIP:   netip.MustParseAddr("fd7a:115c:a1e0::1"),
-		unknownSrcIP:  netip.MustParseAddr("fd7a:115c:a1e0::9999"),
-		magicIP:       netip.MustParseAddr("fd7a:115c:a1e0:a99c:100::1"),
-		unusedMagicIP: netip.MustParseAddr("fd7a:115c:a1e0:a99c:100::2"),
-		transitIP:     netip.MustParseAddr("fd7a:115c:a1e0:a99c:200::1"),
-		realIP:        netip.MustParseAddr("2606:4700::6812:1a78"),
+		clientSrcIP:       netip.MustParseAddr("fd7a:115c:a1e0::1"),
+		unknownSrcIP:      netip.MustParseAddr("fd7a:115c:a1e0::9999"),
+		magicIP:           netip.MustParseAddr("fd7a:115c:a1e0:a99c:100::1"),
+		unusedMagicIP:     netip.MustParseAddr("fd7a:115c:a1e0:a99c:100::2"),
+		unroutableMagicIP: netip.MustParseAddr("fd7a:115c:a1e0:a99c:100::3"),
+		transitIP:         netip.MustParseAddr("fd7a:115c:a1e0:a99c:200::1"),
+		realIP:            netip.MustParseAddr("2606:4700::6812:1a78"),
 	},
 }
 
@@ -158,7 +164,7 @@ func (tn testNet) newClientDatapath(t *testing.T, throwMappingErr bool) *datapat
 	t.Helper()
 
 	mock := &testConn25{}
-	mock.clientTransitIPForMagicIPFn = func(mip netip.Addr) (netip.Addr, error) {
+	mock.clientPrepareNewFlowForMagicIPFn = func(mip netip.Addr) (netip.Addr, error) {
 		if throwMappingErr {
 			return netip.Addr{}, errors.New("synthetic mapping error")
 		}
@@ -167,6 +173,8 @@ func (tn testNet) newClientDatapath(t *testing.T, throwMappingErr bool) *datapat
 			return tn.transitIP, nil
 		case tn.unusedMagicIP:
 			return netip.Addr{}, ErrUnmappedMagicIP
+		case tn.unroutableMagicIP:
+			return netip.Addr{}, ErrTransitIPNotRoutable
 		}
 		return netip.Addr{}, nil
 	}
@@ -222,6 +230,14 @@ func TestHandlePacketFromTunDevice(t *testing.T) {
 				expectedFilterResponse: filter.Drop,
 			},
 			{
+				description:            "drop-magic-ip-with-unroutable-transit-ip",
+				src:                    netip.AddrPortFrom(tn.clientSrcIP, clientPort),
+				dst:                    netip.AddrPortFrom(tn.unroutableMagicIP, serverPort),
+				expectedSrc:            netip.AddrPortFrom(tn.clientSrcIP, clientPort),
+				expectedDst:            netip.AddrPortFrom(tn.unroutableMagicIP, serverPort),
+				expectedFilterResponse: filter.Drop,
+			},
+			{
 				description:            "accept-dont-nat-other-mapping-error",
 				src:                    netip.AddrPortFrom(tn.clientSrcIP, clientPort),
 				dst:                    netip.AddrPortFrom(tn.magicIP, serverPort),
@@ -265,43 +281,55 @@ func TestHandlePacketFromTunDevice(t *testing.T) {
 	}
 }
 
-// TestUnmappedMagicIPICMPUnreachable verifies that a packet to a Magic IP with
-// no active Transit IP mapping is dropped and an ICMP host-unreachable error is
+// TestUnreachableMagicIPICMPUnreachable verifies that a packet to a Magic IP
+// that can't carry traffic is dropped and an ICMP host-unreachable error is
 // injected back toward the local host, sourced from the Magic IP and addressed
-// to the original sender.
-func TestUnmappedMagicIPICMPUnreachable(t *testing.T) {
+// to the original sender. A Magic IP can't carry traffic either because it has
+// no Transit IP mapping at all, or because the Transit IP it maps to hasn't
+// been installed in WireGuard for its connector yet.
+func TestUnreachableMagicIPICMPUnreachable(t *testing.T) {
 	const clientPort, serverPort = 1234, 80
 
 	for _, tn := range testNets {
 		t.Run(tn.name, func(t *testing.T) {
-			dph := tn.newClientDatapath(t, false)
-			chtun, tun := newChannelTUN(t)
+			for _, mc := range []struct {
+				name    string
+				magicIP netip.Addr
+			}{
+				{"unmapped", tn.unusedMagicIP},
+				{"unroutable-transit-ip", tn.unroutableMagicIP},
+			} {
+				t.Run(mc.name, func(t *testing.T) {
+					dph := tn.newClientDatapath(t, false)
+					chtun, tun := newChannelTUN(t)
 
-			// HandlePacketFromTunDevice blocks until the injected packet is
-			// read, so drain the channel TUN concurrently.
-			gotInboundPacketChan := make(chan []byte, 1)
-			go func() { gotInboundPacketChan <- <-chtun.Inbound }()
+					// HandlePacketFromTunDevice blocks until the injected packet is
+					// read, so drain the channel TUN concurrently.
+					gotInboundPacketChan := make(chan []byte, 1)
+					go func() { gotInboundPacketChan <- <-chtun.Inbound }()
 
-			src := netip.AddrPortFrom(tn.clientSrcIP, clientPort)
-			dst := netip.AddrPortFrom(tn.unusedMagicIP, serverPort)
-			p := tn.udpPacket(src, dst)
-			if got, want := dph.HandlePacketFromTunDevice(p, tun), filter.Drop; got != want {
-				t.Fatalf("unexpected filter response: got %v, want %v", got, want)
+					src := netip.AddrPortFrom(tn.clientSrcIP, clientPort)
+					dst := netip.AddrPortFrom(mc.magicIP, serverPort)
+					p := tn.udpPacket(src, dst)
+					if got, want := dph.HandlePacketFromTunDevice(p, tun), filter.Drop; got != want {
+						t.Fatalf("unexpected filter response: got %v, want %v", got, want)
+					}
+					// The dropped packet itself must be left untouched, since the
+					// injected error quotes it.
+					tn.checkPacket(t, p, src, dst)
+
+					var injected []byte
+					select {
+					case injected = <-gotInboundPacketChan:
+					case <-time.After(1 * time.Second):
+						t.Fatal("timed out waiting for injected ICMP packet")
+					}
+
+					// The error should appear to come from the unreachable Magic IP,
+					// addressed back to the original sender.
+					tn.checkICMPUnreachable(t, injected, mc.magicIP, tn.clientSrcIP, p)
+				})
 			}
-			// The dropped packet itself must be left untouched, since the
-			// injected error quotes it.
-			tn.checkPacket(t, p, src, dst)
-
-			var injected []byte
-			select {
-			case injected = <-gotInboundPacketChan:
-			case <-time.After(1 * time.Second):
-				t.Fatal("timed out waiting for injected ICMP packet")
-			}
-
-			// The error should appear to come from the unreachable Magic IP,
-			// addressed back to the original sender.
-			tn.checkICMPUnreachable(t, injected, tn.unusedMagicIP, tn.clientSrcIP, p)
 		})
 	}
 }
@@ -410,9 +438,9 @@ func TestClientFlowCache(t *testing.T) {
 			getTransitIPCalled := false
 
 			mock := &testConn25{}
-			mock.clientTransitIPForMagicIPFn = func(mip netip.Addr) (netip.Addr, error) {
+			mock.clientPrepareNewFlowForMagicIPFn = func(mip netip.Addr) (netip.Addr, error) {
 				if getTransitIPCalled {
-					t.Errorf("ClientGetTransitIPForMagicIP unexpectedly called more than once")
+					t.Errorf("ClientPrepareNewFlowForMagicIP unexpectedly called more than once")
 				}
 				getTransitIPCalled = true
 				return tn.transitIP, nil
@@ -596,14 +624,16 @@ func TestUnmappedTransitIPRejectWithFullInjectionQueue(t *testing.T) {
 				tun := newFakeTUN(t)
 				p := tn.udpPacket(
 					netip.AddrPortFrom(tn.unknownSrcIP, clientPort),
-					netip.AddrPortFrom(tn.transitIP, serverPort))
+					netip.AddrPortFrom(tn.transitIP, serverPort),
+				)
 
 				// Fill the injection queue (depth 1) and leave it unread,
 				// as its reader may be blocked behind wireguard-go's
 				// device.peers lock held by RemovePeer.
 				if err := tun.TryInjectOutbound(tn.udpPacket(
 					netip.AddrPortFrom(tn.clientSrcIP, clientPort),
-					netip.AddrPortFrom(tn.magicIP, serverPort)).Buffer()); err != nil {
+					netip.AddrPortFrom(tn.magicIP, serverPort),
+				).Buffer()); err != nil {
 					t.Fatal(err)
 				}
 

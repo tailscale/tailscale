@@ -1,0 +1,43 @@
+# pnpm settings for cmd/tsconnect. Use ./tool/pnpm (pinned in tool/pnpm.rev)
+# rather than a globally installed pnpm.
+#
+# Most of these are supply-chain hardening settings. Several match pnpm's
+# defaults but are set explicitly so that they're visible and can't be
+# silently weakened by a future default change.
+# See https://pnpm.io/settings for details.
+
+# Don't install any version (direct or transitive) published less than 7 days
+# ago, and fail rather than fall back to a newer version if nothing in the
+# requested range is old enough.
+minimumReleaseAge: 10080 # minutes
+minimumReleaseAgeStrict: true
+# Fail if the registry doesn't tell us when a version was published, rather
+# than skipping the age (and trust) check.
+minimumReleaseAgeIgnoreMissingTime: false
+
+# Fail if a package's trust level (e.g. trusted publishing / provenance) has
+# decreased compared to its earlier releases.
+trustPolicy: no-downgrade
+
+# Re-check minimumReleaseAge and trustPolicy against lockfile entries on every
+# install, so a hand-edited lockfile can't bypass them.
+trustLockfile: false
+
+# Only direct dependencies may come from git repos or tarball URLs.
+blockExoticSubdeps: true
+
+# Don't run dependency lifecycle scripts unless the package is listed in
+# allowBuilds, and fail the install if an unlisted package wants to run one.
+strictDepBuilds: true
+dangerouslyAllowAllBuilds: false
+allowBuilds: {}
+
+# Verify package contents in the store before linking them into node_modules.
+verifyStoreIntegrity: true
+strictStorePkgContentCheck: true
+
+# Error out rather than downloading a different pnpm version if package.json
+# ever declares one that doesn't match tool/pnpm.rev.
+pmOnFail: error
+
+frozenLockfile: true

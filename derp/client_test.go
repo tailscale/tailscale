@@ -12,20 +12,24 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"reflect"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"testing/synctest"
 	"time"
 
 	"go4.org/mem"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
 )
 
 type dummyNetConn struct {
@@ -100,6 +104,152 @@ func TestClientRecv(t *testing.T) {
 				t.Errorf("got %#v; want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestClientRecvMetrics(t *testing.T) {
+	if !buildfeatures.HasClientMetrics {
+		t.Skip("client metrics disabled")
+	}
+	metrics := []*clientmetric.Metric{metricClientRecvKeepAlive, metricClientRecvPing, metricClientRecvPong}
+	for _, tt := range []struct {
+		name    string
+		frame   FrameType
+		payload []byte
+		want    []int64
+		wantErr bool
+	}{
+		{"keepalive", FrameKeepAlive, nil, []int64{1, 0, 0}, false},
+		{"ping", FramePing, make([]byte, 8), []int64{0, 1, 0}, false},
+		{"pong", FramePong, make([]byte, 8), []int64{0, 0, 1}, false},
+		{"short_ping", FramePing, make([]byte, 7), []int64{0, 0, 0}, true},
+		{"short_pong", FramePong, make([]byte, 7), []int64{0, 0, 0}, true},
+		{"truncated_ping", FramePing, nil, []int64{0, 0, 0}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			before := make([]int64, len(metrics))
+			for i, m := range metrics {
+				before[i] = m.Value()
+			}
+			var buf bytes.Buffer
+			bw := bufio.NewWriter(&buf)
+			if err := WriteFrame(bw, tt.frame, tt.payload); err != nil {
+				t.Fatal(err)
+			}
+			if tt.name == "truncated_ping" {
+				buf.Bytes()[4] = 8 // header claims a payload that never arrives
+			}
+			c := &Client{nc: dummyNetConn{}, br: bufio.NewReader(&buf), logf: t.Logf}
+			if _, err := c.Recv(); (err != nil) != tt.wantErr {
+				t.Fatalf("Recv error = %v; wantErr %v", err, tt.wantErr)
+			}
+			for i, m := range metrics {
+				if got := m.Value() - before[i]; got != tt.want[i] {
+					t.Errorf("receive metric %d delta = %d; want %d", i, got, tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestClientRecvReadTimeoutMetric(t *testing.T) {
+	if !buildfeatures.HasClientMetrics {
+		t.Skip("client metrics disabled")
+	}
+	t.Run("read_deadline", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			before := metricClientRecvReadTimeout.Value()
+			nc, peer := net.Pipe()
+			defer nc.Close()
+			defer peer.Close()
+			c := &Client{nc: nc, br: bufio.NewReader(nc)}
+			start := time.Now()
+			if _, err := c.Recv(); !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Fatalf("Recv error = %v; want read deadline", err)
+			}
+			if got := time.Since(start); got != 120*time.Second {
+				t.Errorf("Recv elapsed = %v; want 120s", got)
+			}
+			if got := metricClientRecvReadTimeout.Value() - before; got != 1 {
+				t.Errorf("read timeout delta = %d; want 1", got)
+			}
+		})
+	})
+	for _, tt := range []struct {
+		name string
+		err  error
+		want int64
+	}{
+		{"deadline", os.ErrDeadlineExceeded, 1},
+		{"wrapped_deadline", fmt.Errorf("read: %w", os.ErrDeadlineExceeded), 1},
+		{"eof", io.EOF, 0},
+		{"closed", net.ErrClosed, 0},
+		{"other_timeout", recvTestTimeoutError{}, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			before := metricClientRecvReadTimeout.Value()
+			c := &Client{nc: dummyNetConn{}, br: bufio.NewReader(iotest.ErrReader(tt.err))}
+			_, firstErr := c.Recv()
+			if !errors.Is(firstErr, tt.err) {
+				t.Fatalf("Recv error = %v; want wrapping %v", firstErr, tt.err)
+			}
+			if _, err := c.Recv(); err != firstErr {
+				t.Fatalf("second Recv error = %v; want sticky error %v", err, firstErr)
+			}
+			if got := metricClientRecvReadTimeout.Value() - before; got != tt.want {
+				t.Errorf("read timeout delta = %d; want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// A generic net.Error timeout must not be attributed to the read deadline.
+// In particular, a transport failure is not necessarily a receive-idle expiry.
+type recvTestTimeoutError struct{}
+
+func (recvTestTimeoutError) Error() string   { return "other timeout" }
+func (recvTestTimeoutError) Timeout() bool   { return true }
+func (recvTestTimeoutError) Temporary() bool { return true }
+
+func TestClientSendPingPongMetrics(t *testing.T) {
+	if !buildfeatures.HasClientMetrics {
+		t.Skip("client metrics disabled")
+	}
+	for _, frame := range []FrameType{FramePing, FramePong} {
+		for _, fail := range []bool{false, true} {
+			t.Run(fmt.Sprintf("frame_%x/fail_%v", frame, fail), func(t *testing.T) {
+				beforePing, beforePong := metricClientSendPing.Value(), metricClientSendPong.Value()
+				var buf bytes.Buffer
+				c := &Client{bw: bufio.NewWriter(&buf)}
+				if fail {
+					// A buffered writer retains its first error. Neither a failed
+					// flush nor an already broken writer should count a send.
+					pr, pw := io.Pipe()
+					pr.CloseWithError(io.ErrClosedPipe)
+					defer pw.Close()
+					c.bw = bufio.NewWriter(pw)
+				}
+				for range 2 {
+					if err := c.sendPingOrPong(frame, [8]byte{}); (err != nil) != fail {
+						t.Fatalf("send error = %v; want failure %v", err, fail)
+					}
+				}
+				var wantPing, wantPong int64
+				if !fail {
+					if frame == FramePing {
+						wantPing = 2
+					} else {
+						wantPong = 2
+					}
+				}
+				if got := metricClientSendPing.Value() - beforePing; got != wantPing {
+					t.Errorf("sent ping delta = %d; want %d", got, wantPing)
+				}
+				if got := metricClientSendPong.Value() - beforePong; got != wantPong {
+					t.Errorf("sent pong delta = %d; want %d", got, wantPong)
+				}
+			})
+		}
 	}
 }
 

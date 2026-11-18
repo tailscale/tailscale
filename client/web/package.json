@@ -3,8 +3,7 @@
   "version": "0.0.1",
   "license": "BSD-3-Clause",
   "engines": {
-    "node": "22.23.4",
-    "yarn": "1.22.19"
+    "node": "26.13.1"
   },
   "type": "module",
   "private": true,
@@ -20,7 +19,7 @@
     "zustand": "^4.4.7"
   },
   "devDependencies": {
-    "@types/node": "^22.14.0",
+    "@types/node": "^26.6.6",
     "@types/react": "^18.0.20",
     "@types/react-dom": "^18.0.6",
     "@vitejs/plugin-react-swc": "^3.6.0",
@@ -34,14 +33,10 @@
     "prettier-plugin-organize-imports": "^3.2.2",
     "tailwindcss": "^3.3.3",
     "typescript": "^5.3.3",
-    "vite": "^5.4.21",
+    "vite": "^6.4.6",
     "vite-plugin-svgr": "^4.2.0",
     "vite-tsconfig-paths": "^3.5.0",
     "vitest": "^1.6.1"
-  },
-  "resolutions": {
-    "@typescript-eslint/eslint-plugin": "^6.2.1",
-    "@typescript-eslint/parser": "^6.2.1"
   },
   "scripts": {
     "build": "vite build",

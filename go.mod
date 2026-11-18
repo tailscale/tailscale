@@ -1,6 +1,6 @@
 module tailscale.com
 
-go 1.27.3
+go 1.27.4
 
 require (
 	filippo.io/mkcert v1.4.4
@@ -57,12 +57,12 @@ require (
 	github.com/go4org/plan9netshell v0.0.0-20250324183649-788daa080737
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/gokrazy/breakglass v0.0.0-20260711072910-0f882c44303e
-	github.com/gokrazy/firmware v0.0.0-20260916135839-f966a2e0e4b0
+	github.com/gokrazy/firmware v0.0.0-20261103105416-6bd1fd16a2e2
 	github.com/gokrazy/gokrazy v0.0.0-20260916140236-39fe3e5557b8
-	github.com/gokrazy/kernel.amd64 v0.0.0-20260926085050-5a347b66f180
-	github.com/gokrazy/kernel.arm64 v0.0.0-20260926085557-3998e71b7b1d
-	github.com/gokrazy/kernel.rpi v0.0.0-20260911133309-2cbf751e3f2a
-	github.com/gokrazy/rpi-eeprom v0.0.0-20260924082843-6a92fdda349c
+	github.com/gokrazy/kernel.amd64 v0.0.0-20261111110037-eb0ff0075854
+	github.com/gokrazy/kernel.arm64 v0.0.0-20261111111623-595ae821533a
+	github.com/gokrazy/kernel.rpi v0.0.0-20261103170006-85ea215f0624
+	github.com/gokrazy/rpi-eeprom v0.0.0-20261031093638-30711eb43bb5
 	github.com/gokrazy/serial-busybox v0.0.0-20250119153030-ac58ba7574e7
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8
 	github.com/golang/snappy v1.0.0
@@ -126,7 +126,7 @@ require (
 	github.com/tailscale/ts-gokrazy v0.0.0-20260630224145-b83088f2e52e
 	github.com/tailscale/web-client-prebuilt v0.0.0-20260917222731-e0ed2d0d0fea
 	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
-	github.com/tailscale/wireguard-go v0.0.0-20261105205217-79ead109a81a
+	github.com/tailscale/wireguard-go v0.0.0-20261117232807-a1800e9c5305
 	github.com/tailscale/xnet v0.0.0-20240729143630-8497ac4dab2e
 	github.com/tc-hib/winres v0.3.1
 	github.com/tcnksm/go-httpstat v0.2.0
@@ -137,23 +137,23 @@ require (
 	go.uber.org/zap v1.28.0
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745
 	go4.org/netipx v0.0.0-20260823151212-3075585bcbeb
-	golang.org/x/crypto v0.58.0
+	golang.org/x/crypto v0.59.0
 	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba
 	golang.org/x/image v0.46.0
-	golang.org/x/mod v0.41.0
+	golang.org/x/mod v0.43.0
 	golang.org/x/net v0.62.0
 	golang.org/x/oauth2 v0.37.0
-	golang.org/x/sync v0.24.0
-	golang.org/x/sys v0.49.0
-	golang.org/x/term v0.47.0
-	golang.org/x/text v0.43.0
+	golang.org/x/sync v0.25.0
+	golang.org/x/sys v0.50.0
+	golang.org/x/term v0.48.0
+	golang.org/x/text v0.44.0
 	golang.org/x/time v0.16.0
-	golang.org/x/tools v0.51.0
+	golang.org/x/tools v0.52.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard v0.0.0-20260522210424-ecfc5a8d5446
 	golang.zx2c4.com/wireguard/windows v1.0.1
 	gopkg.in/yaml.v3 v3.0.1
-	gvisor.dev/gvisor v0.0.0-20260915211658-a6f909f08a72
+	gvisor.dev/gvisor v0.0.0-20261117040555-0303b2605d5e
 	helm.sh/helm/v3 v3.21.4
 	honnef.co/go/tools v0.8.1
 	k8s.io/api v0.37.0
@@ -529,7 +529,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto/x509roots/fallback v0.0.0-20260113154411-7d0074ccc6f1 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20260811152304-ee035b5b010f // indirect
-	golang.org/x/telemetry v0.0.0-20260924152758-ed294f943157 // indirect
+	golang.org/x/telemetry v0.0.0-20261009151841-97e8ea77aa2a // indirect
 	gomodules.xyz/jsonpatch/v2 v2.4.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect

@@ -71,6 +71,11 @@ func RequiredBy(ft FeatureTag) set.Set[FeatureTag] {
 // useful tailscaled. Pass it to [MinTags] to get its build tags.
 var ExtraSmall = []FeatureTag{"osrouter", "nattraversal"}
 
+// TSNetMin is the set of features that [tailscale.com/tsnet] requires.
+// Pass it to [MinTags] to get the build tags for the smallest tsnet
+// build. Omitting any of these breaks tsnet.
+var TSNetMin = []FeatureTag{"netstack"}
+
 // MinTags returns the sorted Go build tags for a minimal build that
 // includes only the features in keep and the features they require.
 // Every other omittable feature in [Features] gets its ts_omit_ tag, and

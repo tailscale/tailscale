@@ -303,37 +303,36 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 	return nil
 }
 
-// ClientTransitIPForMagicIP implements [Conn25Datapath].
-func (c *Conn25) ClientTransitIPForMagicIP(m netip.Addr) (netip.Addr, error) {
-	if addr, ok := c.client.transitIPForMagicIP(m); ok {
-		return addr, nil
+// ClientPrepareNewFlowForMagicIP implements [Conn25Datapath].
+// The datapath notifies Conn25 that a flow to magic IP is being established, and
+// Conn25 resolves m to its Transit IP and counts the flow against that address
+// assignment in one step, reporting ok and returning the reference that names
+// that Transit IP and keeps it and its associated addresses from being removed
+// from Conn25's state and returned to their pools while the flow uses them.
+//
+// If m has an active address assignment whose Transit IP isn't routable yet, it
+// reports ok false and returns [ErrTransitIPNotRoutable].
+//
+// If m has no active address assignment, it reports ok false and returns
+// [ErrUnmappedMagicIP] when m falls in a configured Magic IP range, and a nil
+// error when it does not, since in that case m is not a Magic IP at all and the
+// traffic to it is potentially valid non-app-connector traffic.
+func (c *Conn25) ClientPrepareNewFlowForMagicIP(m netip.Addr) (ClientFlowRef, bool, error) {
+	ref, err := c.client.prepareNewFlowForMagicIP(m)
+	if err == nil {
+		return ref, true, nil
+	}
+	if errors.Is(err, ErrTransitIPNotRoutable) {
+		return ClientFlowRef{}, false, err
 	}
 	cfg, ok := c.getConfig()
 	if !ok {
-		return netip.Addr{}, nil
+		return ClientFlowRef{}, false, nil
 	}
 	if !cfg.ipSets.v4Magic.Contains(m) && !cfg.ipSets.v6Magic.Contains(m) {
-		return netip.Addr{}, nil
+		return ClientFlowRef{}, false, nil
 	}
-	// TODO(tailscale/corp#50405): Just because there is a TransitIP associated with the MagicIP,
-	// that doesn't mean the TransitIP is ready to use. We should also make sure that the TransitIP
-	// is installed in WireGuard for the correct node, which happens after it is registered with the
-	// connector. Perhaps a different error message to represent that.
-	return netip.Addr{}, ErrUnmappedMagicIP
-}
-
-// ClientFlowCreated implements [Conn25Datapath].
-// The datapath notifies Conn25 that a flow with transitIP has been created so
-// that Conn25 can prevent that transit IP and associated addresses from being
-// removed from its state and returned to their pools.
-func (c *Conn25) ClientFlowCreated(transitIP netip.Addr) {
-	c.client.flowCreated(transitIP)
-}
-
-// ClientFlowRemoved implements [Conn25Datapath].
-// See [Conn25.ClientFlowCreated].
-func (c *Conn25) ClientFlowRemoved(transitIP netip.Addr) {
-	c.client.flowRemoved(transitIP)
+	return ClientFlowRef{}, false, ErrUnmappedMagicIP
 }
 
 // ConnectorRealIPForTransitIPConnection implements [Conn25Datapath].
@@ -365,7 +364,7 @@ func (e *extension) Shutdown() error {
 		e.ctxCancel(errors.New("extension shutdown"))
 	}
 	if e.conn25 != nil {
-		close(e.conn25.client.addrsCh)
+		e.conn25.client.shutdown()
 	}
 	return nil
 }

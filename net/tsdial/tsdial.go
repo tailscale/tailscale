@@ -55,7 +55,7 @@ func NewDialer(netMon *netmon.Monitor) *Dialer {
 // and no netMon. It's meant exclusively for the "tailscale debug ts2021"
 // debug command, and perhaps tests.
 func NewFromFuncForDebug(logf logger.Logf, dial netx.DialFunc) *Dialer {
-	return &Dialer{sysDialForTest: dial, Logf: logf}
+	return &Dialer{sysDial: dial, Logf: logf}
 }
 
 // Dialer dials out of tailscaled, while taking care of details while
@@ -86,7 +86,7 @@ type Dialer struct {
 
 	netnsDialerOnce sync.Once
 	netnsDialer     netns.Dialer
-	sysDialForTest  netx.DialFunc // or nil
+	sysDial         netx.DialFunc // or nil
 
 	routes atomic.Pointer[bart.Table[bool]] // or nil if UserDial should not use routes. `true` indicates routes that point into the Tailscale interface
 
@@ -371,17 +371,17 @@ func (d *Dialer) closeSysConn(id int) {
 
 // peerDialControlFunc is non-nil on platforms that require a way to
 // bind to dial out to other peers.
-var peerDialControlFunc func(*Dialer) func(network, address string, c syscall.RawConn) error
+var peerDialControlFunc func(*Dialer) func(ctx context.Context, network, address string, c syscall.RawConn) error
 
 // PeerDialControlFunc returns a function
-// that can assigned to net.Dialer.Control to set sockopts or whatnot
+// that can be assigned to net.Dialer.ControlContext to set socket options
 // to make a dial escape the current platform's network sandbox.
 //
 // On many platforms the returned func will be nil.
 //
 // Notably, this is non-nil on iOS and macOS when run as a Network or
 // System Extension (the GUI variants).
-func (d *Dialer) PeerDialControlFunc() func(network, address string, c syscall.RawConn) error {
+func (d *Dialer) PeerDialControlFunc() func(ctx context.Context, network, address string, c syscall.RawConn) error {
 	if peerDialControlFunc == nil {
 		return nil
 	}
@@ -553,11 +553,20 @@ func (d *Dialer) logf(format string, args ...any) {
 	}
 }
 
+// SetSystemDialer sets an alternate function to use for SystemDial.
+// It must be called before d is first used. If it is not set, host
+// network dials use a [netns.Dialer] constructed from the network monitor.
+func (d *Dialer) SetSystemDialer(fn netx.DialFunc) {
+	d.sysDial = fn
+}
+
 // SetSystemDialerForTest sets an alternate function to use for SystemDial
 // instead of netns.Dialer. This is intended for use with nettest.MemoryNetwork.
+//
+// Deprecated: Use SetSystemDialer instead.
 func (d *Dialer) SetSystemDialerForTest(fn netx.DialFunc) {
 	testenv.AssertInTest()
-	d.sysDialForTest = fn
+	d.sysDial = fn
 }
 
 // SystemDial connects to the provided network address without going over
@@ -566,7 +575,7 @@ func (d *Dialer) SetSystemDialerForTest(fn netx.DialFunc) {
 // Control and (in the future, as of 2022-04-27) DERPs..
 func (d *Dialer) SystemDial(ctx context.Context, network, addr string) (net.Conn, error) {
 	d.mu.Lock()
-	if d.netMon == nil && d.sysDialForTest == nil {
+	if d.netMon == nil && d.sysDial == nil {
 		d.mu.Unlock()
 		if testenv.InTest() {
 			panic("SystemDial requires a netmon.Monitor; call SetNetMon first")
@@ -581,8 +590,8 @@ func (d *Dialer) SystemDial(ctx context.Context, network, addr string) (net.Conn
 
 	var c net.Conn
 	var err error
-	if d.sysDialForTest != nil {
-		c, err = d.sysDialForTest(ctx, network, addr)
+	if d.sysDial != nil {
+		c, err = d.sysDial(ctx, network, addr)
 	} else {
 		d.netnsDialerOnce.Do(func() {
 			d.netnsDialer = netns.NewDialer(d.logf, d.netMon)
@@ -747,9 +756,9 @@ func (d *Dialer) dialPeerAPI(ctx context.Context, network, addr string) (net.Con
 func (d *Dialer) getPeerDialer() *net.Dialer {
 	d.peerDialerOnce.Do(func() {
 		d.peerDialer = &net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: netknob.PlatformTCPKeepAlive(),
-			Control:   d.PeerDialControlFunc(),
+			Timeout:        30 * time.Second,
+			KeepAlive:      netknob.PlatformTCPKeepAlive(),
+			ControlContext: d.PeerDialControlFunc(),
 		}
 	})
 	return d.peerDialer

@@ -12,6 +12,7 @@
 package ipnlocal
 
 import (
+	"tailscale.com/feature"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 )
@@ -19,6 +20,14 @@ import (
 const serveEnabled = false
 
 type localListener = struct{}
+
+func (b *LocalBackend) ServeConfigETag() (ipn.ServeConfigView, string, error) {
+	return ipn.ServeConfigView{}, "", feature.ErrUnavailable
+}
+
+func (b *LocalBackend) SetServeConfig(config *ipn.ServeConfig, etag string) error {
+	return feature.ErrUnavailable
+}
 
 func (b *LocalBackend) DeleteForegroundSession(sessionID string) error {
 	return nil

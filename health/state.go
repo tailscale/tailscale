@@ -98,9 +98,8 @@ func (w *Warnable) unhealthyState(ws *warningState) *UnhealthyState {
 	}
 
 	if w != warmingUpWarnable {
-		// Here we tell the frontend that all Warnables depend on warmingUpWarnable. GUIs will silence all warnings until all
-		// their dependencies are healthy. This is a special case to prevent the GUI from showing a bunch of warnings when
-		// the backend is still warming up.
+		// All Warnables implicitly depend on warmingUpWarnable, so that we don't show a bunch of warnings
+		// while the backend is still warming up. See [Tracker.isEffectivelyHealthyLocked].
 		dependsOnWarnableCodes = append(dependsOnWarnableCodes, warmingUpWarnable.Code)
 	}
 
@@ -188,6 +187,10 @@ func severityFromTailcfg(s tailcfg.DisplayMessageSeverity) Severity {
 func (t *Tracker) isEffectivelyHealthyLocked(w *Warnable) bool {
 	if _, ok := t.warnableVal[w]; !ok {
 		// Warnable not found in the tracker. So healthy.
+		return true
+	}
+	if w != warmingUpWarnable && t.warnableVal[warmingUpWarnable] != nil {
+		// Every Warnable implicitly depends on warmingUpWarnable.
 		return true
 	}
 	for _, d := range w.DependsOn {

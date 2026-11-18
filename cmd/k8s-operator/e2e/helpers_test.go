@@ -28,6 +28,7 @@ import (
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tsnet"
 	"tailscale.com/tstest"
+	"tailscale.com/types/logger"
 )
 
 func generateName(prefix string) string {
@@ -229,6 +230,7 @@ func newTailnetNode(t *testing.T, cl *tailscale.Client, hostname string) *tsnet.
 		Ephemeral:  true,
 		Store:      &mem.Store{},
 		AuthKey:    authKey.Key,
+		UserLogf:   logger.Discard,
 	}
 	if _, err := srv.Up(t.Context()); err != nil {
 		t.Fatalf("bringing up node: %v", err)

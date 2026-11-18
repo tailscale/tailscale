@@ -6,6 +6,8 @@ package e2e
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -93,7 +95,7 @@ func hostNameFromOperatorSecret(t *testing.T, s corev1.Secret) string {
 	t.Helper()
 	prefsBytes, ok := s.Data[string(s.Data["_current-profile"])]
 	if !ok {
-		t.Fatalf("no state in operator Secret data: %#v", s.Data)
+		t.Fatalf("no state in operator Secret %q: data keys present: %v", s.Name, slices.Sorted(maps.Keys(s.Data)))
 	}
 
 	prefs := ipn.Prefs{}
@@ -102,7 +104,7 @@ func hostNameFromOperatorSecret(t *testing.T, s corev1.Secret) string {
 	}
 
 	if prefs.Persist == nil {
-		t.Fatalf("no hostname in operator Secret data: %#v", s.Data)
+		t.Fatalf("no hostname in operator Secret %q: data keys present: %v", s.Name, slices.Sorted(maps.Keys(s.Data)))
 	}
 	return prefs.Persist.UserProfile.LoginName
 }

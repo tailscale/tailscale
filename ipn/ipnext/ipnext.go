@@ -27,6 +27,7 @@ import (
 	"tailscale.com/types/mapx"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/views"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -378,6 +379,14 @@ type ProfileStateChangeCallback func(_ ipn.LoginProfileView, _ ipn.PrefsView, sa
 // back into LocalBackend, which may be locked during shutdown.
 type NewControlClientCallback func(controlclient.Client, ipn.LoginProfileView) (cleanup func())
 
+// WatchSession is an IPN bus watch session, as seen by
+// [Hooks.MutateNotifyForSessionLocked].
+type WatchSession interface {
+	// Policy returns the effective policy snapshot most recently delivered to
+	// the session, or nil if it did not request [ipn.NotifySysPolicyChanges].
+	Policy() *policyclient.PolicySnapshot
+}
+
 // Hooks is a collection of hooks that extensions can add to (non-concurrently)
 // during program initialization and can be called by LocalBackend and others at
 // runtime.
@@ -438,6 +447,12 @@ type Hooks struct {
 	// MutateNotifyLocked is called to optionally mutate the provided Notify
 	// before sending it to the IPN bus. It is called with LocalBackend.mu held.
 	MutateNotifyLocked feature.Hooks[func(*ipn.Notify)]
+
+	// MutateNotifyForSessionLocked is called to optionally mutate the provided
+	// Notify before sending it to a particular IPN bus watch session. It runs
+	// after per-session gating, so the Notify reflects what the session will
+	// receive. It is called with LocalBackend.mu held.
+	MutateNotifyForSessionLocked feature.Hooks[func(WatchSession, *ipn.Notify)]
 
 	// SetPeerStatus is called to mutate PeerStatus.
 	// Callers must only use NodeBackend to read data.

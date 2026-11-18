@@ -12,10 +12,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// IsUDPReadFeedback reports whether err is host or network reachability
-// feedback reported by a UDP read, rather than a socket failure.
-func IsUDPReadFeedback(err error) bool {
-	return errors.Is(err, windows.WSAEHOSTUNREACH) || errors.Is(err, windows.WSAENETUNREACH)
+// IsBadSocketError reports whether err indicates that the socket itself is no
+// longer valid.
+func IsBadSocketError(err error) bool {
+	return errors.Is(err, windows.WSAEBADF) || errors.Is(err, windows.WSAENOTSOCK)
 }
 
 // IsClosedPipeError reports whether err resulted from reading or writing to a closed or broken pipe.

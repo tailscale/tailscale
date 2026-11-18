@@ -118,7 +118,7 @@ func sendMessage(hwnd windows.HWND, msg uint32, wparam uintptr, lparam uintptr) 
 
 func translateMessage(lpMsg *_MSG) (res bool) {
 	r0, _, _ := syscall.SyscallN(procTranslateMessage.Addr(), uintptr(unsafe.Pointer(lpMsg)))
-	res = r0 != 0
+	res = uint32(r0) != 0
 	return
 }
 

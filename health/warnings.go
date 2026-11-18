@@ -288,8 +288,7 @@ var applyDiskConfigWarnable = condRegister(func() *Warnable {
 const warmingUpWarnableDuration = 5 * time.Second
 
 // warmingUpWarnable is a Warnable that is reported by the backend when it is starting up, for a maximum time of
-// warmingUpWarnableDuration. The GUIs use the presence of this Warnable to prevent showing any other warnings until
-// the backend is fully started.
+// warmingUpWarnableDuration. While it is unhealthy, the [Tracker] treats all other Warnables as healthy.
 var warmingUpWarnable = condRegister(func() *Warnable {
 	return &Warnable{
 		Code:     tsconst.HealthWarnableWarmingUp,

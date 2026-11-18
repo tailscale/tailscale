@@ -12,10 +12,10 @@ import (
 	"syscall"
 )
 
-// IsUDPReadFeedback reports whether err is host or network reachability
-// feedback reported by a UDP read, rather than a socket failure.
-func IsUDPReadFeedback(err error) bool {
-	return errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH)
+// IsBadSocketError reports whether err indicates that the socket itself is no
+// longer valid.
+func IsBadSocketError(err error) bool {
+	return errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.ENOTSOCK)
 }
 
 // Reports whether err resulted from reading or writing to a closed or broken pipe.

@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"sync"
 	"time"
 
@@ -21,6 +22,23 @@ import (
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
+)
+
+var (
+	// Counts messages returned by Recv, including pongs consumed by derphttp's
+	// Ping helper. These are process-wide across all DERP clients, including
+	// mesh clients and probers, not per-connection or purpose-specific.
+	metricClientRecvKeepAlive = clientmetric.NewCounter("derp_client_recv_keepalive")
+	metricClientRecvPing      = clientmetric.NewCounter("derp_client_recv_ping")
+	metricClientRecvPong      = clientmetric.NewCounter("derp_client_recv_pong")
+	metricClientSendPing      = clientmetric.NewCounter("derp_client_send_ping")
+	metricClientSendPong      = clientmetric.NewCounter("derp_client_send_pong")
+
+	// Counts read-deadline expirations once per dead client, not subsequent
+	// Recv calls returning the sticky error. This includes incomplete frames,
+	// not just connections on which no bytes were received.
+	metricClientRecvReadTimeout = clientmetric.NewCounter("derp_client_recv_read_timeout")
 )
 
 // Client is a DERP client.
@@ -375,7 +393,16 @@ func (c *Client) sendPingOrPong(typ FrameType, data [8]byte) error {
 	if _, err := c.bw.Write(data[:]); err != nil {
 		return err
 	}
-	return c.bw.Flush()
+	if err := c.bw.Flush(); err != nil {
+		return err
+	}
+	// Count completed writes, not attempts or acknowledgements by the peer.
+	if typ == FramePing {
+		metricClientSendPing.Add(1)
+	} else {
+		metricClientSendPong.Add(1)
+	}
+	return nil
 }
 
 // NotePreferred sends a packet that tells the server whether this
@@ -567,6 +594,9 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 	}
 	defer func() {
 		if err != nil {
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				metricClientRecvReadTimeout.Add(1)
+			}
 			err = fmt.Errorf("derp.Recv: %w", err)
 			c.readErr.Store(err)
 		}
@@ -634,6 +664,7 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 		case FrameKeepAlive:
 			// A one-way keep-alive message that doesn't require an acknowledgement.
 			// This predated FramePing/FramePong.
+			metricClientRecvKeepAlive.Add(1)
 			return KeepAliveMessage{}, nil
 		case FramePeerGone:
 			if n < KeyLen {
@@ -713,6 +744,7 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 				continue
 			}
 			copy(pm[:], b[:])
+			metricClientRecvPing.Add(1)
 			return pm, nil
 
 		case FramePong:
@@ -722,6 +754,7 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 				continue
 			}
 			copy(pm[:], b[:])
+			metricClientRecvPong.Add(1)
 			return pm, nil
 
 		case FrameHealth:

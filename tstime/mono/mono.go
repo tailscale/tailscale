@@ -61,14 +61,21 @@ func (t Time) IsZero() bool {
 	return t == 0
 }
 
-// StoreAtomic does an atomic store *t = new.
-func (t *Time) StoreAtomic(new Time) {
-	atomic.StoreInt64((*int64)(t), int64(new))
+// AtomicTime is a [Time] that is loaded and stored atomically.
+// Unlike a plain Time used with sync/atomic, it is 64-bit aligned
+// even on 32-bit platforms. The zero value holds the zero Time.
+type AtomicTime struct {
+	v atomic.Int64
 }
 
-// LoadAtomic does an atomic load *t.
-func (t *Time) LoadAtomic() Time {
-	return Time(atomic.LoadInt64((*int64)(t)))
+// Load atomically loads and returns the Time stored in t.
+func (t *AtomicTime) Load() Time {
+	return Time(t.v.Load())
+}
+
+// Store atomically stores v into t.
+func (t *AtomicTime) Store(v Time) {
+	t.v.Store(int64(v))
 }
 
 // baseWall and baseMono are a pair of almost-identical times used to correlate a Time with a wall time.

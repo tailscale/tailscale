@@ -21,7 +21,6 @@ import (
 	"testing/synctest"
 	"time"
 	"unicode"
-	"unsafe"
 
 	"github.com/gaissmai/bart"
 	"github.com/google/go-cmp/cmp"
@@ -38,7 +37,6 @@ import (
 	"tailscale.com/net/packet/checksum"
 	"tailscale.com/net/routemanager"
 	"tailscale.com/tstest"
-	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -401,9 +399,9 @@ func TestFilter(t *testing.T) {
 				// data was actually filtered.
 				// If it stays zero, nothing made it through
 				// to the wrapped TUN.
-				tun.lastActivityAtomic.StoreAtomic(0)
+				tun.lastActivity.Store(0)
 				_, err = tun.Write([][]byte{tt.data}, 0)
-				filtered = tun.lastActivityAtomic.LoadAtomic() == 0
+				filtered = tun.lastActivity.Load() == 0
 			} else {
 				// chtun.Outbound is unbuffered, and won't be drained until the
 				// first Read call.
@@ -591,16 +589,6 @@ func BenchmarkWrite(b *testing.B) {
 			b.Errorf("err = %v; want nil", err)
 		}
 	}
-}
-
-func TestAtomic64Alignment(t *testing.T) {
-	off := unsafe.Offsetof(Wrapper{}.lastActivityAtomic)
-	if off%8 != 0 {
-		t.Errorf("offset %v not 8-byte aligned", off)
-	}
-
-	c := new(Wrapper)
-	c.lastActivityAtomic.StoreAtomic(mono.Now())
 }
 
 func TestPeerAPIBypass(t *testing.T) {
