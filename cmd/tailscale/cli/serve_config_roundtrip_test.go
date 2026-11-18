@@ -22,6 +22,19 @@ import (
 	"tailscale.com/tailcfg"
 )
 
+// The tests in this file, serve_config_files_test.go and
+// serve_config_mixed_test.go treat a node's Services (its ipn.ServeConfig
+// Services plus which of them it advertises) as the state, and check that
+// every way in and out of it agrees:
+//
+//	tailscale serve ...  ->  state  <-  set-config <file>
+//	                         state  ->  get-config  (the file)
+//	                         state  ->  serve status --json
+//
+// Each row of TestServeConfigRoundTrip is one state spelled three ways side by
+// side: the tailscale serve commands that build it, the file get-config writes
+// for it, and the state itself.
+
 // TestServeConfigRoundTrip checks, for each row, that the commands build the
 // state; that the file builds it with set-config, on a fresh node and over one
 // serving something else; that get-config writes the file back whichever way
@@ -68,6 +81,33 @@ func TestServeConfigRoundTrip(t *testing.T) {
 				TCP: tcp{80: {HTTP: true}},
 				Web: web{"foo.test.ts.net:80": {Handlers: handlers{"/": {Proxy: "http://App.example.com:3000"}}}},
 			}},
+			advertised: []string{"svc:foo"},
+		},
+
+		// Advertisement.
+		{
+			name: "drained",
+			cli: []string{
+				"--service=svc:foo --tcp=5432 tcp://localhost:5432",
+				"drain svc:foo",
+			},
+			file:     `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:5432": "tcp://localhost:5432"}, "advertised": false}}}`,
+			services: services{"svc:foo": {TCP: tcp{5432: {TCPForward: "localhost:5432"}}}},
+		},
+		{
+			name:       "advertised_without_config",
+			cli:        []string{"advertise svc:foo"},
+			file:       `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {}}}}`,
+			advertised: []string{"svc:foo"},
+		},
+		{
+			// Turning off a Service's last port leaves it advertised.
+			name: "last_port_turned_off",
+			cli: []string{
+				"--service=svc:foo --tcp=5432 tcp://localhost:5432",
+				"--service=svc:foo --tcp=5432 off",
+			},
+			file:       `{"version": "0.0.1", "services": {"svc:foo": {"endpoints": {}}}}`,
 			advertised: []string{"svc:foo"},
 		},
 	}

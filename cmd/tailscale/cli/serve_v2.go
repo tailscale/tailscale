@@ -686,7 +686,8 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 	magicDNSSuffix := st.CurrentTailnet.MagicDNSSuffix
 
 	handleService := func(svcName tailcfg.ServiceName, serviceConfig *ipn.ServiceConfig) (*conffile.ServiceDetailsFile, error) {
-		var sdf conffile.ServiceDetailsFile
+		// "endpoints" is required, so a Service without any writes {}.
+		sdf := conffile.ServiceDetailsFile{Endpoints: map[*tailcfg.ProtoPortRange]*conffile.Target{}}
 		// Leave unset for true case since that's the default.
 		if !advertised.Contains(svcName.String()) {
 			sdf.Advertised.Set(false)
@@ -793,6 +794,12 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 	} else if e.allServices {
 		var scf conffile.ServicesConfigFile
 		scf.Version = "0.0.1"
+		// An advertised Service without serve config is still state to write.
+		for _, svc := range prefs.AdvertiseServices {
+			if _, ok := sc.Services[tailcfg.ServiceName(svc)]; !ok {
+				mak.Set(&sc.Services, tailcfg.ServiceName(svc), new(ipn.ServiceConfig))
+			}
+		}
 		for svcName, serviceConfig := range sc.Services {
 			sdf, err := handleService(svcName, serviceConfig)
 			if err != nil {
@@ -807,17 +814,17 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 	} else if forSingleService {
 		serviceConfig, ok := sc.Services[e.service]
 		if !ok {
-			j = []byte("{}")
-		} else {
-			sdf, err := handleService(e.service, serviceConfig)
-			if err != nil {
-				return err
-			}
-			sdf.Version = "0.0.1"
-			j, err = json.MarshalIndent(sdf, "", "  ")
-			if err != nil {
-				return err
-			}
+			// No serve config is still a state the file can say.
+			serviceConfig = new(ipn.ServiceConfig)
+		}
+		sdf, err := handleService(e.service, serviceConfig)
+		if err != nil {
+			return err
+		}
+		sdf.Version = "0.0.1"
+		j, err = json.MarshalIndent(sdf, "", "  ")
+		if err != nil {
+			return err
 		}
 	} else {
 		return errors.New("must specify either --service=svc:<service-name> or --all")
