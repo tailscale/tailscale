@@ -150,15 +150,16 @@ func (q *Parsed) decode4(b []byte) {
 	q.Dst = withIP(q.Dst, netaddr.IPv4(b[16], b[17], b[18], b[19]))
 
 	// subofs is only committed to q after validation, so a rejected
-	// packet can't leave it pointing past the end of the buffer.
+	// packet can't leave it pointing past the end of the buffer or inside
+	// the IPv4 header.
 	subofs := int((b[0] & 0x0F) << 2)
-	if subofs > q.length {
-		// next-proto starts beyond end of packet.
+	if subofs < ip4HeaderLength || subofs > q.length {
+		// next-proto starts beyond end of packet or inside IPv4 header.
 		q.IPProto = unknown
 		return
 	}
 	q.subofs = subofs
-	sub := b[q.subofs:]
+	sub := b[q.subofs:q.length]
 	sub = sub[:len(sub):len(sub)] // help the compiler do bounds check elimination
 
 	// We don't care much about IP fragmentation, except insofar as it's
@@ -204,11 +205,18 @@ func (q *Parsed) decode4(b []byte) {
 				q.IPProto = unknown
 				return
 			}
+			headerLength := int((sub[12] & 0xF0) >> 2)
+			if headerLength < tcpHeaderLength {
+				headerLength = tcpHeaderLength
+			}
+			if len(sub) < headerLength {
+				q.IPProto = unknown
+				return
+			}
 			q.Src = withPort(q.Src, binary.BigEndian.Uint16(sub[0:2]))
 			q.Dst = withPort(q.Dst, binary.BigEndian.Uint16(sub[2:4]))
 			q.TCPFlags = TCPFlag(sub[13])
-			headerLength := (sub[12] & 0xF0) >> 2
-			q.dataofs = q.subofs + int(headerLength)
+			q.dataofs = q.subofs + headerLength
 			return
 		case ipproto.UDP:
 			if len(sub) < udpHeaderLength {
@@ -309,7 +317,11 @@ func (q *Parsed) decode6(b []byte) {
 			return
 		}
 	}
-	sub := b[q.subofs:]
+	if q.subofs > q.length {
+		q.IPProto = unknown
+		return
+	}
+	sub := b[q.subofs:q.length]
 	sub = sub[:len(sub):len(sub)] // help the compiler do bounds check elimination
 
 	switch q.IPProto {
@@ -326,11 +338,18 @@ func (q *Parsed) decode6(b []byte) {
 			q.IPProto = unknown
 			return
 		}
+		headerLength := int((sub[12] & 0xF0) >> 2)
+		if headerLength < tcpHeaderLength {
+			headerLength = tcpHeaderLength
+		}
+		if len(sub) < headerLength {
+			q.IPProto = unknown
+			return
+		}
 		q.Src = withPort(q.Src, binary.BigEndian.Uint16(sub[0:2]))
 		q.Dst = withPort(q.Dst, binary.BigEndian.Uint16(sub[2:4]))
 		q.TCPFlags = TCPFlag(sub[13])
-		headerLength := (sub[12] & 0xF0) >> 2
-		q.dataofs = q.subofs + int(headerLength)
+		q.dataofs = q.subofs + headerLength
 		return
 	case ipproto.UDP:
 		if len(sub) < udpHeaderLength {
@@ -376,7 +395,7 @@ func (q *Parsed) decode6Fragment(b []byte) (continueDecode bool) {
 	// The fragment header is 8 bytes: Next Header, Reserved, a 13-bit
 	// Fragment Offset (in 8-byte blocks) plus a More-Fragments flag, and a
 	// 32-bit Identification.
-	if len(b) < q.subofs+ip6FragHeaderLength {
+	if q.length < q.subofs+ip6FragHeaderLength {
 		q.IPProto = unknown
 		return false
 	}
@@ -481,11 +500,11 @@ func (q *Parsed) Payload() []byte {
 // Transport returns the transport header and payload (IP subprotocol, such as TCP or UDP).
 // This is a read-only view; that is, p retains the ownership of the buffer.
 func (p *Parsed) Transport() []byte {
-	if p.subofs > len(p.b) {
+	if p.subofs > p.length || p.length > len(p.b) {
 		// defensive check, should not survive decode4 or decode6 (first line)
 		return nil
 	}
-	return p.b[p.subofs:]
+	return p.b[p.subofs:p.length]
 }
 
 // IsTCPSyn reports whether q is a TCP SYN packet,
