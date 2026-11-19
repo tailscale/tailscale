@@ -75,6 +75,7 @@ type linuxRouter struct {
 	// restore deleted ip rules.
 	ruleRestorePending atomic.Bool
 	ipRuleFixLimiter   *rate.Limiter
+	routeFixLimiter    *rate.Limiter
 
 	// Various feature checks for the network stack.
 	ipRuleAvailable bool     // whether kernel was built with IP_MULTIPLE_TABLES
@@ -112,6 +113,10 @@ type linuxRouter struct {
 	cgnatMode         linuxfw.CGNATMode
 	magicsockPortV4   uint16
 	magicsockPortV6   uint16
+
+	// Route recovery state is protected by mu.
+	pendingRouteDeletes map[netip.Prefix]bool
+	routeRestoreTimer   *time.Timer
 }
 
 func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus) (router.Router, error) {
@@ -137,6 +142,7 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 
 		cmd: cmd,
 
+		routeFixLimiter:  rate.NewLimiter(rate.Every(5*time.Second), 10),
 		ipRuleFixLimiter: rate.NewLimiter(rate.Every(5*time.Second), 10),
 		ipPolicyPrefBase: 5200,
 	}
@@ -152,6 +158,7 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 			r.logf("updateMagicsockPort(port=%v, network=%s) failed: %v", pu.UDPPort, pu.EndpointNetwork, err)
 		}
 	})
+	eventbus.SubscribeFunc(ec, r.onThrowRouteDeleted)
 	r.eventClient = ec
 
 	if r.useIPCommand() {
@@ -367,6 +374,46 @@ func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
 	})
 }
 
+// onThrowRouteDeleted batches deletion notifications, independently of policy-rule
+// recovery. Desired state is checked both now and when the timer fires.
+func (r *linuxRouter) onThrowRouteDeleted(event netmon.TailscaleThrowRouteDeleted) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed.Load() || !r.localRoutes[event.Dst] {
+		return
+	}
+	if r.pendingRouteDeletes == nil {
+		r.pendingRouteDeletes = make(map[netip.Prefix]bool)
+	}
+	r.pendingRouteDeletes[event.Dst] = true
+	if r.routeRestoreTimer != nil {
+		return
+	}
+	reservation := r.routeFixLimiter.Reserve()
+	if !reservation.OK() {
+		r.pendingRouteDeletes = nil
+		return
+	}
+	r.routeRestoreTimer = time.AfterFunc(reservation.Delay()+250*time.Millisecond, func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.routeRestoreTimer = nil
+		pending := r.pendingRouteDeletes
+		r.pendingRouteDeletes = nil
+		if r.closed.Load() {
+			return
+		}
+		for prefix := range pending {
+			if !r.localRoutes[prefix] {
+				continue
+			}
+			if err := r.addThrowRoute(prefix); err != nil {
+				r.logf("restoring deleted throw route %v: %v", prefix, err)
+			}
+		}
+	})
+}
+
 func (r *linuxRouter) Up() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -384,13 +431,20 @@ func (r *linuxRouter) Up() error {
 }
 
 func (r *linuxRouter) Close() error {
+	// Stop delivery before taking mu: a subscriber may be waiting for mu.
+	r.closed.Store(true)
+	r.eventClient.Close()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.closed.Store(true)
+	if r.routeRestoreTimer != nil {
+		r.routeRestoreTimer.Stop()
+		r.routeRestoreTimer = nil
+	}
+	r.pendingRouteDeletes = nil
 	if r.unregNetMon != nil {
 		r.unregNetMon()
 	}
-	r.eventClient.Close()
 
 	// Clean up connmark rules
 	if err := r.nfr.DelConnmarkSaveRule(); err != nil {
