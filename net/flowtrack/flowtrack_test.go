@@ -75,7 +75,7 @@ func TestCache(t *testing.T) {
 			t.Fatal("missing k3")
 		}
 		if *got != 30 {
-			t.Fatalf("got = %d; want 30", got)
+			t.Fatalf("got = %d; want 30", *got)
 		}
 	})
 	if err != nil {

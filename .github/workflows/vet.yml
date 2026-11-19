@@ -44,4 +44,9 @@ jobs:
         # include the v2 go client (tailscale.com/client/tailscale/v2) if it's
         # a dependency in our go.mod file. Possibly a go vet bug, but avoid
         # cross-repo vetting for now so we can safely add the dependency.
-        run: ./tool/go vet -vettool=/tmp/vettool $(./tool/go run ./tool/listpkgs --ignore-3p ./...)
+        #
+        # scannererr is disabled due to a large number of pre-existing
+        # violations with unknown severity that are a significant behavior
+        # change to address (returning err in cases that previously wouldn't
+        # have)
+        run: ./tool/go vet -vettool=/tmp/vettool -scannererr=FALSE $(./tool/go run ./tool/listpkgs --ignore-3p ./...)
