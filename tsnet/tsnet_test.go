@@ -4215,3 +4215,34 @@ func TestHTTPClientDefaultTransport(t *testing.T) {
 		}
 	}
 }
+
+func TestTailnet(t *testing.T) {
+	const tailnet = "required:tn123"
+	controlURL, control := startControl(t)
+	control.RequireTailnet = tailnet
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	newServer := func(hostname, tailnet string) *Server {
+		s := &Server{
+			Dir:        t.TempDir(),
+			ControlURL: controlURL,
+			Hostname:   hostname,
+			Store:      new(mem.Store),
+			Ephemeral:  true,
+			Tailnet:    tailnet,
+			Logf:       tstest.WhileTestRunningLogger(t),
+		}
+		t.Cleanup(func() { s.Close() })
+		return s
+	}
+
+	if _, err := newServer("s1", tailnet).Up(ctx); err != nil {
+		t.Fatalf("Up with Tailnet %q: %v", tailnet, err)
+	}
+	_, err := newServer("s2", "").Up(ctx)
+	if err == nil || !strings.Contains(err.Error(), tailnet) {
+		t.Fatalf("Up without Tailnet = %v; want a rejection naming %q", err, tailnet)
+	}
+}

@@ -280,6 +280,14 @@ type Server struct {
 	// used.
 	AuthKey string
 
+	// Tailnet, if non-empty, names the tailnet the node asks to join
+	// when it registers. It is sent to the control server verbatim as
+	// [tailcfg.RegisterRequest.Tailnet]; see [ipn.Prefs.Tailnet] for
+	// its format. A "required:" prefix makes the server refuse a login
+	// to any other tailnet. It only takes effect when the node
+	// registers, so it does not move a node that is already logged in.
+	Tailnet string
+
 	// SSHAuthCallback is called for each new SSH session on listeners
 	// from [Server.ListenSSH]. It receives the peer's Tailscale
 	// identity, the same values as Session.Peer and
@@ -1030,6 +1038,7 @@ func (s *Server) start() (reterr error) {
 	prefs.ControlURL = s.getControlURL()
 	prefs.RunWebClient = s.RunWebClient
 	prefs.AdvertiseTags = s.AdvertiseTags
+	prefs.Tailnet = s.Tailnet
 	authKey, err := s.resolveAuthKey()
 	if err != nil {
 		return fmt.Errorf("error resolving auth key: %w", err)
