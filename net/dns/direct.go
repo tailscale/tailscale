@@ -280,7 +280,7 @@ func (m *directManager) rename(old, new string) error {
 		err := m.fs.Rename(old, new)
 		if err == nil {
 			if new == resolvConf {
-				m.relabelResolvConf()
+				m.relabel(resolvConf)
 			}
 			return nil
 		}
@@ -315,18 +315,20 @@ func (m *directManager) rename(old, new string) error {
 		}
 	}
 	if new == resolvConf {
-		m.relabelResolvConf()
+		m.relabel(resolvConf)
 	}
 	return nil
 }
 
 var restoreconPath lazy.SyncValue[string] // path to restorecon, or "" if absent
 
-// relabelResolvConf restores the policy-default SELinux context on
-// /etc/resolv.conf. Best effort: only runs when SELinux is enforcing. See:
+// relabel restores the policy-default SELinux context on name, which
+// is either /etc/resolv.conf or a temp file about to be renamed over
+// it. Best effort: only runs when SELinux is enforcing. See:
 //
-//	https://github.com/tailscale/tailscale/issues/20149.
-func (m *directManager) relabelResolvConf() {
+//	https://github.com/tailscale/tailscale/issues/20149
+//	https://github.com/tailscale/tailscale/issues/22418
+func (m *directManager) relabel(name string) {
 	if runtime.GOOS != "linux" {
 		return
 	}
@@ -347,7 +349,7 @@ func (m *directManager) relabelResolvConf() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	// m.fs may be rooted at a test prefix; restorecon needs the real path.
-	actualPath := m.fs.ActualPath(resolvConf)
+	actualPath := m.fs.ActualPath(name)
 	if out, err := exec.CommandContext(ctx, restorecon, actualPath).CombinedOutput(); err != nil {
 		m.logf("dns: restorecon of %q failed: %v, output: %s", actualPath, err, bytes.TrimSpace(out))
 		m.health.SetUnhealthy(selinuxRelabelWarnable, nil)
@@ -636,6 +638,14 @@ func (m *directManager) atomicWriteFile(fs wholeFileFS, filename string, data []
 	// permissions once it's renamed into place. See #12609.
 	if err := fs.Chmod(tmpName, perm); err != nil {
 		return fmt.Errorf("atomicWriteFile: Chmod: %w", err)
+	}
+	if filename == resolvConf {
+		// Label the temp file before the rename so that the new
+		// /etc/resolv.conf never exists with the generic etc_t label.
+		// The policy file-context regex /etc/resolv\.conf.* covers
+		// the temp name, and rename(2) keeps the inode's label.
+		// rename below relabels again after the swap as a fallback.
+		m.relabel(tmpName)
 	}
 
 	return m.rename(tmpName, filename)
