@@ -16,6 +16,14 @@ import (
 	"tailscale.com/tstest/natlab/vnet"
 )
 
+// Guest paths for the resolv.conf label probe: the script, the labels it
+// records, and its own stderr.
+const (
+	probePath    = "/root/resolvconf-label-probe.py"
+	probeLogPath = "/root/resolvconf-label-probe.log"
+	probeErrPath = "/root/resolvconf-label-probe.err"
+)
+
 // resolvConfLabelProbe watches /etc with inotify and, each time something
 // is renamed to /etc/resolv.conf, records the SELinux label the new inode
 // has at that instant. It wakes within microseconds of the rename, so it
@@ -93,7 +101,7 @@ func TestDirectDNSSELinuxLabel(t *testing.T) {
 			return
 		}
 		for _, cmd := range []string{
-			"cat /root/probe.err",
+			"cat " + probeErrPath,
 			"ls -lZ /etc/resolv*",
 			"journalctl -u tailscaled --no-pager -o cat | grep -i 'dns\\|resolv\\|restorecon' | tail -40",
 			"journalctl -k --no-pager -o cat | grep avc | tail -20",
@@ -113,10 +121,6 @@ func TestDirectDNSSELinuxLabel(t *testing.T) {
 		t.Fatalf("SELinux is %q, want Enforcing", got)
 	}
 
-	const (
-		probePath = "/root/resolvconf-label-probe.py"
-		logPath   = "/root/resolvconf-label-probe.log"
-	)
 	install := fmt.Sprintf("printf %%s %s > %s", shell.Quote(resolvConfLabelProbe), probePath)
 	if out, err := env.SSHExec(node, install); err != nil {
 		t.Fatalf("installing probe: %v\n%s", err, out)
@@ -125,14 +129,14 @@ func TestDirectDNSSELinuxLabel(t *testing.T) {
 	// and only the probe itself is backgrounded, so the remote shell exits and
 	// ssh sees EOF. Backgrounding a command list instead would leave a
 	// subshell holding the session's pipes open.
-	start := fmt.Sprintf("setsid python3 %s %s >/root/probe.err 2>&1 </dev/null &", probePath, logPath)
+	start := fmt.Sprintf("setsid python3 %s %s >%s 2>&1 </dev/null &", probePath, probeLogPath, probeErrPath)
 	if out, err := env.SSHExec(node, start); err != nil {
 		t.Fatalf("starting probe: %v\n%s", err, out)
 	}
 	if err := tstest.WaitFor(15*time.Second, func() error {
-		out, err := env.SSHExec(node, "cat "+logPath)
+		out, err := env.SSHExec(node, "cat "+probeLogPath)
 		if err != nil || !strings.Contains(out, "ready") {
-			errOut, _ := env.SSHExec(node, "cat /root/probe.err")
+			errOut, _ := env.SSHExec(node, "cat "+probeErrPath)
 			return fmt.Errorf("probe not ready (%v): %s%s", err, out, errOut)
 		}
 		return nil
@@ -152,7 +156,7 @@ func TestDirectDNSSELinuxLabel(t *testing.T) {
 
 	var labels []string
 	if err := tstest.WaitFor(30*time.Second, func() error {
-		out, err := env.SSHExec(node, "cat "+logPath)
+		out, err := env.SSHExec(node, "cat "+probeLogPath)
 		if err != nil {
 			return fmt.Errorf("reading probe log: %v\n%s", err, out)
 		}

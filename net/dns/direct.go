@@ -269,19 +269,29 @@ func (m *directManager) restoreBackup() (restored bool, err error) {
 }
 
 // rename tries to rename old to new using m.fs.Rename, and falls back
+// to hand-copying bytes and truncating old if that fails. When new is
+// /etc/resolv.conf, it restores the file's SELinux label afterwards.
+func (m *directManager) rename(old, new string) error {
+	if err := m.renameOrCopy(old, new); err != nil {
+		return err
+	}
+	if new == resolvConf {
+		m.relabel(resolvConf)
+	}
+	return nil
+}
+
+// renameOrCopy renames old to new using m.fs.Rename, and falls back
 // to hand-copying bytes and truncating old if that fails.
 //
 // This is a workaround to /etc/resolv.conf being a bind-mounted file
-// some container environments, which cannot be moved elsewhere in
+// in some container environments, which cannot be moved elsewhere in
 // /etc (because that would be a cross-filesystem move) or deleted
 // (because that would break the bind in surprising ways).
-func (m *directManager) rename(old, new string) error {
+func (m *directManager) renameOrCopy(old, new string) error {
 	if !m.renameBroken {
 		err := m.fs.Rename(old, new)
 		if err == nil {
-			if new == resolvConf {
-				m.relabel(resolvConf)
-			}
 			return nil
 		}
 		if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
@@ -314,17 +324,19 @@ func (m *directManager) rename(old, new string) error {
 			return fmt.Errorf("remove of %q failed (%w) and so did truncate: %v", old, err, err2)
 		}
 	}
-	if new == resolvConf {
-		m.relabel(resolvConf)
-	}
 	return nil
 }
 
 var restoreconPath lazy.SyncValue[string] // path to restorecon, or "" if absent
 
-// relabel restores the policy-default SELinux context on name, which
-// is either /etc/resolv.conf or a temp file about to be renamed over
-// it. Best effort: only runs when SELinux is enforcing. See:
+// relabel restores the policy-default SELinux context on name.
+//
+// name is /etc/resolv.conf or a temp file beside it named
+// /etc/resolv.conf.*. The targeted policy's file-context rule for
+// /etc/resolv\.conf.* covers both, so the temp file gets net_conf_t
+// and keeps it through rename(2).
+//
+// Best effort: only runs when SELinux is enforcing. See:
 //
 //	https://github.com/tailscale/tailscale/issues/20149
 //	https://github.com/tailscale/tailscale/issues/22418
@@ -640,11 +652,8 @@ func (m *directManager) atomicWriteFile(fs wholeFileFS, filename string, data []
 		return fmt.Errorf("atomicWriteFile: Chmod: %w", err)
 	}
 	if filename == resolvConf {
-		// Label the temp file before the rename so that the new
-		// /etc/resolv.conf never exists with the generic etc_t label.
-		// The policy file-context regex /etc/resolv\.conf.* covers
-		// the temp name, and rename(2) keeps the inode's label.
-		// rename below relabels again after the swap as a fallback.
+		// Label the temp file first so /etc/resolv.conf never appears
+		// as etc_t, not even in the window before rename's own relabel.
 		m.relabel(tmpName)
 	}
 
