@@ -2518,6 +2518,9 @@ func (b *LocalBackend) reconcilePrefs() (_ ipn.PrefsView, anyChange bool) {
 
 	prefs := b.pm.CurrentPrefs().AsStruct()
 	if !b.reconcilePrefsLocked(prefs) {
+		// Reconciling can recompute the exit node suggestion even when
+		// the prefs end up unchanged.
+		b.sendSuggestedExitNodeLocked()
 		return prefs.View(), false
 	}
 	return b.setPrefsLocked(prefs), true
@@ -5843,6 +5846,10 @@ func (b *LocalBackend) stopReconnectTimerLocked() {
 func (b *LocalBackend) editPrefsLocked(actor ipnauth.Actor, mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 	syncs.RequiresMutex(&b.mu)
 	p0 := b.pm.CurrentPrefs()
+
+	// The access check below can recompute the exit node suggestion. The
+	// returns that send no prefs still announce a changed suggestion.
+	defer b.sendSuggestedExitNodeLocked()
 
 	// Check if the changes in mp are allowed.
 	if err := b.checkEditPrefsAccessLocked(actor, p0, mp); err != nil {
