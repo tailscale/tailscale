@@ -41,8 +41,6 @@ import (
 const (
 	reconcilerName = "nodekey-reconciler"
 
-	currentProfileKey = "_current-profile"
-
 	// requeueInterval is how often to recheck a device that can't be signed yet for reasons outside its state
 	// Secret, such as an untrusted operator key or a device missing from the operator's netmap.
 	// Reconciles are typically triggered by a change to the device's state Secret; this serves as a polling
@@ -217,7 +215,7 @@ func findTKAPeerByStableID(peers []*ipnstate.TKAPeer, deviceID tailcfg.StableNod
 // tailscaled stores in its state Secret. It returns a zero key if the
 // profile has not been written yet.
 func getDeviceKey(secret *corev1.Secret) (key.NodePublic, error) {
-	currentProfile, ok := secret.Data[currentProfileKey]
+	currentProfile, ok := secret.Data[string(ipn.CurrentProfileStateKey)]
 	if !ok {
 		return key.NodePublic{}, nil
 	}
