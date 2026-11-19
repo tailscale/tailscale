@@ -27,14 +27,23 @@ import (
 type testConn25 struct {
 	clientPrepareNewFlowForMagicIPFn        func(netip.Addr) (netip.Addr, error)
 	connectorRealIPForTransitIPConnectionFn func(netip.Addr, netip.Addr) (netip.Addr, error)
+
+	// countsInvalidTransitIP makes ClientPrepareNewFlowForMagicIP model an
+	// implementation that violates the [Conn25Datapath] contract by reporting
+	// ok with a zero Transit IP, so tests can exercise the datapath's guard
+	// against it.
+	countsInvalidTransitIP bool
 }
 
 // ClientPrepareNewFlowForMagicIP counts a flow, and so reports ok, exactly when
 // clientPrepareNewFlowForMagicIPFn resolves magicIP to a Transit IP.
 func (tc *testConn25) ClientPrepareNewFlowForMagicIP(magicIP netip.Addr) (ClientFlowRef, bool, error) {
 	transitIP, err := tc.clientPrepareNewFlowForMagicIPFn(magicIP)
-	if err != nil || !transitIP.IsValid() {
+	if err != nil {
 		return ClientFlowRef{}, false, err
+	}
+	if !transitIP.IsValid() && !tc.countsInvalidTransitIP {
+		return ClientFlowRef{}, false, nil
 	}
 	return ClientFlowRef{transit: transitIP}, true, nil
 }
@@ -58,6 +67,11 @@ type testNet struct {
 	unroutableMagicIP netip.Addr // a Magic IP whose Transit IP isn't installed in WireGuard yet
 	transitIP         netip.Addr
 	realIP            netip.Addr // the internet-facing address behind transitIP
+
+	// otherFamilyTransitIP is the other testNet's transitIP, so that tests can
+	// hand the datapath a Transit IP that is valid but can't be written into a
+	// packet of this family.
+	otherFamilyTransitIP netip.Addr
 }
 
 var testNets = []testNet{
@@ -72,6 +86,8 @@ var testNets = []testNet{
 		unroutableMagicIP: netip.MustParseAddr("10.64.0.3"),
 		transitIP:         netip.MustParseAddr("169.254.0.1"),
 		realIP:            netip.MustParseAddr("240.64.0.1"),
+
+		otherFamilyTransitIP: netip.MustParseAddr("fd7a:115c:a1e0:a99c:200::1"),
 	},
 	{
 		name:      "ipv6",
@@ -84,6 +100,8 @@ var testNets = []testNet{
 		unroutableMagicIP: netip.MustParseAddr("fd7a:115c:a1e0:a99c:100::3"),
 		transitIP:         netip.MustParseAddr("fd7a:115c:a1e0:a99c:200::1"),
 		realIP:            netip.MustParseAddr("2606:4700::6812:1a78"),
+
+		otherFamilyTransitIP: netip.MustParseAddr("169.254.0.1"),
 	},
 }
 
@@ -484,6 +502,56 @@ func TestClientFlowCache(t *testing.T) {
 			tn.checkPacket(t, incoming,
 				netip.AddrPortFrom(tn.magicIP, serverPort),
 				netip.AddrPortFrom(tn.clientSrcIP, clientPort))
+		})
+	}
+}
+
+// TestClientFlowUnusableTransitIPDropped verifies the defensive measure against
+// a flow with a Transit IP that can't be written into the packet.
+func TestClientFlowUnusableTransitIPDropped(t *testing.T) {
+	const clientPort, serverPort = 1234, 80
+
+	for _, tn := range testNets {
+		t.Run(tn.name, func(t *testing.T) {
+			for _, tt := range []struct {
+				name      string
+				transitIP netip.Addr
+			}{
+				{"invalid", netip.Addr{}},
+				{"wrong-family", tn.otherFamilyTransitIP},
+			} {
+				t.Run(tt.name, func(t *testing.T) {
+					mock := &testConn25{countsInvalidTransitIP: true}
+					mock.clientPrepareNewFlowForMagicIPFn = func(netip.Addr) (netip.Addr, error) {
+						return tt.transitIP, nil
+					}
+					dph := newDatapathHandler(mock, t.Logf)
+					chtun, tun := newChannelTUN(t)
+
+					// HandlePacketFromTunDevice blocks until the injected packet is
+					// read, so drain the channel TUN concurrently.
+					gotInboundPacketChan := make(chan []byte, 1)
+					go func() { gotInboundPacketChan <- <-chtun.Inbound }()
+
+					src := netip.AddrPortFrom(tn.clientSrcIP, clientPort)
+					dst := netip.AddrPortFrom(tn.magicIP, serverPort)
+					p := tn.udpPacket(src, dst)
+					if got, want := dph.HandlePacketFromTunDevice(p, tun), filter.Drop; got != want {
+						t.Fatalf("unexpected filter response: got %v, want %v", got, want)
+					}
+					// The dropped packet itself must be left untouched, since the
+					// injected error quotes it.
+					tn.checkPacket(t, p, src, dst)
+
+					var injected []byte
+					select {
+					case injected = <-gotInboundPacketChan:
+					case <-time.After(1 * time.Second):
+						t.Fatal("timed out waiting for injected ICMP packet")
+					}
+					tn.checkICMPUnreachable(t, injected, tn.magicIP, tn.clientSrcIP, p)
+				})
+			}
 		})
 	}
 }
