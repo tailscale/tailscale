@@ -273,6 +273,15 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed, tun *tstu
 		return filter.Accept
 	}
 	transitIP := ref.TransitIP()
+	if !transitIP.IsValid() || transitIP.Is4() != magicIP.Is4() {
+		// Defense in depth: implementations must not report ok with a Transit IP
+		// that is invalid or in a different family than the Magic IP it replaces.
+		dh.logf("[Unexpected] counted flow for magic IP %v has an unusable transit IP %v, dropping packet",
+			magicIP, transitIP)
+		ref.Release()
+		dh.sendICMPHostUnreachable(p, tun)
+		return filter.Drop
+	}
 
 	// This is a new outbound client flow. Install a DNAT MagicIP-to-TransitIP action
 	// for the outgoing direction, and an SNAT TransitIP-to-MagicIP action for the
