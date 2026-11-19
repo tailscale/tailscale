@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"iter"
 	"maps"
 	"os"
@@ -35,6 +36,32 @@ func TestPropToString(t *testing.T) {
 		if got := propToString(prop); got != want {
 			t.Errorf("propToString(0x%x): got %q, want %q", prop, got, want)
 		}
+	}
+}
+
+func TestIsNoTPM(t *testing.T) {
+	notExist := func(path string) error {
+		return &fs.PathError{Op: "stat", Path: path, Err: fs.ErrNotExist}
+	}
+	denied := &fs.PathError{Op: "open", Path: "/dev/tpm0", Err: fs.ErrPermission}
+	for _, tt := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"not-exist", notExist("/dev/tpmrm0"), true},
+		{"joined-one-not-exist", errors.Join(notExist("/dev/tpmrm0")), true},
+		{"joined-all-not-exist", errors.Join(notExist("/dev/tpmrm0"), notExist("/dev/tpm0")), true},
+		{"joined-not-exist-and-denied", errors.Join(notExist("/dev/tpmrm0"), denied), false},
+		{"denied", denied, false},
+		{"other", errors.New("TPM returned an error"), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isNoTPM(tt.err); got != tt.want {
+				t.Errorf("isNoTPM(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }
 
