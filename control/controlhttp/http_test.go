@@ -235,6 +235,7 @@ func testControlHTTP(t *testing.T, param httpTestParam) {
 		testFallbackDelay:    fallbackDelay,
 		Clock:                clock,
 		HealthTracker:        health.NewTracker(eventbustest.NewBus(t)),
+		BasePath:             "",
 	}
 
 	if param.httpInDial {
@@ -794,6 +795,7 @@ func runDialPlanTest(t *testing.T, plan *tailcfg.ControlDialPlan, want []netip.A
 		testFallbackDelay:    50 * time.Millisecond,
 		Clock:                clock,
 		HealthTracker:        health.NewTracker(bus),
+		BasePath:             "",
 	}
 
 	start := time.Now()
