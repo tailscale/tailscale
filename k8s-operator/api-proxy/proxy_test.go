@@ -29,10 +29,11 @@ func TestImpersonationHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	tests := []struct {
-		name     string
-		emailish string
-		tags     []string
-		capMap   tailcfg.PeerCapMap
+		name            string
+		emailish        string
+		tags            []string
+		capMap          tailcfg.PeerCapMap
+		requestedGroups []string
 
 		wantHeaders http.Header
 	}{
@@ -112,6 +113,47 @@ func TestImpersonationHeaders(t *testing.T) {
 			},
 			wantHeaders: http.Header{},
 		},
+		{
+			name:            "requested-group-allowed",
+			emailish:        "foo@example.com",
+			requestedGroups: []string{"group1"},
+			capMap: tailcfg.PeerCapMap{
+				tailcfg.PeerCapabilityKubernetes: {
+					tailcfg.RawMessage(`{"impersonate":{"groups":["group1","group2","group3"]}}`),
+				},
+			},
+			wantHeaders: http.Header{
+				"Impersonate-Group": {"group1"},
+				"Impersonate-User":  {"foo@example.com"},
+			},
+		},
+		{
+			name:            "requested-group-not-allowed",
+			emailish:        "foo@example.com",
+			requestedGroups: []string{"group-not-allowed"},
+			capMap: tailcfg.PeerCapMap{
+				tailcfg.PeerCapabilityKubernetes: {
+					tailcfg.RawMessage(`{"impersonate":{"groups":["group1","group2"]}}`),
+				},
+			},
+			wantHeaders: http.Header{
+				"Impersonate-User": {"foo@example.com"},
+			},
+		},
+		{
+			name:            "requested-groups-partial-allowed",
+			emailish:        "foo@example.com",
+			requestedGroups: []string{"group1", "group-not-allowed"},
+			capMap: tailcfg.PeerCapMap{
+				tailcfg.PeerCapabilityKubernetes: {
+					tailcfg.RawMessage(`{"impersonate":{"groups":["group1","group2"]}}`),
+				},
+			},
+			wantHeaders: http.Header{
+				"Impersonate-Group": {"group1"},
+				"Impersonate-User":  {"foo@example.com"},
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -126,7 +168,7 @@ func TestImpersonationHeaders(t *testing.T) {
 			},
 			CapMap: tc.capMap,
 		}))
-		addImpersonationHeaders(r, zl.Sugar())
+		addImpersonationHeaders(r, zl.Sugar(), tc.requestedGroups)
 
 		if d := cmp.Diff(tc.wantHeaders, r.Header); d != "" {
 			t.Errorf("unexpected header (-want +got):\n%s", d)
