@@ -1962,6 +1962,26 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		return
 	}
 
+	if !b.applyControlClientStatusLocked(c, st) {
+		return
+	}
+	if st.URL != "" {
+		b.logf("Received auth URL: %.20v...", st.URL)
+		b.setAuthURLLocked(st.URL)
+	}
+	b.stateMachineLocked()
+	// This is currently (2020-07-28) necessary; conditionally disabling it is fragile!
+	// This is where netmap information gets propagated to router and magicsock.
+	b.authReconfigLocked()
+}
+
+// applyControlClientStatusLocked applies a status that carries no error. It
+// updates the login state, the prefs, the netmap, and the exit node, sends
+// one [ipn.Notify] for everything it changed, and reports whether the caller
+// should go on to run the state machine.
+//
+// b.mu must be held.
+func (b *LocalBackend) applyControlClientStatusLocked(c controlclient.Client, st controlclient.Status) (runStateMachine bool) {
 	// Track the number of calls
 	currCall := b.numClientStatusCalls.Add(1)
 
@@ -1994,9 +2014,14 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 	}
 
 	// notify collects the login, prefs, netmap, and exit node changes from
-	// this status. It is sent once, below, before the state machine runs.
+	// this status. The deferred send runs on every return.
 	var notify ipn.Notify
 	notifyPending := false // true once notify must be sent
+	defer func() {
+		if notifyPending {
+			b.sendLocked(notify)
+		}
+	}()
 
 	wasBlocked := b.blocked
 	authWasInProgress := b.authURL != ""
@@ -2120,7 +2145,8 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 			// The Notify built so far is dropped. The replacing path has
 			// already sent its own prefs.
 			b.logf("Ignoring SetControlClientStatus from old client")
-			return
+			notifyPending = false
+			return false
 		}
 		// b.cc is nil for a cached netmap applied by startLocked.
 		if b.cc != nil {
@@ -2164,8 +2190,8 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 			notify.ErrMessage = &msg
 			notify.Prefs = new(b.pm.CurrentPrefs())
 			b.addSuggestedExitNodeLocked(&notify)
-			b.sendLocked(notify)
-			return
+			notifyPending = true
+			return false
 		}
 		if oldNetMap != nil {
 			diff := st.NetMap.ConciseDiffFrom(oldNetMap)
@@ -2249,18 +2275,7 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 	if b.addSuggestedExitNodeLocked(&notify) {
 		notifyPending = true
 	}
-	if notifyPending {
-		b.sendLocked(notify)
-	}
-
-	if st.URL != "" {
-		b.logf("Received auth URL: %.20v...", st.URL)
-		b.setAuthURLLocked(st.URL)
-	}
-	b.stateMachineLocked()
-	// This is currently (2020-07-28) necessary; conditionally disabling it is fragile!
-	// This is where netmap information gets propagated to router and magicsock.
-	b.authReconfigLocked()
+	return true
 }
 
 // handleNetmapExpiry reruns netmap status handling when a node may have
