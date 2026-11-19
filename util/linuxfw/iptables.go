@@ -102,14 +102,18 @@ func newIPTablesRunner(logf logger.Logf) (*iptablesRunner, error) {
 	case ip6terr != nil:
 		logf("disabling tunneled IPv6 due to missing ip6tables: %v", ip6terr)
 	default:
-		supportsV6 = true
 		ipt6, err = iptables.NewWithProtocol(iptables.ProtocolIPv6)
 		if err != nil {
-			return nil, err
+			// ip6tables is present but "ip6tables --version" failed,
+			// as the nft flavor does on kernels without nf_tables.
+			// Run without IPv6 rules instead of failing. (#20348)
+			logf("disabling tunneled IPv6 due to ip6tables init failure: %v", err)
+		} else {
+			supportsV6 = true
+			supportsV6Filter = checkSupportsV6Filter(ipt6, logf)
+			supportsV6NAT = checkSupportsV6NAT(ipt6, logf)
+			logf("netfilter running in iptables mode v6 = %v, v6filter = %v, v6nat = %v", supportsV6, supportsV6Filter, supportsV6NAT)
 		}
-		supportsV6Filter = checkSupportsV6Filter(ipt6, logf)
-		supportsV6NAT = checkSupportsV6NAT(ipt6, logf)
-		logf("netfilter running in iptables mode v6 = %v, v6filter = %v, v6nat = %v", supportsV6, supportsV6Filter, supportsV6NAT)
 	}
 	return &iptablesRunner{
 		ipt4:              ipt4,
