@@ -1,0 +1,82 @@
+name: nix
+
+on:
+  pull_request:
+    paths:
+      - "flake.nix"
+      - "flakehashes.json"
+      - "nix/**"
+      - ".github/workflows/nix.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "flake.nix"
+      - "flakehashes.json"
+      - "nix/**"
+      - ".github/workflows/nix.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  flake-check-linux:
+    name: flake check (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
+      # Eval-only, so it gates fast; includes the nixos-eval and
+      # darwin-eval checks. VM tests run in nixos-vm.
+      - name: nix flake check (no-build)
+        run: nix flake check --no-build
+
+  nixos-vm:
+    name: NixOS VM tests
+    runs-on: ubuntu-latest
+    needs: flake-check-linux
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      # Before installing Nix: the daemon reads system features at start.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
+        with:
+          extra-conf: system-features = nixos-test benchmark big-parallel kvm
+      # One build so the Go toolchain and tailscale build once for all tests.
+      - name: nix build VM tests
+        run: |
+          nix build -L \
+            .#checks.x86_64-linux.single \
+            .#checks.x86_64-linux.multi \
+            .#checks.x86_64-linux.proxy \
+            .#checks.x86_64-linux.derper
+
+  darwin-e2e:
+    name: darwin E2E (Headscale + nix-darwin)
+    runs-on: macos-latest
+    needs: flake-check-linux
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
+      - name: run E2E test
+        working-directory: nix/darwin/tests/ci
+        run: bash run.sh
+      - name: upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: darwin-e2e-logs
+          path: |
+            /tmp/ts-ci/headscale.log
+            /Users/runner/Library/Logs/Tailscale-*.log
