@@ -17,6 +17,7 @@ import (
 	"crypto/x509/pkix"
 	"embed"
 	"encoding/pem"
+	"errors"
 	"maps"
 	"math/big"
 	"os"
@@ -551,6 +552,13 @@ func TestCertStoreRoundTrip(t *testing.T) {
 			unexpected, err := test.store.Read(testDomain, testExpired)
 			if err != errCertExpired {
 				t.Fatalf("Read: expected expiry error: %v", string(unexpected.CertPEM))
+			}
+			const otherDomain = "other.example.com"
+			if err := test.store.WriteTLSCertAndKey(otherDomain, testCert, testKey); err != nil {
+				t.Fatalf("WriteTLSCertAndKey: unexpected error: %v", err)
+			}
+			if _, err := test.store.Read(otherDomain, testNow); !errors.Is(err, errCertInvalid) {
+				t.Fatalf("Read(%q) = %v; want errCertInvalid for a name mismatch", otherDomain, err)
 			}
 		})
 	}
