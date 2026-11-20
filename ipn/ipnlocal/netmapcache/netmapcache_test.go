@@ -206,7 +206,6 @@ func TestRoundTrip(t *testing.T) {
 			if diff := diffNetMaps(cmap, testMap); diff != "" {
 				t.Fatalf("Cached map differs (-got, +want):\n%s", diff)
 			}
-
 		})
 	}
 
@@ -468,6 +467,58 @@ func TestPartial(t *testing.T) {
 	})
 }
 
+func TestClearStore(t *testing.T) {
+	s := make(testStore)
+	c := netmapcache.NewCache(s)
+
+	// Initialize the cache with the test map so we get a baseline.
+	if err := c.Store(t.Context(), testMap); err != nil {
+		t.Fatalf("Store initial netmap: %s", err)
+	}
+
+	if got, err := c.Load(t.Context()); err != nil {
+		t.Errorf("error loading netmap: %s", err)
+	} else if len(got.Peers) == 0 {
+		t.Errorf("expected peers in netmap, got none. Loaded netmap: %+v", got)
+	}
+
+	if err := c.Clear(t.Context()); err != nil {
+		t.Errorf("error clearing netmap: %s", err)
+	}
+
+	if len(s) > 0 {
+		t.Errorf("expected testStore to be empty, got: %+v", s)
+	}
+}
+
+func TestOpenStore(t *testing.T) {
+	t.Run("non_exist", func(t *testing.T) {
+		if store, err := netmapcache.OpenStore(t.Context(), "/not/here"); store != nil || err != nil {
+			t.Errorf("expected a nil store and a nil error, got store: %+v, err: %s", store, err)
+		}
+	})
+
+	t.Run("exist", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := netmapcache.NewStore(t.Context(), dir)
+		if err != nil {
+			t.Fatalf("error creating store: %s", err)
+		}
+		if err := store.Store(t.Context(), "key", []byte("value")); err != nil {
+			t.Fatalf("error storing data in store: %s", err)
+		}
+		if err := store.Close(t.Context()); err != nil {
+			t.Fatalf("error closing store: %s", err)
+		}
+		if store, err := netmapcache.OpenStore(t.Context(), dir); store == nil || err != nil {
+			t.Errorf("expected a store and a nil error, got store: %+v, err: %s", store, err)
+		}
+		if err := store.Close(t.Context()); err != nil {
+			t.Fatalf("error closing store: %s", err)
+		}
+	})
+}
+
 // testStore is an in-memory implementation of the [netmapcache.Store] interface.
 type testStore map[string][]byte
 
@@ -512,6 +563,9 @@ func diffNetMaps(got, want *netmap.NetworkMap) string {
 		cmp.Comparer(eqViewsSlice(func(a, b ipproto.Proto) bool { return a == b })),
 	)
 }
+
+func (t testStore) Clear(context.Context) error { clear(t); return nil }
+func (t testStore) Close(context.Context) error { return nil }
 
 func eqViewsSlice[T any](eqVal func(x, y T) bool) func(a, b views.Slice[T]) bool {
 	return func(a, b views.Slice[T]) bool {

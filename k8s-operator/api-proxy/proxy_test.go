@@ -6,14 +6,18 @@
 package apiproxy
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"reflect"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/net/memnet"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/util/must"
@@ -176,6 +180,94 @@ func Test_determineRecorderConfig(t *testing.T) {
 			}
 			if !reflect.DeepEqual(c.recorderAddresses, tt.wantRecorderAddresses) {
 				t.Errorf("determineRecorderConfig() gotRecorderAddresses = %v, want %v", c.recorderAddresses, tt.wantRecorderAddresses)
+			}
+		})
+	}
+}
+
+// TestWhoIs checks that whoIs resolves the caller from the request's remote
+// address and ignores the X-Forwarded-For header.
+func TestWhoIs(t *testing.T) {
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nodes := map[string]*apitype.WhoIsResponse{
+		"100.64.0.1:1234": {
+			Node:        &tailcfg.Node{Name: "user-node.ts.net."},
+			UserProfile: &tailcfg.UserProfile{LoginName: "user@example.com"},
+		},
+		"100.64.0.2": {
+			Node:        &tailcfg.Node{Name: "admin-node.ts.net."},
+			UserProfile: &tailcfg.UserProfile{LoginName: "admin@example.com"},
+		},
+	}
+	lal := memnet.Listen("local-tailscaled.sock:80")
+	defer lal.Close()
+	localAPI := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		who, ok := nodes[r.URL.Query().Get("addr")]
+		if !ok {
+			http.Error(w, "no match for IP:port", http.StatusNotFound)
+			return
+		}
+		json.NewEncoder(w).Encode(who)
+	})}
+	defer localAPI.Close()
+	go localAPI.Serve(lal)
+
+	ap := &APIServerProxy{
+		log: zl.Sugar(),
+		lc:  &local.Client{Dial: lal.Dial},
+	}
+
+	tests := []struct {
+		name          string
+		remoteAddr    string
+		xForwardedFor string
+		wantLogin     string // empty if whoIs should fail
+	}{
+		{
+			name:       "tailnet_node",
+			remoteAddr: "100.64.0.1:1234",
+			wantLogin:  "user@example.com",
+		},
+		{
+			name:       "not_a_tailnet_node",
+			remoteAddr: "10.0.0.5:1234",
+		},
+		{
+			name:          "x_forwarded_for_ignored",
+			remoteAddr:    "10.0.0.5:1234",
+			xForwardedFor: "100.64.0.2",
+		},
+		{
+			name:          "x_forwarded_for_ignored_for_tailnet_node",
+			remoteAddr:    "100.64.0.1:1234",
+			xForwardedFor: "100.64.0.2",
+			wantLogin:     "user@example.com",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "/api/v1/namespaces/kube-system/secrets", nil)
+			r.RemoteAddr = tt.remoteAddr
+			if tt.xForwardedFor != "" {
+				r.Header.Set("X-Forwarded-For", tt.xForwardedFor)
+			}
+
+			who, err := ap.whoIs(r)
+			if tt.wantLogin == "" {
+				if err == nil {
+					t.Fatalf("whoIs() = %q, want error", who.UserProfile.LoginName)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("whoIs() unexpected error: %v", err)
+			}
+			if got := who.UserProfile.LoginName; got != tt.wantLogin {
+				t.Errorf("whoIs() = %q, want %q", got, tt.wantLogin)
 			}
 		})
 	}

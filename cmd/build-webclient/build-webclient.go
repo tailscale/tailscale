@@ -8,7 +8,7 @@
 //
 // Meant to be invoked from the tailscale/web-client-prebuilt repo when
 // updating the production built web client assets. To run it manually,
-// you can use `./tool/go run ./misc/build-webclient`
+// you can use `./tool/go run ./cmd/build-webclient`
 package main
 
 import (
@@ -46,15 +46,17 @@ func build(toolDir, appDir string) error {
 		return fmt.Errorf("Cannot change cwd: %w", err)
 	}
 
-	if err := yarn(toolDir); err != nil {
+	// The lockfile is never modified (frozenLockfile is set in
+	// client/web/pnpm-workspace.yaml).
+	if err := pnpm(toolDir, "install"); err != nil {
 		return fmt.Errorf("install failed: %w", err)
 	}
 
-	if err := yarn(toolDir, "lint"); err != nil {
+	if err := pnpm(toolDir, "--silent", "run", "lint"); err != nil {
 		return fmt.Errorf("lint failed: %w", err)
 	}
 
-	if err := yarn(toolDir, "build", "--outDir="+*outDir, "--emptyOutDir"); err != nil {
+	if err := pnpm(toolDir, "--silent", "run", "build", "--outDir="+*outDir, "--emptyOutDir"); err != nil {
 		return fmt.Errorf("build failed: %w", err)
 	}
 
@@ -79,9 +81,8 @@ func build(toolDir, appDir string) error {
 	return nil
 }
 
-func yarn(toolDir string, args ...string) error {
-	args = append([]string{"--silent", "--non-interactive"}, args...)
-	return run(filepath.Join(toolDir, "yarn"), args...)
+func pnpm(toolDir string, args ...string) error {
+	return run(filepath.Join(toolDir, "pnpm"), args...)
 }
 
 func run(name string, args ...string) error {

@@ -89,6 +89,9 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 		OwnerReferences: pgOwnerReference(pg),
 	}
 	ss.Spec.Replicas = new(pgReplicas(pg))
+	// Start Pods in parallel so one that isn't ready yet, e.g. while its
+	// device awaits approval, doesn't hold back the others.
+	ss.Spec.PodManagementPolicy = appsv1.ParallelPodManagement
 	ss.Spec.Selector = &metav1.LabelSelector{
 		MatchLabels: pgLabels(pg.Name, nil),
 	}
@@ -285,8 +288,9 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 	// accessible to the whole cluster network (in the absence of NetworkPolicy
 	// rules).
 	//
-	// TODO(tomhjp): add a readiness probe or gate to Ingress Pods. There is a
-	// small window where the Pod is marked ready but routing can still fail.
+	// TODO(tomhjp): run the readiness probe on Ingress Pods by default. Until a
+	// ProxyClass sets it, there is a small window where the Pod is marked ready
+	// but routing can still fail.
 	if pg.Spec.Type == tsapi.ProxyGroupTypeEgress && !hasLocalAddrPortSet(proxyClass) {
 		c.Lifecycle = &corev1.Lifecycle{
 			PreStop: &corev1.LifecycleHandler{
@@ -325,7 +329,8 @@ func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string, por
 			OwnerReferences: pgOwnerReference(pg),
 		},
 		Spec: appsv1.StatefulSetSpec{
-			Replicas: new(pgReplicas(pg)),
+			Replicas:            new(pgReplicas(pg)),
+			PodManagementPolicy: appsv1.ParallelPodManagement,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: pgLabels(pg.Name, nil),
 			},

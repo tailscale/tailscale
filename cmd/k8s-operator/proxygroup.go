@@ -6,6 +6,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -317,6 +318,18 @@ func (r *ProxyGroupReconciler) validate(ctx context.Context, pg *tsapi.ProxyGrou
 		if strings.HasSuffix(imagePath, "k8s-proxy") {
 			errs = append(errs, fmt.Errorf("the configured ProxyClass %q specifies to use image %q but expected a %q image for ProxyGroup of type %q", pc.Name, image, "tailscale", pg.Spec.Type))
 		}
+
+		if pc != nil && pc.Spec.StatefulSet != nil && pc.Spec.StatefulSet.Pod != nil && pc.Spec.StatefulSet.Pod.TailscaleContainer != nil {
+			if tc := pc.Spec.StatefulSet.Pod.TailscaleContainer; tc.LivenessProbe != nil || tc.ReadinessProbe != nil {
+				var env []corev1.EnvVar
+				for _, e := range tc.Env {
+					env = append(env, corev1.EnvVar{Name: string(e.Name), Value: e.Value})
+				}
+				if _, ok := healthzPort(env); !ok {
+					errs = append(errs, fmt.Errorf("the configured ProxyClass %q sets probes, but its TS_HEALTHCHECK_ADDR_PORT, TS_ENABLE_HEALTH_CHECK or TS_LOCAL_ADDR_PORT env var turns off the /livez and /readyz endpoints or binds them where the kubelet can't reach them", pc.Name))
+				}
+			}
+		}
 	}
 
 	return errors.Join(errs...)
@@ -447,6 +460,17 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, tsClient tscl
 	}
 	ss = applyProxyClassToStatefulSet(proxyClass, ss, cfg, logger)
 
+	// TODO(ChaosInTheCRD): temporary check, remove when probes are added for kube-apiserver ProxyGroups.
+	if pg.Spec.Type != tsapi.ProxyGroupTypeKubernetesAPIServer {
+		applyHealthzProbes(proxyClass, ss)
+	}
+
+	if replaced, err := r.maybeReplaceStatefulSet(ctx, ss, logger); err != nil {
+		return r.notReadyErrf(pg, logger, "failed to replace StatefulSet: %w", err)
+	} else if replaced {
+		return notReady(reasonProxyGroupCreating, "waiting for StatefulSet to be replaced to update its Pod management policy")
+	}
+
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, ss, func(s *appsv1.StatefulSet) {
 		s.Spec = ss.Spec
 		s.ObjectMeta.Labels = ss.ObjectMeta.Labels
@@ -535,6 +559,36 @@ func (r *ProxyGroupReconciler) maybeUpdateStatus(ctx context.Context, logger *za
 	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, status, reason, message, pg.Generation, r.clock, logger)
 
 	return nil
+}
+
+// maybeReplaceStatefulSet deletes the ProxyGroup's existing StatefulSet if its
+// Pod management policy differs from the one in ss. Kubernetes doesn't allow
+// that field to change on an existing StatefulSet, so it has to be deleted and
+// created again. The Pods are orphaned rather than deleted, so they keep
+// serving until a later reconcile creates the new StatefulSet, which adopts
+// them. It reports whether the StatefulSet is being replaced.
+func (r *ProxyGroupReconciler) maybeReplaceStatefulSet(ctx context.Context, ss *appsv1.StatefulSet, logger *zap.SugaredLogger) (bool, error) {
+	existing := new(appsv1.StatefulSet)
+	err := r.Get(ctx, client.ObjectKeyFromObject(ss), existing)
+	switch {
+	case apierrors.IsNotFound(err):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("failed to get StatefulSet: %w", err)
+	case !existing.DeletionTimestamp.IsZero():
+		return true, nil
+	}
+	// The API server defaults an unset policy to OrderedReady.
+	current := cmp.Or(existing.Spec.PodManagementPolicy, appsv1.OrderedReadyPodManagement)
+	desired := cmp.Or(ss.Spec.PodManagementPolicy, appsv1.OrderedReadyPodManagement)
+	if current == desired {
+		return false, nil
+	}
+	logger.Infof("Deleting StatefulSet %q, keeping its Pods, to change its Pod management policy from %q to %q; it is recreated on the next reconcile", existing.Name, current, desired)
+	if err := r.Delete(ctx, existing, client.PropagationPolicy(metav1.DeletePropagationOrphan)); err != nil && !apierrors.IsNotFound(err) {
+		return false, fmt.Errorf("failed to delete StatefulSet: %w", err)
+	}
+	return true, nil
 }
 
 func (r *ProxyGroupReconciler) ensureNodePortServiceCreated(ctx context.Context, pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass) (map[string]uint16, *uint16, error) {

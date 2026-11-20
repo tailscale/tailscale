@@ -13,7 +13,6 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/net/packet"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
@@ -39,19 +38,26 @@ type client struct {
 	v6MagicIPPool   *ippool
 	v6TransitIPPool *ippool
 	assignments     addrAssignments
-	byConnKey       map[key.NodePublic]set.Set[netip.Prefix]
+	byConnID        map[tailcfg.NodeID]set.Set[netip.Prefix]
 }
 
-// transitIPForMagicIP is part of the implementation of the [Conn25Datapath] interface for dataflow lookups.
-// See also [Conn25Datapath.ClientTransitIPForMagicIP].
-func (c *client) transitIPForMagicIP(magicIP netip.Addr) (netip.Addr, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	v, ok := c.assignments.lookupByMagicIP(magicIP)
-	if ok {
-		return v.connectorAddr.transit, true
+// errNoMagicIPAssignment is returned by [client.PrepareNewFlowForMagicIP] when
+// this client holds no address assignment for the given Magic IP.
+var errNoMagicIPAssignment = errors.New("no address assignment for magic IP")
+
+// transitIPRoutableLocked reports whether as's Transit IP is registered under
+// its connector's node key, i.e. whether [client.extraWireGuardAllowedIPs]
+// will tell WireGuard to route packets for it to that connector. Until it is,
+// sending to the Transit IP would be a black hole: the assignment exists, but
+// no peer claims the address.
+// c.mu must be held.
+func (c *client) transitIPRoutableLocked(as *addrs) bool {
+	conn := as.connectorAddr.node
+	if !conn.Valid() || conn.Key().IsZero() {
+		return false
 	}
-	return netip.Addr{}, false
+	tip := as.connectorAddr.transit
+	return c.byConnID[conn.ID()].Contains(netip.PrefixFrom(tip, tip.BitLen()))
 }
 
 // linkLocalAllow returns true if the provided packet with a link-local Dst address has a
@@ -99,7 +105,7 @@ func (c *client) reset() {
 	c.v6MagicIPPool = newIPPool(ipSets.v6Magic)
 	c.v6TransitIPPool = newIPPool(ipSets.v6Transit)
 	c.assignments = addrAssignments{clock: c.assignments.clock}
-	c.byConnKey = nil
+	c.byConnID = nil
 
 	// Drop any assignments still waiting to be sent. They describe the state
 	// we just cleared, so delivering them would register transit IPs with
@@ -249,10 +255,10 @@ func (c *client) addTransitIPForConnector(as addrs) error {
 	if !conn.Valid() {
 		return fmt.Errorf("unexpectedly received invalid connector node")
 	}
-	if conn.Key().IsZero() {
-		return fmt.Errorf("node with stable ID %q does not have a key", conn.StableID())
+	if conn.ID() == 0 {
+		return fmt.Errorf("node with stable ID %q does not have a node ID", conn.StableID())
 	}
-	return c.insertTransitConnMapping(as, conn.Key())
+	return c.insertTransitConnMapping(as, conn.ID())
 }
 
 // errQueueFull is returned when the address assignment send queue is full and
@@ -280,16 +286,50 @@ func (c *client) enqueueAddressAssignment(addrs *addrs) error {
 	}
 }
 
-func (c *client) flowCreated(transit netip.Addr) func() {
+// ClientFlowRef is a client-side flow's reference to the address assignment it was counted against.
+type ClientFlowRef struct {
+	transit netip.Addr
+	release func()
+}
+
+// TransitIP returns the Transit IP of the assignment the flow was counted
+// against, which is the address its packets should be forwarded to.
+func (r ClientFlowRef) TransitIP() netip.Addr {
+	return r.transit
+}
+
+// Release gives up the flow's claim on the address assignment, letting the
+// assignment be reclaimed once nothing else holds it. It must be called once
+// the flow is gone, or right away if the caller ends up installing no flow at all.
+func (r ClientFlowRef) Release() {
+	if r.release != nil {
+		r.release()
+	}
+}
+
+// prepareNewFlowForMagicIP resolves magicIP to the transit IP currently assigned
+// to it and records that a flow is being established against that assignment,
+// returning the reference that both names that transit IP and keeps the
+// assignment from being reclaimed.
+//
+// It returns [errNoMagicIPAssignment] if there is no assignment for magicIP, and
+// [ErrTransitIPNotRoutable] if there is one but its Transit IP can't carry
+// traffic yet. Nothing is counted on either error path, so the returned
+// reference is the zero value and must not be released.
+func (c *client) prepareNewFlowForMagicIP(magicIP netip.Addr) (ClientFlowRef, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	entry, ok := c.assignments.byTransitIP[transit]
+	entry, ok := c.assignments.lookupByMagicIP(magicIP)
 	if !ok {
-		return func() {}
+		return ClientFlowRef{}, errNoMagicIPAssignment
 	}
+	if !c.transitIPRoutableLocked(entry) {
+		return ClientFlowRef{}, ErrTransitIPNotRoutable
+	}
+	transit := entry.connectorAddr.transit
 	entry.activeFlowCount++
 	var released bool
-	return func() {
+	return ClientFlowRef{transit: transit, release: func() {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if released {
@@ -304,11 +344,11 @@ func (c *client) flowCreated(transit netip.Addr) func() {
 		if entry.activeFlowCount == 0 {
 			entry.zeroFlowTime = c.assignments.clock.Now()
 		}
-	}
+	}}, nil
 }
 
-func (c *client) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
-	tips, ok := c.lookupTransitIPsByConnKey(k)
+func (c *client) extraWireGuardAllowedIPs(id tailcfg.NodeID) views.Slice[netip.Prefix] {
+	tips, ok := c.lookupTransitIPsByConnID(id)
 	if !ok {
 		return views.Slice[netip.Prefix]{}
 	}
@@ -401,11 +441,11 @@ func (c *client) assignmentIsCurrent(as addrs) bool {
 	return as.generation == c.generation
 }
 
-// insertTransitConnMapping adds an entry to the byConnKey map
+// insertTransitConnMapping adds an entry to the byConnID map
 // for the provided transitIP (as a prefix).
 // The provided assignment must already be present in the byTransitIP map, and
 // must be from the current generation.
-func (c *client) insertTransitConnMapping(as addrs, connKey key.NodePublic) error {
+func (c *client) insertTransitConnMapping(as addrs, connID tailcfg.NodeID) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if as.generation != c.generation {
@@ -416,23 +456,23 @@ func (c *client) insertTransitConnMapping(as addrs, connKey key.NodePublic) erro
 		return errors.New("transit IP is not already known")
 	}
 
-	ctips, ok := c.byConnKey[connKey]
+	ctips, ok := c.byConnID[connID]
 	tipp := netip.PrefixFrom(tip, tip.BitLen())
 	if !ok {
 		ctips.Make()
-		mak.Set(&c.byConnKey, connKey, ctips)
+		mak.Set(&c.byConnID, connID, ctips)
 	}
 	ctips.Add(tipp)
 	return nil
 }
 
-// lookupTransitIPsByConnKey returns a slice containing the transit IPs (as netipPrefix)
-// associated with the given connector (identified by node key), or (nil, false) if there is no entry
-// for the given key.
-func (c *client) lookupTransitIPsByConnKey(k key.NodePublic) ([]netip.Prefix, bool) {
+// lookupTransitIPsByConnID returns a slice containing the transit IPs (as netipPrefix)
+// associated with the given connector (identified by node ID), or (nil, false) if there is no entry
+// for the given ID.
+func (c *client) lookupTransitIPsByConnID(id tailcfg.NodeID) ([]netip.Prefix, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	s, ok := c.byConnKey[k]
+	s, ok := c.byConnID[id]
 	if !ok {
 		return nil, false
 	}

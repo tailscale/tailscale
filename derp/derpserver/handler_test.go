@@ -4,6 +4,7 @@
 package derpserver
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -157,4 +158,39 @@ func TestHandlerTLSReaderSize(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestKeepAlive verifies that the server sends a client keepalives. Run
+// with the race detector, it also verifies that the keepalive timer's
+// func (which resets the timer) is ordered after the timer is assigned.
+func TestKeepAlive(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := New(key.NewNode(), t.Logf)
+		defer s.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		connIn, connOut := memnet.NewConn("derp", 64<<10)
+		defer connIn.Close()
+		defer connOut.Close()
+		go s.Accept(ctx, connIn, bufio.NewReadWriter(bufio.NewReader(connIn), bufio.NewWriter(connIn)), "test-client")
+
+		brw := bufio.NewReadWriter(bufio.NewReader(connOut), bufio.NewWriter(connOut))
+		c, err := derp.NewClient(key.NewNode(), connOut, brw, t.Logf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		for got := 0; got < 3; {
+			m, err := c.Recv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := m.(derp.KeepAliveMessage); ok {
+				got++
+			}
+		}
+		if d := time.Since(start); d < 3*derp.KeepAlive {
+			t.Errorf("got 3 keepalives in %v; want at least %v", d, 3*derp.KeepAlive)
+		}
+	})
 }

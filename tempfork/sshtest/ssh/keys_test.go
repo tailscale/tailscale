@@ -216,26 +216,6 @@ func TestParseECPrivateKey(t *testing.T) {
 	}
 }
 
-func TestParseDSA(t *testing.T) {
-	// We actually exercise the ParsePrivateKey codepath here, as opposed to
-	// using the ParseRawPrivateKey+NewSignerFromKey path that testdata_test.go
-	// uses.
-	s, err := ParsePrivateKey(testdata.PEMBytes["dsa"])
-	if err != nil {
-		t.Fatalf("ParsePrivateKey returned error: %s", err)
-	}
-
-	data := []byte("sign me")
-	sig, err := s.Sign(rand.Reader, data)
-	if err != nil {
-		t.Fatalf("dsa.Sign: %v", err)
-	}
-
-	if err := s.PublicKey().Verify(data, sig); err != nil {
-		t.Errorf("Verify failed: %v", err)
-	}
-}
-
 // Tests for authorized_keys parsing.
 
 // getTestKey returns a public key, and its base64 encoding.

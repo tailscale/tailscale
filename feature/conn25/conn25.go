@@ -42,7 +42,6 @@ import (
 	"tailscale.com/tstime"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/dnstype"
-	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
@@ -287,13 +286,13 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 	})
 
 	// Tell WireGuard what Transit IPs belong to which connector peers.
-	e.host.Hooks().ExtraWireGuardAllowedIPs.Set(func(peers iter.Seq2[tailcfg.NodeID, key.NodePublic]) map[tailcfg.NodeID][]netip.Prefix {
+	e.host.Hooks().ExtraWireGuardAllowedIPs.Set(func(peers iter.Seq[tailcfg.NodeID]) map[tailcfg.NodeID][]netip.Prefix {
 		if !e.conn25.isConfigured() {
 			return nil
 		}
 		var extras map[tailcfg.NodeID][]netip.Prefix
-		for id, k := range peers {
-			if pfxs := e.extraWireGuardAllowedIPs(k); pfxs.Len() > 0 {
+		for id := range peers {
+			if pfxs := e.extraWireGuardAllowedIPs(id); pfxs.Len() > 0 {
 				mak.Set(&extras, id, pfxs.AsSlice())
 			}
 		}
@@ -303,34 +302,36 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 	return nil
 }
 
-// ClientTransitIPForMagicIP implements [Conn25Datapath].
-func (c *Conn25) ClientTransitIPForMagicIP(m netip.Addr) (netip.Addr, error) {
-	if addr, ok := c.client.transitIPForMagicIP(m); ok {
-		return addr, nil
+// ClientPrepareNewFlowForMagicIP implements [Conn25Datapath].
+// The datapath notifies Conn25 that a flow to magic IP is being established, and
+// Conn25 resolves m to its Transit IP and counts the flow against that address
+// assignment in one step, reporting ok and returning the reference that names
+// that Transit IP and keeps it and its associated addresses from being removed
+// from Conn25's state and returned to their pools while the flow uses them.
+//
+// If m has an active address assignment whose Transit IP isn't routable yet, it
+// reports ok false and returns [ErrTransitIPNotRoutable].
+//
+// If m has no active address assignment, it reports ok false and returns
+// [ErrUnmappedMagicIP] when m falls in a configured Magic IP range, and a nil
+// error when it does not, since in that case m is not a Magic IP at all and the
+// traffic to it is potentially valid non-app-connector traffic.
+func (c *Conn25) ClientPrepareNewFlowForMagicIP(m netip.Addr) (ClientFlowRef, bool, error) {
+	ref, err := c.client.prepareNewFlowForMagicIP(m)
+	if err == nil {
+		return ref, true, nil
+	}
+	if errors.Is(err, ErrTransitIPNotRoutable) {
+		return ClientFlowRef{}, false, err
 	}
 	cfg, ok := c.getConfig()
 	if !ok {
-		return netip.Addr{}, nil
+		return ClientFlowRef{}, false, nil
 	}
 	if !cfg.ipSets.v4Magic.Contains(m) && !cfg.ipSets.v6Magic.Contains(m) {
-		return netip.Addr{}, nil
+		return ClientFlowRef{}, false, nil
 	}
-	// TODO(tailscale/corp#50405): Just because there is a TransitIP associated with the MagicIP,
-	// that doesn't mean the TransitIP is ready to use. We should also make sure that the TransitIP
-	// is installed in WireGuard for the correct node, which happens after it is registered with the
-	// connector. Perhaps a different error message to represent that.
-	return netip.Addr{}, ErrUnmappedMagicIP
-}
-
-// ClientFlowCreated implements [Conn25Datapath].
-// The datapath notifies Conn25 that a flow with transitIP has been created so
-// that Conn25 can prevent that transit IP and associated addresses from being
-// removed from its state and returned to their pools. The returned function
-// must be invoked when that flow is removed; it releases the hold on the
-// address assignment the flow was counted against. It releases that hold at
-// most once: calling it again is a no-op.
-func (c *Conn25) ClientFlowCreated(transitIP netip.Addr) func() {
-	return c.client.flowCreated(transitIP)
+	return ClientFlowRef{}, false, ErrUnmappedMagicIP
 }
 
 // ConnectorRealIPForTransitIPConnection implements [Conn25Datapath].
@@ -495,8 +496,8 @@ func (e *extension) profileStateChange(loginProfile ipn.LoginProfileView, prefs 
 	}
 }
 
-func (e *extension) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
-	return e.conn25.client.extraWireGuardAllowedIPs(k)
+func (e *extension) extraWireGuardAllowedIPs(id tailcfg.NodeID) views.Slice[netip.Prefix] {
+	return e.conn25.client.extraWireGuardAllowedIPs(id)
 }
 
 // Conn25 holds state for routing traffic for a domain via a connector.
@@ -969,7 +970,8 @@ func makePeerAPIReq(ctx context.Context, httpClient *http.Client, urlBase string
 
 func (e *extension) pickConnectorURLBase(app appctype.AppConnectorAttr) string {
 	nb := e.host.NodeBackend()
-	peers := pickConnector(nb, app)
+	rp := e.getRouteCheckReport()
+	peers := pickConnector(nb, app, rp)
 	for _, p := range peers {
 		if urlBase := nb.PeerAPIBase(p); urlBase != "" {
 			return urlBase
@@ -1344,6 +1346,25 @@ func rewriteHTTPSResponse(hdr dnsmessage.Header, questions []dnsmessage.Question
 
 const packetFilterAllowReason = "app connector transit IP"
 
+func (e *extension) getRouteCheckReport() ipnlocal.RouteCheckReport {
+	b, ok := e.backend.(*ipnlocal.LocalBackend)
+	if !ok {
+		return nil
+	}
+	hook := ipnlocal.HookRouteCheckReport.GetOrNil()
+	if hook == nil {
+		return nil
+	}
+	return hook(b)
+}
+
+func peerIsReachable(rp ipnlocal.RouteCheckReport, n tailcfg.NodeView) bool {
+	if rp == nil {
+		return n.Online().Get()
+	}
+	return rp.IsReachable(n.ID()).IsReachable()
+}
+
 func isPeerEligibleConnector(peer tailcfg.NodeView) bool {
 	if !peer.Valid() || !peer.Hostinfo().Valid() {
 		return false
@@ -1364,13 +1385,13 @@ func sortByPreference(self tailcfg.NodeView, ns []tailcfg.NodeView) {
 
 // pickConnector returns peers the backend knows about that match the app, in order of preference to use as
 // a connector.
-func pickConnector(nb ipnext.NodeBackend, app appctype.AppConnectorAttr) []tailcfg.NodeView {
+func pickConnector(nb ipnext.NodeBackend, app appctype.AppConnectorAttr, routecheckReport ipnlocal.RouteCheckReport) []tailcfg.NodeView {
 	appTagsSet := set.SetOf(app.Connectors)
 	matches := nb.AppendMatchingPeers(nil, func(n tailcfg.NodeView) bool {
 		if !isPeerEligibleConnector(n) {
 			return false
 		}
-		if !n.Online().Get() {
+		if !peerIsReachable(routecheckReport, n) {
 			return false
 		}
 		for _, t := range n.Tags().All() {

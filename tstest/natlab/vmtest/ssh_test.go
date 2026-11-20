@@ -18,29 +18,34 @@ import (
 	"tailscale.com/tstest/natlab/vnet"
 )
 
-// TestTailscaleSSH_Ubuntu exercises the Tailscale SSH server ("tailscale up
-// --ssh", not a system sshd) on an Ubuntu node, with an Ubuntu node as the SSH
-// client. It tests logging in as both root and a non-root user, which
-// exercises the incubator's su-based login path.
+// TestTailscaleSSH_Ubuntu exercises the Tailscale SSH server on Ubuntu.
+// See testTailscaleSSHForOS for what is verified.
 func TestTailscaleSSH_Ubuntu(t *testing.T) {
-	testSuite := newTestSuite(t, "ubuntu", vmtest.Ubuntu2404)
+	testTailscaleSSHForOS(t, vmtest.Ubuntu2404)
+}
 
-	ubuntu := testSuite.server
+// testTailscaleSSHForOS exercises the Tailscale SSH server ("tailscale up
+// --ssh", not a system sshd) on a Linux node of the given distribution, with
+// an Ubuntu node as the SSH client. It tests logging in as both root and a
+// non-root user, which exercises the incubator's su-based login path.
+func testTailscaleSSHForOS(t *testing.T, serverOS vmtest.OSImageLinux) {
+	testSuite := newTestSuite(t, serverOS.Name, serverOS)
+	server := testSuite.server
 
-	if out, err := testSuite.env.SSHExec(ubuntu, "useradd -m -s /bin/bash tsuser"); err != nil {
+	if out, err := testSuite.env.SSHExec(server, "useradd -m -s /bin/bash tsuser"); err != nil {
 		t.Fatalf("useradd: %v\n%s", err, out)
 	}
 
-	testSuite.waitSSH(t, "ubuntu", "root")
+	testSuite.waitSSH(t, serverOS.Name, "root")
 
-	testSuite.check(t, "ubuntu root login", "root", "id -un && pwd", "root\n/root")
-	testSuite.check(t, "ubuntu non-root login", "tsuser", "id -un && pwd", "tsuser\n/home/tsuser")
+	testSuite.check(t, serverOS.Name+" root login", "root", "id -un && pwd", "root\n/root")
+	testSuite.check(t, serverOS.Name+" non-root login", "tsuser", "id -un && pwd", "tsuser\n/home/tsuser")
 
 	if out, code := testSuite.ssh(t, "nosuchuser", "true"); code == 0 {
-		t.Errorf("ubuntu nonexistent user: ssh succeeded, want failure:\n%s", out)
+		t.Errorf("%s nonexistent user: ssh succeeded, want failure:\n%s", serverOS.Name, out)
 	}
 
-	testSuite.checkAutogroupNonroot(t, "ubuntu")
+	testSuite.checkAutogroupNonroot(t, serverOS.Name)
 }
 
 // TestTailscaleSSH_FreeBSD exercises the Tailscale SSH server ("tailscale up

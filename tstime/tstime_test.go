@@ -30,10 +30,18 @@ func TestParseDuration(t *testing.T) {
 		{"1w1d1h", 8*24*time.Hour + time.Hour},
 		{"1y", 0},
 		{"", 0},
+		{"1.5h", 90 * time.Minute},
 	}
 	for _, tt := range tests {
 		if got, _ := ParseDuration(tt.in); got != tt.want {
 			t.Errorf("ParseDuration(%q) = %d; want %d", tt.in, got, tt.want)
+		}
+	}
+
+	errTests := []string{"0.5d", "1.5d", "1.5w", ".5d", "2.25w", "1d0.5d"}
+	for _, in := range errTests {
+		if d, err := ParseDuration(in); err == nil {
+			t.Errorf("ParseDuration(%q) = %v, want error", in, d)
 		}
 	}
 }

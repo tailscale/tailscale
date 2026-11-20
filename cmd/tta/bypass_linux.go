@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"syscall"
 
@@ -11,7 +12,7 @@ import (
 	"tailscale.com/net/netmon"
 )
 
-// bypassControlFunc is set as net.Dialer.Control so that sockets dialed by
+// bypassControlFunc is set as net.Dialer.ControlContext so that sockets dialed by
 // TTA bypass tailscaled's policy routing. Without it, sockets opened before
 // tailscaled installs an exit-node route would have their packets rerouted
 // via the exit node when the route is later installed, breaking the
@@ -21,7 +22,7 @@ import (
 // LAN-facing NIC) rather than relying on the bypass fwmark. The fwmark
 // approach is conditional on tailscaled having configured SO_MARK-based
 // policy routing; binding to the underlying interface is unconditional.
-func bypassControlFunc(network, address string, c syscall.RawConn) error {
+func bypassControlFunc(_ context.Context, network, address string, c syscall.RawConn) error {
 	ifc, err := netmon.DefaultRouteInterface()
 	if err != nil {
 		return fmt.Errorf("netmon.DefaultRouteInterface: %w", err)

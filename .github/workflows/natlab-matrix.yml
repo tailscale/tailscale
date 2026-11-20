@@ -1,0 +1,110 @@
+# Run TestMatrix from tstest/natlab/vmtest/matrix_generated_test.go on weekends
+# for flake detection. All subtests run sequentially on a single runner to keep
+# resource usage low.
+#
+# This is intentionally separate from natlab-test.yml, which runs the full
+# vmtest suite. That workflow excludes TestMatrix from its discovery; this one
+# runs nothing else.
+#
+# All cache handling and pre test preperation comes from natlab-test.yml.
+name: "natlab-matrix"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "3 1-23/2 * * 6" # Saturday from 01:03 UTC (Friday evening Pacific), every 2h
+    - cron: "3 */2   * * 0"  # all day Sunday, every 2h
+    - cron: "3 1-5/2 * * 1"  # Monday until 05:03 UTC (early morning London), every 2h
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # ./tool/go downloads and extracts the tsgo toolchain on a cold runner.
+      # go.toolchain.rev names an immutable release, so an exact hit is enough.
+      - name: Restore tsgo toolchain
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.cache/tsgo
+          key: natlab-tsgo-${{ runner.os }}-${{ hashFiles('go.toolchain.rev') }}
+
+      - name: Restore Go modules
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/go/pkg/mod
+          key: natlab-gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+
+      # Saved at the end of the job. The run_id suffix makes each save unique,
+      # and restore-keys finds an earlier one.
+      - name: Restore Go build cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.cache/go-build
+          key: natlab-gobuild-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.run_id }}
+          restore-keys: |
+            natlab-gobuild-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            natlab-gobuild-${{ runner.os }}-
+
+      # The cloud VM image cache is keyed only on images.go (image URLs and
+      # SHAs), so it survives across workflow runs and is invalidated only
+      # when a new image source is added.
+      - name: Cache cloud VM images
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.cache/tailscale/vmtest/images
+          key: natlab-vmimages-${{ hashFiles('tstest/natlab/vmtest/images.go') }}
+
+      # The gokrazy VM image is keyed by github.sha. That means we rebuild
+      # it once per commit but matrix test jobs in the same run all share
+      # the result. Per-PR re-runs of the same sha (e.g. a rerun-failed)
+      # also get the cache.
+      - name: Cache gokrazy VM image
+        id: gokrazy-cache
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: gokrazy/natlabapp.qcow2
+          key: natlab-gokrazy-${{ github.sha }}
+
+      # qemu-utils provides qemu-img, which the gokrazy Makefile uses to
+      # convert natlabapp.img to qcow2.
+      - name: Install qemu
+        run: |
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get -y update
+          sudo apt-get -y remove man-db
+          sudo apt-get install -y qemu-system-x86 qemu-utils
+
+      - name: Download cloud VM images
+        # natlabprep is idempotent: it checks the cache before downloading.
+        run: |
+          ./tool/go run ./tstest/natlab/vmtest/cmd/natlabprep
+
+      # This also builds the minimal-feature gokrazy variants, which warms
+      # the Go build cache for their tagged tailscale and tailscaled.
+      - name: Build gokrazy VM image
+        if: steps.gokrazy-cache.outputs.cache-hit != 'true'
+        run: |
+          ./tool/go run ./tstest/natlab/vmtest/cmd/natlabprep --gokrazy
+
+      # No Go source imports this module, so nothing above fetches it. Pulling
+      # it here puts it in the module cache the matrix jobs restore.
+      - name: Download kernel.amd64 module
+        run: |
+          ./tool/go mod download github.com/gokrazy/kernel.amd64
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run TestMatrix
+        # Runs all subtests sequentially via t.Run. The timeout covers the full
+        # suite. Individual subtests have their own bounded waits inside vmtest.
+        run: |
+          ./tool/go test -v -timeout=90m -count=1 ./tstest/natlab/vmtest/ \
+            -run '^TestMatrix$' --run-vm-tests

@@ -13,56 +13,27 @@ import (
 	"testing"
 )
 
-func TestIsUDPReadFeedback(t *testing.T) {
-	tests := []struct {
-		err  error
-		want bool
-	}{
-		{nil, false},
-		{errors.New("unknown error"), false},
-		{syscall.EHOSTUNREACH, true},
-		{syscall.ENETUNREACH, true},
-		{syscall.EHOSTDOWN, false},
-		{syscall.ENETRESET, false},
-		{syscall.ECONNRESET, false},
-		{syscall.ECONNREFUSED, false},
-		{syscall.EBADF, false},
-		{syscall.ENOTSOCK, false},
-		{syscall.EPIPE, false},
-		{syscall.ENOTCONN, false},
-		{net.ErrClosed, false},
-	}
-	for _, tt := range tests {
-		if got := IsUDPReadFeedback(tt.err); got != tt.want {
-			t.Errorf("IsUDPReadFeedback(%v) = %v, want %v", tt.err, got, tt.want)
-		}
-		wrapped := &net.OpError{Op: "read", Net: "udp4", Err: &os.SyscallError{
-			Syscall: "recvfrom", Err: tt.err,
-		}}
-		if got := IsUDPReadFeedback(wrapped); got != tt.want {
-			t.Errorf("IsUDPReadFeedback(wrapped %v) = %v, want %v", tt.err, got, tt.want)
-		}
-	}
-}
-
-func TestIsUDPReadErrorUnknown(t *testing.T) {
+func TestIsBadSocketError(t *testing.T) {
 	for _, tt := range []struct {
 		err  error
 		want bool
 	}{
 		{nil, false},
 		{errors.New("unknown error"), false},
-		{syscall.EADDRNOTAVAIL, true},
+		{syscall.EBADF, true},
+		{syscall.ENOTSOCK, true},
+		{syscall.EPIPE, false},
 		{syscall.EHOSTUNREACH, false},
-		{syscall.ECONNRESET, false},
-		{syscall.EBADF, false},
 		{net.ErrClosed, false},
 	} {
+		if got := IsBadSocketError(tt.err); got != tt.want {
+			t.Errorf("IsBadSocketError(%v) = %v, want %v", tt.err, got, tt.want)
+		}
 		wrapped := &net.OpError{Op: "read", Net: "udp4", Err: &os.SyscallError{
 			Syscall: "recvfrom", Err: tt.err,
 		}}
-		if got := IsUDPReadUnknown(wrapped); got != tt.want {
-			t.Errorf("IsUDPReadUnknown(wrapped %v) = %v, want %v", tt.err, got, tt.want)
+		if got := IsBadSocketError(wrapped); got != tt.want {
+			t.Errorf("IsBadSocketError(wrapped %v) = %v, want %v", tt.err, got, tt.want)
 		}
 	}
 }

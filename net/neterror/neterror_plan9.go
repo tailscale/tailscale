@@ -12,13 +12,8 @@ import (
 	"strings"
 )
 
-// IsUDPReadFeedback always returns false on Plan 9.
-func IsUDPReadFeedback(err error) bool {
-	return false
-}
-
-// IsUDPReadUnknown always returns false on Plan 9.
-func IsUDPReadUnknown(err error) bool {
+// IsBadSocketError always returns false on Plan 9.
+func IsBadSocketError(err error) bool {
 	return false
 }
 

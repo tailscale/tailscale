@@ -26,7 +26,7 @@ func runBuildPkg() {
 	}
 
 	log.Printf("Linting...\n")
-	if err := runYarn("lint"); err != nil {
+	if err := runPnpm("--silent", "run", "lint"); err != nil {
 		log.Fatalf("Linting failed: %v", err)
 	}
 
@@ -50,7 +50,7 @@ func runBuildPkg() {
 	}
 
 	log.Printf("Generating types...\n")
-	if err := runYarn("pkg-types"); err != nil {
+	if err := runPnpm("--silent", "run", "pkg-types"); err != nil {
 		log.Fatalf("Type generation failed: %v", err)
 	}
 	if err := copyTypeDeclarations(); err != nil {

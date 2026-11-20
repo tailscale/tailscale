@@ -53,6 +53,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/log/sockstatlog"
 	"tailscale.com/logpolicy"
+	"tailscale.com/logtail"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
@@ -206,6 +207,8 @@ type watchSession struct {
 	// this session via [Notify.SelfChange]. A change to self is a profile
 	// boundary for implicit bus state, so per-session dedup state such as
 	// lastSentUserProfile must be reset when this identity changes.
+	// It is itself reset on a profile change, as the new profile may
+	// have no self node.
 	lastSentSelf tailcfg.NodeView
 
 	// policyUID is the user ID used for policy snapshot scoping.
@@ -273,10 +276,15 @@ type LocalBackend struct {
 	pushDeviceToken          syncs.AtomicValue[string]
 	backendLogID             logid.PublicID // or zero value if logging not in use
 	unregisterSysPolicyWatch func()
-	varRoot                  string         // or empty if SetVarRoot never called
-	logFlushFunc             func()         // or nil if SetLogFlusher wasn't called
-	em                       *expiryManager // non-nil; TODO(nickkhyl): move to nodeBackend
-	sshAtomicBool            atomic.Bool    // TODO(nickkhyl): move to nodeBackend
+	varRoot                  string // or empty if SetVarRoot never called
+	logFlushFunc             func() // or nil if SetLogFlusher wasn't called
+	// logUploader is the process-wide logtail logger for tailscaled's main
+	// log stream. Set via [LocalBackend.SetLogUploader]. May be nil.
+	logUploader *logtail.Logger
+	// logAuth caches tokens for authenticated log uploads (for node logs and netlog).
+	logAuth       logAuthCache
+	em            *expiryManager // non-nil; TODO(nickkhyl): move to nodeBackend
+	sshAtomicBool atomic.Bool    // TODO(nickkhyl): move to nodeBackend
 	// webClientAtomicBool controls whether the web client is running. This should
 	// be true unless the disable-web-client node attribute has been set.
 	webClientAtomicBool atomic.Bool // TODO(nickkhyl): move to nodeBackend
@@ -637,6 +645,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		em:           newExpiryManager(logf, sys.Bus.Get()),
 		loginFlags:   loginFlags,
 		clock:        clock,
+		logAuth:      logAuthCache{logf: logf},
 	}
 
 	sys.NoiseRoundTripper.Set(noiseRoundTripper{b})
@@ -832,6 +841,10 @@ func (b *LocalBackend) onHomeDERPUpdateLocked(du magicsock.HomeDERPChanged) {
 	}
 
 	if !cn.homeDERP.CompareAndSwap(int64(du.Old), int64(du.New)) {
+		return
+	}
+
+	if !cn.SelfHasCap(nodecap.CacheNetworkMaps) || !envknob.BoolDefaultTrue("TS_USE_CACHED_NETMAP") {
 		return
 	}
 
@@ -1405,6 +1418,7 @@ func (b *LocalBackend) shutdown() {
 		b.notifyCancel()
 	}
 	b.appConnector.Close()
+	b.closeDiskCacheLocked()
 	b.mu.Unlock()
 
 	// These shutdown methods wait for goroutines that can acquire b.mu. The
@@ -2521,7 +2535,7 @@ func (b *LocalBackend) sysPolicyChangedForSession(sess *watchSession) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if sess.suspended {
+	if sess.suspended || b.notifyWatchers[sess.sessionID] != sess {
 		return
 	}
 	snapshot, err := b.polc.GetPolicySnapshot(sess.policyUID)
@@ -2538,10 +2552,7 @@ func (b *LocalBackend) sysPolicyChangedForSession(sess *watchSession) {
 		f(&n)
 	}
 	nForSess := b.notifyForSessionLocked(sess, &n)
-	select {
-	case sess.ch <- nForSess:
-	default:
-	}
+	b.sendToWatchSessionLocked(sess, nForSess)
 }
 
 var (
@@ -2578,7 +2589,12 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	muts = b.tkaFilterDeltaMutsLocked(muts)
 	needsAuthReconfig := netmapDeltaNeedsAuthReconfig(cn, muts)
 
-	deltaRes, _ := cn.UpdateNetmapDelta(muts)
+	deltaRes, ok := cn.UpdateNetmapDelta(muts)
+	if !ok {
+		// Returning false makes controlclient deliver a full netmap
+		// instead.
+		return false
+	}
 	b.notifyPeerUpdateLocked()
 	b.checkCachedDNSLocked()
 	if buildfeatures.HasDrive {
@@ -2631,6 +2647,13 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		b.e.SyncDevicePeer(k)
 	}
 	b.setDataPlanePeerRoutes()
+
+	// Sync peers whose handshake type changed. This change takes effect
+	// on the next handshake with this peer, so sync before triggering
+	// handshakes based on disco key changes.
+	for k := range deltaRes.HandshakeTypeChanged {
+		b.e.SyncDevicePeer(k)
+	}
 
 	// Mark the WireGuard session for an opportunistic handshake for peers whose
 	// disco key changed in a way that indicates a restart, flushing their dead
@@ -2925,12 +2948,11 @@ func mutationsAreWorthyOfRecalculatingSuggestedExitNode(muts []netmap.NodeMutati
 			continue
 		}
 
-		// Some exit node is being mutated.  We care about it if it's online
-		// or offline state has changed.  We *might* eventually care about it for other reasons
-		// but for the sake of finding a "better" suggested exit node, this is probably
-		// sufficient.
+		// Some exit node is being mutated.  We care about it if its online
+		// or offline state has changed, or its DERP home, which
+		// [suggestExitNode] uses to group candidates by region.
 		switch m.(type) {
-		case netmap.NodeMutationOnline:
+		case netmap.NodeMutationOnline, netmap.NodeMutationDERPHome:
 			return true
 		}
 	}
@@ -4376,25 +4398,33 @@ func (b *LocalBackend) sendToLocked(n ipn.Notify, recipient notificationTarget) 
 			continue
 		}
 		nForSess := b.notifyForSessionLocked(sess, &n)
-		select {
-		case sess.ch <- nForSess:
-		default:
-			switch {
-			case sess.mask&ipn.NotifyInProcessNoDisconnect != 0:
-				metricWatchIPNBusBehindBlocked.Add(1)
-				select {
-				case sess.ch <- nForSess:
-				case <-sess.ctx.Done():
-				}
-			case sess.mask&ipn.NotifySuspendWhenBehind != 0:
-				metricWatchIPNBusBehindSuspended.Add(1)
-				b.logf("IPN bus watcher %s fell behind; suspending it", sess.sessionID)
-				b.suspendLaggingWatchSessionLocked(sess)
-			default:
-				metricWatchIPNBusBehindClosed.Add(1)
-				b.logf("IPN bus watcher %s fell behind; closing the watch", sess.sessionID)
-				b.closeLaggingWatchSessionLocked(sess)
+		b.sendToWatchSessionLocked(sess, nForSess)
+	}
+}
+
+// sendToWatchSessionLocked sends n to sess, handling a watcher that has
+// fallen behind according to its requested notification mode.
+//
+// b.mu must be held.
+func (b *LocalBackend) sendToWatchSessionLocked(sess *watchSession, n *ipn.Notify) {
+	select {
+	case sess.ch <- n:
+	default:
+		switch {
+		case sess.mask&ipn.NotifyInProcessNoDisconnect != 0:
+			metricWatchIPNBusBehindBlocked.Add(1)
+			select {
+			case sess.ch <- n:
+			case <-sess.ctx.Done():
 			}
+		case sess.mask&ipn.NotifySuspendWhenBehind != 0:
+			metricWatchIPNBusBehindSuspended.Add(1)
+			b.logf("IPN bus watcher %s fell behind; suspending it", sess.sessionID)
+			b.suspendLaggingWatchSessionLocked(sess)
+		default:
+			metricWatchIPNBusBehindClosed.Add(1)
+			b.logf("IPN bus watcher %s fell behind; closing the watch", sess.sessionID)
+			b.closeLaggingWatchSessionLocked(sess)
 		}
 	}
 }
@@ -4707,14 +4737,14 @@ func (b *LocalBackend) tellRecipientToBrowseToURLLocked(url string, recipient no
 
 // onClientVersion is called on MapResponse updates when a MapResponse contains
 // a non-nil ClientVersion message.
-func (b *LocalBackend) onClientVersion(v *tailcfg.ClientVersion) {
+func (b *LocalBackend) onClientVersion(v tailcfg.ClientVersion) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.lastClientVersion = v
-	b.health.SetLatestVersion(v)
+	b.lastClientVersion = &v
+	b.health.SetLatestVersion(&v)
 	prefs := b.pm.CurrentPrefs()
 	if prefs.Valid() && prefs.AutoUpdate().Check {
-		b.sendLocked(ipn.Notify{ClientVersion: v})
+		b.sendLocked(ipn.Notify{ClientVersion: &v})
 	}
 }
 
@@ -6607,6 +6637,18 @@ func (b *LocalBackend) SetLogFlusher(flushFunc func()) {
 	b.logFlushFunc = flushFunc
 }
 
+// SetLogUploader sets the process-wide logtail logger used for tailscaled's
+// main log stream. It enables authenticated log uploads when the node is in a
+// tailnet (see [LocalBackend.updateLogUploadAuth]).
+//
+// It should only be called before the LocalBackend is used.
+func (b *LocalBackend) SetLogUploader(lg *logtail.Logger) {
+	if !buildfeatures.HasLogTail {
+		return
+	}
+	b.logUploader = lg
+}
+
 // TryFlushLogs calls the log flush function. It returns false if a log flush
 // function was never initialized with SetLogFlusher.
 //
@@ -7676,6 +7718,15 @@ func (b *LocalBackend) resolveExitNodeInPrefsLocked(prefs *ipn.Prefs) (changed b
 // received nm. If nm is nil, it resets all configuration as though
 // Tailscale is turned off.
 func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
+	// Cache any log-upload bearer token, then remove it from nm before any
+	// subsystem observes the netmap. The token must not be installed into
+	// the published map (status, WhoIs, SelfChange, the disk cache, or
+	// debug dumps).
+	if buildfeatures.HasLogTail {
+		b.updateLogUploadAuth(nm)
+	}
+	stripLogUploadAuth(nm)
+
 	if buildfeatures.HasCacheNetMap {
 		// As a defensive measure, if something triggers a panic when we are
 		// installing a network map, make an effort to discard any cached netmaps.
@@ -7703,7 +7754,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	if nm != nil {
 		login = cmp.Or(profileFromView(nm.UserProfiles[nm.User()]).LoginName, "<missing-profile>")
 	}
-	discoChanged, routeChanged := b.currentNode().SetNetMap(nm)
+	res := b.currentNode().SetNetMap(nm)
 	// A profile reset swaps in a fresh nodeBackend before clearing its map,
 	// so notify on every clear even if this node never received a map.
 	if !b.shutdownCalled && (oldNetMap == nil || nm == nil) {
@@ -7725,16 +7776,24 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 			ms.SetNetworkMap(tailcfg.NodeView{}, nil)
 		}
 	}
+
+	// Sync peers whose handshake type changed. This change takes effect
+	// on the next handshake with this peer, so sync before triggering
+	// handshakes based on disco key changes.
+	for k := range res.HandshakeTypeChanged {
+		b.e.SyncDevicePeer(k)
+	}
+
 	// Reset the WireGuard session for peers whose disco key changed in
 	// a way that indicates a restart, flushing their dead session keys;
 	// each such peer is lazily re-created on demand with current state.
-	for _, k := range discoChanged {
+	for k := range res.DiscoChanged {
 		b.e.MarkDevicePeerForHandshake(k)
 	}
 	// Converge the wireguard-go device for peers whose routes changed
 	// (or that were removed) in the full-netmap resync above; peers not
 	// in routeChanged are already up to date.
-	for k := range routeChanged {
+	for k := range res.ChangedAllowedIPs {
 		b.e.SyncDevicePeer(k)
 	}
 	if login != b.activeLogin {
@@ -8516,6 +8575,18 @@ func (s netLogNodeSource) NetLogIDs() (nodeID, domainID logid.PrivateID, logExit
 	return nodeID, domainID, nm.SelfNode.HasCap(nodecap.LogExitFlows), true
 }
 
+// LogUploadAuth implements [wgengine.NetLogSource].
+func (s netLogNodeSource) LogUploadAuth() (authID string, authToken func() string) {
+	nm := s.b.NetMap()
+	if nm == nil || !nm.SelfNode.Valid() {
+		return "", nil
+	}
+	id := formatAuthID(nm.SelfNode.ID())
+	return string(id), func() string {
+		return string(s.b.logAuth.loadToken(id))
+	}
+}
+
 // Compile-time assertion that netLogNodeSource implements
 // [wgengine.NetLogSource].
 var _ wgengine.NetLogSource = netLogNodeSource{}
@@ -8768,6 +8839,15 @@ func (b *LocalBackend) resetForProfileChangeLocked() error {
 		// ephemeral nodes, which can then call back here. But we're shutting
 		// down, so no need to do any work.
 		return nil
+	}
+	b.closeDiskCacheLocked()
+	// IPN bus watchers may drop the old node's implicit bus state
+	// on a profile switch, and the new profile may never deliver
+	// a self node to mark the boundary, such as when the new profile's
+	// node key has expired.
+	for _, sess := range b.notifyWatchers {
+		sess.lastSentUserProfile = nil
+		sess.lastSentSelf = tailcfg.NodeView{}
 	}
 	if buildfeatures.HasDNS {
 		if dm, ok := b.sys.DNSManager.GetOK(); ok {

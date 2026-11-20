@@ -5,26 +5,124 @@ package controlclient
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
+	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/types/persist"
 	"tailscale.com/util/eventbus/eventbustest"
 )
+
+func TestMapRequestWatchdogTimeoutMetric(t *testing.T) {
+	if !buildfeatures.HasClientMetrics {
+		t.Skip("client metrics disabled")
+	}
+	for _, tt := range []struct {
+		name         string
+		inBody       bool
+		cancel       bool
+		transportErr bool
+		want         int64
+	}{
+		{name: "initial_request", want: 1},
+		{name: "map_response", inBody: true, want: 1},
+		{name: "canceled_request", cancel: true},
+		{name: "canceled_response", inBody: true, cancel: true},
+		{name: "transport_error", transportErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				before := metricMapRequestWatchdogTimeout.Value()
+				bus := eventbustest.NewBus(t)
+				dialer := tsdial.NewDialer(netmon.NewStatic())
+				dialer.SetBus(bus)
+				defer dialer.Close()
+				transportErr := errors.New("transport failed")
+				httpc := &http.Client{Transport: mapWatchdogRoundTripper(func(r *http.Request) (*http.Response, error) {
+					if tt.transportErr {
+						return nil, transportErr
+					}
+					if tt.inBody {
+						return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(mapWatchdogReader{r.Context()}), Header: make(http.Header)}, nil
+					}
+					<-r.Context().Done()
+					return nil, r.Context().Err()
+				})}
+				machineKey := key.NewMachine()
+				c, err := NewDirect(Options{
+					ServerURL:            "https://control.example",
+					GetMachinePrivateKey: func() (key.MachinePrivate, error) { return machineKey, nil },
+					Persist:              persist.Persist{PrivateNodeKey: key.NewNode()},
+					Hostinfo:             &tailcfg.Hostinfo{BackendLogID: "test-backend-log-id"},
+					NoiseTestClient:      httpc,
+					HealthTracker:        health.NewTracker(bus),
+					Dialer:               dialer,
+					Bus:                  bus,
+					Logf:                 t.Logf,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				done := make(chan error, 1)
+				start := time.Now()
+				go func() { done <- c.sendMapRequest(ctx, true, &countingNetmapUpdater{}) }()
+				synctest.Wait()
+				if tt.cancel {
+					cancel()
+				}
+				err = <-done // advances fake time only if the watchdog is needed
+				if tt.transportErr {
+					if !errors.Is(err, transportErr) {
+						t.Fatalf("sendMapRequest error = %v; want transport error", err)
+					}
+				} else if !errors.Is(err, context.Canceled) {
+					t.Fatalf("sendMapRequest error = %v; want context.Canceled", err)
+				}
+				synctest.Wait() // let the canceled watchdog goroutine exit
+				if got := metricMapRequestWatchdogTimeout.Value() - before; got != tt.want {
+					t.Errorf("watchdog timeout delta = %d; want %d", got, tt.want)
+				}
+				wantElapsed := time.Duration(tt.want) * watchdogTimeout
+				if got := time.Since(start); got != wantElapsed {
+					t.Errorf("request elapsed = %v; want %v", got, wantElapsed)
+				}
+			})
+		})
+	}
+}
+
+type mapWatchdogRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f mapWatchdogRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type mapWatchdogReader struct{ ctx context.Context }
+
+func (r mapWatchdogReader) Read([]byte) (int, error) {
+	<-r.ctx.Done()
+	return 0, r.ctx.Err()
+}
 
 func TestSetDiscoPublicKey(t *testing.T) {
 	initialKey := key.NewDisco().Public()

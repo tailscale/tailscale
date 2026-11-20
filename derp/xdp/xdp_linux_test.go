@@ -990,6 +990,27 @@ func TestXDP(t *testing.T) {
 		return nil
 	}
 
+	// checkMetrics reports an error for every counter in server.metrics.last
+	// that differs from want, in either direction.
+	checkMetrics := func(t *testing.T, want map[bpfCountersKey]uint64) {
+		t.Helper()
+		for k, v := range want {
+			gotCounter, ok := server.metrics.last[k]
+			if !ok {
+				t.Errorf("expected counter at key %+v not found", k)
+			}
+			if gotCounter != v {
+				t.Errorf("key: %+v gotCounter: %d != %d", k, gotCounter, v)
+			}
+		}
+		for k := range server.metrics.last {
+			_, ok := want[k]
+			if !ok {
+				t.Errorf("counter at key: %+v incremented unexpectedly", k)
+			}
+		}
+	}
+
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			err = clearCounters()
@@ -1019,24 +1040,57 @@ func TestXDP(t *testing.T) {
 				t.Fatalf("error updating metrics: %v", err)
 			}
 			if c.wantMetrics != nil {
-				for k, v := range c.wantMetrics {
-					gotCounter, ok := server.metrics.last[k]
-					if !ok {
-						t.Errorf("expected counter at key %+v not found", k)
-					}
-					if gotCounter != v {
-						t.Errorf("key: %+v gotCounter: %d != %d", k, gotCounter, v)
-					}
-				}
-				for k := range server.metrics.last {
-					_, ok := c.wantMetrics[k]
-					if !ok {
-						t.Errorf("counter at key: %+v incremented unexpectedly", k)
-					}
-				}
+				checkMetrics(t, c.wantMetrics)
 			}
 		})
 	}
+
+	// The cases above clear the counters map before each run, so they only
+	// ever exercise the key insertion path of inc_counter. Run the same
+	// packet repeatedly without clearing to cover the in-place increment
+	// of an existing key.
+	t.Run("counters-accumulate", func(t *testing.T) {
+		err = clearCounters()
+		if err != nil {
+			t.Fatalf("error clearing counters: %v", err)
+		}
+		err = server.SetDropSTUN(false)
+		if err != nil {
+			t.Fatalf("error setting drop STUN: %v", err)
+		}
+		const runs = 5
+		packetIn := ipv4STUNBindingReqIPProtoPass
+		for i := range runs {
+			opts := ebpf.RunOptions{
+				Data:    packetIn,
+				DataOut: make([]byte, 1514),
+			}
+			got, err := server.objs.XdpProgFunc.Run(&opts)
+			if err != nil {
+				t.Fatalf("run %d: error running program: %v", i, err)
+			}
+			if xdpAction(got) != xdpActionPass {
+				t.Fatalf("run %d: got code: %s != %s", i, xdpAction(got), xdpActionPass)
+			}
+		}
+		err = server.updateMetrics()
+		if err != nil {
+			t.Fatalf("error updating metrics: %v", err)
+		}
+		wantMetrics := map[bpfCountersKey]uint64{
+			{
+				Af:      uint8(bpfCounterKeyAfCOUNTER_KEY_AF_IPV4),
+				Pba:     uint8(bpfCounterKeyPacketsBytesActionCOUNTER_KEY_PACKETS_PASS_TOTAL),
+				ProgEnd: uint8(bpfCounterKeyProgEndCOUNTER_KEY_END_UNSPECIFIED),
+			}: runs,
+			{
+				Af:      uint8(bpfCounterKeyAfCOUNTER_KEY_AF_IPV4),
+				Pba:     uint8(bpfCounterKeyPacketsBytesActionCOUNTER_KEY_BYTES_PASS_TOTAL),
+				ProgEnd: uint8(bpfCounterKeyProgEndCOUNTER_KEY_END_UNSPECIFIED),
+			}: uint64(runs * len(packetIn)),
+		}
+		checkMetrics(t, wantMetrics)
+	})
 }
 
 func TestCountersMapKey(t *testing.T) {

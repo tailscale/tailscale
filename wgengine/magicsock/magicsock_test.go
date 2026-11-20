@@ -30,7 +30,6 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
-	"unsafe"
 
 	qt "github.com/frankban/quicktest"
 	"github.com/google/go-cmp/cmp"
@@ -1572,36 +1571,6 @@ func TestDiscoStringLogRace(t *testing.T) {
 	wg.Wait()
 }
 
-// Test32bitAlignment verifies that the 64-bit atomic mono.Time fields are
-// 64-bit aligned, so that StoreAtomic and LoadAtomic won't panic on 32-bit
-// platforms.
-//
-// For normal Go atomic types (sync/atomic.Int64, etc), the Go compiler
-// guarantees 64-bit alignment on 32-bit platforms with an unexported magic
-// embedded struct field. We can't make mono.Time use that easily. We could change
-// mono.Time to be type Time struct { atomic.Int64 }, but that's pretty invasive.
-// Instead, we just have this test to keep us safe on 32-bit platforms.
-func Test32bitAlignment(t *testing.T) {
-	if rt := reflect.TypeFor[mono.Time](); rt.Kind() != reflect.Int64 {
-		t.Fatalf("mono.Time is not a 64-bit integer type anymore; this test may be irrelevant now or out of date")
-	}
-
-	de := endpoint{
-		c: &Conn{},
-	}
-
-	if off := unsafe.Offsetof(de.lastRecvWG); off%8 != 0 {
-		t.Fatalf("endpoint.lastRecvWG is not 8-byte aligned")
-	}
-	if off := unsafe.Offsetof(de.lastRecvUDPAny); off%8 != 0 {
-		t.Fatalf("endpoint.lastRecvUDPAny is not 8-byte aligned")
-	}
-
-	// Verify these don't panic.
-	de.lastRecvWG.StoreAtomic(mono.Now())
-	de.lastRecvUDPAny.StoreAtomic(mono.Now())
-}
-
 // newTestConn returns a new Conn.
 func newTestConn(t testing.TB) *Conn {
 	t.Helper()
@@ -2491,6 +2460,71 @@ func TestSetNetworkMapWithNoPeers(t *testing.T) {
 	}
 }
 
+// Tests that a full netmap restoring a peer's DERP home and endpoints to
+// their values from before a delta isn't skipped by the updateNodes fast
+// path. See https://github.com/tailscale/tailscale/issues/22379.
+func TestDeltaThenFullNetmapRevert(t *testing.T) {
+	c := newTestConn(t)
+	defer c.Close()
+	c.SetPrivateKey(key.NewNode())
+
+	nodeKey := randNodeKey()
+	peerA := nodeViews([]*tailcfg.Node{{
+		ID: 1, Key: nodeKey, DiscoKey: randDiscoKey(), HomeDERP: 4,
+		Endpoints: eps("192.0.2.1:41641"),
+	}})
+
+	// state returns the peer endpoint's DERP region and endpoints.
+	state := func() string {
+		de, ok := c.peerMap.endpointForNodeKey(nodeKey)
+		if !ok {
+			t.Fatal("no endpoint")
+		}
+		de.mu.Lock()
+		defer de.mu.Unlock()
+		var addrs []string
+		for ap := range de.endpointState {
+			addrs = append(addrs, ap.String())
+		}
+		slices.Sort(addrs)
+		return fmt.Sprintf("derp-%d %v", de.derpAddr.Port(), addrs)
+	}
+
+	c.SetNetworkMap(tailcfg.NodeView{}, peerA)
+	want := "derp-4 [192.0.2.1:41641]"
+	if got := state(); got != want {
+		t.Fatalf("after first netmap: got %q; want %q", got, want)
+	}
+
+	muts, ok := netmap.NodeMutationsFromPatch(&tailcfg.PeerChange{
+		NodeID:     1,
+		DERPRegion: 26,
+		Endpoints:  eps("192.0.2.2:41641"),
+		Online:     new(true),
+	})
+	if !ok {
+		t.Fatal("NodeMutationsFromPatch failed")
+	}
+	c.UpdateNetmapDelta(muts)
+	if got, want := state(), "derp-26 [192.0.2.2:41641]"; got != want {
+		t.Fatalf("after delta: got %q; want %q", got, want)
+	}
+	if peerA[0].HomeDERP() != 4 {
+		t.Fatal("delta mutated the original NodeView")
+	}
+	c.mu.Lock()
+	snap := c.peersByID[1]
+	c.mu.Unlock()
+	if snap.Online().Valid() {
+		t.Error("Online mutation unexpectedly applied to snapshot")
+	}
+
+	c.SetNetworkMap(tailcfg.NodeView{}, peerA)
+	if got := state(); got != want {
+		t.Fatalf("after reverting netmap: got %q; want %q", got, want)
+	}
+}
+
 // Tests that the full-set peer update path (SetNetworkMap) and the
 // incremental per-peer paths (UpsertPeer, RemovePeer) maintain the
 // node-key-keyed DERP state (derpRoute and peerLastDerp) identically
@@ -3228,7 +3262,7 @@ func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 			for _, epd := range test.ep {
 				endpoint.endpointState[epd.addrPort] = &endpointState{}
 			}
-			udpAddr, _, shouldPing := endpoint.addrForSendLocked(testTime)
+			udpAddr, _, shouldPing := endpoint.addrForSendLocked(testTime, false)
 			if udpAddr.ap.IsValid() != test.validAddr {
 				t.Errorf("udpAddr validity is incorrect; got %v, want %v", udpAddr.ap.IsValid(), test.validAddr)
 			}
@@ -3255,7 +3289,7 @@ func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 				state.recentPong = 0
 			}
 
-			udpAddr, _, shouldPing = endpoint.addrForSendLocked(secondPingTime)
+			udpAddr, _, shouldPing = endpoint.addrForSendLocked(secondPingTime, false)
 			if udpAddr != test.want {
 				t.Errorf("udpAddr returned is not expected: got %v, want %v", udpAddr, test.want)
 			}
@@ -3553,7 +3587,7 @@ func TestShouldRebind(t *testing.T) {
 	}
 }
 
-func TestMaybeRebindOnError(t *testing.T) {
+func TestMaybeRebindOnWriteError(t *testing.T) {
 	tstest.PanicOnLog()
 	tstest.ResourceCheck(t)
 
@@ -3572,7 +3606,7 @@ func TestMaybeRebindOnError(t *testing.T) {
 			defer conn.Close()
 
 			before := metricRebindCalls.Value()
-			conn.maybeRebindOnError(rebindErr)
+			conn.maybeRebindOnWriteError(rebindErr)
 			after := metricRebindCalls.Value()
 			if before+1 != after {
 				t.Errorf("should rebind on %#v", rebindErr)
@@ -3589,7 +3623,7 @@ func TestMaybeRebindOnError(t *testing.T) {
 				lastRebindTime := time.Now().Add(-1 * time.Second)
 				conn.lastErrRebind.Store(lastRebindTime)
 				before := metricRebindCalls.Value()
-				conn.maybeRebindOnError(err)
+				conn.maybeRebindOnWriteError(err)
 				after := metricRebindCalls.Value()
 				if before != after {
 					t.Errorf("should not rebind within 5 seconds of last")
@@ -3599,7 +3633,7 @@ func TestMaybeRebindOnError(t *testing.T) {
 				// rebind time.
 				time.Sleep(6 * time.Second)
 
-				conn.maybeRebindOnError(err)
+				conn.maybeRebindOnWriteError(err)
 				newTime := conn.lastErrRebind.Load()
 				if newTime == lastRebindTime {
 					t.Errorf("expected a rebind to occur")
@@ -3610,6 +3644,94 @@ func TestMaybeRebindOnError(t *testing.T) {
 			}
 		})
 	})
+}
+
+func TestMaybeRebindOnReadError(t *testing.T) {
+	tstest.PanicOnLog()
+	tstest.ResourceCheck(t)
+
+	for _, tt := range []struct {
+		errno  error
+		rebind bool
+	}{
+		{syscall.EBADF, runtime.GOOS != "windows"},
+		{syscall.ENOTSOCK, runtime.GOOS != "windows"},
+		{syscall.Errno(10009), runtime.GOOS == "windows"},
+		{syscall.Errno(10038), runtime.GOOS == "windows"},
+		{syscall.ECONNRESET, false},
+	} {
+		t.Run(tt.errno.Error(), func(t *testing.T) {
+			c := newTestConn(t)
+			defer c.Close()
+			before := metricRebindCalls.Value()
+			c.maybeRebindOnReadError(readErr(tt.errno))
+			var want int64
+			if tt.rebind {
+				want = 1
+			}
+			if got := metricRebindCalls.Value() - before; got != want {
+				t.Errorf("rebinds = %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestMaybeRebind(t *testing.T) {
+	tstest.PanicOnLog()
+	tstest.ResourceCheck(t)
+
+	t.Run("closing", func(t *testing.T) {
+		c := newTestConn(t)
+		defer c.Close()
+		c.closing.Store(true)
+		before := metricRebindCalls.Value()
+		c.maybeRebind("test")
+		if got := metricRebindCalls.Value() - before; got != 0 {
+			t.Errorf("rebinds = %d, want 0", got)
+		}
+		if !c.lastErrRebind.Load().IsZero() {
+			t.Error("lastErrRebind updated while closing")
+		}
+	})
+
+	t.Run("concurrent", func(t *testing.T) {
+		c := newTestConn(t)
+		defer c.Close()
+		before := metricRebindCalls.Value()
+		const n = 10
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for range n {
+			wg.Go(func() {
+				<-start
+				c.maybeRebind("test")
+			})
+		}
+		close(start)
+		wg.Wait()
+		if got := metricRebindCalls.Value() - before; got != 1 {
+			t.Errorf("%d concurrent maybeRebind calls rebound %d times, want 1", n, got)
+		}
+	})
+}
+
+func TestBindSocketAfterClose(t *testing.T) {
+	c := newTestConn(t)
+	c.Close()
+	for _, tt := range []struct {
+		ruc     *RebindingUDPConn
+		network string
+	}{
+		{&c.pconn4, "udp4"},
+		{&c.pconn6, "udp6"},
+	} {
+		if err := c.bindSocket(tt.ruc, tt.network, keepCurrentPort); !errors.Is(err, net.ErrClosed) {
+			t.Errorf("bindSocket(%s) after Close = %v, want net.ErrClosed", tt.network, err)
+		}
+		if port := tt.ruc.Port(); port != 0 {
+			t.Errorf("%s bound to port %d after Close, want unbound", tt.network, port)
+		}
+	}
 }
 
 func newTestConnAndRegistry(t *testing.T, mod ...func(*Options)) (*Conn, *usermetric.Registry) {
@@ -3721,6 +3843,20 @@ func Test_packetLooksLike(t *testing.T) {
 
 	nakedWireGuardInitiation := make([]byte, len(geneveEncapDisco))
 	binary.LittleEndian.PutUint32(nakedWireGuardInitiation, device.MessageInitiationType)
+	nakedWireGuardInitiationRetry := make([]byte, len(geneveEncapDisco))
+	binary.LittleEndian.PutUint32(nakedWireGuardInitiationRetry, device.MessageInitiationType)
+	nakedWireGuardInitiationRetry[3] |= 0x80
+	nakedWireGuardResponseRetry := make([]byte, len(geneveEncapDisco))
+	binary.LittleEndian.PutUint32(nakedWireGuardResponseRetry, device.MessageResponseType)
+	nakedWireGuardResponseRetry[3] |= 0x80
+	t.Run("retry-fixtures-packet-is-retry", func(t *testing.T) {
+		if !device.PacketIsRetry(nakedWireGuardInitiationRetry) {
+			t.Fatal("device.PacketIsRetry returned false for initiation message retry fixture")
+		}
+		if !device.PacketIsRetry(nakedWireGuardResponseRetry) {
+			t.Fatal("device.PacketIsRetry returned false for response message retry fixture")
+		}
+	})
 	nakedWireGuardResponse := make([]byte, len(geneveEncapDisco))
 	binary.LittleEndian.PutUint32(nakedWireGuardResponse, device.MessageResponseType)
 	nakedWireGuardCookieReply := make([]byte, len(geneveEncapDisco))
@@ -3845,6 +3981,18 @@ func Test_packetLooksLike(t *testing.T) {
 		{
 			name:                    "naked-WireGuard-Response-type",
 			msg:                     nakedWireGuardResponse,
+			wantPacketLooksLikeType: packetLooksLikeWireGuard,
+			wantIsGeneveEncap:       false,
+		},
+		{
+			name:                    "naked-WireGuard-Initiation-type-retry-set",
+			msg:                     nakedWireGuardInitiationRetry,
+			wantPacketLooksLikeType: packetLooksLikeWireGuard,
+			wantIsGeneveEncap:       false,
+		},
+		{
+			name:                    "naked-WireGuard-Response-type-retry-set",
+			msg:                     nakedWireGuardResponseRetry,
 			wantPacketLooksLikeType: packetLooksLikeWireGuard,
 			wantIsGeneveEncap:       false,
 		},
@@ -4308,11 +4456,11 @@ func TestConn_receiveIP(t *testing.T) {
 
 	newPeerMapInsertableEndpoint := func(lastRecvWG mono.Time) *endpoint {
 		ep := &endpoint{
-			nodeID:     1,
-			publicKey:  key.NewNode().Public(),
-			lastRecvWG: lastRecvWG,
-			c:          &Conn{logf: func(msg string, args ...any) {}},
+			nodeID:    1,
+			publicKey: key.NewNode().Public(),
+			c:         &Conn{logf: func(msg string, args ...any) {}},
 		}
+		ep.lastRecvWG.Store(lastRecvWG)
 		ep.updateDiscoKey(key.NewDisco().Public())
 		return ep
 	}
@@ -5049,6 +5197,115 @@ func TestUpsertPeerTSMPKeyPreservedOnControlUpdate(t *testing.T) {
 	if conn.peerMap.knownPeerDiscoKey(dk1) {
 		t.Error("control key dk1 shoud not be in peermap")
 	}
+}
+
+// TestUpsertPeerControlRotationAfterTSMP verifies that a peer which advertised
+// its disco key over TSMP follows a later disco key learned via control. The
+// restarted peer's new key becomes active for that node without any inbound
+// disco or TSMP for the new key. A second peer that still uses the retired key
+// must not make that stale key look selected.
+func TestUpsertPeerControlRotationAfterTSMP(t *testing.T) {
+	dkA := key.NewDisco().Public()
+	dkB := key.NewDisco().Public()
+	dkC := key.NewDisco().Public()
+
+	// withOtherPeer keeps dkA indexed by a second node so a global
+	// knownPeerDiscoKey(dkA) hit cannot hide a stale active key on peer1.
+	run := func(t *testing.T, withOtherPeer bool) {
+		conn := newTestConn(t)
+
+		nk1 := key.NewNode().Public()
+		peer1 := &tailcfg.Node{
+			ID:        1,
+			Key:       nk1,
+			DiscoKey:  dkA,
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+		}
+		peers := []*tailcfg.Node{peer1}
+		var nk2 key.NodePublic
+		if withOtherPeer {
+			nk2 = key.NewNode().Public()
+			peers = append(peers, &tailcfg.Node{
+				ID:        2,
+				Key:       nk2,
+				DiscoKey:  dkA,
+				Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")},
+			})
+		}
+		conn.SetNetworkMap(tailcfg.NodeView{}, nodeViews(peers))
+		conn.HandleDiscoKeyAdvertisement(peer1.View(),
+			packet.TSMPDiscoKeyAdvertisement{Key: dkA})
+
+		ep, ok := conn.peerMap.endpointForNodeKey(nk1)
+		if !ok {
+			t.Fatal("peer1 endpoint missing")
+		}
+		if got := ep.disco.Load(); got.key() != dkA || !got.tsmpIsActive() {
+			t.Fatalf("after TSMP advertisement: key=%v tsmpActive=%v, want %v active", got.key(), got.tsmpIsActive(), dkA)
+		}
+
+		check := func(want key.DiscoPublic) {
+			t.Helper()
+			ep, ok := conn.peerMap.endpointForNodeKey(nk1)
+			if !ok {
+				t.Fatal("peer1 endpoint missing")
+			}
+			got := ep.disco.Load()
+			if got.key() != want || got.tsmpIsActive() {
+				t.Errorf("active key=%v tsmpActive=%v, want %v tsmpActive=false", got.key(), got.tsmpIsActive(), want)
+			}
+			if got.keyFromTSMP() != dkA {
+				t.Errorf("tsmp key=%v, want retired material %v", got.keyFromTSMP(), dkA)
+			}
+			if !conn.peerMap.knownPeerDiscoKey(got.key()) {
+				t.Errorf("selected key %v failed knownPeerDiscoKey", got.key())
+			}
+			if _, ok := conn.peerMap.nodesOfDisco[got.key()][nk1]; !ok {
+				t.Errorf("selected key %v does not map to peer1", got.key())
+			}
+		}
+
+		peer1.DiscoKey = dkB
+		conn.UpsertPeer(peer1.View())
+		check(dkB)
+		if _, ok := conn.peerMap.nodesOfDisco[dkA][nk1]; ok {
+			t.Error("retired key A should not map to peer1")
+		}
+		if _, ok := conn.peerMap.nodesOfDisco[dkB][nk1]; !ok {
+			t.Error("key B should map to peer1")
+		}
+		if withOtherPeer {
+			if _, ok := conn.peerMap.nodesOfDisco[dkA][nk2]; !ok {
+				t.Error("key A should still map to the other peer")
+			}
+			if !conn.peerMap.knownPeerDiscoKey(dkA) {
+				t.Error("key A should remain known via the other peer")
+			}
+		} else if conn.peerMap.knownPeerDiscoKey(dkA) {
+			t.Error("retired key A should not pass knownPeerDiscoKey")
+		}
+
+		peer1.DiscoKey = dkC
+		conn.UpsertPeer(peer1.View())
+		check(dkC)
+		if _, ok := conn.peerMap.nodesOfDisco[dkB][nk1]; ok {
+			t.Error("key B should not map to peer1 after rotation to C")
+		}
+		if _, ok := conn.peerMap.nodesOfDisco[dkC][nk1]; !ok {
+			t.Error("key C should map to peer1")
+		}
+		if _, ok := conn.peerMap.nodesOfDisco[dkA][nk1]; ok {
+			t.Error("key A should not map to peer1 after rotation to C")
+		}
+		if withOtherPeer {
+			if _, ok := conn.peerMap.nodesOfDisco[dkA][nk2]; !ok {
+				t.Error("key A should still map to the other peer after rotation to C")
+			}
+		}
+	}
+
+	t.Run("retired-key-unknown", func(t *testing.T) { run(t, false) })
+	t.Run("other-peer-keeps-retired-key", func(t *testing.T) { run(t, true) })
 }
 
 func TestUnambiguousNodeKeyOfPingLocked(t *testing.T) {

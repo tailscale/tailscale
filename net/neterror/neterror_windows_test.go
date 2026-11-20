@@ -16,38 +16,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func TestIsUDPReadFeedback(t *testing.T) {
-	for _, tt := range []struct {
-		err  error
-		want bool
-	}{
-		{nil, false},
-		{errors.New("unknown error"), false},
-		{windows.WSAEHOSTUNREACH, true},
-		{windows.WSAENETUNREACH, true},
-		{windows.WSAEHOSTDOWN, false},
-		{windows.WSAENETRESET, false},
-		{windows.WSAECONNRESET, false},
-		{windows.WSAECONNREFUSED, false},
-		{windows.WSAEBADF, false},
-		{windows.WSAENOTSOCK, false},
-		{windows.WSAENOTCONN, false},
-		{syscall.EHOSTUNREACH, false},
-		{syscall.ENETUNREACH, false},
-		{net.ErrClosed, false},
-	} {
-		if got := IsUDPReadFeedback(tt.err); got != tt.want {
-			t.Errorf("IsUDPReadFeedback(%v) = %v, want %v", tt.err, got, tt.want)
-		}
-		wrapped := &net.OpError{Op: "read", Net: "udp4", Err: &os.SyscallError{
-			Syscall: "WSARecvFrom", Err: tt.err,
-		}}
-		if got := IsUDPReadFeedback(wrapped); got != tt.want {
-			t.Errorf("IsUDPReadFeedback(wrapped %v) = %v, want %v", tt.err, got, tt.want)
-		}
-	}
-}
-
 func TestIsClosedPipeError(t *testing.T) {
 	for _, tt := range []struct {
 		err  error
@@ -71,24 +39,28 @@ func TestIsClosedPipeError(t *testing.T) {
 	}
 }
 
-func TestIsUDPReadErrorUnknown(t *testing.T) {
+func TestIsBadSocketError(t *testing.T) {
 	for _, tt := range []struct {
 		err  error
 		want bool
 	}{
 		{nil, false},
 		{errors.New("unknown error"), false},
-		{windows.WSAEADDRNOTAVAIL, false},
-		{windows.WSAEHOSTUNREACH, false},
+		{windows.WSAEBADF, true},
+		{windows.WSAENOTSOCK, true},
 		{windows.WSAECONNRESET, false},
-		{syscall.EADDRNOTAVAIL, false},
+		{syscall.EBADF, false},
+		{syscall.ENOTSOCK, false},
 		{net.ErrClosed, false},
 	} {
+		if got := IsBadSocketError(tt.err); got != tt.want {
+			t.Errorf("IsBadSocketError(%v) = %v, want %v", tt.err, got, tt.want)
+		}
 		wrapped := &net.OpError{Op: "read", Net: "udp4", Err: &os.SyscallError{
 			Syscall: "WSARecvFrom", Err: tt.err,
 		}}
-		if got := IsUDPReadUnknown(wrapped); got != tt.want {
-			t.Errorf("IsUDPReadUnknown(wrapped %v) = %v, want %v", tt.err, got, tt.want)
+		if got := IsBadSocketError(wrapped); got != tt.want {
+			t.Errorf("IsBadSocketError(wrapped %v) = %v, want %v", tt.err, got, tt.want)
 		}
 	}
 }

@@ -76,8 +76,8 @@ search ts.net ts-dns.test
 }
 
 // watchFile is a test implementation of the file watcher that uses a timer
-// instead of inotify. Real inotify (gonotify.NewDirWatcher) creates goroutines
-// that block on real syscalls, which don't work inside synctest's fake-time
+// instead of inotify. The real watcher blocks reading an inotify fd, which
+// doesn't work inside synctest's fake-time
 // bubble. Instead, we use a one-shot timer that synctest.Wait() will advance,
 // triggering a callback to check for file trampling.
 func watchFile(ctx context.Context, dir, filename string, cb func()) error {

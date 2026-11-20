@@ -81,8 +81,8 @@ func generateGPNotification(machine bool, mgmtProduct *uint16, mgmtProductOption
 		_p0 = 1
 	}
 	r0, _, _ := syscall.SyscallN(procGenerateGPNotification.Addr(), uintptr(_p0), uintptr(unsafe.Pointer(mgmtProduct)), uintptr(mgmtProductOptions))
-	if r0 != 0 {
-		ret = syscall.Errno(r0)
+	if uint32(r0) != 0 {
+		ret = syscall.Errno(uint32(r0))
 	}
 	return
 }

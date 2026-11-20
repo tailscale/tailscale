@@ -91,10 +91,20 @@ func printRouteCheckReport(rp *routecheck.Report) error {
 		}
 	}
 
+	apps := rp.RoutableApps()
+
+	// Don’t render apps that only have one connector:
+	for app, nodes := range apps {
+		if len(nodes) <= 1 {
+			delete(apps, app)
+		}
+	}
+
 	if enc != nil {
 		out := tsroutecheckjsonv0.ReportResponse{
 			Done:   rp.Done,
 			Routes: routes,
+			Apps:   apps,
 		}
 		if err := jsonv2.MarshalEncode(enc, out); err != nil {
 			return err
@@ -118,5 +128,19 @@ func printRouteCheckReport(rp *routecheck.Report) error {
 		}
 	}
 	fmt.Fprintln(w)
+
+	if len(apps) > 0 {
+		fmt.Fprintf(w, "\nReachable connectors at %s:\n", rp.Done.Local().Format(tstime.DateSpTimeZ))
+		fmt.Fprintf(w, "\n %s\t%s\t%s", "APP", "IP", "HOSTNAME")
+		for app, nodes := range apps.Sorted() {
+			slices.SortFunc(nodes, func(a, b routecheck.Node) int {
+				return cmp.Compare(a.Name, b.Name) // order by hostname
+			})
+			for _, n := range nodes {
+				fmt.Fprintf(w, "\n %s\t%s\t%s", app, n.Addr, strings.TrimSuffix(n.Name, "."))
+			}
+		}
+		fmt.Fprintln(w)
+	}
 	return nil
 }

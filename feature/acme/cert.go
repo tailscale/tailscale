@@ -18,6 +18,7 @@ import (
 	"log"
 	randv2 "math/rand/v2"
 	"net"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -395,8 +396,9 @@ var getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBacken
 	// "replaces" extension so LE classifies the new cert as a renewal
 	// and exempts it from the per-registered-domain rate limit. Stores
 	// that can tell the current ACME account did not issue the previous
-	// cert opt out via [ARIReplacesAllower]; see #18251.
-	var opts []xacme.OrderOption
+	// cert opt out via [ARIReplacesAllower]; see #18251. If the CA
+	// rejects it, [authorizeOrder] retries without it.
+	var replaces *x509.Certificate
 	if previous != nil && !envknob.Bool("TS_DEBUG_ACME_FORCE_RENEWAL") {
 		prevCrt, err := parseCertificate(previous)
 		if err == nil {
@@ -411,7 +413,7 @@ var getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBacken
 				}
 			}
 			if useReplaces {
-				opts = append(opts, xacme.WithOrderReplacesCert(prevCrt))
+				replaces = prevCrt
 			} else {
 				logf("account key mismatch for previous cert; skipping ARI 'replaces' hint")
 			}
@@ -423,7 +425,7 @@ var getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBacken
 		logf:      logf,
 		traceACME: traceACME,
 		domain:    domain,
-		opts:      opts,
+		replaces:  replaces,
 	}
 	if e.shouldUseACMETLSALPN01(b, domain, previous, logf) {
 		issueArgs.challengeType = acmeChallengeTLSALPN01
@@ -473,12 +475,12 @@ func (e *extension) ensureAccount(ctx context.Context, ac *xacme.Client, logf lo
 }
 
 type acmeCertIssueArgs struct {
-	cs            certStore           // certificate and ACME account storage
-	logf          logger.Logf         // logs ACME progress and failures
-	traceACME     func(any)           // optional hook for logging ACME messages
-	domain        string              // certificate domain being issued
-	opts          []xacme.OrderOption // ACME order options
-	challengeType acmeChallengeType   // challenge type to fulfill
+	cs            certStore         // certificate and ACME account storage
+	logf          logger.Logf       // logs ACME progress and failures
+	traceACME     func(any)         // optional hook for logging ACME messages
+	domain        string            // certificate domain being issued
+	replaces      *x509.Certificate // previous cert to name in the ARI "replaces" field, or nil
+	challengeType acmeChallengeType // challenge type to fulfill
 }
 
 func (args acmeCertIssueArgs) baseDomain() string { return strings.TrimPrefix(args.domain, "*.") }
@@ -522,7 +524,7 @@ func (e *extension) issueACMECert(ctx context.Context, b *ipnlocal.LocalBackend,
 	} else {
 		authzIDs = []xacme.AuthzID{{Type: "dns", Value: args.domain}}
 	}
-	order, err := ac.AuthorizeOrder(ctx, authzIDs, args.opts...)
+	order, err := authorizeOrder(ctx, ac, authzIDs, args.replaces, args.logf)
 	if err != nil {
 		return nil, err
 	}
@@ -628,6 +630,33 @@ func (e *extension) issueACMECert(ctx context.Context, b *ipnlocal.LocalBackend,
 	e.domainRenewed(args.domain)
 
 	return &ipnlocal.TLSCertKeyPair{CertPEM: certPEM.Bytes(), KeyPEM: privPEM.Bytes()}, nil
+}
+
+// authorizeOrder creates an order for ids, naming replaces in the ARI
+// "replaces" field if non-nil. If the CA rejects that, it retries once
+// without the field, as not every store can tell whether the current ACME
+// account issued replaces, and the CA also rejects a replaces that another
+// order already names. See tailscale/tailscale#22042.
+func authorizeOrder(ctx context.Context, ac *xacme.Client, ids []xacme.AuthzID, replaces *x509.Certificate, logf logger.Logf) (*xacme.Order, error) {
+	if replaces == nil {
+		return ac.AuthorizeOrder(ctx, ids)
+	}
+	order, err := ac.AuthorizeOrder(ctx, ids, xacme.WithOrderReplacesCert(replaces))
+	if err == nil || !isOrderRejected(err) {
+		return order, err
+	}
+	logf("acme: order with ARI 'replaces' rejected, retrying without it: %v", err)
+	return ac.AuthorizeOrder(ctx, ids)
+}
+
+// isOrderRejected reports whether the CA refused the order request. Rate
+// limits don't count, as a plain order would be limited too.
+func isOrderRejected(err error) bool {
+	ae, ok := errors.AsType[*xacme.Error](err)
+	if !ok {
+		return false
+	}
+	return ae.StatusCode >= 400 && ae.StatusCode < 500 && ae.StatusCode != http.StatusTooManyRequests
 }
 
 func fulfillACMEDNS01Challenge(ctx context.Context, b *ipnlocal.LocalBackend, ac *xacme.Client, az *xacme.Authorization, logf logger.Logf, traceACME func(any)) error {

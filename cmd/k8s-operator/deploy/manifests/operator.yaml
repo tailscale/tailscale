@@ -3259,6 +3259,80 @@ spec:
                                                             - Never
                                                             - IfNotPresent
                                                         type: string
+                                                    livenessProbe:
+                                                        description: |-
+                                                            Liveness probe against the proxy's /livez endpoint, which fails only when
+                                                            tailscaled stops responding, not when the tailnet is unreachable. Off
+                                                            unless set; {} runs it with the default timing. Older proxy images don't
+                                                            serve /livez and fail the probe. Only used by ProxyGroups.
+                                                        properties:
+                                                            failureThreshold:
+                                                                default: 3
+                                                                description: |-
+                                                                    Minimum consecutive failures for the probe to be considered failed after
+                                                                    having succeeded.
+                                                                format: int32
+                                                                minimum: 1
+                                                                type: integer
+                                                            initialDelaySeconds:
+                                                                description: |-
+                                                                    Number of seconds after the container has started before the probe is
+                                                                    initiated.
+                                                                format: int32
+                                                                minimum: 0
+                                                                type: integer
+                                                            periodSeconds:
+                                                                default: 10
+                                                                description: How often, in seconds, to perform the probe.
+                                                                format: int32
+                                                                minimum: 1
+                                                                type: integer
+                                                            timeoutSeconds:
+                                                                description: |-
+                                                                    Number of seconds after which the probe times out. Defaults to 5 for
+                                                                    livenessProbe and 1 for readinessProbe.
+                                                                format: int32
+                                                                minimum: 1
+                                                                type: integer
+                                                        type: object
+                                                    readinessProbe:
+                                                        description: |-
+                                                            Readiness probe against the proxy's /readyz endpoint, which passes once
+                                                            the proxy has a tailnet IP address and, for proxies that serve Tailscale
+                                                            Services, has applied its serve config and has a TLS cert for each
+                                                            HTTPS-only Tailscale Service. Off unless set; {} runs it with the default
+                                                            timing. Older proxy images don't serve /readyz and fail the probe.
+                                                            Only used by ProxyGroups.
+                                                        properties:
+                                                            failureThreshold:
+                                                                default: 3
+                                                                description: |-
+                                                                    Minimum consecutive failures for the probe to be considered failed after
+                                                                    having succeeded.
+                                                                format: int32
+                                                                minimum: 1
+                                                                type: integer
+                                                            initialDelaySeconds:
+                                                                description: |-
+                                                                    Number of seconds after the container has started before the probe is
+                                                                    initiated.
+                                                                format: int32
+                                                                minimum: 0
+                                                                type: integer
+                                                            periodSeconds:
+                                                                default: 10
+                                                                description: How often, in seconds, to perform the probe.
+                                                                format: int32
+                                                                minimum: 1
+                                                                type: integer
+                                                            timeoutSeconds:
+                                                                description: |-
+                                                                    Number of seconds after which the probe times out. Defaults to 5 for
+                                                                    livenessProbe and 1 for readinessProbe.
+                                                                format: int32
+                                                                minimum: 1
+                                                                type: integer
+                                                        type: object
                                                     resources:
                                                         description: |-
                                                             Container resource requirements.
@@ -3599,6 +3673,80 @@ spec:
                                                             - Never
                                                             - IfNotPresent
                                                         type: string
+                                                    livenessProbe:
+                                                        description: |-
+                                                            Liveness probe against the proxy's /livez endpoint, which fails only when
+                                                            tailscaled stops responding, not when the tailnet is unreachable. Off
+                                                            unless set; {} runs it with the default timing. Older proxy images don't
+                                                            serve /livez and fail the probe. Only used by ProxyGroups.
+                                                        properties:
+                                                            failureThreshold:
+                                                                default: 3
+                                                                description: |-
+                                                                    Minimum consecutive failures for the probe to be considered failed after
+                                                                    having succeeded.
+                                                                format: int32
+                                                                minimum: 1
+                                                                type: integer
+                                                            initialDelaySeconds:
+                                                                description: |-
+                                                                    Number of seconds after the container has started before the probe is
+                                                                    initiated.
+                                                                format: int32
+                                                                minimum: 0
+                                                                type: integer
+                                                            periodSeconds:
+                                                                default: 10
+                                                                description: How often, in seconds, to perform the probe.
+                                                                format: int32
+                                                                minimum: 1
+                                                                type: integer
+                                                            timeoutSeconds:
+                                                                description: |-
+                                                                    Number of seconds after which the probe times out. Defaults to 5 for
+                                                                    livenessProbe and 1 for readinessProbe.
+                                                                format: int32
+                                                                minimum: 1
+                                                                type: integer
+                                                        type: object
+                                                    readinessProbe:
+                                                        description: |-
+                                                            Readiness probe against the proxy's /readyz endpoint, which passes once
+                                                            the proxy has a tailnet IP address and, for proxies that serve Tailscale
+                                                            Services, has applied its serve config and has a TLS cert for each
+                                                            HTTPS-only Tailscale Service. Off unless set; {} runs it with the default
+                                                            timing. Older proxy images don't serve /readyz and fail the probe.
+                                                            Only used by ProxyGroups.
+                                                        properties:
+                                                            failureThreshold:
+                                                                default: 3
+                                                                description: |-
+                                                                    Minimum consecutive failures for the probe to be considered failed after
+                                                                    having succeeded.
+                                                                format: int32
+                                                                minimum: 1
+                                                                type: integer
+                                                            initialDelaySeconds:
+                                                                description: |-
+                                                                    Number of seconds after the container has started before the probe is
+                                                                    initiated.
+                                                                format: int32
+                                                                minimum: 0
+                                                                type: integer
+                                                            periodSeconds:
+                                                                default: 10
+                                                                description: How often, in seconds, to perform the probe.
+                                                                format: int32
+                                                                minimum: 1
+                                                                type: integer
+                                                            timeoutSeconds:
+                                                                description: |-
+                                                                    Number of seconds after which the probe times out. Defaults to 5 for
+                                                                    livenessProbe and 1 for readinessProbe.
+                                                                format: int32
+                                                                minimum: 1
+                                                                type: integer
+                                                        type: object
                                                     resources:
                                                         description: |-
                                                             Container resource requirements.

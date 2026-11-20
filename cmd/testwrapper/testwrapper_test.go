@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 var (
@@ -392,6 +393,39 @@ func TestTimeout(t *testing.T) {
 
 	if testing.Verbose() {
 		t.Logf("success - output:\n%s", out)
+	}
+}
+
+// TestIdleWatchdog checks that testwrapper kills a go test that produces no
+// output, simulating a hang outside the test binary with a slow -exec wrapper.
+func TestIdleWatchdog(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script -exec wrapper")
+	}
+	t.Parallel()
+
+	dir := t.TempDir()
+	testfile := filepath.Join(dir, "idle_test.go")
+	if err := os.WriteFile(testfile, []byte("package idle_test\n\nimport \"testing\"\n\nfunc TestIdle(t *testing.T) {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wrapper := filepath.Join(dir, "slowexec.sh")
+	if err := os.WriteFile(wrapper, []byte("#!/bin/sh\nsleep 30\nexec \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := cmdTestwrapper(t, "-exec", wrapper, "-timeout=1s", testfile)
+	cmd.Env = append(cmd.Env, "TS_TESTWRAPPER_IDLE_MARGIN=1s")
+	start := time.Now()
+	out, err := cmd.CombinedOutput()
+	if code, ok := errExitCode(err); !ok || code != 1 {
+		t.Fatalf("testwrapper: expected exit code 1 but got: %v; output was:\n%s", err, out)
+	}
+	if want := "no output from go test in 2s"; !bytes.Contains(out, []byte(want)) {
+		t.Fatalf("testwrapper: expected output containing %q but got:\n%s", want, out)
+	}
+	if d := time.Since(start); d > 25*time.Second {
+		t.Errorf("testwrapper took %v; want it killed well before the 30s -exec sleep", d)
 	}
 }
 

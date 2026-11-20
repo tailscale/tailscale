@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Run a command with our local pnpm install, rather than any globally installed
+# instance.
+#
+# The pnpm version is pinned in tool/pnpm.rev and the expected sha256 of each
+# platform's release tarball is pinned in tool/pnpm.sha256. To upgrade pnpm,
+# update both files (the digests are listed on the GitHub release page).
+
+set -euo pipefail
+
+if [[ "${CI:-}" == "true" ]]; then
+    set -x
+fi
+
+(
+    repo_root="${BASH_SOURCE%/*}/../"
+    cd "$repo_root"
+
+    ./tool/node --version >/dev/null # Ensure node is unpacked and ready
+
+    cachedir="$HOME/.cache/tailscale-pnpm"
+
+    read -r want_rev < "./tool/pnpm.rev"
+
+    got_rev=""
+    if [[ -x "${cachedir}/pnpm" ]]; then
+        got_rev=$("${cachedir}/pnpm" --version 2>/dev/null || true)
+    fi
+
+    if [[ "$want_rev" != "$got_rev" ]]; then
+        # works for "linux" and "darwin"
+        OS=$(uname -s | tr A-Z a-z)
+        ARCH=$(uname -m)
+        if [ "$ARCH" = "x86_64" ]; then
+            ARCH="x64"
+        fi
+        if [ "$ARCH" = "aarch64" ]; then
+            ARCH="arm64"
+        fi
+        LIBC=""
+        if [ "$OS" = "linux" ] && ldd --version 2>&1 | grep -qi musl; then
+            LIBC="-musl"
+        fi
+        asset="pnpm-${OS}-${ARCH}${LIBC}.tar.gz"
+
+        want_sum=$(awk -v f="$asset" '$2 == f { print $1 }' ./tool/pnpm.sha256)
+        if [[ -z "$want_sum" ]]; then
+            echo "tool/pnpm: no pinned sha256 for $asset in tool/pnpm.sha256" >&2
+            exit 1
+        fi
+
+        mkdir -p "$(dirname "$cachedir")"
+        tmpdir=$(mktemp -d "${cachedir}.XXXXXX")
+        trap 'rm -rf "$tmpdir"' EXIT
+        tarball="$tmpdir/$asset"
+        # Force HTTP 1.1, see https://github.com/tailscale/tailscale/issues/8988
+        curl -f -L --http1.1 -o "$tarball" "https://github.com/pnpm/pnpm/releases/download/v${want_rev}/${asset}"
+
+        if command -v sha256sum >/dev/null; then
+            got_sum=$(sha256sum "$tarball" | awk '{print $1}')
+        else
+            got_sum=$(shasum -a 256 "$tarball" | awk '{print $1}')
+        fi
+        if [[ "$got_sum" != "$want_sum" ]]; then
+            echo "tool/pnpm: sha256 mismatch for $asset: got $got_sum, want $want_sum" >&2
+            exit 1
+        fi
+
+        mkdir "$tmpdir/out"
+        tar -C "$tmpdir/out" -xzf "$tarball"
+        rm -rf "$cachedir"
+        mv "$tmpdir/out" "$cachedir"
+    fi
+)
+
+# Put our pinned node on PATH: pnpm's standalone binary bundles its own Node but
+# doesn't expose it, and package scripts and node_modules/.bin shims (tsc,
+# tailwind, dts-bundle-generator...) are shell scripts that run `node` from PATH.
+export PATH="$HOME/.cache/tailscale-node/bin:$HOME/.cache/tailscale-pnpm:$PATH"
+exec "$HOME/.cache/tailscale-pnpm/pnpm" "$@"

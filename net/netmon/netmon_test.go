@@ -148,7 +148,7 @@ func TestMonitorMode(t *testing.T) {
 		time.AfterFunc(*monitorDuration, bus.Close)
 		n := 0
 		mon.Start()
-		eventbustest.Expect(tw, func(event *ChangeDelta) (bool, error) {
+		eventbustest.Expect(tw, func(event ChangeDelta) (bool, error) {
 			n++
 			t.Logf("cb: changed=%v, ifSt=%v", event.RebindLikelyRequired, event.CurrentState())
 			return false, nil // Return false, indicating we wanna look for more events

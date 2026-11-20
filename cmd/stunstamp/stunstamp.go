@@ -207,7 +207,7 @@ func tcpDial(ctx context.Context, lport *lportForTCPConn, dst netip.AddrPort) (n
 			LocalAddr: &net.TCPAddr{
 				Port: int(*lport),
 			},
-			Control: func(network, address string, c syscall.RawConn) error {
+			ControlContext: func(_ context.Context, network, address string, c syscall.RawConn) error {
 				return c.Control(func(fd uintptr) {
 					// we may restart faster than TIME_WAIT can clear
 					opErr = setSOReuseAddr(fd)

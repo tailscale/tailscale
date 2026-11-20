@@ -11,13 +11,8 @@ import (
 	"io/fs"
 )
 
-// IsUDPReadFeedback always returns false on this platform.
-func IsUDPReadFeedback(err error) bool {
-	return false
-}
-
-// IsUDPReadUnknown always returns false on this platform.
-func IsUDPReadUnknown(err error) bool {
+// IsBadSocketError always returns false on this platform.
+func IsBadSocketError(err error) bool {
 	return false
 }
 

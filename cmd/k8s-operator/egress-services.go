@@ -53,13 +53,20 @@ const (
 
 	labelSvcType = "tailscale.com/svc-type" // ingress or egress
 	typeEgress   = "egress"
-	// maxPorts is the maximum number of ports that can be exposed on a
-	// container. In practice this will be ports in range [10000 - 11000). The
-	// high range should make it easier to distinguish container ports from
-	// the tailnet target ports for debugging purposes (i.e when reading
-	// netfilter rules). The limit of 1000 is somewhat arbitrary, the
-	// assumption is that this would not be hit in practice.
-	maxPorts = 1000
+	// minMatchPort and maxPorts define the range of match ports that can be
+	// exposed on a container: [minMatchPort, minMatchPort+maxPorts). The high
+	// range should make it easier to distinguish container ports from the
+	// tailnet target ports for debugging purposes (i.e when reading netfilter
+	// rules). The range ends below the Linux ephemeral port range (32768+), so
+	// that match ports do not collide with ports that the proxy itself uses.
+	//
+	// In practice, a ProxyGroup reaches other limits before it uses maxPorts.
+	// The config for all its egress Services is in one ConfigMap, and each
+	// proxy writes the status of those Services to its own state Secret.
+	// Kubernetes limits both objects to 1 MiB, which they reach at about 4000
+	// to 7000 ports, depending on the length of the names.
+	minMatchPort = 10000
+	maxPorts     = 20000
 
 	indexEgressProxyGroup = ".metadata.annotations.egress-proxy-group"
 
@@ -480,6 +487,11 @@ func (esr *egressSvcsReconciler) usedPortsForPG(ctx context.Context, pg string) 
 	usedPorts := sets.New[int32]()
 	for _, s := range svcList.Items {
 		for _, p := range s.Spec.Ports {
+			// The health check port targets the proxy's own health check
+			// endpoint, not a match port.
+			if p.Name == tsHealthCheckPortName {
+				continue
+			}
 			usedPorts.Insert(p.TargetPort.IntVal)
 		}
 	}
@@ -642,13 +654,13 @@ func svcNameBase(s string) string {
 	}
 }
 
-// unusedPort returns a port in range [10000 - 11000). The caller must ensure that
-// usedPorts does not contain all ports in range [10000 - 11000).
+// unusedPort returns a port in range [minMatchPort, minMatchPort+maxPorts). The
+// caller must ensure that usedPorts does not contain all ports in that range.
 func unusedPort(usedPorts sets.Set[int32]) int32 {
 	foundFreePort := false
 	var suggestPort int32
 	for !foundFreePort {
-		suggestPort = rand.Int32N(maxPorts) + 10000
+		suggestPort = rand.Int32N(maxPorts) + minMatchPort
 		if !usedPorts.Has(suggestPort) {
 			foundFreePort = true
 		}

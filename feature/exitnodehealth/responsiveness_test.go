@@ -169,6 +169,8 @@ func TestExitNodeResponsivenessLifecycle(t *testing.T) {
 		e.evaluateResponsiveness(now)
 		e.mu.Unlock()
 	}
+	// End the warm-up period, during which warnings are hidden.
+	b.HealthTracker().SetIPNState(ipn.Running.String(), true)
 	w := b.HealthTracker().CurrentState().Warnings[exitNodeUnresponsiveWarnable.Code]
 	want := "The selected exit node \"my-gateway\" has not responded since " + start.WallTime().UTC().Format(time.RFC3339) + ". Internet connectivity may be affected."
 	if w.Text != want {

@@ -63,6 +63,7 @@ import (
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/tsnet"
+	tslogger "tailscale.com/types/logger"
 	"tailscale.com/util/must"
 )
 
@@ -597,6 +598,7 @@ func runTests(m *testing.M) (int, error) {
 		Ephemeral:  true,
 		Store:      &mem.Store{},
 		AuthKey:    authKey.Key,
+		UserLogf:   tslogger.Discard,
 	}
 	_, err = tnClient.Up(ctx)
 	if err != nil {
@@ -610,6 +612,7 @@ func runTests(m *testing.M) (int, error) {
 		Ephemeral:  true,
 		Store:      &mem.Store{},
 		AuthKey:    secondAuthKey.Key,
+		UserLogf:   tslogger.Discard,
 	}
 	_, err = secondTNClient.Up(ctx)
 	if err != nil {

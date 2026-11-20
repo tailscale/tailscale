@@ -54,6 +54,7 @@ import (
 	"tailscale.com/types/opt"
 	"tailscale.com/util/must"
 	"tailscale.com/util/set"
+	"tailscale.com/util/syspolicy/pkey"
 )
 
 func TestMain(m *testing.M) {
@@ -246,6 +247,32 @@ func TestCollectPanic(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestLogLineHooks checks that a node's log line hooks see its output, even as the Windows service.
+func TestLogLineHooks(t *testing.T) {
+	tstest.Parallel(t)
+	env := NewTestEnv(t)
+	n1 := NewTestNode(t, env)
+	started := make(chan bool, 1)
+	n1.addLogLineHook(func(line []byte) {
+		if mem.Contains(mem.B(line), mem.S("Program starting: ")) {
+			select {
+			case started <- true:
+			default:
+			}
+		}
+	})
+
+	d1 := n1.StartDaemon()
+	n1.AwaitResponding()
+	select {
+	case <-started:
+	case <-time.After(20 * time.Second):
+		t.Fatal("log line hooks never saw tailscaled's startup line")
+	}
+
+	d1.MustCleanShutdown(t)
 }
 
 func TestControlTimeLogLine(t *testing.T) {
@@ -537,6 +564,25 @@ func TestOneNodeUpAuth(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOneNodeUpAuthKeyPolicy(t *testing.T) {
+	tstest.Parallel(t)
+	const authKey = "opensesame"
+	env := NewTestEnv(t, ConfigureControl(func(control *testcontrol.Server) {
+		control.RequireAuthKey = authKey
+	}))
+	n1 := NewTestNode(t, env)
+	n1.syspolicy = map[pkey.Key]any{pkey.AuthKey: authKey}
+
+	d1 := n1.StartDaemon()
+	n1.AwaitResponding()
+	n1.MustUp()
+
+	t.Logf("Got IP: %v", n1.AwaitIP4())
+	n1.AwaitRunning()
+
+	d1.MustCleanShutdown(t)
 }
 
 // TestRetagStaleMapRequestRace reproduces tailscale/tailscale#20365: a node
@@ -847,7 +893,7 @@ func TestOneNodeUpInterruptedDeviceApproval(t *testing.T) {
 
 func TestConfigFileAuthKey(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("a config file can't set unattended mode, so Windows drops the node to NoState; see #20751")
+		t.Skip("the Windows service gets no --config, and outside it a CLI command swaps the config's profile for the user's own; see #20871")
 	}
 	t.Parallel()
 	const authKey = "opensesame"
@@ -912,11 +958,11 @@ func TestTwoNodes(t *testing.T) {
 		os.WriteFile("n2.log", cleanLog(n2), 0666)
 	})
 
-	if runtime.GOOS != "windows" {
-		// TODO(yaruk): the service node has no stderr to scrape the address from; see #20443.
+	// The Windows service runs tailscaled without --socks5-server.
+	if d1.svc == nil {
 		t.Logf("node1 SOCKS5 addr: %v", n1.AwaitSocksAddr(n1SocksAddrCh))
-		t.Logf("node2 SOCKS5 addr: %v", n1.AwaitSocksAddr(n2SocksAddrCh))
 	}
+	t.Logf("node2 SOCKS5 addr: %v", n1.AwaitSocksAddr(n2SocksAddrCh))
 
 	n1.AwaitListening()
 	t.Logf("n1 is listening")
@@ -1383,6 +1429,61 @@ func TestOneNodeUpWindowsStyle(t *testing.T) {
 	n1.AwaitRunning()
 
 	d1.MustCleanShutdown(t)
+}
+
+// TestUnattendedModeOn checks that --unattended keeps a Windows node connected after the CLI exits.
+func TestUnattendedModeOn(t *testing.T) {
+	env, n1, d1 := startUnattendedModeNode(t)
+	n1.MustUp("--unattended=true")
+
+	stayed := regexp.MustCompile(`client disconnected \(.*\): staying on profile `)
+	disconnects := regexp.MustCompile(`client disconnected .*`)
+	if err := tstest.WaitFor(20*time.Second, func() error {
+		logs := env.LogCatcher.logsString()
+		if !stayed.MatchString(logs) {
+			return fmt.Errorf("want a log line matching %#q, got %q", stayed, disconnects.FindAllString(logs, -1))
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n := env.Control.InServeMap(); n == 0 {
+		t.Fatalf("no control connection after the CLI exited: in serve map = %d; want 1", n)
+	}
+
+	d1.MustCleanShutdown(t)
+}
+
+// TestUnattendedModeOff checks that a Windows node with no GUI disconnects once the CLI exits.
+func TestUnattendedModeOff(t *testing.T) {
+	env, n1, d1 := startUnattendedModeNode(t)
+	n1.MustUp("--unattended=false")
+
+	if err := tstest.WaitFor(20*time.Second, func() error {
+		if n := env.Control.InServeMap(); n != 0 {
+			return fmt.Errorf("in serve map = %d; want 0", n)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("control connection left open after the CLI exited: %v", err)
+	}
+
+	d1.MustCleanShutdown(t)
+}
+
+// startUnattendedModeNode starts a node that acts as Windows, so the tests run on every platform.
+func startUnattendedModeNode(t *testing.T) (*TestEnv, *TestNode, *Daemon) {
+	t.Helper()
+	if !*windowsUnattended {
+		t.Skip("tests unattended mode with no GUI attached (re-run with --windows-unattended)")
+	}
+	tstest.Parallel(t)
+	env := NewTestEnv(t)
+	n1 := NewTestNode(t, env)
+	n1.upFlagGOOS = "windows"
+	d1 := n1.StartDaemonAsIPNGOOS("windows")
+	n1.AwaitResponding()
+	return env, n1, d1
 }
 
 // TestClientSideJailing tests that when one node is jailed for another, the

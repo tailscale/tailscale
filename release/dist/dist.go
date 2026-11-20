@@ -64,8 +64,10 @@ type Build struct {
 	Tmp string
 	// Go is the path to the Go binary to use for building.
 	Go string
-	// Yarn is the path to the yarn binary to use for building the web client assets.
-	Yarn string
+	// Pnpm optionally overrides the path to the pnpm binary used to build the
+	// web client assets. If empty, BuildWebClientAssets looks for tool/pnpm in
+	// Repo, then pnpm in $PATH.
+	Pnpm string
 	// Version is the version info of the build.
 	Version mkversion.VersionInfo
 	// Time is the timestamp of the build.
@@ -108,16 +110,11 @@ func NewBuild(repo, out string) (*Build, error) {
 	if err != nil {
 		return nil, fmt.Errorf("finding go binary: %w", err)
 	}
-	yarnTool, err := findTool(repo, "yarn")
-	if err != nil {
-		return nil, fmt.Errorf("finding yarn binary: %w", err)
-	}
 	b := &Build{
 		Repo:         repo,
 		Tmp:          tmp,
 		Out:          out,
 		Go:           goTool,
-		Yarn:         yarnTool,
 		Version:      mkversion.Info(),
 		Time:         time.Now().UTC(),
 		extra:        map[any]any{},
@@ -230,11 +227,20 @@ func (b *Build) BuildWebClientAssets() error {
 		if b.WebClientSource == "" {
 			return nil
 		}
+		// pnpm is only needed here, so look for it now rather than in
+		// NewBuild, so that builds which don't need it don't require it.
+		pnpm := b.Pnpm
+		if pnpm == "" {
+			var err error
+			if pnpm, err = findTool(b.Repo, "pnpm"); err != nil {
+				return fmt.Errorf("pnpm not found, cannot build web client assets: %w", err)
+			}
+		}
 		dir := b.WebClientSource
-		if err := b.Command(dir, b.Yarn, "install").Run(); err != nil {
+		if err := b.Command(dir, pnpm, "install").Run(); err != nil {
 			return err
 		}
-		if err := b.Command(dir, b.Yarn, "build").Run(); err != nil {
+		if err := b.Command(dir, pnpm, "run", "build").Run(); err != nil {
 			return err
 		}
 		return nil

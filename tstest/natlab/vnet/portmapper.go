@@ -30,6 +30,9 @@ const (
 
 	resultSuccess       = 0
 	resultUnsuppVersion = 1
+	resultNotAuthorized = 2
+
+	pcpErrorLifetimeSec = 1800 // 30 min
 
 	opcodeResponseBit = 128
 )
@@ -120,6 +123,7 @@ func (n *network) handleUPnPControl(w http.ResponseWriter, r *http.Request) {
 	name := action.XMLName.Local
 
 	var out string
+	var emptyNonce [12]byte
 	switch name {
 	case "GetExternalIPAddress":
 		out = fmt.Sprintf("<NewExternalIPAddress>%v</NewExternalIPAddress>", n.wanIP4)
@@ -136,15 +140,23 @@ func (n *network) handleUPnPControl(w http.ResponseWriter, r *http.Request) {
 		}
 		// TODO(fmarier): reject wildcard value (0) in ExternalPort
 		// TODO(fmarier): spec says NewLeaseDuration of 0 needs to be treated as 604800 seconds
-		gotPort, ok := n.doPortMap(action.InternalClient, action.InternalPort, action.ExternalPort, int(action.LeaseDuration), UPnP)
+		gotPort, ok := n.doPortMap(action.InternalClient, action.InternalPort, action.ExternalPort, int(action.LeaseDuration), UPnP, emptyNonce)
 		if !ok {
 			n.logf("UPnP map request for %v:%d failed", action.InternalClient, action.InternalPort)
 			http.Error(w, "port mapping failed", http.StatusInternalServerError)
 			return
 		}
 		out = fmt.Sprintf("<NewReservedPort>%d</NewReservedPort>", gotPort)
+	case "DeletePortMapping":
+		pm, ok := n.portMappings()[netip.AddrPortFrom(n.wanIP4, action.ExternalPort)]
+		if !ok {
+			n.logf("UPnP delete request for port %d: no such mapping", action.ExternalPort)
+			http.Error(w, "no such mapping", http.StatusInternalServerError)
+			return
+		}
+		// lifetime=0 is a delete here, not a permanent UPnP mapping
+		n.doPortMap(pm.dst.Addr(), pm.dst.Port(), action.ExternalPort, 0, UPnP, emptyNonce)
 	default:
-		// TODO(fmarier): handle portmap releases (DeletePortMapping)
 		n.logf("TODO: handle UPnP action %q", name)
 		http.Error(w, "unsupported action", http.StatusInternalServerError)
 		return
@@ -207,8 +219,7 @@ func (n *network) writePCPUnsuppVersion(req UDPPacket) {
 		0, // reserved
 		resultUnsuppVersion,
 	)
-	lifetimeSec := uint32(1800) // 30 min
-	res = binary.BigEndian.AppendUint32(res, lifetimeSec)
+	res = binary.BigEndian.AppendUint32(res, pcpErrorLifetimeSec)
 	epoch := uint32(time.Now().Unix())
 	res = binary.BigEndian.AppendUint32(res, epoch)
 	res = append(res, make([]byte, 12)...) // reserved (96 bits)
@@ -261,9 +272,8 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 		internalPort := binary.BigEndian.Uint16(req.Payload[4:6])
 		wantExtPort := binary.BigEndian.Uint16(req.Payload[6:8])
 		lifetimeSec := n.grantedPortMapLifetime(binary.BigEndian.Uint32(req.Payload[8:12]))
-		gotPort, ok := n.doPortMap(req.Src.Addr(), internalPort, wantExtPort, int(lifetimeSec), NATPMP)
+		gotPort, ok := n.doPortMap(req.Src.Addr(), internalPort, wantExtPort, int(lifetimeSec), NATPMP, [12]byte{})
 		if !ok {
-			// TODO(fmarier): handle portmap releases properly
 			n.logf("NAT-PMP map request for %v:%d failed", req.Src.Addr(), internalPort)
 			return
 		}
@@ -355,12 +365,27 @@ func (n *network) handlePCPRequest(req UDPPacket) {
 		// TODO(fmarier): reject wildcard mappings (internalPort = 0)
 		wantExtPort := binary.BigEndian.Uint16(req.Payload[42:44])
 		// TODO(fmarier): reject wantedExtAddr that doesn't match IP version
-		nonce := req.Payload[24:36]
-		// TODO(fmarier): pass the nonce into doPortmap so that it can be checked on renewals/deletions
-		gotPort, ok := n.doPortMap(req.Src.Addr(), internalPort, wantExtPort, int(lifetimeSec), PCP)
+		nonce := [12]byte(req.Payload[24:36])
+		gotPort, ok := n.doPortMap(req.Src.Addr(), internalPort, wantExtPort, int(lifetimeSec), PCP, nonce)
 		if !ok {
-			// TODO(fmarier): handle portmap releases
 			n.logf("PCP map request for %v:%d failed", req.Src.Addr(), internalPort)
+			res := make([]byte, 0, 60)
+			res = append(res,
+				versionPCP,
+				opcodeResponseBit|opcodeMAP,
+				0,                   // reserved
+				resultNotAuthorized, // TODO(fmarier): NO_RESOURCES instead of NOT_AUTHORIZED when no free external port
+			)
+			res = binary.BigEndian.AppendUint32(res, pcpErrorLifetimeSec) // TODO(fmarier): use remaining lifetime of mapping for a nonce mismatch
+			epoch := uint32(time.Now().Unix())
+			res = binary.BigEndian.AppendUint32(res, epoch)
+			res = append(res, make([]byte, 12)...) // reserved (96 bits)
+			res = append(res, req.Payload[24:]...) // nonce, protocol, int port, ext port and IP copied from request
+			n.WriteUDPPacketNoNAT(UDPPacket{
+				Src:     req.Dst,
+				Dst:     req.Src,
+				Payload: res,
+			})
 			return
 		}
 		res := make([]byte, 0, 60)
@@ -374,15 +399,19 @@ func (n *network) handlePCPRequest(req UDPPacket) {
 		epoch := uint32(time.Now().Unix())
 		res = binary.BigEndian.AppendUint32(res, epoch)
 		res = append(res, make([]byte, 12)...) // reserved (96 bits)
-		res = append(res, nonce...)
+		res = append(res, nonce[:]...)
 		res = append(res,
 			protocolUDP,
 			0, 0, 0, // reserved
 		)
 		res = binary.BigEndian.AppendUint16(res, internalPort)
-		res = binary.BigEndian.AppendUint16(res, gotPort)
-		wan4 := n.wanIP4.As16()
-		res = append(res, wan4[:]...) // TODO(fmarier): handle non-zero requested external addresses
+		if lifetimeSec == 0 {
+			res = append(res, req.Payload[42:60]...) // suggested external port and IP from the request
+		} else {
+			res = binary.BigEndian.AppendUint16(res, gotPort)
+			wan4 := n.wanIP4.As16()
+			res = append(res, wan4[:]...) // TODO(fmarier): handle non-zero requested external addresses
+		}
 
 		// "02 81 00 00 00 00 1c 20 6a c9 62 fb 00 00 00 00 00 00 00 00 00 00 00 00 95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f 11 00 00 00 9f 40 e6 59 00 00 00 00 00 00 00 00 00 00 ff ff 02 01 01 01" =>
 		//   02 vers
@@ -420,6 +449,7 @@ type PortMapping struct {
 	dst       netip.AddrPort // LAN IP:port
 	ExpiresAt time.Time
 	Service   NetworkService
+	pcpNonce  [12]byte
 }
 
 func (n *network) portMappings() map[netip.AddrPort]PortMapping {
@@ -433,7 +463,7 @@ func (n *network) portMappings() map[netip.AddrPort]PortMapping {
 	return ret
 }
 
-func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec int, service NetworkService) (gotPort uint16, ok bool) {
+func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec int, service NetworkService, nonce [12]byte) (gotPort uint16, ok bool) {
 	n.natMu.Lock()
 	defer n.natMu.Unlock()
 
@@ -444,37 +474,57 @@ func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec 
 	wanAP := netip.AddrPortFrom(n.wanIP4, wantExtPort)
 	dst := netip.AddrPortFrom(src, dstLANPort)
 
-	if sec == 0 {
-		lanAP, ok := n.portMap[wanAP]
-		if ok && lanAP.dst.Addr() == src {
-			n.logf("vnet: released %v mapping from %v to %v", service, wanAP, dst)
-			delete(n.portMap, wanAP)
+	if service == PCP {
+		now := time.Now()
+		for _, v := range n.portMap {
+			// A mapping made with NAT-PMP or UPnP has no nonce, so a PCP
+			// request for it is treated as a nonce mismatch. This is not
+			// explicitly covered by the RFCs, but we discussed and decided
+			// on this approach because it's useful for our tests.
+			if v.dst == dst && now.Before(v.ExpiresAt) && (v.Service != PCP || v.pcpNonce != nonce) {
+				n.logf("vnet: rejected PCP map request for %v with mismatched nonce", dst)
+				return 0, false
+			}
 		}
-		return 0, false
+	}
+
+	if sec == 0 {
+		for k, v := range n.portMap {
+			if v.dst == dst {
+				n.logf("vnet: released %v mapping from %v to %v", service, k, dst)
+				delete(n.portMap, k)
+			}
+		}
+		return 0, true
 	}
 
 	// See if they already have a mapping and extend expiry if so.
 	// TODO(fmarier): renewing with a different protocol overwrites the
 	// service that created the mapping, so PortMappings only reports the
-	// most recent one.
+	// most recent one. Renewing a PCP mapping with NAT-PMP or UPnP also
+	// clears its nonce.
 	for k, v := range n.portMap {
 		if v.dst == dst {
 			n.portMap[k] = PortMapping{
 				dst:       dst,
 				ExpiresAt: time.Now().Add(time.Duration(sec) * time.Second),
 				Service:   service,
+				pcpNonce:  nonce,
 			}
 			n.logf("vnet: renewed %v mapping from %v to %v", service, wanAP, dst)
 			return k.Port(), true
 		}
 	}
 
+	// TODO(fmarier): IsPublicPortUsed does not look at n.portMap, so asking
+	// for an external port held by another mapping takes it over.
 	for range 20_000 {
 		if wanAP.Port() > 0 && !n.natTable.IsPublicPortUsed(wanAP) {
 			mak.Set(&n.portMap, wanAP, PortMapping{
 				dst:       dst,
 				ExpiresAt: time.Now().Add(time.Duration(sec) * time.Second),
 				Service:   service,
+				pcpNonce:  nonce,
 			})
 			n.logf("vnet: allocated %v mapping from %v to %v", service, wanAP, dst)
 			return wanAP.Port(), true

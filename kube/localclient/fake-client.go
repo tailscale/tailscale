@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 )
 
 type FakeLocalClient struct {
@@ -16,6 +17,9 @@ type FakeLocalClient struct {
 	EditPrefsCalls    []*ipn.MaskedPrefs
 	GetPrefsResult    *ipn.Prefs
 	CertDomainsResult []string
+	// CertStatusResults maps a domain to the cert status the fake returns.
+	// Domains absent from the map are reported as missing.
+	CertStatusResults map[string]*tailcfg.C2NTLSCertInfo
 }
 
 func (m *FakeLocalClient) SetServeConfig(ctx context.Context, cfg *ipn.ServeConfig) error {
@@ -44,6 +48,13 @@ func (f *FakeLocalClient) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchO
 
 func (f *FakeLocalClient) CertPair(ctx context.Context, domain string) ([]byte, []byte, error) {
 	return nil, nil, fmt.Errorf("CertPair not implemented")
+}
+
+func (f *FakeLocalClient) CertStatus(ctx context.Context, domain string) (*tailcfg.C2NTLSCertInfo, error) {
+	if info, ok := f.CertStatusResults[domain]; ok {
+		return info, nil
+	}
+	return &tailcfg.C2NTLSCertInfo{Missing: true, Error: "no certificate"}, nil
 }
 
 func (f *FakeLocalClient) CertDomains(ctx context.Context) ([]string, error) {

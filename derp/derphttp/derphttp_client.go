@@ -105,6 +105,7 @@ type Client struct {
 	tlsState     *tls.ConnectionState
 	pingOut      map[derp.PingMessage]chan<- bool // chan to send to on pong
 	clock        tstime.Clock
+	websocket    bool // whether to use HookUpgradeWebsocket, as it worked last time
 }
 
 // ConnectedState describes the state of a derphttp Client.
@@ -320,6 +321,33 @@ func (c *Client) preferIPv6() bool {
 	return false
 }
 
+// HookUpgradeWebsocket, if set, is how DERP clients get past HTTP proxies
+// that intercept TLS and refuse the "Upgrade: DERP" request but allow
+// WebSocket upgrades, like browsers use. It's set by the opt-in
+// feature/derpwebsocket package.
+//
+// If a client's HTTP upgrade to DERP fails after any TLS handshake
+// succeeded, the client redials and calls the hook in place of the HTTP
+// upgrade. Once that works, the client keeps using the hook for its
+// reconnects until it fails.
+var HookUpgradeWebsocket feature.Hook[WebsocketUpgrader]
+
+// WebsocketUpgrader is the type of [HookUpgradeWebsocket].
+//
+// It does a WebSocket handshake with the "derp" subprotocol over conn, a new
+// connection to the DERP server (after any HTTP proxy CONNECT and TLS), for
+// the DERP server URL urlStr, such as "https://derp.example.com/derp". The
+// ctx bounds the handshake. It returns a net.Conn that carries the DERP
+// protocol in binary WebSocket messages.
+type WebsocketUpgrader func(ctx context.Context, conn net.Conn, urlStr string) (net.Conn, error)
+
+// upgradeError is an error from a DERP client's HTTP upgrade exchange.
+// See HookUpgradeWebsocket.
+type upgradeError struct{ err error }
+
+func (e upgradeError) Error() string { return e.err.Error() }
+func (e upgradeError) Unwrap() error { return e.err }
+
 // dialWebsocketFunc is non-nil (set by websocket.go's init) when compiled in.
 var dialWebsocketFunc func(ctx context.Context, urlStr string) (net.Conn, error)
 
@@ -356,6 +384,34 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		}
 	}()
 
+	upgradeWebsocket, ok := HookUpgradeWebsocket.GetOk()
+	if !ok {
+		return c.connectLocked(ctx, caller, nil)
+	}
+	if c.websocket {
+		client, connGen, err = c.connectLocked(ctx, caller, upgradeWebsocket)
+		if err == nil {
+			return client, connGen, nil
+		}
+		c.logf("%s: websocket connect failed, retrying without: %v", caller, err)
+		c.websocket = false
+	}
+	client, connGen, err = c.connectLocked(ctx, caller, nil)
+	if !errors.As(err, new(upgradeError)) {
+		return client, connGen, err
+	}
+	c.logf("%s: HTTP upgrade failed, retrying with websocket: %v", caller, err)
+	client, connGen, err = c.connectLocked(ctx, caller, upgradeWebsocket)
+	c.websocket = err == nil
+	return client, connGen, err
+}
+
+// connectLocked does one attempt to connect for connect.
+// If upgradeWebsocket is non-nil, it's used in place of the
+// HTTP upgrade to DERP. See HookUpgradeWebsocket.
+//
+// c.mu must be held.
+func (c *Client) connectLocked(ctx context.Context, caller string, upgradeWebsocket WebsocketUpgrader) (client *derp.Client, connGen int, err error) {
 	// timeout is the fallback maximum time (if ctx doesn't limit
 	// it further) to do all of: DNS + TCP + TLS + HTTP Upgrade +
 	// DERP upgrade.
@@ -388,9 +444,9 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	defer func() {
 		if err != nil {
 			if ctx.Err() != nil {
-				err = fmt.Errorf("%v: %v", ctx.Err(), err)
+				err = fmt.Errorf("%v: %w", ctx.Err(), err)
 			}
-			err = fmt.Errorf("%s connect to %v: %v", caller, c.targetString(reg), err)
+			err = fmt.Errorf("%s connect to %v: %w", caller, c.targetString(reg), err)
 			if tcpConn != nil {
 				go tcpConn.Close()
 			}
@@ -505,6 +561,19 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		httpConn = tcpConn
 	}
 
+	if upgradeWebsocket != nil {
+		urlStr := c.urlString(node)
+		wsConn, err := upgradeWebsocket(ctx, httpConn, urlStr)
+		if err != nil {
+			return nil, 0, err
+		}
+		httpConn = wsConn
+		// The server only skips its greeting for the fast start
+		// below, which the WebSocket handshake can't use, so make
+		// derp.NewClient read the server's key from the greeting.
+		serverPub = key.NodePublic{}
+	}
+
 	brw := bufio.NewReadWriter(bufio.NewReader(httpConn), bufio.NewWriter(httpConn))
 	var derpClient *derp.Client
 
@@ -527,7 +596,9 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		// https://github.com/tailscale/tailscale/issues/12724
 	}
 
-	if !serverPub.IsZero() && serverProtoVersion != 0 {
+	if upgradeWebsocket != nil {
+		// The WebSocket handshake above replaced the HTTP upgrade.
+	} else if !serverPub.IsZero() && serverProtoVersion != 0 {
 		// parseMetaCert found the server's public key (no TLS
 		// middlebox was in the way), so skip the HTTP upgrade
 		// exchange.  See https://github.com/tailscale/tailscale/issues/693
@@ -543,20 +614,20 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		// client auth frame will flush it.
 	} else {
 		if err := req.Write(brw); err != nil {
-			return nil, 0, err
+			return nil, 0, upgradeError{err}
 		}
 		if err := brw.Flush(); err != nil {
-			return nil, 0, err
+			return nil, 0, upgradeError{err}
 		}
 
 		resp, err := http.ReadResponse(brw.Reader, req)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, upgradeError{err}
 		}
 		if resp.StatusCode != http.StatusSwitchingProtocols {
 			b, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBodyBytes))
 			resp.Body.Close()
-			return nil, 0, fmt.Errorf("GET failed: status %v: %q", resp.Status, b)
+			return nil, 0, upgradeError{fmt.Errorf("GET failed: status %v: %q", resp.Status, b)}
 		}
 	}
 	derpClient, err = derp.NewClient(c.privateKey, httpConn, brw, c.logf,

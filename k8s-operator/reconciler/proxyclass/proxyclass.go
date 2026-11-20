@@ -231,6 +231,14 @@ func (r *Reconciler) validate(ctx context.Context, pc *tsapi.ProxyClass, logger 
 				if tc.Debug != nil {
 					violations = append(violations, field.TypeInvalid(field.NewPath("spec", "statefulSet", "pod", "tailscaleInitContainer", "debug"), tc.Debug, "debug settings cannot be configured on the init container"))
 				}
+
+				if tc.LivenessProbe != nil {
+					violations = append(violations, field.TypeInvalid(field.NewPath("spec", "statefulSet", "pod", "tailscaleInitContainer", "livenessProbe"), tc.LivenessProbe, "probes cannot be configured on the init container"))
+				}
+
+				if tc.ReadinessProbe != nil {
+					violations = append(violations, field.TypeInvalid(field.NewPath("spec", "statefulSet", "pod", "tailscaleInitContainer", "readinessProbe"), tc.ReadinessProbe, "probes cannot be configured on the init container"))
+				}
 			}
 		}
 	}

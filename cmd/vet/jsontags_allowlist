@@ -41,6 +41,8 @@ OmitEmptyShouldBeOmitZero	tailscale.com/k8s-operator/apis/v1alpha1.ConnectorSpec
 OmitEmptyShouldBeOmitZero	tailscale.com/k8s-operator/apis/v1alpha1.ConnectorSpec.SubnetRouter
 OmitEmptyShouldBeOmitZero	tailscale.com/k8s-operator/apis/v1alpha1.Container.Debug
 OmitEmptyShouldBeOmitZero	tailscale.com/k8s-operator/apis/v1alpha1.Container.ImagePullPolicy
+OmitEmptyShouldBeOmitZero	tailscale.com/k8s-operator/apis/v1alpha1.Container.LivenessProbe
+OmitEmptyShouldBeOmitZero	tailscale.com/k8s-operator/apis/v1alpha1.Container.ReadinessProbe
 OmitEmptyShouldBeOmitZero	tailscale.com/k8s-operator/apis/v1alpha1.Container.SecurityContext
 OmitEmptyShouldBeOmitZero	tailscale.com/k8s-operator/apis/v1alpha1.KubeAPIServerConfig.Mode
 OmitEmptyShouldBeOmitZero	tailscale.com/k8s-operator/apis/v1alpha1.Nameserver.Image
@@ -215,6 +217,10 @@ OmitEmptyUnsupportedInV2	tailscale.com/ipn/ipnstate.PingResult.IsLocalIP
 OmitEmptyUnsupportedInV2	tailscale.com/ipn/ipnstate.PingResult.PeerAPIPort
 OmitEmptyUnsupportedInV2	tailscale.com/ipn/ipnstate.Status.HaveNodeKey
 OmitEmptyUnsupportedInV2	tailscale.com/k8s-operator/apis/v1alpha1.PortRange.EndPort
+OmitEmptyUnsupportedInV2	tailscale.com/k8s-operator/apis/v1alpha1.Probe.FailureThreshold
+OmitEmptyUnsupportedInV2	tailscale.com/k8s-operator/apis/v1alpha1.Probe.InitialDelaySeconds
+OmitEmptyUnsupportedInV2	tailscale.com/k8s-operator/apis/v1alpha1.Probe.PeriodSeconds
+OmitEmptyUnsupportedInV2	tailscale.com/k8s-operator/apis/v1alpha1.Probe.TimeoutSeconds
 OmitEmptyUnsupportedInV2	tailscale.com/k8s-operator/apis/v1alpha1.ProxyClassSpec.UseLetsEncryptStagingEnvironment
 OmitEmptyUnsupportedInV2	tailscale.com/k8s-operator/apis/v1alpha1.RecorderSpec.EnableUI
 OmitEmptyUnsupportedInV2	tailscale.com/k8s-operator/apis/v1alpha1.TailscaleConfig.AcceptRoutes

@@ -269,10 +269,9 @@ type Warnable struct {
 	// the Args of the unhappy state, just like we do in the Text function.
 	Severity Severity
 	// DependsOn is a set of Warnables that this Warnable depends on and need to be healthy
-	// before this Warnable is relevant. The GUI can use this information to ignore
-	// this Warnable if one of its dependencies is unhealthy.
-	// That is, if any of these Warnables are unhealthy, then this Warnable is not relevant
-	// and should be considered healthy to bother the user about.
+	// before this Warnable is relevant. If any of these Warnables are unhealthy, the [Tracker]
+	// treats this Warnable as healthy and omits it from [State] and [Tracker.Strings],
+	// so clients do not need to check the dependencies themselves.
 	DependsOn []*Warnable
 
 	// MapDebugFlag is a MapRequest.DebugFlag that is sent to control when this Warnable is unhealthy
@@ -1302,6 +1301,8 @@ type ReceiveFuncStats struct {
 	prevNumCalls uint64
 	// inCall indicates whether the receive func is currently running.
 	inCall atomic.Bool
+	// broken is set by the receive func itself while it cannot read.
+	broken atomic.Bool
 	// missing indicates whether the receive func is not running.
 	missing bool
 }
@@ -1324,6 +1325,27 @@ func (s *ReceiveFuncStats) Exit() {
 		return
 	}
 	s.inCall.Store(false)
+}
+
+// SetBroken records whether the receive func is running but unable to read.
+// A broken func is reported like a missing one.
+//
+// s may be nil.
+func (s *ReceiveFuncStats) SetBroken(broken bool) {
+	if !buildfeatures.HasHealth || s == nil {
+		return
+	}
+	s.broken.Store(broken)
+}
+
+// Broken reports the value last set by [ReceiveFuncStats.SetBroken].
+//
+// s may be nil.
+func (s *ReceiveFuncStats) Broken() bool {
+	if !buildfeatures.HasHealth || s == nil {
+		return false
+	}
+	return s.broken.Load()
 }
 
 // ReceiveFuncStats returns the ReceiveFuncStats tracker for the given func
@@ -1353,6 +1375,11 @@ func (t *Tracker) checkReceiveFuncsLocked() {
 		prev := f.prevNumCalls
 		numCalls := f.numCalls.Load()
 		f.prevNumCalls = numCalls
+		if f.broken.Load() {
+			// Not OK: the function is running, but not reading.
+			f.missing = true
+			continue
+		}
 		if numCalls > prev {
 			// OK: the function has gotten called since last we checked
 			continue
