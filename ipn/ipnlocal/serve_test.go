@@ -2743,3 +2743,109 @@ func TestGetTLSServeCertForPortLowercasesSNI(t *testing.T) {
 		t.Error("unconfigured name: got cert, want error")
 	}
 }
+
+// TestForwardTCPHalfClose reproduces tailscale/tailscale#20880.
+//
+// A client sends its whole request and then half-closes its write side.
+// The backend waits for EOF before writing its response. The forwarder
+// must pass the client's FIN to the backend and keep the backend-to-client
+// direction open until the backend is done.
+func TestForwardTCPHalfClose(t *testing.T) {
+	b := newTestBackend(t)
+
+	request := bytes.Repeat([]byte("q"), 1<<20)
+	response := bytes.Repeat([]byte("r"), 256<<10)
+
+	// The backend reads until EOF, then writes its response and closes.
+	backendLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backendLn.Close()
+	backendErr := make(chan error, 1)
+	go func() {
+		backendErr <- func() error {
+			c, err := backendLn.Accept()
+			if err != nil {
+				return err
+			}
+			defer c.Close()
+			got, err := io.ReadAll(c)
+			if err != nil {
+				return fmt.Errorf("backend read: %w", err)
+			}
+			if len(got) != len(request) {
+				return fmt.Errorf("backend read %d bytes, want %d", len(got), len(request))
+			}
+			if _, err := c.Write(response); err != nil {
+				return fmt.Errorf("backend write: %w", err)
+			}
+			return nil
+		}()
+	}()
+
+	// The client side of the forwarder is a real TCP connection so that
+	// CloseWrite produces a FIN rather than a net.Pipe close.
+	clientLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientLn.Close()
+	client, err := net.Dial("tcp", clientLn.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	conn, err := clientLn.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Dial the backend the same way the serve handler does.
+	backConn, err := b.dialer.SystemDial(t.Context(), "tcp", backendLn.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	forwardErr := make(chan error, 1)
+	go func() {
+		// Mirror the deferred closes in the serve TCPForward handler.
+		defer conn.Close()
+		defer backConn.Close()
+		forwardErr <- b.forwardTCPWithProxyProtocol(conn, backConn, 0, netip.MustParseAddrPort("100.64.0.1:12345"), 443, backendLn.Addr().String())
+	}()
+
+	if _, err := client.Write(request); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.(*net.TCPConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+
+	client.SetReadDeadline(time.Now().Add(10 * time.Second))
+	got, err := io.ReadAll(client)
+	if err != nil {
+		t.Fatalf("client read: %v", err)
+	}
+
+	select {
+	case err := <-backendErr:
+		if err != nil {
+			t.Errorf("backend: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Error("backend did not finish")
+	}
+	select {
+	case err := <-forwardErr:
+		if err != nil {
+			t.Errorf("forwardTCPWithProxyProtocol: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Error("forwarder did not return")
+	}
+
+	if !bytes.Equal(got, response) {
+		t.Fatalf("client read %d response bytes, want %d", len(got), len(response))
+	}
+}
