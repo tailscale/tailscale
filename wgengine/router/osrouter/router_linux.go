@@ -126,6 +126,10 @@ type linuxRouter struct {
 	// before subscribeEvents, or later with mu held. Read with mu held.
 	underlayAddrs func() []netip.Addr
 
+	// underlaySrcRepairPending is whether a repair of externally deleted
+	// underlay source rules is scheduled.
+	underlaySrcRepairPending atomic.Bool
+
 	// netChangePending is whether an underlay source rule reconcile for a
 	// network change is queued but hasn't yet acquired mu.
 	netChangePending atomic.Bool
@@ -185,7 +189,7 @@ type routerFixed struct {
 	rpFilterStrictV4 func() bool
 
 	// afterFunc, if non-nil, replaces time.AfterFunc for the router's rule
-	// restore and rp_filter recheck timers. For tests.
+	// restore and repair timers. For tests.
 	afterFunc func(time.Duration, func())
 
 	// ipRuleAvailable is whether the kernel was built with
@@ -196,9 +200,11 @@ type routerFixed struct {
 	// installed. Zero means defaultIPPolicyPrefBase.
 	ipPolicyPrefBase int
 
-	// ipRuleFixLimiter rate limits restores of the base ip rules, so we
+	// ipRuleFixLimiter rate limits restores of the base ip rules, and
+	// underlayRepairLimiter repairs of the rp_filter underlay rules, so we
 	// don't get into a high-speed fight with another process deleting them.
-	ipRuleFixLimiter *rate.Limiter
+	ipRuleFixLimiter      *rate.Limiter
+	underlayRepairLimiter *rate.Limiter
 }
 
 const (
@@ -246,6 +252,9 @@ func newLinuxRouter(fixed routerFixed) *linuxRouter {
 	}
 	if fixed.ipRuleFixLimiter == nil {
 		fixed.ipRuleFixLimiter = rate.NewLimiter(rate.Every(5*time.Second), 10)
+	}
+	if fixed.underlayRepairLimiter == nil {
+		fixed.underlayRepairLimiter = rate.NewLimiter(rate.Every(5*time.Second), 10)
 	}
 	r := &linuxRouter{
 		routerFixed:   fixed,
@@ -507,9 +516,13 @@ func (r *linuxRouter) onIPRuleDeleted(family uint8, table uint8, priority uint32
 		return
 	}
 	if r.isUnderlayRulePriority(int(priority)) {
-		// rp_filter underlay rules are added and removed by us as
-		// addresses come and go, so don't run the full restore, which
-		// would feed back into ourselves.
+		// rp_filter underlay rules are added and removed by us
+		// as addresses come and go, so don't run the full restore
+		// (which would feed back into ourselves). Instead do an
+		// add-only repair in case another process deleted one of ours.
+		// An external flush (systemd-networkd) also deletes the base
+		// rules, whose events run the full restore below.
+		r.scheduleUnderlaySrcRuleRepair()
 		return
 	}
 	if r.ruleRestorePending.Swap(true) {
@@ -528,6 +541,7 @@ func (r *linuxRouter) onIPRuleDeleted(family uint8, table uint8, priority uint32
 		if r.ruleRestorePending.Swap(false) && !r.closed.Load() {
 			r.logf("somebody (likely systemd-networkd) deleted ip rules; restoring Tailscale's")
 			r.justAddIPRules()
+			r.restoreUnderlaySrcRules()
 		}
 	})
 }
