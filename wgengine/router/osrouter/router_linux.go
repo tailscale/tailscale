@@ -30,9 +30,11 @@ import (
 	"golang.org/x/sys/unix"
 	"golang.org/x/time/rate"
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/via64"
 	"tailscale.com/tsconst"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
@@ -98,6 +100,9 @@ type linuxRouter struct {
 
 	cmd commandRunner
 	nfr linuxfw.NetfilterRunner
+
+	// via64 is the kernel 4via6 datapath, if TS_DEBUG_4VIA6_KERNEL is set (net/via64/xlat).
+	via64 Via64Datapath
 
 	mu                sync.Mutex
 	addrs             map[netip.Prefix]bool
@@ -190,6 +195,21 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 	}
 
 	r.fixupWSLMTU()
+
+	if envknob.Bool("TS_DEBUG_4VIA6_KERNEL") && !r.useIPCommand() {
+		if newVia64, ok := HookNewVia64.GetOk(); ok {
+			r.via64 = newVia64(Via64Config{
+				Ingress:      tunname,
+				RulePriority: r.via64RulePriority(),
+				Table:        via64Table,
+				Logf:         logf,
+			})
+			r.setVia64HostInterfaces()
+			eventbus.SubscribeFunc(ec, func(netmon.ChangeDelta) { r.setVia64HostInterfaces() })
+		} else {
+			logf("via64: TS_DEBUG_4VIA6_KERNEL is set, but this tailscaled is built without it; netstack handles 4via6")
+		}
+	}
 
 	return r, nil
 }
@@ -343,6 +363,9 @@ type AddIPRules struct{}
 // about the priority number. We could just do this in response to any netlink
 // change. Filtering by known priority ranges cuts back on some logspam.
 func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
+	if r.via64 != nil && (int(priority) == r.via64RulePriority() || int(priority) == r.via64RulePriority()-1) {
+		go r.via64.Reassert()
+	}
 	if int(priority) < r.ipPolicyPrefBase || int(priority) >= (r.ipPolicyPrefBase+100) {
 		// Not our rule.
 		return
@@ -391,6 +414,12 @@ func (r *linuxRouter) Close() error {
 		r.unregNetMon()
 	}
 	r.eventClient.Close()
+
+	if r.via64 != nil {
+		if err := r.via64.Close(); err != nil {
+			r.logf("via64: %v", err)
+		}
+	}
 
 	// Clean up connmark rules
 	if err := r.nfr.DelConnmarkSaveRule(); err != nil {
@@ -603,6 +632,14 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 		err := r.setCGNATDropModeLocked(cgnatMode)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("set cgnat mode: %w", err))
+		}
+	}
+
+	if r.via64 != nil {
+		r.setVia64HostInterfaces()
+		// The mode linuxfw reached, not the one asked for, and whether the tun carries IPv6 at all.
+		if err := r.via64.Update(cfg.SubnetRoutes, cfg.SNATSubnetRoutes, r.netfilterMode, r.getV6Available() && r.getV6FilteringAvailable()); err != nil {
+			r.logf("via64: kernel 4via6 translation unavailable: %v", err)
 		}
 	}
 
@@ -1574,6 +1611,42 @@ var (
 	tailscaleRouteTable = newRouteTable("tailscale", 52)
 )
 
+// via64RulePriority is via64's policy rule priority, below Tailscale's own; via64 also uses the one below it.
+func (r *linuxRouter) via64RulePriority() int { return r.ipPolicyPrefBase - 10 }
+
+// via64Table and the table after it hold via64's routes.
+const via64Table = 5264
+
+// Via64Datapath is the kernel 4via6 datapath that feature/via64 provides.
+type Via64Datapath interface {
+	// Update makes the datapath match the router's configuration. On error, netstack keeps handling 4via6.
+	Update(advertised []netip.Prefix, snat bool, netfilter preftype.NetfilterMode, tunIPv6 bool) error
+	// Reassert repairs the datapath, or hands 4via6 back to netstack if the host no longer allows it.
+	Reassert()
+	Close() error
+}
+
+// Via64Config is what the router tells HookNewVia64.
+type Via64Config struct {
+	Ingress      string // the tun device
+	RulePriority int    // via64 uses this priority and the one below
+	Table        int    // via64 uses this table and the next
+	Logf         logger.Logf
+}
+
+// HookNewVia64 creates the kernel 4via6 datapath; feature/via64 sets it.
+var HookNewVia64 feature.Hook[func(Via64Config) Via64Datapath]
+
+// HookVia64CleanUp removes any kernel 4via6 state, whether or not TS_DEBUG_4VIA6_KERNEL is set, so a tailscaled that died with it on leaves nothing behind; feature/via64 sets it.
+var HookVia64CleanUp feature.Hook[func(table int) error]
+
+// setVia64HostInterfaces tells net/via64 this host's addresses, so 4via6 to the host and its containers stays on netstack.
+func (r *linuxRouter) setVia64HostInterfaces() {
+	if st := r.netMon.InterfaceState(); st != nil {
+		via64.SetHostInterfaces(st.InterfaceIPs)
+	}
+}
+
 // baseIPRules are the policy routing rules that Tailscale uses, when not
 // running on a UBNT device.
 //
@@ -1946,6 +2019,11 @@ func cleanUp(logf logger.Logf, interfaceName string) {
 		linuxfw.NfTablesCleanUp(logf)
 	}
 	removeOrphanedAddrsForCleanup(logf, osCommandRunner{ambientCapNetAdmin: useAmbientCaps()}, interfaceName)
+	if f, ok := HookVia64CleanUp.GetOk(); ok {
+		if err := f(via64Table); err != nil {
+			logf("via64: cleanup: %v", err)
+		}
+	}
 }
 
 // removeOrphanedAddrsForCleanup removes every Tailscale-range address from
