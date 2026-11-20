@@ -1,3 +1,5 @@
+.claude/settings.local.json
+
 # Binaries for programs and plugins
 *~
 *.tmp
