@@ -28,6 +28,13 @@ if [ "${SYNOPKG_DSM_VERSION_MAJOR}" -eq "6" ]; then
     chown -R tailscale:tailscale "${PKGVAR}/"
 fi
 
+# for smaller synology units with less than 512MB of memory, set a GOMEMLIMIT for all child processes
+# to 128MiB to prevent constant swapping. 
+MEM_TOTAL_KB=$(awk '/MemTotal:/ { print $2 }' /proc/meminfo)
+if [ "$MEM_TOTAL_KB" -lt 524288 ]; then
+    export GOMEMLIMIT=128MiB
+fi
+
 start_daemon() {
     local ts=$(date --iso-8601=second)
     echo "${ts} Starting ${SERVICE_NAME} with: ${SERVICE_COMMAND}" >${LOG_FILE}
