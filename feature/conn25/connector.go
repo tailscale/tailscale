@@ -7,23 +7,31 @@ import (
 	"container/list"
 	"context"
 	"net/netip"
+	"slices"
 	"sync"
 	"time"
 
 	"tailscale.com/net/packet"
 	"tailscale.com/net/routelimits"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tstime"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 )
 
 type appAddr struct {
-	app         string
-	addr        netip.Addr
+	app  string
+	addr netip.Addr
+	// ports are the protocol and port combinations the peer was permitted to
+	// reach through app at the moment it registered this mapping. See
+	// [appProtoPortRanges] for where they come from, and
+	// [connector.ingressAllow] for how they are enforced.
+	ports       []tailcfg.ProtoPortRange
 	expiryEntry *list.Element
 }
 
-func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr, peerV6 netip.Addr, tipr TransitIPRequest) TransitIPResponse {
+func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr, peerV6 netip.Addr, tipr TransitIPRequest, ports []tailcfg.ProtoPortRange) TransitIPResponse {
 	if tipr.TransitIP.Is4() != tipr.DestinationIP.Is4() {
 		c.logf("[Unexpected] peer attempt to map a transit IP to dest IP did not have matching families: node: %s, tIPv4: %v dIPv4: %v",
 			n.StableID(), tipr.TransitIP.Is4(), tipr.DestinationIP.Is4())
@@ -77,8 +85,63 @@ func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr
 		transitIP: tipr.TransitIP,
 		createdAt: c.clock.Now(),
 	})
-	peerMap[tipr.TransitIP] = appAddr{addr: tipr.DestinationIP, app: tipr.App, expiryEntry: elem}
+	peerMap[tipr.TransitIP] = appAddr{addr: tipr.DestinationIP, app: tipr.App, ports: ports, expiryEntry: elem}
 	return TransitIPResponse{}
+}
+
+// appProtoPortRanges returns the protocol and port combinations peerCaps
+// permits the peer to reach through app, as granted by the "ip" field of the
+// grant that produced the peer's [peercap.Conn25Prefix] capability for it.
+//
+// It reports hasCap false if the peer holds no capability for app at all. A
+// capability that is present but carries no values permits no traffic, and
+// comes back as an empty slice with hasCap true: the app stays resolvable and
+// registrable, which keeps the misconfiguration diagnosable, but
+// [connector.ingressAllow] lets nothing through.
+func appProtoPortRanges(peerCaps tailcfg.PeerCapMap, app string) (ranges []tailcfg.ProtoPortRange, hasCap bool, err error) {
+	cap := peercap.Conn25Prefix.ToAttribute(app)
+	if !peerCaps.HasCapability(cap) {
+		return nil, false, nil
+	}
+	ranges, err = tailcfg.UnmarshalCapJSON[tailcfg.ProtoPortRange](peerCaps, cap)
+	if err != nil {
+		return nil, true, err
+	}
+	return ranges, true, nil
+}
+
+// protolessGrantProtos is the set of protocols a [tailcfg.ProtoPortRange] with
+// no protocol (e.g. "*" or "80") covers. It is the same set the packet filter
+// uses for a [tailcfg.FilterRule] that names no protocol, and the set
+// [tailcfg.ProtoPortRange] documents for a zero Proto.
+var protolessGrantProtos = []ipproto.Proto{ipproto.TCP, ipproto.UDP, ipproto.ICMPv4, ipproto.ICMPv6}
+
+// protoPortRangesAllow reports whether ranges, the protocol and port
+// combinations a peer was granted for an app, permit a packet of protocol
+// proto addressed to port.
+//
+// ICMP carries no port, so it is permitted whenever the peer was granted
+// anything at all for the app. That mirrors the packet filter, which allows
+// ICMP to any destination the source may reach on any port by any protocol
+// (see matchIPsOnly in [tailscale.com/wgengine/filter]), so a "tcp:443" grant
+// does not break ping.
+func protoPortRangesAllow(ranges []tailcfg.ProtoPortRange, proto ipproto.Proto, port uint16) bool {
+	if proto == ipproto.ICMPv4 || proto == ipproto.ICMPv6 {
+		return len(ranges) > 0
+	}
+	for _, r := range ranges {
+		if r.Proto == 0 {
+			if !slices.Contains(protolessGrantProtos, proto) {
+				continue
+			}
+		} else if ipproto.Proto(r.Proto) != proto {
+			continue
+		}
+		if port >= r.Ports.First && port <= r.Ports.Last {
+			return true
+		}
+	}
+	return false
 }
 
 // connectorTransitIPExpiry is the minimum length of time a peer+transitIP -> dstIP mapping will be held in the connector.
@@ -149,28 +212,64 @@ func (c *connector) destinationInPools(dst netip.Addr) bool {
 	return (magic != nil && magic.Contains(dst)) || (transit != nil && transit.Contains(dst))
 }
 
-// packetFilterAllow returns true if the provided packet has a Src that is in
-// the configured transit IP range for this connector, false otherwise.
-func (c *connector) packetFilterAllow(p packet.Parsed) (bool, string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	ipSets := c.getIPSets()
-	if ipSets.v4Transit != nil && ipSets.v4Transit.Contains(p.Dst.Addr()) {
-		return true, packetFilterAllowReason
-	}
-	if ipSets.v6Transit != nil && ipSets.v6Transit.Contains(p.Dst.Addr()) {
+// linkLocalAllow reports whether p, whose destination is a link-local unicast
+// address, should be exempt from the filter's blanket drop of such packets.
+// conn25 allocates transit IPs out of link-local space, so a packet addressed
+// to one has to get past that check; whether the peer may actually reach it is
+// decided by [connector.ingressAllow].
+func (c *connector) linkLocalAllow(p packet.Parsed) (bool, string) {
+	if c.transitIPInPool(p.Dst.Addr()) {
 		return true, packetFilterAllowReason
 	}
 	return false, ""
 }
 
+// ingressAllow reports whether p, a packet arriving from a peer, may be
+// accepted by this connector. It may if p is addressed to an address in a
+// configured transit IP pool and either the peer has no mapping registered for
+// that address, or the grant it registered the mapping under permits p's
+// protocol and destination port.
+//
+// Packets for an unregistered mapping are accepted here so that the datapath
+// can drop them itself and answer with the TSMP message that prompts the
+// client to re-register (see [datapathHandler.HandlePacketFromWireGuard]).
+// Nothing is forwarded on their behalf.
+//
+// The permitted protocols and ports are the ones the peer held when it
+// registered the mapping. A grant that is tightened afterwards takes effect
+// when the mapping is re-registered, at the latest [connectorTransitIPExpiry]
+// after it was last registered.
+func (c *connector) ingressAllow(p packet.Parsed) (bool, string) {
+	if !c.transitIPInPool(p.Dst.Addr()) {
+		return false, ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	aa, ok := c.lookupAppAddrBySrcIPAndTransitIP(p.Src.Addr(), p.Dst.Addr())
+	if !ok {
+		return true, packetFilterAllowReason
+	}
+	if !protoPortRangesAllow(aa.ports, p.IPProto, p.Dst.Port()) {
+		return false, ""
+	}
+	return true, packetFilterAllowReason
+}
+
 func (c *connector) lookupAddrBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (netip.Addr, bool) {
-	m, ok := c.transitIPs[srcIP]
-	if !ok || m == nil {
+	v, ok := c.lookupAppAddrBySrcIPAndTransitIP(srcIP, transitIP)
+	if !ok {
 		return netip.Addr{}, false
 	}
+	return v.addr, true
+}
+
+func (c *connector) lookupAppAddrBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (appAddr, bool) {
+	m, ok := c.transitIPs[srcIP]
+	if !ok || m == nil {
+		return appAddr{}, false
+	}
 	v, ok := m[transitIP]
-	return v.addr, ok
+	return v, ok
 }
 
 // expireTransitIPs expires entries in the connector's transitIPs map that are

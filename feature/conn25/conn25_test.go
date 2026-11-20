@@ -4043,8 +4043,10 @@ func TestHandleHookReplyToDNSQueries(t *testing.T) {
 	exampleAppPeerCap := tailcfg.PeerCapMap{
 		peercap.Conn25Prefix.ToAttribute("example"): []tailcfg.RawMessage{`"*"`},
 	}
-	// This is to verify that it's not picky about which ports are allowed for
-	// the app.
+	// The presence of the capability is what grants DNS resolution for the
+	// app; its values restrict traffic, not queries. So even a grant that
+	// permits no traffic at all still resolves. See [connector.ingressAllow]
+	// for where the values are enforced.
 	exampleAppPeerCapRestrictive := tailcfg.PeerCapMap{
 		peercap.Conn25Prefix.ToAttribute("example"): []tailcfg.RawMessage{},
 	}

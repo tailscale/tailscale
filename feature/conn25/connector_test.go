@@ -9,12 +9,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"go4.org/netipx"
 	"tailscale.com/net/packet"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tstest"
 	"tailscale.com/types/appctype"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/must"
 )
@@ -279,7 +281,7 @@ func TestConnectorDisallowedDestinations(t *testing.T) {
 	}
 }
 
-func TestConnectorPacketFilterAllow(t *testing.T) {
+func TestConnectorLinkLocalAllow(t *testing.T) {
 	src := netip.MustParseAddr("100.64.0.1")
 	knownTip := netip.MustParseAddr("192.0.2.1")
 	unknownTip := netip.MustParseAddr("100.64.0.42")
@@ -296,17 +298,351 @@ func TestConnectorPacketFilterAllow(t *testing.T) {
 		},
 	})
 
-	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
+	if allow, _ := c.connector.linkLocalAllow(packet.Parsed{
 		Src: netip.AddrPortFrom(src, 1234),
 		Dst: netip.AddrPortFrom(knownTip, 1234),
 	}); !allow {
 		t.Fatal("knownTip: should have been allowed")
 	}
 
-	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
+	if allow, _ := c.connector.linkLocalAllow(packet.Parsed{
 		Src: netip.AddrPortFrom(src, 1234),
 		Dst: netip.AddrPortFrom(unknownTip, 1234),
 	}); allow {
 		t.Fatal("unknownTip: should not have been allowed")
+	}
+}
+
+// TestConnectorIngressAllow checks that [connector.ingressAllow] holds peers
+// to the protocols and ports their grant for the app permits, that a transit
+// IP with no registered mapping still gets through so the datapath can answer
+// with the re-registration TSMP, and that addresses outside the transit pools
+// are refused outright.
+func TestConnectorIngressAllow(t *testing.T) {
+	const appName = "app"
+
+	peerIP := netip.MustParseAddr("100.64.0.1")
+	peerNode := (&tailcfg.Node{ID: 1, Addresses: []netip.Prefix{netip.PrefixFrom(peerIP, 32)}}).View()
+	otherPeerIP := netip.MustParseAddr("100.64.0.2")
+
+	transitIP := netip.MustParseAddr("192.0.2.1")
+	unmappedTransitIP := netip.MustParseAddr("192.0.2.2")
+	outsidePoolIP := netip.MustParseAddr("100.64.0.42")
+
+	type probe struct {
+		proto ipproto.Proto
+		port  uint16
+		dst   netip.Addr // defaults to transitIP
+		src   netip.Addr // defaults to peerIP
+		want  bool
+	}
+
+	tests := []struct {
+		name  string
+		grant []tailcfg.RawMessage
+		// noRegister skips registering the transit IP mapping, leaving the
+		// connector with nothing to look up for it.
+		noRegister bool
+		probes     []probe
+	}{
+		{
+			name:  "wildcard",
+			grant: []tailcfg.RawMessage{`"*"`},
+			probes: []probe{
+				{proto: ipproto.TCP, port: 443, want: true},
+				{proto: ipproto.TCP, port: 80, want: true},
+				{proto: ipproto.UDP, port: 53, want: true},
+				{proto: ipproto.ICMPv4, want: true},
+			},
+		},
+		{
+			name:  "tcp-443",
+			grant: []tailcfg.RawMessage{`"tcp:443"`},
+			probes: []probe{
+				{proto: ipproto.TCP, port: 443, want: true},
+				{proto: ipproto.TCP, port: 80, want: false},
+				{proto: ipproto.TCP, port: 442, want: false},
+				{proto: ipproto.TCP, port: 444, want: false},
+				{proto: ipproto.UDP, port: 443, want: false},
+				// ICMP has no port, so any grant at all permits it.
+				{proto: ipproto.ICMPv4, want: true},
+			},
+		},
+		{
+			name:  "protoless-port",
+			grant: []tailcfg.RawMessage{`"80"`},
+			probes: []probe{
+				{proto: ipproto.TCP, port: 80, want: true},
+				{proto: ipproto.UDP, port: 80, want: true},
+				{proto: ipproto.TCP, port: 443, want: false},
+				// A protocol-less range covers TCP+UDP+ICMP, not SCTP.
+				{proto: ipproto.SCTP, port: 80, want: false},
+			},
+		},
+		{
+			name:  "port-range",
+			grant: []tailcfg.RawMessage{`"tcp:8000-8100"`},
+			probes: []probe{
+				{proto: ipproto.TCP, port: 7999, want: false},
+				{proto: ipproto.TCP, port: 8000, want: true},
+				{proto: ipproto.TCP, port: 8050, want: true},
+				{proto: ipproto.TCP, port: 8100, want: true},
+				{proto: ipproto.TCP, port: 8101, want: false},
+			},
+		},
+		{
+			name:  "union-of-values",
+			grant: []tailcfg.RawMessage{`"tcp:443"`, `"udp:53"`},
+			probes: []probe{
+				{proto: ipproto.TCP, port: 443, want: true},
+				{proto: ipproto.UDP, port: 53, want: true},
+				{proto: ipproto.UDP, port: 443, want: false},
+				{proto: ipproto.TCP, port: 53, want: false},
+			},
+		},
+		{
+			name:  "empty-grant-permits-nothing",
+			grant: []tailcfg.RawMessage{},
+			probes: []probe{
+				{proto: ipproto.TCP, port: 443, want: false},
+				{proto: ipproto.UDP, port: 53, want: false},
+				{proto: ipproto.ICMPv4, want: false},
+			},
+		},
+		{
+			name:  "outside-transit-pool",
+			grant: []tailcfg.RawMessage{`"*"`},
+			probes: []probe{
+				{proto: ipproto.TCP, port: 443, dst: outsidePoolIP, want: false},
+			},
+		},
+		{
+			// Without a mapping the connector has no grant to judge the
+			// packet by, so it passes the filter and the datapath drops it
+			// and tells the client to re-register.
+			name:       "no-mapping-registered",
+			grant:      []tailcfg.RawMessage{`"tcp:443"`},
+			noRegister: true,
+			probes: []probe{
+				{proto: ipproto.TCP, port: 443, dst: unmappedTransitIP, want: true},
+				{proto: ipproto.TCP, port: 80, dst: unmappedTransitIP, want: true},
+			},
+		},
+		{
+			// A mapping registered by one peer says nothing about another,
+			// which lands in the no-mapping case above.
+			name:  "different-peer",
+			grant: []tailcfg.RawMessage{`"tcp:443"`},
+			probes: []probe{
+				{proto: ipproto.TCP, port: 80, src: otherPeerIP, want: true},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newConn25(t.Logf)
+			c.reconfig(&config{
+				isConfigured: true,
+				appsByName:   map[string]appctype.AppConnectorAttr{appName: {}},
+				ipSets:       ipSets{v4Transit: mustIPSetFromPrefix("192.0.2.0/24")},
+			})
+
+			if !tt.noRegister {
+				peerCap := tailcfg.PeerCapMap{
+					peercap.Conn25Prefix.ToAttribute(appName): tt.grant,
+				}
+				resp := c.handleConnectorTransitIPRequest(peerNode, peerCap, ConnectorTransitIPRequest{
+					TransitIPs: []TransitIPRequest{{
+						TransitIP:     transitIP,
+						DestinationIP: netip.MustParseAddr("203.0.113.1"),
+						App:           appName,
+					}},
+				})
+				if len(resp.TransitIPs) != 1 || resp.TransitIPs[0].Code != OK {
+					t.Fatalf("registration failed: %+v", resp.TransitIPs)
+				}
+			}
+
+			for _, p := range tt.probes {
+				src, dst := p.src, p.dst
+				if !src.IsValid() {
+					src = peerIP
+				}
+				if !dst.IsValid() {
+					dst = transitIP
+				}
+				got, _ := c.connector.ingressAllow(packet.Parsed{
+					IPProto: p.proto,
+					Src:     netip.AddrPortFrom(src, 12345),
+					Dst:     netip.AddrPortFrom(dst, p.port),
+				})
+				if got != p.want {
+					t.Errorf("ingressAllow(%v %v -> %v:%d) = %v, want %v",
+						p.proto, src, dst, p.port, got, p.want)
+				}
+			}
+		})
+	}
+}
+
+// TestConnectorGrantRegistration checks that the grant's values are decoded
+// and stored with the mapping, and that a grant that cannot be decoded is
+// refused outright rather than registered under a partial interpretation.
+func TestConnectorGrantRegistration(t *testing.T) {
+	const appName = "app"
+
+	peerIP := netip.MustParseAddr("100.64.0.1")
+	peerNode := (&tailcfg.Node{ID: 1, Addresses: []netip.Prefix{netip.PrefixFrom(peerIP, 32)}}).View()
+	transitIP := netip.MustParseAddr("192.0.2.1")
+
+	tests := []struct {
+		name      string
+		grant     []tailcfg.RawMessage
+		omitCap   bool
+		wantCode  TransitIPResponseCode
+		wantMsg   string
+		wantPorts []tailcfg.ProtoPortRange
+	}{
+		{
+			name:      "proto-and-port",
+			grant:     []tailcfg.RawMessage{`"tcp:443"`},
+			wantCode:  OK,
+			wantPorts: []tailcfg.ProtoPortRange{{Proto: int(ipproto.TCP), Ports: tailcfg.PortRange{First: 443, Last: 443}}},
+		},
+		{
+			name:      "wildcard",
+			grant:     []tailcfg.RawMessage{`"*"`},
+			wantCode:  OK,
+			wantPorts: []tailcfg.ProtoPortRange{{Ports: tailcfg.PortRangeAny}},
+		},
+		{
+			name:      "empty",
+			grant:     []tailcfg.RawMessage{},
+			wantCode:  OK,
+			wantPorts: []tailcfg.ProtoPortRange{},
+		},
+		{
+			name:     "unparseable",
+			grant:    []tailcfg.RawMessage{`"not-a-port"`},
+			wantCode: MissingAppPermission,
+			wantMsg:  unparseableAppPermissionMessage,
+		},
+		{
+			name:     "no-capability",
+			omitCap:  true,
+			wantCode: MissingAppPermission,
+			wantMsg:  missingAppPermissionMessage,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newConn25(t.Logf)
+			c.reconfig(&config{
+				isConfigured: true,
+				appsByName:   map[string]appctype.AppConnectorAttr{appName: {}},
+				ipSets:       ipSets{v4Transit: mustIPSetFromPrefix("192.0.2.0/24")},
+			})
+
+			peerCap := tailcfg.PeerCapMap{}
+			if !tt.omitCap {
+				peerCap[peercap.Conn25Prefix.ToAttribute(appName)] = tt.grant
+			}
+			resp := c.handleConnectorTransitIPRequest(peerNode, peerCap, ConnectorTransitIPRequest{
+				TransitIPs: []TransitIPRequest{{
+					TransitIP:     transitIP,
+					DestinationIP: netip.MustParseAddr("203.0.113.1"),
+					App:           appName,
+				}},
+			})
+			if len(resp.TransitIPs) != 1 {
+				t.Fatalf("got %d responses, want 1", len(resp.TransitIPs))
+			}
+			if got := resp.TransitIPs[0].Code; got != tt.wantCode {
+				t.Errorf("code = %d, want %d", got, tt.wantCode)
+			}
+			if got := resp.TransitIPs[0].Message; got != tt.wantMsg {
+				t.Errorf("message = %q, want %q", got, tt.wantMsg)
+			}
+
+			c.connector.mu.Lock()
+			defer c.connector.mu.Unlock()
+			aa, ok := c.connector.lookupAppAddrBySrcIPAndTransitIP(peerIP, transitIP)
+			if tt.wantCode != OK {
+				// A refused request must not leave a mapping behind.
+				if ok {
+					t.Errorf("mapping was registered for a refused request: %+v", aa)
+				}
+				return
+			}
+			if !ok {
+				t.Fatal("no mapping registered")
+			}
+			if diff := cmp.Diff(tt.wantPorts, aa.ports); diff != "" {
+				t.Errorf("stored ports mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestProtoPortRangesAllow(t *testing.T) {
+	ppr := func(s string) tailcfg.ProtoPortRange {
+		var p tailcfg.ProtoPortRange
+		if err := p.UnmarshalText([]byte(s)); err != nil {
+			t.Fatalf("parsing %q: %v", s, err)
+		}
+		return p
+	}
+
+	tests := []struct {
+		name   string
+		ranges []tailcfg.ProtoPortRange
+		proto  ipproto.Proto
+		port   uint16
+		want   bool
+	}{
+		{name: "nil-denies-tcp", proto: ipproto.TCP, port: 80},
+		{name: "nil-denies-icmp", proto: ipproto.ICMPv4},
+		{name: "empty-denies-icmp", ranges: []tailcfg.ProtoPortRange{}, proto: ipproto.ICMPv4},
+
+		{name: "wildcard-tcp", ranges: []tailcfg.ProtoPortRange{ppr("*")}, proto: ipproto.TCP, port: 1, want: true},
+		{name: "wildcard-udp", ranges: []tailcfg.ProtoPortRange{ppr("*")}, proto: ipproto.UDP, port: 65535, want: true},
+		{name: "wildcard-icmp6", ranges: []tailcfg.ProtoPortRange{ppr("*")}, proto: ipproto.ICMPv6, want: true},
+		// "*" is protocol-less, which means TCP+UDP+ICMP, not every protocol.
+		{name: "wildcard-not-sctp", ranges: []tailcfg.ProtoPortRange{ppr("*")}, proto: ipproto.SCTP, port: 80},
+
+		{name: "tcp-match", ranges: []tailcfg.ProtoPortRange{ppr("tcp:443")}, proto: ipproto.TCP, port: 443, want: true},
+		{name: "tcp-wrong-port", ranges: []tailcfg.ProtoPortRange{ppr("tcp:443")}, proto: ipproto.TCP, port: 80},
+		{name: "tcp-wrong-proto", ranges: []tailcfg.ProtoPortRange{ppr("tcp:443")}, proto: ipproto.UDP, port: 443},
+		// ICMP is permitted by any grant, even a TCP-only one.
+		{name: "tcp-grant-allows-icmp", ranges: []tailcfg.ProtoPortRange{ppr("tcp:443")}, proto: ipproto.ICMPv4, want: true},
+
+		{name: "tcp-any-port", ranges: []tailcfg.ProtoPortRange{ppr("tcp:*")}, proto: ipproto.TCP, port: 9999, want: true},
+		{name: "tcp-any-port-not-udp", ranges: []tailcfg.ProtoPortRange{ppr("tcp:*")}, proto: ipproto.UDP, port: 9999},
+
+		{name: "range-low", ranges: []tailcfg.ProtoPortRange{ppr("tcp:80-90")}, proto: ipproto.TCP, port: 79},
+		{name: "range-first", ranges: []tailcfg.ProtoPortRange{ppr("tcp:80-90")}, proto: ipproto.TCP, port: 80, want: true},
+		{name: "range-last", ranges: []tailcfg.ProtoPortRange{ppr("tcp:80-90")}, proto: ipproto.TCP, port: 90, want: true},
+		{name: "range-high", ranges: []tailcfg.ProtoPortRange{ppr("tcp:80-90")}, proto: ipproto.TCP, port: 91},
+
+		{name: "protoless-tcp", ranges: []tailcfg.ProtoPortRange{ppr("80")}, proto: ipproto.TCP, port: 80, want: true},
+		{name: "protoless-udp", ranges: []tailcfg.ProtoPortRange{ppr("80")}, proto: ipproto.UDP, port: 80, want: true},
+		{name: "protoless-wrong-port", ranges: []tailcfg.ProtoPortRange{ppr("80")}, proto: ipproto.TCP, port: 81},
+
+		{name: "numeric-proto", ranges: []tailcfg.ProtoPortRange{ppr("132:9")}, proto: ipproto.SCTP, port: 9, want: true},
+
+		{name: "union-first", ranges: []tailcfg.ProtoPortRange{ppr("tcp:443"), ppr("udp:53")}, proto: ipproto.TCP, port: 443, want: true},
+		{name: "union-second", ranges: []tailcfg.ProtoPortRange{ppr("tcp:443"), ppr("udp:53")}, proto: ipproto.UDP, port: 53, want: true},
+		{name: "union-neither", ranges: []tailcfg.ProtoPortRange{ppr("tcp:443"), ppr("udp:53")}, proto: ipproto.UDP, port: 443},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := protoPortRangesAllow(tt.ranges, tt.proto, tt.port); got != tt.want {
+				t.Errorf("protoPortRangesAllow(%v, %v, %d) = %v, want %v",
+					tt.ranges, tt.proto, tt.port, got, tt.want)
+			}
+		})
 	}
 }

@@ -251,16 +251,17 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 		if !e.conn25.isConfigured() {
 			return false, ""
 		}
-		return e.conn25.connector.packetFilterAllow(p)
+		return e.conn25.connector.linkLocalAllow(p)
 	})
 
 	// Allow the connector to receive packets with Transit IP destinations
-	// that are not "local" to it, and that it does not advertise.
+	// that are not "local" to it, and that it does not advertise, as long as
+	// the peer's grant for the app permits their protocol and port.
 	e.host.Hooks().Filter.IngressAllowHooks.Add(func(p packet.Parsed) (bool, string) {
 		if !e.conn25.isConfigured() {
 			return false, ""
 		}
-		return e.conn25.connector.packetFilterAllow(p)
+		return e.conn25.connector.ingressAllow(p)
 	})
 
 	// Route DNS queries for app domains to the connector that serves
@@ -569,13 +570,14 @@ func (c *Conn25) reconfig(cfg *config) {
 }
 
 const (
-	dupeTransitIPMessage          = "Duplicate transit address in ConnectorTransitIPRequest"
-	noMatchingPeerIPFamilyMessage = "No peer IP found with matching IP family"
-	addrFamilyMismatchMessage     = "Transit and Destination addresses must have matching IP family"
-	unknownAppNameMessage         = "The App name in the request does not match a configured App"
-	missingAppPermissionMessage   = "You do not have permission to use this App"
-	transitIPNotInPoolMessage     = "The transit address is not in a configured transit IP pool"
-	disallowedDestinationMessage  = "Destination address is in a disallowed address range"
+	dupeTransitIPMessage            = "Duplicate transit address in ConnectorTransitIPRequest"
+	noMatchingPeerIPFamilyMessage   = "No peer IP found with matching IP family"
+	addrFamilyMismatchMessage       = "Transit and Destination addresses must have matching IP family"
+	unknownAppNameMessage           = "The App name in the request does not match a configured App"
+	missingAppPermissionMessage     = "You do not have permission to use this App"
+	unparseableAppPermissionMessage = "The permission granting access to this App could not be parsed"
+	transitIPNotInPoolMessage       = "The transit address is not in a configured transit IP pool"
+	disallowedDestinationMessage    = "Destination address is in a disallowed address range"
 )
 
 // handleConnectorTransitIPRequest creates a ConnectorTransitIPResponse in response
@@ -629,11 +631,26 @@ func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, peerCaps ta
 			continue
 		}
 
-		if !peerCaps.HasCapability(peercap.Conn25Prefix.ToAttribute(each.App)) {
+		// The grant that gives the peer access to the app also carries the
+		// protocols and ports it may use, which get stored with the mapping
+		// and enforced on every packet by [connector.ingressAllow].
+		ports, hasCap, err := appProtoPortRanges(peerCaps, each.App)
+		if !hasCap {
 			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
 				Code:    MissingAppPermission,
 				Message: missingAppPermissionMessage,
 			})
+			continue
+		}
+		if err != nil {
+			// Fail closed on the whole grant rather than registering a
+			// mapping under the values we did manage to understand.
+			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
+				Code:    MissingAppPermission,
+				Message: unparseableAppPermissionMessage,
+			})
+			c.logf("[Unexpected] peer holds an unparseable conn25 grant: node: %s, app: %q, err: %v",
+				n.StableID(), each.App, err)
 			continue
 		}
 
@@ -646,7 +663,7 @@ func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, peerCaps ta
 				n.StableID(), each.App)
 			continue
 		}
-		tipresp := c.connector.handleTransitIPRequest(n, peerIPv4, peerIPv6, each)
+		tipresp := c.connector.handleTransitIPRequest(n, peerIPv4, peerIPv6, each, ports)
 		seen[each.TransitIP] = true
 		resp.TransitIPs = append(resp.TransitIPs, tipresp)
 	}

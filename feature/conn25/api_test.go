@@ -10,7 +10,9 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/appctype"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/must"
@@ -62,7 +64,12 @@ func TestGetActiveState(t *testing.T) {
 				netip.MustParseAddr("169.254.0.11"):  {app: "app1", addr: netip.MustParseAddr("10.0.0.11")},
 			},
 			netip.MustParseAddr("11.0.0.1"): {
-				netip.MustParseAddr("169.254.0.5"): {app: "zapp", addr: netip.MustParseAddr("10.0.0.5")},
+				// A mapping whose grant restricts the protocols and ports it
+				// may carry; the others were granted nothing and carry none.
+				netip.MustParseAddr("169.254.0.5"): {app: "zapp", addr: netip.MustParseAddr("10.0.0.5"), ports: []tailcfg.ProtoPortRange{
+					{Proto: int(ipproto.TCP), Ports: tailcfg.PortRange{First: 443, Last: 443}},
+					{Ports: tailcfg.PortRangeAny},
+				}},
 				netip.MustParseAddr("169.254.0.6"): {app: "app1", addr: netip.MustParseAddr("10.0.0.6")},
 			},
 		}
@@ -134,7 +141,9 @@ func TestGetActiveState(t *testing.T) {
 						ClientIP: "11.0.0.1",
 						Apps: []appctype.Conn25ConnectorAppState{
 							{App: "app1", Addresses: []appctype.Conn25ConnectorAddressState{{DestinationIP: "10.0.0.6", TransitIP: "169.254.0.6"}}},
-							{App: "zapp", Addresses: []appctype.Conn25ConnectorAddressState{{DestinationIP: "10.0.0.5", TransitIP: "169.254.0.5"}}},
+							{App: "zapp", Addresses: []appctype.Conn25ConnectorAddressState{
+								{DestinationIP: "10.0.0.5", TransitIP: "169.254.0.5", Ports: []string{"tcp:443", "*"}},
+							}},
 						},
 					},
 					{
