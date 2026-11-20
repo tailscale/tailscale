@@ -8,9 +8,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/envknob"
@@ -19,6 +24,8 @@ import (
 	"tailscale.com/kube/kubeapi"
 	"tailscale.com/kube/kubeclient"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 )
 
 func TestKubernetesPodMigrationWithTPMAttestationKey(t *testing.T) {
@@ -633,6 +640,401 @@ func TestReadTLSCertAndKey(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReadTLSCertAndKeyWriteReplicaCache(t *testing.T) {
+	const testDomain = "my-app.tailnetxyz.ts.net"
+
+	var (
+		secretData   map[string][]byte
+		secretGetErr error
+		gets         int
+		lastTimeout  time.Duration
+	)
+	client := &kubeclient.FakeClient{
+		GetSecretImpl: func(ctx context.Context, name string) (*kubeapi.Secret, error) {
+			gets++
+			if deadline, ok := ctx.Deadline(); ok {
+				lastTimeout = time.Until(deadline)
+			}
+			if secretGetErr != nil {
+				return nil, secretGetErr
+			}
+			return &kubeapi.Secret{Data: secretData}, nil
+		},
+		JSONPatchResourceImpl: func(context.Context, string, string, []kubeclient.JSONPatch) error {
+			return nil
+		},
+	}
+	clock := tstest.NewClock(tstest.ClockOpts{})
+	s := &Store{
+		client:        client,
+		secretName:    "ts-state",
+		certShareMode: "rw",
+		clock:         tstime.DefaultClock{Clock: clock},
+		logf:          t.Logf,
+	}
+	tlsData := func(cert, key string) map[string][]byte {
+		return map[string][]byte{"tls.crt": []byte(cert), "tls.key": []byte(key)}
+	}
+
+	steps := []struct {
+		name         string
+		advance      time.Duration
+		secretData   map[string][]byte
+		secretGetErr error
+		// write, if set, writes cert and key with WriteTLSCertAndKey
+		// before the read.
+		write       map[string][]byte
+		wantCert    string
+		wantKey     string
+		wantErr     error
+		wantGet     bool
+		wantTimeout time.Duration // max GetSecret timeout, if wantGet
+	}{
+		{
+			name:         "no_cache_api_error",
+			secretGetErr: errors.New("api error"),
+			wantErr:      errors.New("api error"),
+			wantGet:      true,
+			wantTimeout:  timeout,
+		},
+		{
+			name:        "first_read_from_secret",
+			secretData:  tlsData("cert-a", "key-a"),
+			wantCert:    "cert-a",
+			wantKey:     "key-a",
+			wantGet:     true,
+			wantTimeout: timeout,
+		},
+		{
+			name:       "within_ttl_served_from_cache",
+			advance:    rwCertTTL / 2,
+			secretData: tlsData("cert-b", "key-b"),
+			wantCert:   "cert-a",
+			wantKey:    "key-a",
+		},
+		{
+			name:        "after_ttl_read_from_secret",
+			advance:     rwCertTTL,
+			secretData:  tlsData("cert-b", "key-b"),
+			wantCert:    "cert-b",
+			wantKey:     "key-b",
+			wantGet:     true,
+			wantTimeout: rwCertFallbackTimeout,
+		},
+		{
+			name:         "after_ttl_api_error_serves_last_known_good",
+			advance:      rwCertTTL,
+			secretGetErr: errors.New("api error"),
+			wantCert:     "cert-b",
+			wantKey:      "key-b",
+			wantGet:      true,
+			wantTimeout:  rwCertFallbackTimeout,
+		},
+		{
+			name:         "after_fallback_served_from_cache",
+			advance:      rwCertTTL / 2,
+			secretGetErr: errors.New("api error"),
+			wantCert:     "cert-b",
+			wantKey:      "key-b",
+		},
+		{
+			name:       "after_ttl_secret_emptied",
+			advance:    rwCertTTL,
+			secretData: map[string][]byte{},
+			wantErr:    ipn.ErrStateNotExist,
+			wantGet:    true,
+		},
+		{
+			name:         "emptied_secret_clears_cache",
+			secretGetErr: errors.New("api error"),
+			wantErr:      errors.New("api error"),
+			wantGet:      true,
+			wantTimeout:  timeout,
+		},
+		{
+			name:       "written_cert_served_from_cache",
+			write:      tlsData("cert-c", "key-c"),
+			secretData: tlsData("cert-c", "key-c"),
+			wantCert:   "cert-c",
+			wantKey:    "key-c",
+		},
+		{
+			name:         "after_ttl_secret_not_found",
+			advance:      rwCertTTL,
+			secretGetErr: &kubeapi.Status{Code: 404},
+			wantErr:      ipn.ErrStateNotExist,
+			wantGet:      true,
+		},
+		{
+			name:         "not_found_clears_cache",
+			secretGetErr: errors.New("api error"),
+			wantErr:      errors.New("api error"),
+			wantGet:      true,
+			wantTimeout:  timeout,
+		},
+		{
+			name:       "written_cert_served_from_cache_again",
+			write:      tlsData("cert-d", "key-d"),
+			secretData: tlsData("cert-d", "key-d"),
+			wantCert:   "cert-d",
+			wantKey:    "key-d",
+		},
+		{
+			name:         "after_ttl_secret_forbidden",
+			advance:      rwCertTTL,
+			secretGetErr: &kubeapi.Status{Code: 403},
+			wantErr:      ipn.ErrStateNotExist,
+			wantGet:      true,
+		},
+		{
+			name:         "forbidden_clears_cache",
+			secretGetErr: errors.New("api error"),
+			wantErr:      errors.New("api error"),
+			wantGet:      true,
+			wantTimeout:  timeout,
+		},
+	}
+	for _, st := range steps {
+		clock.Advance(st.advance)
+		secretData = st.secretData
+		secretGetErr = st.secretGetErr
+		if st.write != nil {
+			if err := s.WriteTLSCertAndKey(testDomain, st.write["tls.crt"], st.write["tls.key"]); err != nil {
+				t.Fatalf("%s: WriteTLSCertAndKey: %v", st.name, err)
+			}
+		}
+		gets = 0
+
+		cert, key, err := s.ReadTLSCertAndKey(testDomain)
+		switch {
+		case st.wantErr != nil:
+			if err == nil || !strings.Contains(err.Error(), st.wantErr.Error()) {
+				t.Errorf("%s: got error %v, want error containing %v", st.name, err, st.wantErr)
+			}
+		case err != nil:
+			t.Errorf("%s: unexpected error: %v", st.name, err)
+		default:
+			if string(cert) != st.wantCert || string(key) != st.wantKey {
+				t.Errorf("%s: got cert %q key %q, want cert %q key %q", st.name, cert, key, st.wantCert, st.wantKey)
+			}
+		}
+		if gotGet := gets > 0; gotGet != st.wantGet {
+			t.Errorf("%s: read Secret = %v, want %v", st.name, gotGet, st.wantGet)
+		}
+		if st.wantGet && st.wantTimeout != 0 && (lastTimeout > st.wantTimeout || lastTimeout < st.wantTimeout-time.Second) {
+			t.Errorf("%s: GetSecret timeout = %v, want %v", st.name, lastTimeout, st.wantTimeout)
+		}
+	}
+}
+
+// TestReadTLSCertAndKeyWriteReplicaWriteDuringRead tests that a cert Secret
+// read that is in flight when WriteTLSCertAndKey writes a new cert doesn't
+// replace or remove the new cert in the write replica's cache.
+func TestReadTLSCertAndKeyWriteReplicaWriteDuringRead(t *testing.T) {
+	const testDomain = "my-app.tailnetxyz.ts.net"
+
+	tests := []struct {
+		name string
+		// cached, if set, is cached and expired before the read.
+		cached string
+		// secretData and secretGetErr are what the in-flight read gets.
+		secretData   map[string][]byte
+		secretGetErr error
+		wantCert     string
+		wantErr      error
+	}{
+		{
+			name:       "read_returns_old_cert",
+			secretData: map[string][]byte{"tls.crt": []byte("cert-old"), "tls.key": []byte("key-old")},
+			wantCert:   "cert-old",
+		},
+		{
+			name:         "read_returns_not_found",
+			secretGetErr: &kubeapi.Status{Code: 404},
+			wantErr:      ipn.ErrStateNotExist,
+		},
+		{
+			name:       "read_returns_old_cert_with_cached_cert",
+			cached:     "cert-old",
+			secretData: map[string][]byte{"tls.crt": []byte("cert-old"), "tls.key": []byte("key-old")},
+			wantCert:   "cert-old",
+		},
+		{
+			name:         "read_returns_not_found_with_cached_cert",
+			cached:       "cert-old",
+			secretGetErr: &kubeapi.Status{Code: 404},
+			wantErr:      ipn.ErrStateNotExist,
+		},
+		{
+			name:         "read_returns_api_error_with_cached_cert",
+			cached:       "cert-old",
+			secretGetErr: errors.New("api error"),
+			wantCert:     "cert-old",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gets atomic.Int32
+			getStarted := make(chan struct{})
+			releaseGet := make(chan struct{})
+			client := &kubeclient.FakeClient{
+				GetSecretImpl: func(ctx context.Context, name string) (*kubeapi.Secret, error) {
+					if gets.Add(1) > 1 {
+						// WriteTLSCertAndKey reads the Secret
+						// before it updates it.
+						return &kubeapi.Secret{Data: map[string][]byte{"tls.crt": []byte("cert-new"), "tls.key": []byte("key-new")}}, nil
+					}
+					close(getStarted)
+					<-releaseGet
+					if tt.secretGetErr != nil {
+						return nil, tt.secretGetErr
+					}
+					return &kubeapi.Secret{Data: tt.secretData}, nil
+				},
+				JSONPatchResourceImpl: func(context.Context, string, string, []kubeclient.JSONPatch) error {
+					return nil
+				},
+				UpdateSecretImpl: func(context.Context, *kubeapi.Secret) error {
+					return nil
+				},
+			}
+			clock := tstest.NewClock(tstest.ClockOpts{})
+			s := &Store{
+				client:        client,
+				secretName:    "ts-state",
+				certShareMode: "rw",
+				clock:         tstime.DefaultClock{Clock: clock},
+				logf:          t.Logf,
+			}
+			if tt.cached != "" {
+				s.setRWCert(testDomain, []byte(tt.cached), []byte("key"))
+				clock.Advance(rwCertTTL)
+			}
+
+			type result struct {
+				cert []byte
+				err  error
+			}
+			done := make(chan result)
+			go func() {
+				cert, _, err := s.ReadTLSCertAndKey(testDomain)
+				done <- result{cert, err}
+			}()
+			<-getStarted
+			if err := s.WriteTLSCertAndKey(testDomain, []byte("cert-new"), []byte("key-new")); err != nil {
+				t.Fatalf("WriteTLSCertAndKey: %v", err)
+			}
+			close(releaseGet)
+
+			res := <-done
+			if tt.wantErr != nil {
+				if !errors.Is(res.err, tt.wantErr) {
+					t.Errorf("in-flight read: got error %v, want %v", res.err, tt.wantErr)
+				}
+			} else if res.err != nil || string(res.cert) != tt.wantCert {
+				t.Errorf("in-flight read: got cert %q, error %v, want cert %q", res.cert, res.err, tt.wantCert)
+			}
+
+			// The next read must serve the new cert from the cache.
+			getsBefore := gets.Load()
+			cert, key, err := s.ReadTLSCertAndKey(testDomain)
+			if err != nil {
+				t.Fatalf("next read: %v", err)
+			}
+			if string(cert) != "cert-new" || string(key) != "key-new" {
+				t.Errorf("next read: got cert %q key %q, want cert %q key %q", cert, key, "cert-new", "key-new")
+			}
+			if gets.Load() != getsBefore {
+				t.Errorf("next read: read Secret, want cached cert")
+			}
+		})
+	}
+}
+
+// TestWriteTLSCertAndKeyWriteReplicaCopiesCert tests that a write replica
+// caches copies of the cert and key that it writes, so that a caller that
+// modifies them afterwards doesn't change the cached cert.
+func TestWriteTLSCertAndKeyWriteReplicaCopiesCert(t *testing.T) {
+	const testDomain = "my-app.tailnetxyz.ts.net"
+
+	client := &kubeclient.FakeClient{
+		GetSecretImpl: func(ctx context.Context, name string) (*kubeapi.Secret, error) {
+			return &kubeapi.Secret{Data: map[string][]byte{"tls.crt": []byte("cert"), "tls.key": []byte("key")}}, nil
+		},
+		JSONPatchResourceImpl: func(context.Context, string, string, []kubeclient.JSONPatch) error {
+			return nil
+		},
+	}
+	s := &Store{
+		client:        client,
+		secretName:    "ts-state",
+		certShareMode: "rw",
+		logf:          t.Logf,
+	}
+	cert, key := []byte("cert"), []byte("key")
+	if err := s.WriteTLSCertAndKey(testDomain, cert, key); err != nil {
+		t.Fatalf("WriteTLSCertAndKey: %v", err)
+	}
+	copy(cert, "XXXX")
+	copy(key, "XXX")
+
+	gotCert, gotKey, err := s.ReadTLSCertAndKey(testDomain)
+	if err != nil {
+		t.Fatalf("ReadTLSCertAndKey: %v", err)
+	}
+	if string(gotCert) != "cert" || string(gotKey) != "key" {
+		t.Errorf("got cert %q key %q, want cert %q key %q", gotCert, gotKey, "cert", "key")
+	}
+}
+
+// TestReadTLSCertAndKeyWriteReplicaConcurrentReads tests that concurrent
+// reads of an expired cached cert read the cert Secret only once.
+func TestReadTLSCertAndKeyWriteReplicaConcurrentReads(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const (
+			testDomain = "my-app.tailnetxyz.ts.net"
+			readers    = 10
+		)
+		var gets atomic.Int32
+		releaseGet := make(chan struct{})
+		client := &kubeclient.FakeClient{
+			GetSecretImpl: func(ctx context.Context, name string) (*kubeapi.Secret, error) {
+				gets.Add(1)
+				<-releaseGet
+				return &kubeapi.Secret{Data: map[string][]byte{"tls.crt": []byte("cert-new"), "tls.key": []byte("key-new")}}, nil
+			},
+		}
+		clock := tstest.NewClock(tstest.ClockOpts{})
+		s := &Store{
+			client:        client,
+			secretName:    "ts-state",
+			certShareMode: "rw",
+			clock:         tstime.DefaultClock{Clock: clock},
+			logf:          t.Logf,
+		}
+		s.setRWCert(testDomain, []byte("cert-old"), []byte("key-old"))
+		clock.Advance(rwCertTTL)
+
+		var wg sync.WaitGroup
+		for range readers {
+			wg.Go(func() {
+				cert, _, err := s.ReadTLSCertAndKey(testDomain)
+				if err != nil || string(cert) != "cert-new" {
+					t.Errorf("got cert %q, error %v, want cert %q", cert, err, "cert-new")
+				}
+			})
+		}
+		// Wait for all readers to block on the in-flight read.
+		synctest.Wait()
+		close(releaseGet)
+		wg.Wait()
+
+		if got := gets.Load(); got != 1 {
+			t.Errorf("GetSecret called %d times, want 1", got)
+		}
+	})
 }
 
 func TestNewWithClient(t *testing.T) {
