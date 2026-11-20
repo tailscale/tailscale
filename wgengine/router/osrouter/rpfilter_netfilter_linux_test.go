@@ -100,6 +100,7 @@ func TestUnderlaySrcRulesNetfilterV6(t *testing.T) {
 			t.Fatal("exit node on, with underlay rules: reply dropped")
 		}
 
+		e.checkRuleDeleteAndRepair()
 		e.checkExitNodeOff()
 	})
 }
@@ -152,6 +153,7 @@ func TestUnderlaySrcRulesNetfilterV4(t *testing.T) {
 			t.Fatal("strict rp_filter, with underlay rules: reply dropped")
 		}
 
+		e.checkRuleDeleteAndRepair()
 		e.checkExitNodeOff()
 	})
 }
@@ -374,6 +376,26 @@ func (e *netfilterRPFEnv) sendReply() (passed bool) {
 		t.Fatalf("socket got %q from %v; want %q from %v", got, from, payload, e.remote)
 	}
 	return true
+}
+
+// checkRuleDeleteAndRepair checks that it's the source rule for e.local that
+// lets the reply through: with just that one deleted (as another process
+// might) the reply is dropped again, until the router repairs it.
+func (e *netfilterRPFEnv) checkRuleDeleteAndRepair() {
+	t := e.t
+	t.Helper()
+	if err := delIPRule(e.lr.underlayIPRule(underlayRule{fam: e.fam, src: e.local})); err != nil {
+		t.Fatal(err)
+	}
+	if e.sendReply() {
+		t.Fatal("source rule deleted: reply passed; the rule isn't what lets it through")
+	}
+	waitForTimers(t, &e.timers, "repair of the deleted source rule", func() bool {
+		return slices.Contains(kernelUnderlayRules(t, e.lr), e.local)
+	})
+	if !e.sendReply() {
+		t.Fatal("after repair: reply dropped")
+	}
 }
 
 // checkExitNodeOff checks that with the exit node off the rules go, and with

@@ -2294,8 +2294,8 @@ func TestSubscribeEventsAfterInit(t *testing.T) {
 			default:
 			}
 			// At the underlay source rule priority, onIPRuleDeleted
-			// returns early (those deletions are our own), without
-			// running ip commands on the fake OS.
+			// takes the add-only repair path, which never runs ip
+			// commands on the fake OS.
 			ruleDeleted.Publish(netmon.RuleDeleted{
 				Table:    uint8(mainRouteTable.Num),
 				Priority: uint32(defaultIPPolicyPrefBase + underlaySrcRuleOffset),
