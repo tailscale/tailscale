@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"tailscale.com/syncs"
+	"tailscale.com/util/execqueue"
 	"tailscale.com/util/set"
 	"tailscale.com/util/syspolicy/internal/loggerx"
 	"tailscale.com/util/syspolicy/pkey"
@@ -73,6 +74,7 @@ func (c PolicyChange) HasChangedAnyOf(keys ...pkey.Key) bool {
 type policyChangeCallbacks struct {
 	mu  syncs.Mutex
 	cbs set.HandleSet[PolicyChangeCallback]
+	q   execqueue.ExecQueue // invokes cbs, one policy change at a time
 }
 
 // Register adds the specified callback to be invoked whenever the policy changes.
@@ -87,8 +89,15 @@ func (c *policyChangeCallbacks) Register(callback PolicyChangeCallback) (unregis
 	}
 }
 
-// Invoke calls the registered callback functions with the specified policy change info.
+// Invoke schedules the registered callback functions to be called with the
+// specified policy change info. It does not wait for them to return, so it
+// can be called while holding locks that the callbacks acquire. The callbacks
+// for one policy change return before those for the next one are called.
 func (c *policyChangeCallbacks) Invoke(snapshots Change[*setting.Snapshot]) {
+	c.q.Add(func() { c.invoke(snapshots) })
+}
+
+func (c *policyChangeCallbacks) invoke(snapshots Change[*setting.Snapshot]) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
@@ -105,8 +114,9 @@ func (c *policyChangeCallbacks) Invoke(snapshots Change[*setting.Snapshot]) {
 	}
 }
 
-// Close awaits the completion of active callbacks and prevents any further invocations.
+// Close prevents any further invocations.
 func (c *policyChangeCallbacks) Close() {
+	c.q.Shutdown()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.cbs != nil {
