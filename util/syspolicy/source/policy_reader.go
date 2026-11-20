@@ -130,7 +130,8 @@ func (r *Reader) reload(force bool) (*setting.Snapshot, error) {
 		// Return the last known policy instead of reading from the store.
 		return r.lastPolicy, nil
 	}
-	if r.upToDate && !force {
+	wasUpToDate := r.upToDate
+	if wasUpToDate && !force {
 		return r.lastPolicy, nil
 	}
 
@@ -179,6 +180,12 @@ func (r *Reader) reload(force bool) (*setting.Snapshot, error) {
 	newPolicy := setting.NewSnapshot(m, setting.SummaryWith(r.origin))
 	if r.lastPolicy == nil || !newPolicy.EqualItems(r.lastPolicy) {
 		r.lastPolicy = newPolicy
+		if wasUpToDate {
+			// A forced read found a change the store never reported.
+			// The sessions other than the caller's still hold the old
+			// policy and won't re-read it unless notified.
+			r.notifySessionsLocked()
+		}
 	}
 	return r.lastPolicy, nil
 }
@@ -241,6 +248,12 @@ func (r *Reader) onPolicyChange() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.upToDate = false
+	r.notifySessionsLocked()
+}
+
+// notifySessionsLocked notifies the active [ReadingSession]s of a policy change.
+// r.mu must be held.
+func (r *Reader) notifySessionsLocked() {
 	for _, s := range r.sessions {
 		select {
 		case s.policyChangedCh <- struct{}{}:
