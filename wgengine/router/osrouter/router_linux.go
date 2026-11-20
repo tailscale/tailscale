@@ -105,6 +105,38 @@ type linuxRouter struct {
 	magicsockPortV4   uint16
 	magicsockPortV6   uint16
 
+	// underlaySrcRules is the set of local underlay addresses for which we
+	// have installed a "from <addr> lookup main" ip rule so that strict
+	// reverse path filtering keeps working while using an exit node. See
+	// rpfilter_linux.go.
+	underlaySrcRules set.Set[underlayRule]
+
+	// exitRouteV4 and exitRouteV6 are whether the current config routes
+	// 0.0.0.0/0 and ::/0 into table 52, i.e. whether we use an exit node.
+	// Set from the config at the start of Set, before routes change, so
+	// the underlay rules can be installed ahead of the default route.
+	exitRouteV4, exitRouteV6 bool
+
+	// underlaySrcRulesCapped is whether the last reconcile hit
+	// maxUnderlaySrcRulesPerFamily; used to log only on transitions.
+	underlaySrcRulesCapped bool
+
+	// underlayAddrs returns the host's candidate underlay source addresses.
+	// It defaults to reading the netmon interface state; tests override it
+	// before subscribeEvents, or later with mu held. Read with mu held.
+	underlayAddrs func() []netip.Addr
+
+	// lastUnderlayErr is the last underlay rule error logged, so a
+	// persistent failure isn't logged on every network change.
+	lastUnderlayErr string
+
+	// rpFilterStrictV4Seen is the IPv4 rp_filter mode the underlay rules
+	// were last computed with, which recheckRPFilter compares against.
+	rpFilterStrictV4Seen bool
+
+	// rpFilterRecheckPending is whether a recheckRPFilter is scheduled.
+	rpFilterRecheckPending atomic.Bool
+
 	// ipRulesV6 is whether the base ip rules were last installed for IPv6
 	// too. Read without mu by onIPRuleDeleted.
 	ipRulesV6 atomic.Bool
@@ -133,8 +165,13 @@ type routerFixed struct {
 	// default, interfaceV6UsableForTun. See #20447.
 	interfaceV6Usable func() bool
 
+	// rpFilterStrictV4 reports whether the kernel's IPv4 rp_filter is in
+	// strict mode somewhere, gating the IPv4 underlay rules. Nil means the
+	// production default, which reads the sysctls.
+	rpFilterStrictV4 func() bool
+
 	// afterFunc, if non-nil, replaces time.AfterFunc for the router's rule
-	// restore timers. For tests.
+	// restore and rp_filter recheck timers. For tests.
 	afterFunc func(time.Duration, func())
 
 	// ipRuleAvailable is whether the kernel was built with
@@ -203,6 +240,10 @@ func newLinuxRouter(fixed routerFixed) *linuxRouter {
 	if r.interfaceV6Usable == nil {
 		r.interfaceV6Usable = func() bool { return interfaceV6UsableForTun(r.tunname) }
 	}
+	if r.rpFilterStrictV4 == nil {
+		r.rpFilterStrictV4 = r.rpFilterStrictV4FromSysctl
+	}
+	r.underlayAddrs = r.underlayAddrsFromNetMon
 	if r.useIPCommand() {
 		r.ipRuleAvailable = (r.cmd.run("ip", "rule") == nil)
 	} else {
@@ -267,6 +308,9 @@ func (r *linuxRouter) subscribeEvents(bus *eventbus.Bus) {
 		if err := r.updateMagicsockPort(pu.UDPPort, pu.EndpointNetwork); err != nil {
 			r.logf("updateMagicsockPort(port=%v, network=%s) failed: %v", pu.UDPPort, pu.EndpointNetwork, err)
 		}
+	})
+	eventbus.SubscribeFunc(ec, func(netmon.ChangeDelta) {
+		r.onNetworkChange()
 	})
 }
 
@@ -446,6 +490,12 @@ func (r *linuxRouter) onIPRuleDeleted(family uint8, table uint8, priority uint32
 	if family == unix.AF_INET6 && !r.ipRulesV6.Load() {
 		return
 	}
+	if r.isUnderlayRulePriority(int(priority)) {
+		// rp_filter underlay rules are added and removed by us as
+		// addresses come and go, so don't run the full restore, which
+		// would feed back into ourselves.
+		return
+	}
 	if r.ruleRestorePending.Swap(true) {
 		// Another timer is already pending.
 		return
@@ -475,6 +525,9 @@ func (r *linuxRouter) Up() error {
 	if err := r.addIPRules(); err != nil {
 		return fmt.Errorf("adding IP rules: %w", err)
 	}
+	// Remove rp_filter underlay source rules left by a previous instance
+	// that didn't shut down cleanly. Set installs fresh ones as needed.
+	r.sweepStaleUnderlaySrcRulesLocked()
 	if err := r.upInterface(); err != nil {
 		return fmt.Errorf("bringing interface up: %w", err)
 	}
@@ -495,6 +548,15 @@ func (r *linuxRouter) Close() error {
 	if err := r.nfr.DelConnmarkSaveRule(); err != nil {
 		r.logf("warning: failed to delete connmark rules: %v", err)
 	}
+
+	// Remove the rp_filter underlay rules last, once the interface (and
+	// with it the exit node default route) and the base rules are gone,
+	// even if one of those steps fails.
+	defer func() {
+		if err := r.removeUnderlaySrcRulesLocked(); err != nil {
+			r.logf("warning: %v", err)
+		}
+	}()
 
 	if err := r.downInterface(); err != nil {
 		return err
@@ -561,6 +623,16 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 		errs = append(errs, err)
 	}
 
+	// Install the rp_filter underlay rules (add only) before the exit node
+	// default route below, so replies to tailscaled's sockets are never
+	// dropped in between. Removals wait for the full reconcile after the
+	// routes have changed. This is best effort: a failure shouldn't fail
+	// Set or mark the router unhealthy. The full reconcile below retries,
+	// and logs.
+	r.exitRouteV4 = slices.Contains(cfg.Routes, tsaddr.AllIPv4()) || r.routes[tsaddr.AllIPv4()]
+	r.exitRouteV6 = slices.Contains(cfg.Routes, tsaddr.AllIPv6()) || r.routes[tsaddr.AllIPv6()]
+	r.updateUnderlaySrcRulesLocked(true)
+
 	newLocalRoutes, err := cidrDiff("localRoute", r.localRoutes, cfg.LocalRoutes, r.addThrowRoute, r.delThrowRoute, r.logf)
 	if err != nil {
 		errs = append(errs, err)
@@ -615,6 +687,16 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 		}
 	}
 
+	// Keep strict rp_filter working for replies to tailscaled's own
+	// sockets while table 52 holds an exit-node default route. Runs after
+	// r.routes and r.addrs are updated, as it depends on both.
+	// Follow the default routes actually installed, not the desired
+	// config: if deleting one failed, it's still there and so must the
+	// rules be.
+	r.exitRouteV4 = r.routes[tsaddr.AllIPv4()]
+	r.exitRouteV6 = r.routes[tsaddr.AllIPv6()]
+	r.logUnderlayErrLocked(r.updateUnderlaySrcRulesLocked(false))
+
 	// Ensure that the SNAT rule is added or removed as needed.
 	switch {
 	case cfg.SNATSubnetRoutes == r.snatSubnetRoutes:
@@ -647,8 +729,11 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 	r.updateStatefulFilteringWithDockerWarning(cfg)
 
 	// Connmark rules for rp_filter compatibility.
-	// Always enabled when netfilter is ON to handle all rp_filter=1 scenarios
-	// (normal operation, exit nodes, subnet routers, and clients using exit nodes).
+	// Restoring the bypass mark on replies lets mark-aware reverse path
+	// checks (e.g. an nftables "fib saddr . mark . iif oif" rule) pass. The
+	// kernel's own rp_filter only consults the mark when
+	// src_valid_mark=1, which we deliberately don't set (see #19796); for
+	// that case, see the underlay source rules in rpfilter_linux.go.
 	// Gate on r.netfilterMode (actual state) rather than cfg.NetfilterMode
 	// (desired state) so we don't call into the runner when chain setup failed.
 	netfilterOn := r.netfilterMode == netfilterOn
@@ -2051,6 +2136,7 @@ func cleanUp(logf logger.Logf, interfaceName string) {
 		linuxfw.NfTablesCleanUp(logf)
 	}
 	removeOrphanedAddrsForCleanup(logf, osCommandRunner{ambientCapNetAdmin: useAmbientCaps()}, interfaceName)
+	removeUnderlaySrcRulesForCleanup(logger.WithPrefix(logf, "router: "))
 }
 
 // removeOrphanedAddrsForCleanup removes every Tailscale-range address from

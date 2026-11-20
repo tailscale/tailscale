@@ -535,8 +535,9 @@ func (i *iptablesRunner) DelStatefulRule(tunname string) error {
 
 // AddConnmarkSaveRule adds conntrack marking rules to save and restore marks.
 // These rules run in mangle/PREROUTING (to restore marks from conntrack) and
-// mangle/OUTPUT (to save marks to conntrack) before rp_filter checks, enabling
-// proper routing table lookups for exit nodes and subnet routers.
+// mangle/OUTPUT (to save marks to conntrack), so routing decisions for reply
+// packets use the right table. Reverse path checks only see the restored mark
+// if they're mark-aware (see NetfilterRunner.AddConnmarkSaveRule).
 func (i *iptablesRunner) AddConnmarkSaveRule() error {
 	// Check if rules already exist (idempotency)
 	for _, ipt := range i.getTables() {
@@ -556,7 +557,8 @@ func (i *iptablesRunner) AddConnmarkSaveRule() error {
 	}
 
 	// mangle/PREROUTING: Restore mark from conntrack for ESTABLISHED/RELATED connections
-	// This runs BEFORE routing decision and rp_filter check
+	// This runs before the routing decision and the kernel's rp_filter check,
+	// though rp_filter only uses the mark with src_valid_mark=1.
 	// The connmark check ensures we only restore when Tailscale has marked the connection,
 	// preventing us from wiping mark bits set by other systems when ct mark is zero.
 	for _, ipt := range i.getTables() {
