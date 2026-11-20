@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -114,4 +115,23 @@ func TestLimit(t *testing.T) {
 	if err := <-errCh; err != nil {
 		t.Error(err)
 	}
+}
+
+// TestDeadlineAfterClose checks that setting a deadline on a closed pipe
+// doesn't leave a timer goroutine behind. An http.Server can do that if it's
+// closed between accepting a conn and starting its TLS handshake, which sets
+// the handshake deadlines. synctest.Test fails if a goroutine started in its
+// bubble is still blocked when it returns.
+func TestDeadlineAfterClose(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := NewPipe("p1", 1<<16)
+		p.Close()
+		dl := time.Now().Add(time.Hour)
+		if err := p.SetReadDeadline(dl); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.SetWriteDeadline(dl); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
