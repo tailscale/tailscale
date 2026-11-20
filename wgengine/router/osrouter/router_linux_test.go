@@ -523,18 +523,17 @@ v6/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
 
 	fake := NewFakeOS(t)
 	ht := health.NewTracker(bus)
-	router, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", mon, fake, ht, bus)
-	router.(*linuxRouter).nfr = fake.nfr
-	// Don't consult the live /proc for the tun's IPv6 state in tests; the
-	// fake netfilter runner's HasIPV6 (noV6) is the authoritative v6 signal
-	// here. See #20447.
-	router.(*linuxRouter).interfaceV6Usable = func() bool { return true }
-	if err != nil {
-		t.Fatalf("failed to create router: %v", err)
-	}
+	router := newTestRouter(t.Logf, "tailscale0", mon, fake, ht, bus, func(r *linuxRouter) {
+		r.nfr = fake.nfr
+		// Don't consult the live /proc for the tun's IPv6 state in tests; the
+		// fake netfilter runner's HasIPV6 (noV6) is the authoritative v6 signal
+		// here. See #20447.
+		r.interfaceV6Usable = func() bool { return true }
+	})
 	if err := router.Up(); err != nil {
 		t.Fatalf("failed to up router: %v", err)
 	}
+	defer router.Close()
 
 	testState := func(t *testing.T, i int) {
 		t.Helper()
@@ -1237,6 +1236,13 @@ type linuxTest struct {
 }
 
 func (lt *linuxTest) Close() error {
+	if lt.r != nil {
+		// Stop the router's eventbus callbacks and timers so they can't
+		// outlive the test, without calling Close, which would also
+		// delete the base ip rules (on the host, for these root tests).
+		lt.r.closed.Store(true)
+		lt.r.eventClient.Close()
+	}
 	if lt.tun != nil {
 		lt.tun.Close()
 	}
@@ -1246,7 +1252,7 @@ func (lt *linuxTest) Close() error {
 	return nil
 }
 
-func newLinuxRootTest(t *testing.T) (*linuxTest, *eventbus.Bus) {
+func newLinuxRootTest(t *testing.T, nfr linuxfw.NetfilterRunner) (*linuxTest, *eventbus.Bus) {
 	tstest.RequireRoot(t)
 
 	lt := new(linuxTest)
@@ -1264,12 +1270,14 @@ func newLinuxRootTest(t *testing.T) (*linuxTest, *eventbus.Bus) {
 	mon.Start()
 	lt.mon = mon
 
-	r, err := newUserspaceRouter(logf, lt.tun, mon, nil, bus)
+	tunname, err := lt.tun.Name()
 	if err != nil {
 		lt.Close()
 		t.Fatal(err)
 	}
-	lr := r.(*linuxRouter)
+	lr := newTestRouter(logf, tunname, mon, osCommandRunner{ambientCapNetAdmin: useAmbientCaps()}, nil, bus, func(r *linuxRouter) {
+		r.nfr = nfr
+	})
 	if err := lr.upInterface(); err != nil {
 		lt.Close()
 		t.Fatal(err)
@@ -1280,8 +1288,7 @@ func newLinuxRootTest(t *testing.T) (*linuxTest, *eventbus.Bus) {
 
 func TestRuleDeletedEvent(t *testing.T) {
 	fake := NewFakeOS(t)
-	lt, bus := newLinuxRootTest(t)
-	lt.r.nfr = fake.nfr
+	lt, bus := newLinuxRootTest(t, fake.nfr)
 	defer lt.Close()
 	event := netmon.RuleDeleted{
 		Table:    52,
@@ -1300,8 +1307,7 @@ func TestRuleDeletedEvent(t *testing.T) {
 
 func TestDelRouteIdempotent(t *testing.T) {
 	fake := NewFakeOS(t)
-	lt, _ := newLinuxRootTest(t)
-	lt.r.nfr = fake.nfr
+	lt, _ := newLinuxRootTest(t, fake.nfr)
 	defer lt.Close()
 
 	for _, s := range []string{
@@ -1328,8 +1334,7 @@ func TestDelRouteIdempotent(t *testing.T) {
 
 func TestAddRemoveRules(t *testing.T) {
 	fake := NewFakeOS(t)
-	lt, _ := newLinuxRootTest(t)
-	lt.r.nfr = fake.nfr
+	lt, _ := newLinuxRootTest(t, fake.nfr)
 	defer lt.Close()
 	r := lt.r
 
@@ -1568,8 +1573,10 @@ func TestUpdateMagicsockPortChange(t *testing.T) {
 	nfr.ipt4["filter/ts-input"] = []string{}
 
 	r := &linuxRouter{
-		logf:          logger.Discard,
-		health:        new(health.Tracker),
+		routerFixed: routerFixed{
+			logf:   logger.Discard,
+			health: new(health.Tracker),
+		},
 		netfilterMode: netfilterOn,
 		nfr:           nfr,
 	}
@@ -1617,15 +1624,12 @@ func TestSetSkipsNetfilterAddonsWhenSetupFails(t *testing.T) {
 
 	fake := NewFakeOS(t)
 	ht := health.NewTracker(bus)
-	r, err := newUserspaceRouterAdvanced(logger.Discard, "tailscale0", mon, fake, ht, bus)
-	if err != nil {
-		t.Fatalf("newUserspaceRouterAdvanced: %v", err)
-	}
-	lr := r.(*linuxRouter)
-	lr.nfr = nfr
-	// Keep the fake netfilter runner's HasIPV6 the sole v6 signal; don't
-	// consult the live /proc for the tun's IPv6 state. See #20447.
-	lr.interfaceV6Usable = func() bool { return true }
+	lr := newTestRouter(logger.Discard, "tailscale0", mon, fake, ht, bus, func(r *linuxRouter) {
+		r.nfr = nfr
+		// Keep the fake netfilter runner's HasIPV6 the sole v6 signal; don't
+		// consult the live /proc for the tun's IPv6 state. See #20447.
+		r.interfaceV6Usable = func() bool { return true }
+	})
 	if err := lr.Up(); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
@@ -1652,9 +1656,29 @@ func TestSetSkipsNetfilterAddonsWhenSetupFails(t *testing.T) {
 	}
 }
 
+// newTestRouter builds a router as newUserspaceRouterAdvanced does, but runs
+// configure on it before it subscribes to the eventbus. Nothing is subscribed
+// yet, so configure may still set the routerFixed fields; once this returns
+// they must not be written again. See subscribeEvents.
+func newTestRouter(logf logger.Logf, tunname string, mon *netmon.Monitor, cmd commandRunner, ht *health.Tracker, bus *eventbus.Bus, configure ...func(*linuxRouter)) *linuxRouter {
+	r := newLinuxRouter(routerFixed{
+		logf:    logf,
+		tunname: tunname,
+		netMon:  mon,
+		health:  ht,
+		cmd:     cmd,
+	})
+	for _, f := range configure {
+		f(r)
+	}
+	r.subscribeEvents(bus)
+	return r
+}
+
 // newTestLinuxRouter builds a linuxRouter backed by a fakeOS, brought up and
-// ready for Set, mirroring TestSetSkipsNetfilterAddonsWhenSetupFails.
-func newTestLinuxRouter(t *testing.T) (*linuxRouter, *fakeOS) {
+// ready for Set, mirroring TestSetSkipsNetfilterAddonsWhenSetupFails. Any
+// configure funcs run after the defaults and before eventbus subscription.
+func newTestLinuxRouter(t *testing.T, configure ...func(*linuxRouter)) (*linuxRouter, *fakeOS) {
 	t.Helper()
 	bus := eventbus.New()
 	t.Cleanup(bus.Close)
@@ -1667,15 +1691,14 @@ func newTestLinuxRouter(t *testing.T) (*linuxRouter, *fakeOS) {
 
 	fake := NewFakeOS(t)
 	ht := health.NewTracker(bus)
-	r, err := newUserspaceRouterAdvanced(logger.Discard, "tailscale0", mon, fake, ht, bus)
-	if err != nil {
-		t.Fatalf("newUserspaceRouterAdvanced: %v", err)
+	defaults := func(r *linuxRouter) {
+		r.nfr = fake.nfr
+		// Keep the fake netfilter runner's HasIPV6 (noV6) the sole v6
+		// signal; don't consult the live /proc for the tun's IPv6 state.
+		// See #20447.
+		r.interfaceV6Usable = func() bool { return true }
 	}
-	lr := r.(*linuxRouter)
-	lr.nfr = fake.nfr
-	// Keep the fake netfilter runner's HasIPV6 (noV6) the sole v6 signal;
-	// don't consult the live /proc for the tun's IPv6 state. See #20447.
-	lr.interfaceV6Usable = func() bool { return true }
+	lr := newTestRouter(logger.Discard, "tailscale0", mon, fake, ht, bus, append([]func(*linuxRouter){defaults}, configure...)...)
 	if err := lr.Up(); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
@@ -1958,10 +1981,11 @@ func TestSetSkipsV6OrphansWhenV6Unavailable(t *testing.T) {
 // is the #20447 scenario: historically the v6 addAddress errored, aborting the
 // whole router pass, which in turn suppressed DNS configuration.
 func TestSetSkipsV6WhenInterfaceV6Unusable(t *testing.T) {
-	lr, fake := newTestLinuxRouter(t)
 	// Global v6 is fine (fake nfr HasIPV6 defaults true), but the tun
 	// interface has no usable v6.
-	lr.interfaceV6Usable = func() bool { return false }
+	lr, fake := newTestLinuxRouter(t, func(r *linuxRouter) {
+		r.interfaceV6Usable = func() bool { return false }
+	})
 
 	cfg := &Config{
 		LocalAddrs:    mustCIDRs("100.64.0.1/32", "fd7a:115c:a1e0::1/128"),
@@ -1985,12 +2009,14 @@ func TestSetSkipsV6WhenInterfaceV6Unusable(t *testing.T) {
 // per-interface IPv6 check (which reads /proc) once, rather than once per
 // address and route, even though many getV6Available calls happen within it.
 func TestSetSnapshotsV6Usable(t *testing.T) {
-	lr, _ := newTestLinuxRouter(t)
-	var calls int
-	lr.interfaceV6Usable = func() bool {
-		calls++
-		return true
-	}
+	var calls atomic.Int32
+	lr, _ := newTestLinuxRouter(t, func(r *linuxRouter) {
+		r.interfaceV6Usable = func() bool {
+			calls.Add(1)
+			return true
+		}
+	})
+	calls.Store(0) // ignore calls made by Up
 
 	cfg := &Config{
 		LocalAddrs:    mustCIDRs("100.64.0.1/32", "fd7a:115c:a1e0::1/128"),
@@ -2000,8 +2026,8 @@ func TestSetSnapshotsV6Usable(t *testing.T) {
 	if err := lr.Set(cfg); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	if calls != 1 {
-		t.Errorf("interfaceV6Usable called %d times during one Set; want 1 (snapshotted)", calls)
+	if n := calls.Load(); n != 1 {
+		t.Errorf("interfaceV6Usable called %d times during one Set; want 1 (snapshotted)", n)
 	}
 }
 
@@ -2111,4 +2137,75 @@ func TestCleanUpOnlyTouchesTunInterface(t *testing.T) {
 	if !slices.Contains(fake.ips, "100.64.0.5/32 dev eth0") {
 		t.Errorf("non-Tailscale CGNAT addr on eth0 was wrongly removed; ips=%q", fake.ips)
 	}
+}
+
+// TestSubscribeEventsAfterInit enforces the subscribeEvents contract: the
+// constructor must finish writing every routerFixed field before it
+// subscribes to the eventbus, because callbacks read those fields without
+// holding mu.
+//
+// A publisher floods the bus with events whose callbacks read those fields
+// (RuleDeleted reads ipPolicyPrefBase without mu). If a future change
+// subscribes earlier, or writes such a field after subscribing, the race
+// detector reports it. It can only do so under -race; without it this is a
+// smoke test.
+func TestSubscribeEventsAfterInit(t *testing.T) {
+	bus := eventbus.New()
+	defer bus.Close()
+	pubc := bus.Client("test-publisher")
+	ruleDeleted := eventbus.Publish[netmon.RuleDeleted](pubc)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			// Just below our priority range, onIPRuleDeleted reads
+			// ipPolicyPrefBase and returns, without scheduling a
+			// restore that would run ip commands on the fake OS.
+			ruleDeleted.Publish(netmon.RuleDeleted{
+				Table:    uint8(mainRouteTable.Num),
+				Priority: uint32(defaultIPPolicyPrefBase - 1),
+			})
+		}
+	})
+	defer func() {
+		close(stop)
+		wg.Wait()
+	}()
+
+	for range 20 {
+		r, err := newUserspaceRouterAdvanced(logger.Discard, "tailscale0", nil, NewFakeOS(t), nil, bus)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lr := r.(*linuxRouter)
+		// Wait until the bus has delivered an event to this router's
+		// callbacks, so the race detector sees them read the constructor's
+		// fields. Watching delivery rather than sleeping doesn't hide a late
+		// write: that write would happen inside the constructor above, so it
+		// stays unordered against the callback's read.
+		w := bus.Debugger().WatchSubscribe(lr.eventClient)
+		<-w.Events()
+		w.Close()
+		lr.closed.Store(true)
+		lr.eventClient.Close()
+	}
+}
+
+func TestSubscribeEventsTwicePanics(t *testing.T) {
+	bus := eventbus.New()
+	defer bus.Close()
+	lr := newTestRouter(logger.Discard, "tailscale0", nil, NewFakeOS(t), nil, bus)
+	defer lr.eventClient.Close()
+	defer func() {
+		if recover() == nil {
+			t.Error("second subscribeEvents didn't panic")
+		}
+	}()
+	lr.subscribeEvents(bus)
 }
