@@ -4217,32 +4217,38 @@ func TestHTTPClientDefaultTransport(t *testing.T) {
 }
 
 func TestTailnet(t *testing.T) {
-	const tailnet = "required:tn123"
+	const tailnet = "tn123"
 	controlURL, control := startControl(t)
-	control.RequireTailnet = tailnet
+	control.RequireTailnet = "required:" + tailnet
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	newServer := func(hostname, tailnet string) *Server {
+	newServer := func(hostname, tailnet string, required bool) *Server {
 		s := &Server{
-			Dir:        t.TempDir(),
-			ControlURL: controlURL,
-			Hostname:   hostname,
-			Store:      new(mem.Store),
-			Ephemeral:  true,
-			Tailnet:    tailnet,
-			Logf:       tstest.WhileTestRunningLogger(t),
+			Dir:             t.TempDir(),
+			ControlURL:      controlURL,
+			Hostname:        hostname,
+			Store:           new(mem.Store),
+			Ephemeral:       true,
+			Tailnet:         tailnet,
+			TailnetRequired: required,
+			Logf:            tstest.WhileTestRunningLogger(t),
 		}
 		t.Cleanup(func() { s.Close() })
 		return s
 	}
 
-	if _, err := newServer("s1", tailnet).Up(ctx); err != nil {
-		t.Fatalf("Up with Tailnet %q: %v", tailnet, err)
+	if _, err := newServer("s1", tailnet, true).Up(ctx); err != nil {
+		t.Fatalf("Up with required Tailnet %q: %v", tailnet, err)
 	}
-	_, err := newServer("s2", "").Up(ctx)
-	if err == nil || !strings.Contains(err.Error(), tailnet) {
-		t.Fatalf("Up without Tailnet = %v; want a rejection naming %q", err, tailnet)
+	if _, err := newServer("s2", tailnet, false).Up(ctx); err == nil || !strings.Contains(err.Error(), tailnet) {
+		t.Fatalf("Up with recommended Tailnet = %v; want a rejection naming %q", err, tailnet)
+	}
+	if _, err := newServer("s3", "required:"+tailnet, false).Up(ctx); err == nil || !strings.Contains(err.Error(), "TailnetRequired") {
+		t.Fatalf("Up with prefixed Tailnet = %v; want an error pointing at TailnetRequired", err)
+	}
+	if _, err := newServer("s4", "", true).Up(ctx); err == nil || !strings.Contains(err.Error(), "TailnetRequired") {
+		t.Fatalf("Up with TailnetRequired and no Tailnet = %v; want an error", err)
 	}
 }
