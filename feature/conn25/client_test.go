@@ -411,8 +411,8 @@ func (c *client) currentGeneration() uint64 {
 	return c.generation
 }
 
-// enqueueAddressAssignmentForTest is [client.enqueueAddressAssignment] with the
-// lock it expects callers to hold, plus the generation stamp that
+// enqueueAddressAssignmentForTest is [client.enqueueAddressAssignmentLocked]
+// with the lock it expects callers to hold, plus the generation stamp that
 // [client.reserveAddresses] would have applied. The production callers all
 // enqueue from inside a c.mu critical section; tests reach for it on its own,
 // and build the [addrs] by hand rather than reserving one. Without the stamp
@@ -422,7 +422,7 @@ func (c *client) enqueueAddressAssignmentForTest(as *addrs) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	as.generation = c.generation
-	return c.enqueueAddressAssignment(as)
+	return c.enqueueAddressAssignmentLocked(as)
 }
 
 func TestTransitIPConnMapping(t *testing.T) {
