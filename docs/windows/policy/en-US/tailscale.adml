@@ -123,6 +123,12 @@ If you enable this policy setting, you can specify how long Tailscale will wait 
 If you disable or don't configure this policy setting, Tailscale will only reconnect if a user chooses to or if required by a different policy setting.
 
 Refer to https://pkg.go.dev/time#ParseDuration for information about the supported duration strings.]]></string>
+            <string id="AllowTailnetSysPolicy">Allow policy settings from the tailnet</string>
+            <string id="AllowTailnetSysPolicy_Help"><![CDATA[This policy setting controls whether policy settings configured by the administrators of a tailnet are applied to this device.
+
+If you enable this policy setting, policy settings received from the tailnet are applied while the device is connected to that tailnet. A setting that is also configured on this device, such as via Group Policy or MDM, keeps the value configured on the device.
+
+If you disable or do not configure this policy setting, policy settings received from the tailnet are ignored.]]></string>
             <string id="AllowTailscaledRestart">Allow users to restart tailscaled</string>
             <string id="AllowTailscaledRestart_Help"><![CDATA[This policy setting controls whether users are allowed to fully reset the connection by restarting tailscaled. This can be useful for troubleshooting certain connectivity issues.
 
