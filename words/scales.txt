@@ -511,3 +511,6 @@ spectrum
 roygbiv
 pride
 cat
+deepsea
+prism
+heart
