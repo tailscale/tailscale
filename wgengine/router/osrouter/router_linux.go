@@ -130,6 +130,16 @@ type linuxRouter struct {
 	// network change is queued but hasn't yet acquired mu.
 	netChangePending atomic.Bool
 
+	// underlayPortRulesUnsupported is whether the kernel turned out not to
+	// support the magicsock port rule's selectors.
+	underlayPortRulesUnsupported bool
+
+	// underlayMagicsockPortV4 and V6 are the magicsock ports for the
+	// rp_filter underlay port rules. Unlike magicsockPortV4/V6, which track
+	// the netfilter rule actually installed, they're set even when the
+	// netfilter update fails.
+	underlayMagicsockPortV4 uint16
+
 	// lastUnderlayErr is the last underlay rule error logged, so a
 	// persistent failure isn't logged on every network change.
 	lastUnderlayErr string
@@ -312,6 +322,8 @@ func (r *linuxRouter) subscribeEvents(bus *eventbus.Bus) {
 		if err := r.updateMagicsockPort(pu.UDPPort, pu.EndpointNetwork); err != nil {
 			r.logf("updateMagicsockPort(port=%v, network=%s) failed: %v", pu.UDPPort, pu.EndpointNetwork, err)
 		}
+		// The rp_filter magicsock port rules follow the port.
+		r.queueNetworkChange()
 	})
 	eventbus.SubscribeFunc(ec, func(netmon.ChangeDelta) {
 		r.queueNetworkChange()
@@ -863,6 +875,12 @@ func (r *linuxRouter) updateStatefulFilteringWithDockerWarning(cfg *router.Confi
 func (r *linuxRouter) updateMagicsockPort(port uint16, network string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// The rp_filter underlay rules don't use netfilter, so record the port
+	// for them first, whatever happens with the netfilter rule below. They
+	// only have IPv4 port rules.
+	if network == "udp4" {
+		r.underlayMagicsockPortV4 = port
+	}
 	if r.nfr == nil {
 		if err := r.setupNetfilterLocked(r.netfilterKind); err != nil {
 			return fmt.Errorf("could not setup netfilter: %w", err)
