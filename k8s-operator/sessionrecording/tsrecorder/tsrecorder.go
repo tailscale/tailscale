@@ -8,12 +8,12 @@ package tsrecorder
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
 	"time"
 
-	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	"tailscale.com/sessionrecording"
 	"tailscale.com/tstime"
