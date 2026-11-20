@@ -45,6 +45,7 @@ import (
 	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/nettype"
 	"tailscale.com/types/views"
 	"tailscale.com/util/backoff"
 	"tailscale.com/util/clientmetric"
@@ -586,7 +587,7 @@ func (c *serviceMeteredConn) Write(p []byte) (int, error) {
 // and drain gracefully when a connection won't be reused, avoiding a truncating
 // RST on the final response.
 func (c *serviceMeteredConn) CloseWrite() error {
-	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+	if cw, ok := c.Conn.(nettype.TCPWriteCloser); ok {
 		return cw.CloseWrite()
 	}
 	return nil

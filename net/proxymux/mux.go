@@ -149,20 +149,10 @@ func (c *connWithOneByte) Read(bs []byte) (int, error) {
 	return 1, nil
 }
 
-// CloseRead implements [nettype.HalfCloser], allowing the underlying Conn
-// to be half-closed if possible. Otherwise, this is a no-op.
-func (c *connWithOneByte) CloseRead() error {
-	if hc, ok := c.Conn.(nettype.HalfCloser); ok {
-		c.readClosed = true
-		return hc.CloseRead()
-	}
-	return nil
-}
-
-// CloseWrite implements [nettype.HalfCloser], allowing the underlying Conn
+// CloseWrite implements [nettype.TCPWriteCloser], allowing the underlying Conn
 // to be half-closed if possible. Otherwise, this is a no-op.
 func (c *connWithOneByte) CloseWrite() error {
-	if hc, ok := c.Conn.(nettype.HalfCloser); ok {
+	if hc, ok := c.Conn.(nettype.TCPWriteCloser); ok {
 		return hc.CloseWrite()
 	}
 	return nil

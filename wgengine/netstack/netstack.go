@@ -10,7 +10,6 @@ import (
 	"errors"
 	"expvar"
 	"fmt"
-	"io"
 	"math"
 	"net"
 	"net/netip"
@@ -54,6 +53,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/pumptcp"
 	"tailscale.com/util/set"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
@@ -1891,11 +1891,6 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 	}
 	defer client.Close()
 
-	// As of 2025-07-03, backend is always either a net.TCPConn
-	// from stdDialer.DialContext (which has the requisite functions),
-	// or nil from hangDialer in tests (in which case we would have
-	// errored out by now), so this conversion should always succeed.
-	backendHalfCloser, backendIsHalfCloser := backend.(nettype.HalfCloser)
 	connClosed := make(chan error, 2)
 	// Each direction half-closes its destination once the source is done,
 	// so the destination's peer sees EOF while the other direction keeps
@@ -1903,27 +1898,21 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 	// has no effect on the wire, and once the source has returned EOF,
 	// macOS (and Linux, if the socket is fully closed by then) rejects the
 	// shutdown with ENOTCONN, which used to be logged for every connection.
+	//
+	// [pumptcp.Copy] requires its destination to support TCP half-closing.
+	// As of 2025-07-03, backend is always either a net.TCPConn
+	// from stdDialer.DialContext (which has the requisite functions),
+	// or nil from hangDialer in tests (in which case we would have
+	// errored out by now), so if we get here, backend should support
+	// half-closing.
+	// client is a [*gonet.TCPConn], which supports half-closing.
 	go func() {
-		_, err := io.Copy(backend, client)
-		if err != nil {
-			err = fmt.Errorf("client -> backend: %w", err)
-		}
+		err := pumptcp.Copy(backend, client, "client -> backend")
 		connClosed <- err
-		if backendIsHalfCloser {
-			if err := backendHalfCloser.CloseWrite(); err != nil {
-				ns.logf("client -> backend close connection: %v", err)
-			}
-		}
 	}()
 	go func() {
-		_, err := io.Copy(client, backend)
-		if err != nil {
-			err = fmt.Errorf("backend -> client: %w", err)
-		}
+		err := pumptcp.Copy(client, backend, "backend -> client")
 		connClosed <- err
-		if err := client.CloseWrite(); err != nil {
-			ns.logf("backend -> client close connection: %v", err)
-		}
 	}()
 	// Wait for both ends of the connection to close.
 	for range 2 {
