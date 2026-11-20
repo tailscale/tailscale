@@ -159,7 +159,7 @@ you can run the command prompt as Administrator one of these ways:
 
 	up.Logf("making tailscale.exe copy to switch to...")
 	up.cleanupOldDownloads(filepath.Join(os.TempDir(), updaterPrefix+"-*.exe"))
-	_, cmdTailscaleCopy, err := makeCmdTailscaleCopy()
+	cmdTailscale, cmdTailscaleCopy, err := makeCmdTailscaleCopy()
 	if err != nil {
 		return err
 	}
@@ -173,6 +173,13 @@ you can run the command prompt as Administrator one of these ways:
 	cmd.Stdin = os.Stdin
 	if err := cmd.Start(); err != nil {
 		return err
+	}
+	if selfExe, err := os.Executable(); err == nil && selfExe != cmdTailscale {
+		// We're tailscaled (the service's child process) rather
+		// than tailscale (the CLI). If we exited now, the service
+		// would restart us right away (see babysitProc in cmd/tailscaled),
+		// so keep running until the installer stops the service.
+		return cmd.Wait()
 	}
 	// Once it's started, exit ourselves, so the binary is free
 	// to be replaced.
