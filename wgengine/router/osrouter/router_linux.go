@@ -126,6 +126,10 @@ type linuxRouter struct {
 	// before subscribeEvents, or later with mu held. Read with mu held.
 	underlayAddrs func() []netip.Addr
 
+	// netChangePending is whether an underlay source rule reconcile for a
+	// network change is queued but hasn't yet acquired mu.
+	netChangePending atomic.Bool
+
 	// lastUnderlayErr is the last underlay rule error logged, so a
 	// persistent failure isn't logged on every network change.
 	lastUnderlayErr string
@@ -310,7 +314,7 @@ func (r *linuxRouter) subscribeEvents(bus *eventbus.Bus) {
 		}
 	})
 	eventbus.SubscribeFunc(ec, func(netmon.ChangeDelta) {
-		r.onNetworkChange()
+		r.queueNetworkChange()
 	})
 }
 
