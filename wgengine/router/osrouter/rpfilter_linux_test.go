@@ -389,8 +389,9 @@ func TestUnderlaySrcRulesInRestoreRange(t *testing.T) {
 func TestIsOurUnderlayRule(t *testing.T) {
 	base := defaultIPPolicyPrefBase
 	r := &linuxRouter{routerFixed: routerFixed{ipPolicyPrefBase: base}}
-	// srcRule and supRule are ours as listed by a kernel without rule
-	// protocol support (pre-4.17), so only their shape identifies them.
+	// srcRule, supRule and portRule are ours as listed by a kernel
+	// without rule protocol support (pre-4.17), so only their shape
+	// identifies them.
 	noProto := func(u underlayRule) func() ipRule {
 		return func() ipRule {
 			ru := r.underlayIPRule(u)
@@ -400,6 +401,7 @@ func TestIsOurUnderlayRule(t *testing.T) {
 	}
 	srcRule := noProto(underlayRule{fam: v4, src: netip.MustParseAddr("192.168.1.5")})
 	supRule := noProto(underlayRule{fam: v6})
+	portRule := noProto(underlayRule{fam: v4, src: netip.MustParseAddr("192.168.1.5"), port: 41641})
 	mod := func(ru ipRule, f func(*ipRule)) ipRule { f(&ru); return ru }
 	noUID := func(ru *ipRule) { ru.uidRange = nil }
 	// An administrator's "ip rule add pref 5260 from 192.0.2.50 lookup main".
@@ -417,6 +419,7 @@ func TestIsOurUnderlayRule(t *testing.T) {
 		{"protocol-ours", mod(srcRule(), func(ru *ipRule) { ru.hasProtocol = true; ru.protocol = ruleProtocolTailscale }), true, true},
 		{"protocol-ours-odd-shape", mod(srcRule(), func(ru *ipRule) { ru.hasProtocol = true; ru.protocol = ruleProtocolTailscale; ru.other = true }), true, true},
 		{"protocol-ours-suppress", mod(supRule(), func(ru *ipRule) { ru.hasProtocol = true; ru.protocol = ruleProtocolTailscale }), true, true},
+		{"protocol-ours-port", mod(portRule(), func(ru *ipRule) { ru.hasProtocol = true; ru.protocol = ruleProtocolTailscale }), true, true},
 		{"protocol-admin-same-shape", mod(srcRule(), func(ru *ipRule) { ru.hasProtocol = true; ru.protocol = 0 }), false, false},
 		{"protocol-other-daemon", mod(srcRule(), func(ru *ipRule) { ru.hasProtocol = true; ru.protocol = 186 }), false, false},
 		{"protocol-ours-other-priority", mod(srcRule(), func(ru *ipRule) { ru.hasProtocol = true; ru.protocol = ruleProtocolTailscale; ru.priority++ }), false, false},
@@ -442,6 +445,13 @@ func TestIsOurUnderlayRule(t *testing.T) {
 		{"shape-suppress-other-prefixlen", mod(supRule(), func(ru *ipRule) { ru.suppressPrefixlen = 8 }), false, false},
 		{"shape-suppress-other-table", mod(supRule(), func(ru *ipRule) { ru.table = 254 }), false, false},
 		{"shape-suppress-with-src", mod(supRule(), func(ru *ipRule) { ru.src = netip.MustParseAddr("2001:db8::5") }), false, false},
+		// Port rules only exist from 4.17 (with a protocol); before
+		// that a leftover has lost its selectors and must be swept.
+		{"shape-port-selectors-dropped", mod(portRule(), func(ru *ipRule) { ru.ipProto = 0; ru.sportRange = nil }), true, false},
+		{"shape-port-selectors-dropped-pre410", mod(portRule(), func(ru *ipRule) { ru.ipProto = 0; ru.sportRange = nil; ru.uidRange = nil }), false, true},
+		{"shape-port-tcp", mod(portRule(), func(ru *ipRule) { ru.ipProto = unix.IPPROTO_TCP }), false, false},
+		{"shape-port-without-src", mod(portRule(), func(ru *ipRule) { ru.src = netip.Addr{} }), false, false},
+		{"shape-port-without-suppress", mod(portRule(), func(ru *ipRule) { ru.suppressPrefixlen = -1 }), false, false},
 	}
 	for _, tt := range tests {
 		if got := isOurUnderlayRuleFor(tt.ru, base, true); got != tt.want {
@@ -462,6 +472,8 @@ func TestIPRuleMarshalRoundTrip(t *testing.T) {
 		{fam: v6, src: netip.MustParseAddr("2001:db8::5")},
 		{fam: v4},
 		{fam: v6},
+		{fam: v4, src: netip.MustParseAddr("192.168.1.5"), port: 41641},
+		{fam: v6, src: netip.MustParseAddr("2001:db8::5"), port: 65535},
 	} {
 		want := r.underlayIPRule(u)
 		b, err := want.marshal()
@@ -637,6 +649,7 @@ func underlayRulesKernelChild(t *testing.T) {
 	// which must be swept too (review finding: they lacked the protocol).
 	for _, u := range []underlayRule{
 		{fam: v4, src: netip.MustParseAddr("192.0.2.98")},
+		{fam: v4, src: netip.MustParseAddr("192.0.2.98"), port: 41641},
 		{fam: v6},
 	} {
 		if err := (osCommandRunner{}).run(lr.underlayIPCommandArgs("add", u)...); err != nil {
@@ -659,8 +672,8 @@ func underlayRulesKernelChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lr.Close()
-	if got, sup := kernelUnderlayRules(t, lr), kernelSuppressRules(t, lr); len(got) != 0 || len(sup) != 0 {
-		t.Fatalf("after Up, stale rules not swept: %v %v", got, sup)
+	if got, sup, port := kernelUnderlayRules(t, lr), kernelSuppressRules(t, lr), kernelPortRules(t, lr); len(got) != 0 || len(sup) != 0 || len(port) != 0 {
+		t.Fatalf("after Up, stale rules not swept: %v %v %v", got, sup, port)
 	}
 	checkAdminRules("after Up's sweep")
 
@@ -815,6 +828,84 @@ func underlayRulesKernelChild(t *testing.T) {
 	}
 	if err := replyPasses(); err != nil {
 		t.Errorf("LAN blocked: reply from exit node rejected: %v", err)
+	}
+	// ...except replies to tailscaled's magicsock port, so direct paths to
+	// peers on the LAN keep working (review finding: they fell back to
+	// DERP). Other LAN traffic to the same address stays blocked.
+	const msPort = 41641
+	// The IPv4 port comes through the eventbus, as from magicsock.
+	portPub := eventbus.Publish[router.PortUpdate](bus.Client("test-magicsock"))
+	portPub.Publish(router.PortUpdate{UDPPort: msPort, EndpointNetwork: "udp4"})
+	if err := lr.updateMagicsockPort(msPort, "udp6"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "magicsock port rule via PortUpdate", func() bool {
+		return slices.Equal(kernelPortRules(t, lr), []addrFamily{v4})
+	})
+	if got := kernelPortRules(t, lr); !slices.Equal(got, []addrFamily{v4}) {
+		t.Fatalf("magicsock port rules for families %v; want v4 only", got)
+	}
+	if _, err := kernelRouteGetPorts(local4, lanHost4, "ul0", -1, unix.IPPROTO_UDP, msPort, msPort); err != nil {
+		t.Errorf("LAN blocked: LAN peer reply to magicsock port rejected: %v", err)
+	}
+	if got, _ := kernelRouteGetPorts(lanHost4, local4, "", 0, unix.IPPROTO_UDP, msPort, msPort); got != "ul0" {
+		t.Errorf("LAN blocked: magicsock packet to LAN host via %q; want ul0", got)
+	}
+	if got, _ := kernelRouteGetPorts(lanHost4, local4, "", 0, unix.IPPROTO_UDP, 5555, msPort); got != tunName {
+		t.Errorf("LAN blocked: other root UDP to LAN host via %q; want %s", got, tunName)
+	}
+	if _, err := kernelRouteGetPorts(local4, lanHost4, "ul0", -1, unix.IPPROTO_TCP, 40000, 22); !errors.Is(err, unix.EINVAL) {
+		t.Errorf("LAN blocked: LAN-initiated TCP to a local service passed reverse-path validation (%v); want EINVAL", err)
+	}
+	// No IPv6 port rules: the IPv6 LAN block applies to magicsock too.
+	lanHost6 := netip.MustParseAddr("2001:db8:1::9")
+	if got, _ := kernelRouteGetPorts(lanHost6, local6, "", 0, unix.IPPROTO_UDP, msPort, msPort); got != tunName {
+		t.Errorf("LAN blocked: unmarked IPv6 UDP from the magicsock port via %q; want %s", got, tunName)
+	}
+
+	// Known limitation, pinned so a change to it is deliberate: with LAN
+	// access off, replies from the LAN to tailscaled sockets other than
+	// magicsock's (the gateway's NAT-PMP or DNS, a control or DERP server
+	// on the LAN) still fail strict rp_filter. Table 52 holds the LAN
+	// prefix, the suppress rule keeps it ahead of the source rule, and only
+	// the magicsock port is exempt. The reverted src_valid_mark=1 let these
+	// through on hosts with netfilter on.
+	for _, sport := range []uint16{53, 5351, 443} { // the LAN gateway's DNS, NAT-PMP, a LAN control server
+		if _, err := kernelRouteGetPorts(local4, gw4, "ul0", -1, unix.IPPROTO_UDP, sport, 40000); !errors.Is(err, unix.EINVAL) {
+			t.Errorf("LAN blocked: reply from LAN %v:%d to a non-magicsock socket: %v; want EINVAL (known limitation; update the commit message if fixed)", gw4, sport, err)
+		}
+	}
+
+	// Forwarded traffic from the network behind us with the magicsock
+	// port as source port isn't affected (review finding: without "from
+	// A" it went out the physical interface, past the exit node, the
+	// tailnet routes and the LAN block).
+	behind := netip.MustParseAddr("192.168.5.7")
+	for _, sport := range []uint16{5555, msPort} {
+		for _, dst := range []netip.Addr{remote4, peer4, lanHost4} {
+			if got, err := kernelRouteGetPorts(dst, behind, "lan0", -1, unix.IPPROTO_UDP, sport, 9); got != tunName {
+				t.Errorf("forwarded UDP %v:%d -> %v: dev %q (%v), want %s", behind, sport, dst, got, err, tunName)
+			}
+		}
+	}
+	// Peers sending to the magicsock port through the tunnel still pass
+	// reverse-path validation (review finding: the port rule sent their
+	// reverse lookup to main's default route).
+	for _, dst := range []netip.Addr{netip.MustParseAddr("100.101.102.104"), local4, behind} {
+		if _, err := kernelRouteGetPorts(dst, peer4, tunName, -1, unix.IPPROTO_UDP, 9, msPort); err != nil {
+			t.Errorf("tailnet UDP %v -> %v:%d arriving on %s rejected: %v", peer4, dst, msPort, tunName, err)
+		}
+	}
+	// The rule follows magicsock port changes.
+	if err := lr.updateMagicsockPort(msPort+1, "udp4"); err != nil {
+		t.Fatal(err)
+	}
+	lr.onNetworkChange()
+	if _, err := kernelRouteGetPorts(local4, lanHost4, "ul0", -1, unix.IPPROTO_UDP, msPort+1, msPort+1); err != nil {
+		t.Errorf("after port change: reply to new magicsock port rejected: %v", err)
+	}
+	if _, err := kernelRouteGetPorts(local4, lanHost4, "ul0", -1, unix.IPPROTO_UDP, msPort, msPort); !errors.Is(err, unix.EINVAL) {
+		t.Errorf("after port change: reply to old magicsock port still exempt (%v)", err)
 	}
 	if err := lr.Set(cfgLANAllowed); err != nil {
 		t.Fatal(err)
@@ -989,6 +1080,25 @@ func kernelSuppressRules(t *testing.T, lr *linuxRouter) []addrFamily {
 		}
 		for _, ru := range rules {
 			if isOurUnderlayRule(ru, lr.ipPolicyPrefBase) && int(ru.priority) == lr.underlaySuppressRulePriority() && !slices.Contains(out, fam) {
+				out = append(out, fam)
+			}
+		}
+	}
+	return out
+}
+
+// kernelPortRules lists the families that have our magicsock port rule
+// installed in the kernel.
+func kernelPortRules(t *testing.T, lr *linuxRouter) []addrFamily {
+	t.Helper()
+	var out []addrFamily
+	for _, fam := range []addrFamily{v4, v6} {
+		rules, err := listIPRules(fam)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ru := range rules {
+			if isOurUnderlayRule(ru, lr.ipPolicyPrefBase) && int(ru.priority) == lr.underlayPortRulePriority() && !slices.Contains(out, fam) {
 				out = append(out, fam)
 			}
 		}
@@ -1282,6 +1392,62 @@ func TestUnderlaySrcRulesBeforeExitRoute(t *testing.T) {
 	}
 }
 
+// TestUnderlayPortRules checks the magicsock port rules: one per IPv4
+// underlay address (none for IPv6, whose netfilter reverse-path checks
+// carry no ports), installed with the exit node, following port changes,
+// removed with the exit node.
+func TestUnderlayPortRules(t *testing.T) {
+	lr, fake := newTestLinuxRouter(t)
+	setTestUnderlayAddrs(lr, []netip.Addr{netip.MustParseAddr("192.168.1.5"), netip.MustParseAddr("10.1.2.3"), netip.MustParseAddr("2001:db8::5")})
+	for _, nw := range []string{"udp4", "udp6"} {
+		if err := lr.updateMagicsockPort(41641, nw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	portRules := func() []string {
+		var out []string
+		for _, ru := range fake.rules {
+			if strings.Contains(ru, fmt.Sprintf(" pref %d ", defaultIPPolicyPrefBase+underlayPortRuleOffset)) {
+				out = append(out, ru)
+			}
+		}
+		return out
+	}
+	want := func(port int, addrs ...string) []string {
+		var out []string
+		for _, a := range addrs {
+			out = append(out, fmt.Sprintf("-4 pref 5252 from %s ipproto udp sport %d uidrange 0-0 table main suppress_prefixlength 0 protocol 52", a, port))
+		}
+		slices.Sort(out)
+		return out
+	}
+	if err := lr.Set(exitConfig("100.100.100.100/32")); err != nil {
+		t.Fatal(err)
+	}
+	if got := portRules(); len(got) != 0 {
+		t.Fatalf("port rules without exit node: %q", got)
+	}
+	if err := lr.Set(exitConfig("0.0.0.0/0", "::/0")); err != nil {
+		t.Fatal(err)
+	}
+	if got, w := portRules(), want(41641, "10.1.2.3", "192.168.1.5"); !slices.Equal(got, w) {
+		t.Fatalf("port rules:\n got %q\nwant %q", got, w)
+	}
+	if err := lr.updateMagicsockPort(41700, "udp4"); err != nil {
+		t.Fatal(err)
+	}
+	lr.onNetworkChange()
+	if got, w := portRules(), want(41700, "10.1.2.3", "192.168.1.5"); !slices.Equal(got, w) {
+		t.Fatalf("after port change:\n got %q\nwant %q", got, w)
+	}
+	if err := lr.Set(exitConfig("100.100.100.100/32")); err != nil {
+		t.Fatal(err)
+	}
+	if got := portRules(); len(got) != 0 {
+		t.Fatalf("port rules after exit node off: %q", got)
+	}
+}
+
 // TestUnderlaySrcRulesFailures covers the reconcile's failure paths: a
 // failed suppress rule add skips its source rules without failing Set, a
 // failed delete stays tracked and is retried, and "File exists" from the ip
@@ -1394,6 +1560,29 @@ func TestUnderlayRulesRemovedLastOnClose(t *testing.T) {
 		t.Errorf("Close: interface down at %d, rule removal at %d; want removal after down; ran %q", down, del, fake.cmds)
 	}
 	checkUnderlayRules(t, fake)
+}
+
+// TestUnderlayPortRuleWithoutNetfilter checks that the magicsock port rule
+// follows the port even when the netfilter magicsock rule fails (review
+// finding: the port was only recorded after netfilter succeeded, so no
+// rule was installed).
+func TestUnderlayPortRuleWithoutNetfilter(t *testing.T) {
+	lr, fake := newTestLinuxRouter(t)
+	setTestUnderlayAddrs(lr, []netip.Addr{netip.MustParseAddr("192.168.1.5")})
+	cfg := exitConfig("0.0.0.0/0")
+	cfg.NetfilterMode = netfilterOn
+	if err := lr.Set(cfg); err != nil {
+		t.Fatal(err)
+	}
+	fake.nfr.(*fakeIPTablesRunner).addMagicsockPortErr = errors.New("ts-input chain flushed by a firewall reload")
+	if err := lr.updateMagicsockPort(41641, "udp4"); err == nil {
+		t.Fatal("test setup: netfilter magicsock rule didn't fail")
+	}
+	lr.onNetworkChange()
+	want := "-4 pref 5252 from 192.168.1.5 ipproto udp sport 41641 uidrange 0-0 table main suppress_prefixlength 0 protocol 52"
+	if !slices.Contains(fake.rules, want) {
+		t.Errorf("no magicsock port rule after a failed netfilter update; rules: %q", underlayRules(fake))
+	}
 }
 
 // TestUnderlayAddrsLinkLocalLast is a regression test for the per-family cap
@@ -1510,6 +1699,36 @@ func TestRPFilterRecheck(t *testing.T) {
 	timers.drain()
 	if n := timers.len(); n != 0 {
 		t.Fatalf("%d timers still scheduled after the exit node went away; want 0", n)
+	}
+}
+
+// TestCheckPortRule checks the port rule verification: a rule the kernel
+// installed without its selectors means it doesn't support them, but a
+// rule that's simply gone (deleted by someone else meanwhile) doesn't
+// (review finding: that disabled port rules until restart).
+func TestCheckPortRule(t *testing.T) {
+	r := &linuxRouter{routerFixed: routerFixed{ipPolicyPrefBase: defaultIPPolicyPrefBase}}
+	want := r.underlayIPRule(underlayRule{fam: v4, src: netip.MustParseAddr("192.168.1.5"), port: 41641})
+	stripped := want
+	stripped.ipProto, stripped.sportRange = 0, nil
+	otherSrc := want
+	otherSrc.src = netip.MustParseAddr("192.168.1.6")
+	otherPort := want
+	otherPort.sportRange = &[2]uint16{41642, 41642}
+	for _, tt := range []struct {
+		name  string
+		rules []ipRule
+		want  portRuleCheck
+	}{
+		{"installed", []ipRule{otherSrc, want}, portRuleOK},
+		{"stripped", []ipRule{stripped}, portRuleStripped},
+		{"gone", []ipRule{otherSrc}, portRuleMissing},
+		{"gone-other-port-present", []ipRule{otherPort}, portRuleMissing},
+		{"empty", nil, portRuleMissing},
+	} {
+		if got := checkPortRule(tt.rules, want); got != tt.want {
+			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
+		}
 	}
 }
 
