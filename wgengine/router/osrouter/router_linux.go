@@ -61,30 +61,26 @@ const (
 	netfilterOn       = preftype.NetfilterOn
 )
 
+// linuxRouter is the Linux implementation of router.Router.
+//
+// The embedded routerFixed is written once, by newLinuxRouter, and only read
+// afterwards. Every other field is guarded by mu, atomic, or written by
+// subscribeEvents.
 type linuxRouter struct {
+	routerFixed
+
 	closed        atomic.Bool
-	logf          func(fmt string, args ...any)
-	tunname       string
-	netMon        *netmon.Monitor
-	health        *health.Tracker
-	eventClient   *eventbus.Client
-	rulesAddedPub *eventbus.Publisher[AddIPRules]
+	eventClient   *eventbus.Client                // set by subscribeEvents
+	rulesAddedPub *eventbus.Publisher[AddIPRules] // set by subscribeEvents
 	unregNetMon   func()
 
 	// ruleRestorePending is whether a timer has been started to
 	// restore deleted ip rules.
 	ruleRestorePending atomic.Bool
-	ipRuleFixLimiter   *rate.Limiter
 
-	// Various feature checks for the network stack.
-	ipRuleAvailable bool     // whether kernel was built with IP_MULTIPLE_TABLES
-	fwmaskWorksLazy opt.Bool // whether we can use 'ip rule...fwmark <mark>/<mask>'; set lazily
-
-	// interfaceV6Usable reports whether the kernel has IPv6 enabled on the
-	// tunnel interface specifically (distinct from global IPv6 support,
-	// which the netfilter runner tracks). Always set: the constructor wires
-	// it to interfaceV6UsableForTun; tests override it. See #20447.
-	interfaceV6Usable func() bool
+	// fwmaskWorksLazy is whether we can use 'ip rule...fwmark <mark>/<mask>';
+	// set lazily.
+	fwmaskWorksLazy opt.Bool
 
 	// interfaceV6UsableMemo memoizes interfaceV6Usable for the duration of a
 	// single Set, so its many getV6Available calls don't each hit /proc. It's
@@ -93,10 +89,6 @@ type linuxRouter struct {
 	// justAddIPRules; the unset value there means "read live". See #20447.
 	interfaceV6UsableMemo atomic.Int32
 
-	// ipPolicyPrefBase is the base priority at which ip rules are installed.
-	ipPolicyPrefBase int
-
-	cmd commandRunner
 	nfr linuxfw.NetfilterRunner
 
 	mu                sync.Mutex
@@ -114,6 +106,54 @@ type linuxRouter struct {
 	magicsockPortV6   uint16
 }
 
+// routerFixed holds the linuxRouter fields that are fixed for its lifetime:
+// what it is built with, the hooks that replace parts of it in tests, and
+// what newLinuxRouter derives from those. newLinuxRouter takes one by value,
+// so a router is complete when it returns: there is no window in which a
+// caller could still be setting a field that an eventbus callback already
+// reads.
+//
+// Those callbacks read these fields without holding mu, which is race-free
+// only because every write to them happens before subscribeEvents registers
+// the callbacks; see subscribeEvents.
+type routerFixed struct {
+	logf    func(fmt string, args ...any)
+	tunname string
+	netMon  *netmon.Monitor
+	health  *health.Tracker
+	cmd     commandRunner
+
+	// interfaceV6Usable reports whether the kernel has IPv6 enabled on the
+	// tunnel interface specifically (distinct from global IPv6 support,
+	// which the netfilter runner tracks). Nil means the production
+	// default, interfaceV6UsableForTun. See #20447.
+	interfaceV6Usable func() bool
+
+	// afterFunc, if non-nil, replaces time.AfterFunc for the router's rule
+	// restore timers. For tests.
+	afterFunc func(time.Duration, func())
+
+	// ipRuleAvailable is whether the kernel was built with
+	// IP_MULTIPLE_TABLES.
+	ipRuleAvailable bool
+
+	// ipPolicyPrefBase is the base priority at which ip rules are
+	// installed. Zero means defaultIPPolicyPrefBase.
+	ipPolicyPrefBase int
+
+	// ipRuleFixLimiter rate limits restores of the base ip rules, so we
+	// don't get into a high-speed fight with another process deleting them.
+	ipRuleFixLimiter *rate.Limiter
+}
+
+const (
+	// defaultIPPolicyPrefBase is the default base priority for our ip rules.
+	defaultIPPolicyPrefBase = 5200
+	// mwan3IPPolicyPrefBase is the base priority used when OpenWrt mwan3 is
+	// detected; see newUserspaceRouterAdvanced.
+	mwan3IPPolicyPrefBase = 1300
+)
+
 func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus) (router.Router, error) {
 	tunname, err := tunDev.Name()
 	if err != nil {
@@ -128,34 +168,39 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Moni
 }
 
 func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon.Monitor, cmd commandRunner, health *health.Tracker, bus *eventbus.Bus) (router.Router, error) {
-	r := &linuxRouter{
-		logf:          logf,
-		tunname:       tunname,
-		netfilterMode: netfilterOff,
-		netMon:        netMon,
-		health:        health,
+	r := newLinuxRouter(routerFixed{
+		logf:    logf,
+		tunname: tunname,
+		netMon:  netMon,
+		health:  health,
+		cmd:     cmd,
+	})
+	// Must be last; see subscribeEvents.
+	r.subscribeEvents(bus)
+	return r, nil
+}
 
-		cmd: cmd,
-
-		ipRuleFixLimiter: rate.NewLimiter(rate.Every(5*time.Second), 10),
-		ipPolicyPrefBase: 5200,
+// newLinuxRouter builds a fully initialized linuxRouter that isn't yet
+// connected to the eventbus. Everything fixed for the router's lifetime
+// arrives in fixed, whose unset fields newLinuxRouter fills in with their
+// production defaults, so a returned router has nothing left to set before
+// subscribeEvents apart from the mu-guarded fields tests replace.
+func newLinuxRouter(fixed routerFixed) *linuxRouter {
+	if fixed.ipPolicyPrefBase == 0 {
+		fixed.ipPolicyPrefBase = defaultIPPolicyPrefBase
 	}
-	r.interfaceV6Usable = func() bool { return interfaceV6UsableForTun(r.tunname) }
-	ec := bus.Client("router-linux")
-	r.rulesAddedPub = eventbus.Publish[AddIPRules](ec)
-	eventbus.SubscribeFunc(ec, func(rs netmon.RuleDeleted) {
-		r.onIPRuleDeleted(rs.Table, rs.Priority)
-	})
-	eventbus.SubscribeFunc(ec, func(pu router.PortUpdate) {
-		r.logf("portUpdate(port=%v, network=%s)", pu.UDPPort, pu.EndpointNetwork)
-		if err := r.updateMagicsockPort(pu.UDPPort, pu.EndpointNetwork); err != nil {
-			r.logf("updateMagicsockPort(port=%v, network=%s) failed: %v", pu.UDPPort, pu.EndpointNetwork, err)
-		}
-	})
-	r.eventClient = ec
-
+	if fixed.ipRuleFixLimiter == nil {
+		fixed.ipRuleFixLimiter = rate.NewLimiter(rate.Every(5*time.Second), 10)
+	}
+	r := &linuxRouter{
+		routerFixed:   fixed,
+		netfilterMode: netfilterOff,
+	}
+	if r.interfaceV6Usable == nil {
+		r.interfaceV6Usable = func() bool { return interfaceV6UsableForTun(r.tunname) }
+	}
 	if r.useIPCommand() {
-		r.ipRuleAvailable = (cmd.run("ip", "rule") == nil)
+		r.ipRuleAvailable = (r.cmd.run("ip", "rule") == nil)
 	} else {
 		if rules, err := netlink.RuleList(netlink.FAMILY_V4); err != nil {
 			r.logf("error querying IP rules (does kernel have IP_MULTIPLE_TABLES?): %v", err)
@@ -185,13 +230,51 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 	if err != nil {
 		r.logf("error checking mwan3 installation: %v", err)
 	} else if isMWAN3 {
-		r.ipPolicyPrefBase = 1300
+		r.ipPolicyPrefBase = mwan3IPPolicyPrefBase
 		r.logf("mwan3 on openWRT detected, switching policy base priority to 1300")
 	}
 
 	r.fixupWSLMTU()
+	return r
+}
 
-	return r, nil
+// subscribeEvents connects r to the eventbus. From the first SubscribeFunc
+// on, callbacks run concurrently on eventbus goroutines and read r's
+// routerFixed fields without holding mu. Those reads are race-free only
+// because every write to them happens before this call; eventbus
+// registration provides the happens-before edge. So:
+//
+//   - call subscribeEvents exactly once, as the last step of construction;
+//   - never write a routerFixed field after calling it.
+//
+// TestSubscribeEventsAfterInit enforces this under the race detector.
+func (r *linuxRouter) subscribeEvents(bus *eventbus.Bus) {
+	if r.eventClient != nil {
+		panic("linuxRouter.subscribeEvents called twice")
+	}
+	ec := bus.Client("router-linux")
+	r.eventClient = ec
+	r.rulesAddedPub = eventbus.Publish[AddIPRules](ec)
+	eventbus.SubscribeFunc(ec, func(rs netmon.RuleDeleted) {
+		r.onIPRuleDeleted(rs.Table, rs.Priority)
+	})
+	eventbus.SubscribeFunc(ec, func(pu router.PortUpdate) {
+		r.logf("portUpdate(port=%v, network=%s)", pu.UDPPort, pu.EndpointNetwork)
+		if err := r.updateMagicsockPort(pu.UDPPort, pu.EndpointNetwork); err != nil {
+			r.logf("updateMagicsockPort(port=%v, network=%s) failed: %v", pu.UDPPort, pu.EndpointNetwork, err)
+		}
+	})
+}
+
+// after runs f after d on the router's timer hook (routerFixed.afterFunc),
+// which tests replace to drive the router's timers instead of waiting on
+// the wall clock.
+func (r *linuxRouter) after(d time.Duration, f func()) {
+	if r.afterFunc != nil {
+		r.afterFunc(d, f)
+		return
+	}
+	time.AfterFunc(d, f)
 }
 
 // ipCmdSupportsFwmask returns true if the system 'ip' binary supports using a
@@ -359,7 +442,7 @@ func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
 
 	r.rulesAddedPub.Publish(AddIPRules{})
 
-	time.AfterFunc(rr.Delay()+250*time.Millisecond, func() {
+	r.after(rr.Delay()+250*time.Millisecond, func() {
 		if r.ruleRestorePending.Swap(false) && !r.closed.Load() {
 			r.logf("somebody (likely systemd-networkd) deleted ip rules; restoring Tailscale's")
 			r.justAddIPRules()
@@ -1950,9 +2033,11 @@ func removeOrphanedAddrsForCleanup(logf logger.Logf, cmd commandRunner, interfac
 	// the nil nfr/netMon/health are never dereferenced. logf is wrapped to match
 	// the live router's "router: " prefix.
 	r := &linuxRouter{
-		logf:    logger.WithPrefix(logf, "router: "),
-		tunname: interfaceName,
-		cmd:     cmd,
+		routerFixed: routerFixed{
+			logf:    logger.WithPrefix(logf, "router: "),
+			tunname: interfaceName,
+			cmd:     cmd,
+		},
 	}
 	ifaceAddrs, err := r.tailscaleInterfaceAddrs()
 	if err != nil {
