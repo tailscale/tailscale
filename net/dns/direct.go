@@ -269,19 +269,29 @@ func (m *directManager) restoreBackup() (restored bool, err error) {
 }
 
 // rename tries to rename old to new using m.fs.Rename, and falls back
+// to hand-copying bytes and truncating old if that fails. When new is
+// /etc/resolv.conf, it restores the file's SELinux label afterwards.
+func (m *directManager) rename(old, new string) error {
+	if err := m.renameOrCopy(old, new); err != nil {
+		return err
+	}
+	if new == resolvConf {
+		m.relabel(resolvConf)
+	}
+	return nil
+}
+
+// renameOrCopy renames old to new using m.fs.Rename, and falls back
 // to hand-copying bytes and truncating old if that fails.
 //
 // This is a workaround to /etc/resolv.conf being a bind-mounted file
-// some container environments, which cannot be moved elsewhere in
+// in some container environments, which cannot be moved elsewhere in
 // /etc (because that would be a cross-filesystem move) or deleted
 // (because that would break the bind in surprising ways).
-func (m *directManager) rename(old, new string) error {
+func (m *directManager) renameOrCopy(old, new string) error {
 	if !m.renameBroken {
 		err := m.fs.Rename(old, new)
 		if err == nil {
-			if new == resolvConf {
-				m.relabelResolvConf()
-			}
 			return nil
 		}
 		if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
@@ -314,19 +324,23 @@ func (m *directManager) rename(old, new string) error {
 			return fmt.Errorf("remove of %q failed (%w) and so did truncate: %v", old, err, err2)
 		}
 	}
-	if new == resolvConf {
-		m.relabelResolvConf()
-	}
 	return nil
 }
 
 var restoreconPath lazy.SyncValue[string] // path to restorecon, or "" if absent
 
-// relabelResolvConf restores the policy-default SELinux context on
-// /etc/resolv.conf. Best effort: only runs when SELinux is enforcing. See:
+// relabel restores the policy-default SELinux context on name.
 //
-//	https://github.com/tailscale/tailscale/issues/20149.
-func (m *directManager) relabelResolvConf() {
+// name is /etc/resolv.conf or a temp file beside it named
+// /etc/resolv.conf.*. The targeted policy's file-context rule for
+// /etc/resolv\.conf.* covers both, so the temp file gets net_conf_t
+// and keeps it through rename(2).
+//
+// Best effort: only runs when SELinux is enforcing. See:
+//
+//	https://github.com/tailscale/tailscale/issues/20149
+//	https://github.com/tailscale/tailscale/issues/22418
+func (m *directManager) relabel(name string) {
 	if runtime.GOOS != "linux" {
 		return
 	}
@@ -347,7 +361,7 @@ func (m *directManager) relabelResolvConf() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	// m.fs may be rooted at a test prefix; restorecon needs the real path.
-	actualPath := m.fs.ActualPath(resolvConf)
+	actualPath := m.fs.ActualPath(name)
 	if out, err := exec.CommandContext(ctx, restorecon, actualPath).CombinedOutput(); err != nil {
 		m.logf("dns: restorecon of %q failed: %v, output: %s", actualPath, err, bytes.TrimSpace(out))
 		m.health.SetUnhealthy(selinuxRelabelWarnable, nil)
@@ -636,6 +650,11 @@ func (m *directManager) atomicWriteFile(fs wholeFileFS, filename string, data []
 	// permissions once it's renamed into place. See #12609.
 	if err := fs.Chmod(tmpName, perm); err != nil {
 		return fmt.Errorf("atomicWriteFile: Chmod: %w", err)
+	}
+	if filename == resolvConf {
+		// Label the temp file first so /etc/resolv.conf never appears
+		// as etc_t, not even in the window before rename's own relabel.
+		m.relabel(tmpName)
 	}
 
 	return m.rename(tmpName, filename)
