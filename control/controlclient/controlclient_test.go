@@ -528,6 +528,41 @@ func TestRegisterRateLimited(t *testing.T) {
 	}
 }
 
+func TestTryLogoutFailureKeepsNodeKey(t *testing.T) {
+	var failRegister atomic.Bool
+	d := newDirectForTestControl(t, &testcontrol.Server{
+		MaybeRejectRequest: testcontrol.RejectRequestForPath("/machine/register", func() (int, string, string) {
+			if failRegister.Swap(false) {
+				return http.StatusInternalServerError, "", "logout failed"
+			}
+			return 0, "", ""
+		}),
+	})
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	if _, err := d.TryLogin(ctx, LoginEphemeral); err != nil {
+		t.Fatalf("TryLogin: %v", err)
+	}
+	nodeKey := d.GetPersist().PrivateNodeKey()
+
+	failRegister.Store(true)
+	if err := d.TryLogout(ctx); err == nil {
+		t.Fatal("expected error on first logout, got nil")
+	}
+	if !d.GetPersist().PrivateNodeKey().Equal(nodeKey) {
+		t.Fatal("failed logout discarded node key")
+	}
+
+	if err := d.TryLogout(ctx); err != nil {
+		t.Fatalf("TryLogout retry: %v", err)
+	}
+	if !d.GetPersist().PrivateNodeKey().IsZero() {
+		t.Fatal("successful logout kept node key")
+	}
+}
+
 // TestMapRequestRateLimited verifies that the client turns 429 and 503
 // responses to map requests into a [rateLimitError] carrying the server's
 // Retry-After value, and that other failures don't.
