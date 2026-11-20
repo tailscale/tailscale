@@ -1198,6 +1198,52 @@ func TestIsIPRuleNotFound(t *testing.T) {
 	}
 }
 
+// TestQueueNetworkChangeCoalesces checks that the ChangeDelta callback never
+// blocks on r.mu and that a burst of changes while a reconcile is pending
+// collapses into that one reconcile.
+func TestQueueNetworkChangeCoalesces(t *testing.T) {
+	lr, fake := newTestLinuxRouter(t)
+	var calls atomic.Int32
+	addrs := []netip.Addr{netip.MustParseAddr("192.168.1.5")}
+	lr.mu.Lock()
+	lr.underlayAddrs = func() []netip.Addr { calls.Add(1); return slices.Clone(addrs) }
+	lr.mu.Unlock()
+	if err := lr.Set(exitConfig("0.0.0.0/0")); err != nil {
+		t.Fatal(err)
+	}
+	checkUnderlayRules(t, fake, "192.168.1.5")
+	calls.Store(0)
+
+	// Hold mu, as a long Set would, and fire a burst of changes. Each
+	// callback must return immediately.
+	lr.mu.Lock()
+	addrs = []netip.Addr{netip.MustParseAddr("192.168.1.77")}
+	done := make(chan struct{})
+	go func() {
+		for range 100 {
+			lr.queueNetworkChange()
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		lr.mu.Unlock()
+		t.Fatal("queueNetworkChange blocked while r.mu was held")
+	}
+	lr.mu.Unlock()
+
+	waitFor(t, "coalesced reconcile", func() bool {
+		lr.mu.Lock()
+		defer lr.mu.Unlock()
+		return !lr.netChangePending.Load() && lr.underlaySrcRules.Contains(underlayRule{fam: v4, src: netip.MustParseAddr("192.168.1.77")})
+	})
+	checkUnderlayRules(t, fake, "192.168.1.77")
+	if n := calls.Load(); n != 1 {
+		t.Errorf("burst of 100 changes ran %d reconciles; want 1", n)
+	}
+}
+
 // TestUnderlaySrcRulesBeforeExitRoute checks that enabling an exit node
 // installs the underlay rules before the default route, so there is no
 // window in which replies to tailscaled's sockets are dropped, and that

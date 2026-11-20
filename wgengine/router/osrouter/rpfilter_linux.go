@@ -578,13 +578,30 @@ func (r *linuxRouter) underlayNetlinkUsable() bool {
 	return ok
 }
 
-// onNetworkChange is the netmon.ChangeDelta eventbus callback. It
-// reconciles the underlay rules with the current interface state so they
-// follow address changes (DHCP renewals, interfaces coming and going, IPv6
-// privacy address rotation).
+// queueNetworkChange is the netmon.ChangeDelta eventbus callback. It must
+// return quickly: the router's eventbus client delivers events one at a
+// time, so blocking here (on r.mu behind a long Set, then on netlink
+// syscalls) would delay RuleDeleted and PortUpdate delivery. It hands the
+// work to a goroutine and coalesces bursts: while a reconcile is pending
+// (waiting for r.mu), further changes are dropped, since the pending
+// reconcile reads the latest interface state once it runs. At most one
+// goroutine waits and one runs at a time.
+func (r *linuxRouter) queueNetworkChange() {
+	if r.closed.Load() || r.netChangePending.Swap(true) {
+		return
+	}
+	go r.onNetworkChange()
+}
+
+// onNetworkChange reconciles the underlay rules with the current interface
+// state so they follow address changes (DHCP renewals, interfaces coming
+// and going, IPv6 privacy address rotation).
 func (r *linuxRouter) onNetworkChange() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Clear only once we hold mu: changes arriving from here on queue a
+	// new reconcile, as this one may already have read older state.
+	r.netChangePending.Store(false)
 	if r.closed.Load() {
 		return
 	}
