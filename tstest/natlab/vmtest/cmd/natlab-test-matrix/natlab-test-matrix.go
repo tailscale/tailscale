@@ -204,10 +204,4 @@ var testMatrix = []struct {
 	{name: "{{.TestName}}", fn: func(t *testing.T) { {{.FuncName}}(t, {{.JoinedParams}}) }},
 {{- end}}
 }
-
-func TestMatrix(t *testing.T) {
-	for _, tt := range testMatrix {
-		t.Run(tt.name, tt.fn)
-	}
-}
 `))
