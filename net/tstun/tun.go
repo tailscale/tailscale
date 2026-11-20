@@ -87,6 +87,7 @@ func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	metricQueues.Set(int64(len(tun.QueuesOf(dev))))
 	if err := waitInterfaceUp(dev, 90*time.Second, logf); err != nil {
 		dev.Close()
 		return nil, "", err
