@@ -133,18 +133,9 @@ func (prs PortRanges) All() iter.Seq[uint16] {
 				end = pr.Port
 			}
 
-			if pr.Port > end {
-				continue
-			}
-			// port is a uint16, so incrementing past end when end is
-			// 65535 wraps back to zero and restarts the range forever.
-			// Stop once end has been yielded.
-			for port := pr.Port; ; port++ {
-				if !yield(port) {
+			for port := int(pr.Port); port <= int(end); port++ {
+				if !yield(uint16(port)) {
 					return
-				}
-				if port == end {
-					break
 				}
 			}
 		}
