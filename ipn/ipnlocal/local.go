@@ -345,6 +345,7 @@ type LocalBackend struct {
 	// hostinfo is mutated in-place while mu is held.
 	hostinfo          *tailcfg.Hostinfo      // TODO(nickkhyl): move to nodeBackend
 	nmExpiryTimer     tstime.TimerController // for updating netMap on node expiry; can be nil; TODO(nickkhyl): move to nodeBackend
+	nmExpiryAt        time.Time              // wall time at which nmExpiryTimer should fire
 	activeLogin       string                 // last logged LoginName from netMap; TODO(nickkhyl): move to nodeBackend (or remove? it's in [ipn.LoginProfile]).
 	engineStatus      ipn.EngineStatus
 	endpoints         []tailcfg.Endpoint
@@ -1177,15 +1178,12 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 
 	b.interfaceState = delta.CurrentState()
 
-	if delta.TimeJumped() {
-		nm := b.currentNode().NetMap()
-		if nm != nil {
-			expiry := nm.SelfKeyExpiry()
-			if !expiry.IsZero() && expiry.Before(b.clock.Now()) {
-				b.keyExpired = true
-				b.stateMachineLocked()
-			}
-		}
+	if delta.TimeJumped() && b.nmExpiryTimer != nil {
+		// The timer runs on monotonic time, which on most platforms
+		// does not advance while the device is asleep. Reschedule it
+		// against the wall clock so that a key that expired during
+		// sleep is handled now rather than a sleep's duration late.
+		b.nmExpiryTimer.Reset(max(0, b.nmExpiryAt.Sub(b.clock.Now())))
 	}
 
 	b.pauseOrResumeControlClientLocked()
@@ -1880,6 +1878,7 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		nextExpiry := b.em.nextPeerExpiry(st.NetMap, now)
 		if !nextExpiry.IsZero() {
 			tmrDuration := nextExpiry.Sub(now) + 10*time.Second
+			b.nmExpiryAt = now.Add(tmrDuration)
 			b.nmExpiryTimer = b.clock.AfterFunc(tmrDuration, func() {
 				b.handleNetmapExpiry(c, st, currCall, tmrDuration)
 			})
@@ -1938,7 +1937,7 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 			prefs.Persist = st.Persist.AsStruct()
 		}
 	}
-	if st.LoggedIn {
+	if st.LoggedIn && !b.keyExpired {
 		if authWasInProgress {
 			b.resetAuthURLLocked()
 			// Interactive login finished successfully (URL visited).

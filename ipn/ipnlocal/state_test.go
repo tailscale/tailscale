@@ -1624,7 +1624,8 @@ func TestExpiredKeyLoggedInStatusDoesNotUnblockEngine(t *testing.T) {
 
 	// A subsequent control status can still say LoggedIn even though the
 	// node key remains expired. This must not be treated as completed
-	// reauthentication.
+	// reauthentication, including when an interactive login is pending.
+	cc().sendAuthURL(&expiredNetmap)
 	cc().send(sendOpt{
 		loginFinished: true,
 		nm:            &expiredNetmap,
@@ -1639,12 +1640,19 @@ func TestExpiredKeyLoggedInStatusDoesNotUnblockEngine(t *testing.T) {
 	if cfg := engine.Config(); len(cfg.Addresses) != 0 {
 		t.Errorf("stale LoggedIn status restored engine addresses: %v", cfg.Addresses)
 	}
+	lb.mu.Lock()
+	authURL := lb.authURL
+	lb.mu.Unlock()
+	if authURL == "" {
+		t.Error("stale LoggedIn status reset the pending auth URL")
+	}
 }
 
 func TestTimeJumpRechecksSelfKeyExpiry(t *testing.T) {
 	tests := []struct {
 		name           string
 		wakeAfter      time.Duration
+		wantReset      time.Duration // new duration of the expiry timer
 		wantState      ipn.State
 		wantBlocked    bool
 		wantConfigured bool
@@ -1652,6 +1660,7 @@ func TestTimeJumpRechecksSelfKeyExpiry(t *testing.T) {
 		{
 			name:           "before_expiry",
 			wakeAfter:      4 * time.Minute,
+			wantReset:      time.Minute + 10*time.Second,
 			wantState:      ipn.Running,
 			wantBlocked:    false,
 			wantConfigured: true,
@@ -1659,6 +1668,7 @@ func TestTimeJumpRechecksSelfKeyExpiry(t *testing.T) {
 		{
 			name:           "after_expiry",
 			wakeAfter:      7 * time.Minute,
+			wantReset:      0,
 			wantState:      ipn.NeedsLogin,
 			wantBlocked:    true,
 			wantConfigured: false,
@@ -1726,6 +1736,14 @@ func TestTimeJumpRechecksSelfKeyExpiry(t *testing.T) {
 			}
 
 			lb.linkChange(delta)
+
+			if got, want := clock.resets, []time.Duration{tt.wantReset}; !slices.Equal(got, want) {
+				t.Fatalf("expiry timer resets = %v; want %v", got, want)
+			}
+			if tt.wantReset == 0 {
+				// The rescheduled timer fires immediately.
+				clock.afterFunc()
+			}
 
 			if got := lb.State(); got != tt.wantState {
 				t.Errorf("state after wake = %v; want %v", got, tt.wantState)
