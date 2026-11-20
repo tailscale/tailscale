@@ -7,6 +7,9 @@ package magicsock
 
 import (
 	"syscall"
+
+	"tailscale.com/net/sockopts"
+	"tailscale.com/types/nettype"
 )
 
 // getIPProto returns the value of the get/setsockopt proto argument necessary
@@ -37,9 +40,22 @@ func (c *Conn) setDontFragment(network string, enable bool) error {
 	if !enable {
 		optArg = dontFragDisabled
 	}
-	return c.connControl(network, func(fd uintptr) error {
+	return c.connControl(network, dontFragmentFn(network, optArg))
+}
+
+// setDontFragmentOn sets or clears the don't fragment bit on pconns, which aren't published in a RebindingUDPConn yet.
+func setDontFragmentOn(pconns []nettype.PacketConn, network string, enable bool) error {
+	optArg := dontFragEnabled
+	if !enable {
+		optArg = dontFragDisabled
+	}
+	return sockopts.ControlEach(pconns, dontFragmentFn(network, optArg))
+}
+
+func dontFragmentFn(network string, optArg int) func(fd uintptr) error {
+	return func(fd uintptr) error {
 		return syscall.SetsockoptInt(int(fd), getIPProto(network), getDontFragOpt(network), optArg)
-	})
+	}
 }
 
 // getDontFragment reports whether the network sockets have the don't fragment bit set.
@@ -57,4 +73,36 @@ func (c *Conn) getDontFragment(network string) (bool, error) {
 		return nil
 	})
 	return err == nil && allSet, err
+}
+
+// copyDontFragment gives rc, a connected socket being dialled for network, the shared socket's current don't-fragment setting. UpdatePMTUD redials connected sockets when it changes that setting.
+func (c *Conn) copyDontFragment(network string, rc syscall.RawConn) error {
+	ruc := &c.pconn4
+	if network == "udp6" {
+		ruc = &c.pconn6
+	}
+	sc, ok := ruc.connAt(0).(syscall.Conn) // every socket in the group gets the same options; connAt takes no lock
+	if !ok {
+		return nil // nothing to copy from
+	}
+	src, err := sc.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var v int
+	var gerr, serr error
+	if err := src.Control(func(fd uintptr) {
+		v, gerr = syscall.GetsockoptInt(int(fd), getIPProto(network), getDontFragOpt(network))
+	}); err != nil {
+		return err
+	}
+	if gerr != nil {
+		return gerr
+	}
+	if err := rc.Control(func(fd uintptr) {
+		serr = syscall.SetsockoptInt(int(fd), getIPProto(network), getDontFragOpt(network), v)
+	}); err != nil {
+		return err
+	}
+	return serr
 }
