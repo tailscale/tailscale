@@ -55,6 +55,9 @@ spec:
           secret:
             secretName: {{ include "tailscale-operator.fullname" . }}-oauth
         {{- end }}
+        # Writable, so the root filesystem can be read-only.
+        - name: tmp
+          emptyDir: {}
       containers:
         - name: operator
           {{- with .Values.operatorConfig.securityContext }}
@@ -110,6 +113,8 @@ spec:
               value: {{ .Values.proxyConfig.defaultTags }}
             - name: APISERVER_PROXY
               value: "{{ .Values.apiServerProxyConfig.mode }}"
+            - name: K8S_PROXY_RESTRICTED_POD_SECURITY
+              value: "{{ .Values.apiServerProxyConfig.restrictedPodSecurity }}"
             - name: PROXY_FIREWALL_MODE
               value: {{ .Values.proxyConfig.firewallMode }}
             {{- if .Values.proxyConfig.defaultProxyClass }}
@@ -126,6 +131,9 @@ spec:
                   fieldPath: metadata.uid
             - name: OPERATOR_SHARED_ACME_ACCOUNT_KEY
               value: {{ .Values.operatorConfig.sharedACMEAccountKey | quote }}
+            # tsnet's state dir, writable for any UID, even without a home (e.g. OpenShift).
+            - name: XDG_CONFIG_HOME
+              value: /tmp
             {{- with .Values.operatorConfig.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -143,6 +151,8 @@ spec:
               mountPath: /oauth
               readOnly: true
             {{- end }}
+            - name: tmp
+              mountPath: /tmp
       {{- with .Values.operatorConfig.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
