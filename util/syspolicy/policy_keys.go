@@ -15,8 +15,7 @@ import (
 // This includes the first time a policy needs to be read from any source.
 var implicitDefinitions = []*setting.Definition{
 	// Device policy settings (can only be configured on a per-device basis):
-	setting.NewDefinition(pkey.AllowedSuggestedExitNodes, setting.DeviceSetting, setting.StringListValue),
-	setting.NewDefinition(pkey.AllowExitNodeOverride, setting.DeviceSetting, setting.BooleanValue),
+	setting.NewDefinition(pkey.AllowTailnetSysPolicy, setting.DeviceSetting, setting.BooleanValue),
 	setting.NewDefinition(pkey.AllowTailscaledRestart, setting.DeviceSetting, setting.BooleanValue),
 	setting.NewDefinition(pkey.AlwaysOn, setting.DeviceSetting, setting.BooleanValue),
 	setting.NewDefinition(pkey.AlwaysOnOverrideWithReason, setting.DeviceSetting, setting.BooleanValue),
@@ -25,15 +24,9 @@ var implicitDefinitions = []*setting.Definition{
 	setting.NewDefinition(pkey.CheckUpdates, setting.DeviceSetting, setting.PreferenceOptionValue),
 	setting.NewDefinition(pkey.ControlURL, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(pkey.DeviceSerialNumber, setting.DeviceSetting, setting.StringValue),
-	setting.NewDefinition(pkey.EnableDNSRegistration, setting.DeviceSetting, setting.PreferenceOptionValue),
 	setting.NewDefinition(pkey.EnableIncomingConnections, setting.DeviceSetting, setting.PreferenceOptionValue),
 	setting.NewDefinition(pkey.EnableRunExitNode, setting.DeviceSetting, setting.PreferenceOptionValue),
 	setting.NewDefinition(pkey.EnableServerMode, setting.DeviceSetting, setting.PreferenceOptionValue),
-	setting.NewDefinition(pkey.EnableTailscaleDNS, setting.DeviceSetting, setting.PreferenceOptionValue),
-	setting.NewDefinition(pkey.EnableTailscaleSubnets, setting.DeviceSetting, setting.PreferenceOptionValue),
-	setting.NewDefinition(pkey.ExitNodeAllowLANAccess, setting.DeviceSetting, setting.PreferenceOptionValue),
-	setting.NewDefinition(pkey.ExitNodeID, setting.DeviceSetting, setting.StringValue),
-	setting.NewDefinition(pkey.ExitNodeIP, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(pkey.FlushDNSOnSessionUnlock, setting.DeviceSetting, setting.BooleanValue),
 	setting.NewDefinition(pkey.EncryptState, setting.DeviceSetting, setting.BooleanValue),
 	setting.NewDefinition(pkey.Hostname, setting.DeviceSetting, setting.StringValue),
@@ -41,11 +34,21 @@ var implicitDefinitions = []*setting.Definition{
 	setting.NewDefinition(pkey.LogTarget, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(pkey.MachineCertificateSubject, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(pkey.PostureChecking, setting.DeviceSetting, setting.PreferenceOptionValue),
-	setting.NewDefinition(pkey.ReconnectAfter, setting.DeviceSetting, setting.DurationValue),
 	setting.NewDefinition(pkey.Tailnet, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(pkey.HardwareAttestation, setting.DeviceSetting, setting.BooleanValue),
 
-	// User policy settings (can be configured on a user- or device-basis):
+	// Profile policy settings (can be configured for the current profile or on a per-device basis):
+	setting.NewDefinition(pkey.AllowedSuggestedExitNodes, setting.ProfileSetting, setting.StringListValue),
+	setting.NewDefinition(pkey.AllowExitNodeOverride, setting.ProfileSetting, setting.BooleanValue),
+	setting.NewDefinition(pkey.EnableDNSRegistration, setting.ProfileSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(pkey.EnableTailscaleDNS, setting.ProfileSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(pkey.EnableTailscaleSubnets, setting.ProfileSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(pkey.ExitNodeAllowLANAccess, setting.ProfileSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(pkey.ExitNodeID, setting.ProfileSetting, setting.StringValue),
+	setting.NewDefinition(pkey.ExitNodeIP, setting.ProfileSetting, setting.StringValue),
+	setting.NewDefinition(pkey.ReconnectAfter, setting.ProfileSetting, setting.DurationValue),
+
+	// User policy settings (can be configured on a user-, tailnet- or device-basis):
 	setting.NewDefinition(pkey.AdminConsoleVisibility, setting.UserSetting, setting.VisibilityValue),
 	setting.NewDefinition(pkey.AutoUpdateVisibility, setting.UserSetting, setting.VisibilityValue),
 	setting.NewDefinition(pkey.ExitNodeMenuVisibility, setting.UserSetting, setting.VisibilityValue),

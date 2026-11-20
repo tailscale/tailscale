@@ -5,4 +5,7 @@
 
 package condregister
 
-import _ "tailscale.com/feature/syspolicy"
+import (
+	_ "tailscale.com/feature/syspolicy"
+	_ "tailscale.com/feature/tailnetsyspolicy"
+)
