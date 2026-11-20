@@ -22,6 +22,7 @@ import (
 	"github.com/tailscale/netlink"
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/netipx"
+	"golang.org/x/sys/unix"
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
@@ -2136,6 +2137,28 @@ func TestCleanUpOnlyTouchesTunInterface(t *testing.T) {
 	}
 	if !slices.Contains(fake.ips, "100.64.0.5/32 dev eth0") {
 		t.Errorf("non-Tailscale CGNAT addr on eth0 was wrongly removed; ips=%q", fake.ips)
+	}
+}
+
+// TestOnIPRuleDeletedFamily checks that deletions of IPv6 rules are ignored
+// while no IPv6 rules of ours are installed, now that netmon reports them,
+// and that IPv4 deletions still schedule a restore.
+func TestOnIPRuleDeletedFamily(t *testing.T) {
+	lr, _ := newTestLinuxRouter(t, func(r *linuxRouter) {
+		r.nfr.(*fakeIPTablesRunner).noV6 = true
+	})
+	if lr.ipRulesV6.Load() {
+		t.Fatal("ipRulesV6 = true without IPv6")
+	}
+	// Keep any scheduled restore from running against the fake OS.
+	lr.closed.Store(true)
+	lr.onIPRuleDeleted(unix.AF_INET6, uint8(tailscaleRouteTable.Num), defaultIPPolicyPrefBase+10)
+	if lr.ruleRestorePending.Load() {
+		t.Error("IPv6 rule deletion scheduled a restore without IPv6 rules")
+	}
+	lr.onIPRuleDeleted(unix.AF_INET, uint8(tailscaleRouteTable.Num), defaultIPPolicyPrefBase+10)
+	if !lr.ruleRestorePending.Load() {
+		t.Error("IPv4 rule deletion didn't schedule a restore")
 	}
 }
 

@@ -6,6 +6,8 @@
 package netmon
 
 import (
+	"fmt"
+	"math"
 	"net"
 	"net/netip"
 	"time"
@@ -31,10 +33,72 @@ func (unspecifiedMessage) ignore() bool { return false }
 // RuleDeleted reports that one of Tailscale's policy routing rules
 // was deleted.
 type RuleDeleted struct {
+	// Family is the deleted rule's address family (unix.AF_INET or
+	// unix.AF_INET6).
+	Family uint8
 	// Table is the table number that the deleted rule referenced.
 	Table uint8
 	// Priority is the lookup priority of the deleted rule.
 	Priority uint32
+}
+
+// netlinkGroups are the rtnetlink multicast groups netmon listens to.
+// Routes get us most of the events of interest, but we need address as
+// well to cover things like DHCP deciding to give us a new address upon
+// renewal - routing wouldn't change, but all reachability would.
+const netlinkGroups = unix.RTMGRP_IPV4_IFADDR | unix.RTMGRP_IPV6_IFADDR |
+	unix.RTMGRP_IPV4_ROUTE | unix.RTMGRP_IPV6_ROUTE |
+	unix.RTMGRP_IPV4_RULE |
+	// x/sys/unix has no RTMGRP_IPV6_RULE bitmask constant; derive it from
+	// the group number. Without this, deletions of our IPv6 ip rules (e.g.
+	// by systemd-networkd) go unnoticed.
+	1<<(unix.RTNLGRP_IPV6_RULE-1)
+
+// fibRuleHdrLen is sizeof(struct fib_rule_hdr), the fixed header of a rule
+// message. x/sys/unix has no constant for it, but the kernel lays it out
+// exactly as struct rtmsg (four bytes, the table, three more bytes, then
+// 32-bit flags), which it does have.
+const fibRuleHdrLen = unix.SizeofRtMsg
+
+// parseRuleDeleted decodes an RTM_DELRULE message into a RuleDeleted.
+//
+// The header is decoded by rtnetlink.RuleMessage. The attributes are not:
+// RuleMessage rejects any attribute it doesn't know, and kernels keep adding
+// them (6.15 attaches FRA_SPORT_MASK to every single-port rule, such as our
+// rp_filter magicsock port rule), so a deletion we can't parse would be one
+// we never repair. Only FRA_PRIORITY and FRA_TABLE are read; the rest are
+// skipped. Route parsing (rtnetlink.RouteMessage) is no use either: rule
+// attributes reuse numbers that mean something else for routes
+// (FRA_UID_RANGE is RTA_ENCAP_TYPE, for example).
+func parseRuleDeleted(b []byte) (RuleDeleted, error) {
+	if len(b) < fibRuleHdrLen {
+		return RuleDeleted{}, fmt.Errorf("short fib_rule_hdr: %d bytes", len(b))
+	}
+	var hdr rtnetlink.RuleMessage
+	if err := hdr.UnmarshalBinary(b[:fibRuleHdrLen]); err != nil {
+		return RuleDeleted{}, fmt.Errorf("parsing fib_rule_hdr: %w", err)
+	}
+	rd := RuleDeleted{
+		Family: hdr.Family,
+		Table:  hdr.Table,
+	}
+	ad, err := netlink.NewAttributeDecoder(b[fibRuleHdrLen:])
+	if err != nil {
+		return RuleDeleted{}, err
+	}
+	for ad.Next() {
+		switch ad.Type() {
+		case unix.FRA_PRIORITY:
+			rd.Priority = ad.Uint32()
+		case unix.FRA_TABLE:
+			// FRA_TABLE carries the full 32-bit table ID; keep it only
+			// if it fits the header's uint8 Table field.
+			if t := ad.Uint32(); t <= math.MaxUint8 {
+				rd.Table = uint8(t)
+			}
+		}
+	}
+	return rd, ad.Err()
 }
 
 // nlConn wraps a *netlink.Conn and returns a monitor.Message
@@ -58,13 +122,7 @@ type nlConn struct {
 
 func newOSMon(bus *eventbus.Bus, logf logger.Logf, m *Monitor) (osMon, error) {
 	conn, err := netlink.Dial(unix.NETLINK_ROUTE, &netlink.Config{
-		// Routes get us most of the events of interest, but we need
-		// address as well to cover things like DHCP deciding to give
-		// us a new address upon renewal - routing wouldn't change,
-		// but all reachability would.
-		Groups: unix.RTMGRP_IPV4_IFADDR | unix.RTMGRP_IPV6_IFADDR |
-			unix.RTMGRP_IPV4_ROUTE | unix.RTMGRP_IPV6_ROUTE |
-			unix.RTMGRP_IPV4_RULE, // no IPV6_RULE in x/sys/unix
+		Groups: netlinkGroups,
 	})
 	if err != nil {
 		// Google Cloud Run does not implement NETLINK_ROUTE RTMGRP support
@@ -230,19 +288,16 @@ func (c *nlConn) Receive() (message, error) {
 	case unix.RTM_DELRULE:
 		// For https://github.com/tailscale/tailscale/issues/1591 where
 		// systemd-networkd deletes our rules.
-		var rmsg rtnetlink.RouteMessage
-		err := rmsg.UnmarshalBinary(msg.Data)
+		rd, err := parseRuleDeleted(msg.Data)
 		if err != nil {
 			c.logf("ip rule deleted; failed to parse netlink message: %v", err)
-		} else {
-			c.logf("ip rule deleted: %+v", rmsg)
-			// On `ip -4 rule del pref 5210 table main`, logs:
-			// monitor: ip rule deleted: {Family:2 DstLength:0 SrcLength:0 Tos:0 Table:254 Protocol:0 Scope:0 Type:1 Flags:0 Attributes:{Dst:<nil> Src:<nil> Gateway:<nil> OutIface:0 Priority:5210 Table:254 Mark:4294967295 Expires:<nil> Metrics:<nil> Multipath:[]}}
+			return ignoreMessage{}, nil
 		}
-		rd := RuleDeleted{
-			Table:    rmsg.Table,
-			Priority: rmsg.Attributes.Priority,
-		}
+		// Logged only verbosely: rules are deleted routinely, by other
+		// software (Cilium, mwan3, ip rule flush) and by tailscaled itself
+		// as its rp_filter underlay rules follow address changes. The
+		// router logs when it restores rules someone else deleted.
+		c.logf("[v1] ip rule deleted: %+v", rd)
 		c.rulesDeleted.Publish(rd)
 		if debugNetlinkMessages() {
 			c.logf("%+v", rd)
@@ -303,7 +358,34 @@ type newAddrMessage struct {
 }
 
 func (m *newAddrMessage) ignore() bool {
-	return tsaddr.IsTailscaleIP(m.Addr)
+	if !tsaddr.IsTailscaleIP(m.Addr) {
+		return false
+	}
+	// Our own Tailscale addresses change with our config, so ignore
+	// them; the same ranges on another interface are a real network
+	// change we have to react to.
+	return isTailscaleIfIndex(m.IfIndex)
+}
+
+// interfaceNameByIndex returns the name of the interface with the given
+// index. It's a variable for tests.
+var interfaceNameByIndex = func(idx uint32) (string, error) {
+	ifc, err := net.InterfaceByIndex(int(idx))
+	if err != nil {
+		return "", err
+	}
+	return ifc.Name, nil
+}
+
+// isTailscaleIfIndex reports whether idx is the Tailscale interface. If the
+// interface can't be found (for example, it was just deleted), it reports
+// true, the conservative answer for deciding whether to ignore an event.
+func isTailscaleIfIndex(idx uint32) bool {
+	name, err := interfaceNameByIndex(idx)
+	if err != nil {
+		return true
+	}
+	return isTailscaleInterface(name, nil)
 }
 
 type ignoreMessage struct{}

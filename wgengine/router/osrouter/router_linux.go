@@ -104,6 +104,10 @@ type linuxRouter struct {
 	cgnatMode         linuxfw.CGNATMode
 	magicsockPortV4   uint16
 	magicsockPortV6   uint16
+
+	// ipRulesV6 is whether the base ip rules were last installed for IPv6
+	// too. Read without mu by onIPRuleDeleted.
+	ipRulesV6 atomic.Bool
 }
 
 // routerFixed holds the linuxRouter fields that are fixed for its lifetime:
@@ -256,7 +260,7 @@ func (r *linuxRouter) subscribeEvents(bus *eventbus.Bus) {
 	r.eventClient = ec
 	r.rulesAddedPub = eventbus.Publish[AddIPRules](ec)
 	eventbus.SubscribeFunc(ec, func(rs netmon.RuleDeleted) {
-		r.onIPRuleDeleted(rs.Table, rs.Priority)
+		r.onIPRuleDeleted(rs.Family, rs.Table, rs.Priority)
 	})
 	eventbus.SubscribeFunc(ec, func(pu router.PortUpdate) {
 		r.logf("portUpdate(port=%v, network=%s)", pu.UDPPort, pu.EndpointNetwork)
@@ -425,9 +429,16 @@ type AddIPRules struct{}
 // Note that we don't care about the table number. We don't strictly even care
 // about the priority number. We could just do this in response to any netlink
 // change. Filtering by known priority ranges cuts back on some logspam.
-func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
+//
+// family is the deleted rule's address family (unix.AF_INET or AF_INET6),
+// or 0 if unknown. IPv6 deletions are ignored while we have no IPv6 rules
+// installed (no usable IPv6), as there's nothing of ours to restore.
+func (r *linuxRouter) onIPRuleDeleted(family uint8, table uint8, priority uint32) {
 	if int(priority) < r.ipPolicyPrefBase || int(priority) >= (r.ipPolicyPrefBase+100) {
 		// Not our rule.
+		return
+	}
+	if family == unix.AF_INET6 && !r.ipRulesV6.Load() {
 		return
 	}
 	if r.ruleRestorePending.Swap(true) {
@@ -1735,6 +1746,7 @@ func (r *linuxRouter) justAddIPRules() error {
 	if !r.ipRuleAvailable {
 		return nil
 	}
+	r.ipRulesV6.Store(slices.Contains(r.addrFamilies(), v6))
 	if r.useIPCommand() {
 		return r.addIPRulesWithIPCommand()
 	}
