@@ -152,8 +152,6 @@ func (c *connector) destinationInPools(dst netip.Addr) bool {
 // packetFilterAllow returns true if the provided packet has a Src that is in
 // the configured transit IP range for this connector, false otherwise.
 func (c *connector) packetFilterAllow(p packet.Parsed) (bool, string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	ipSets := c.getIPSets()
 	if ipSets.v4Transit != nil && ipSets.v4Transit.Contains(p.Dst.Addr()) {
 		return true, packetFilterAllowReason
