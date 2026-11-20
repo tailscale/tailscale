@@ -1605,6 +1605,8 @@ func (t *Wrapper) SetConnectionCounter(fn netlogfunc.ConnectionCounter) {
 }
 
 var (
+	metricQueues = clientmetric.NewGauge("tstun_queues")
+
 	metricPacketIn              = clientmetric.NewCounter("tstun_in_from_wg")
 	metricPacketInDrop          = clientmetric.NewCounter("tstun_in_from_wg_drop")
 	metricPacketInDropFilter    = clientmetric.NewCounter("tstun_in_from_wg_drop_filter")
