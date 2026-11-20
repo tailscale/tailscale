@@ -89,6 +89,8 @@ spec:
               value: {{ .Values.loginServer }}
             - name: OPERATOR_INGRESS_CLASS_NAME
               value: {{ .Values.ingressClass.name }}
+            - name: OPERATOR_AUTO_SIGN_NODE_KEYS
+              value: {{ .Values.operatorConfig.autoSignNodeKeys | quote }}
             {{- if .Values.oauthSecretVolume }}
             - name: CLIENT_ID_FILE
               value: /oauth/client_id
