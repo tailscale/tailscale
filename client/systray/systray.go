@@ -532,7 +532,7 @@ func (menu *Menu) watchIPNBus() {
 }
 
 func (menu *Menu) watchIPNBusInner() error {
-	watcher, err := menu.lc.WatchIPNBus(menu.bgCtx, 0)
+	watcher, err := menu.lc.WatchIPNBus(menu.bgCtx, ipn.NotifyInitialState|ipn.NotifyInitialPrefs)
 	if err != nil {
 		return fmt.Errorf("watching ipn bus: %w", err)
 	}
@@ -546,7 +546,9 @@ func (menu *Menu) watchIPNBusInner() error {
 			if err != nil {
 				return fmt.Errorf("ipnbus error: %w", err)
 			}
-			if url := n.BrowseToURL; url != nil {
+			// SessionID is only set on the initial NotifyInitialState message: don't
+			// reopen the browser for a login URL that was already presented on arrival.
+			if url := n.BrowseToURL; url != nil && n.SessionID == "" {
 				// Avoid opening the browser when running as root, just in case.
 				runningAsRoot := os.Getuid() == 0
 				if !runningAsRoot {
