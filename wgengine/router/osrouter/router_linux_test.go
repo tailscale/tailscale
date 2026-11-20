@@ -50,6 +50,39 @@ ip rule add -6 pref 5230 fwmark 0x80000/0xff0000 table default
 ip rule add -6 pref 5250 fwmark 0x80000/0xff0000 type unreachable
 ip rule add -6 pref 5270 table 52
 `
+	// basicExitV4 is basic plus the rp_filter underlay source rules for the
+	// IPv4 addresses returned by testUnderlayAddrs, installed while an IPv4
+	// exit route is present.
+	basicExitV4 := `
+ip rule add -4 pref 5210 fwmark 0x80000/0xff0000 table main
+ip rule add -4 pref 5230 fwmark 0x80000/0xff0000 table default
+ip rule add -4 pref 5250 fwmark 0x80000/0xff0000 type unreachable
+ip rule add -4 pref 5255 not fwmark 0x80000/0xff0000 table 52 suppress_prefixlength 0 protocol 52
+ip rule add -4 pref 5260 from 10.1.2.3 uidrange 0-0 table main protocol 52
+ip rule add -4 pref 5260 from 192.168.1.5 uidrange 0-0 table main protocol 52
+ip rule add -4 pref 5270 table 52
+ip rule add -6 pref 5210 fwmark 0x80000/0xff0000 table main
+ip rule add -6 pref 5230 fwmark 0x80000/0xff0000 table default
+ip rule add -6 pref 5250 fwmark 0x80000/0xff0000 type unreachable
+ip rule add -6 pref 5270 table 52
+`
+	// basicExitDual is basicExitV4 plus the IPv6 underlay source rules.
+	basicExitDual := `
+ip rule add -4 pref 5210 fwmark 0x80000/0xff0000 table main
+ip rule add -4 pref 5230 fwmark 0x80000/0xff0000 table default
+ip rule add -4 pref 5250 fwmark 0x80000/0xff0000 type unreachable
+ip rule add -4 pref 5255 not fwmark 0x80000/0xff0000 table 52 suppress_prefixlength 0 protocol 52
+ip rule add -4 pref 5260 from 10.1.2.3 uidrange 0-0 table main protocol 52
+ip rule add -4 pref 5260 from 192.168.1.5 uidrange 0-0 table main protocol 52
+ip rule add -4 pref 5270 table 52
+ip rule add -6 pref 5210 fwmark 0x80000/0xff0000 table main
+ip rule add -6 pref 5230 fwmark 0x80000/0xff0000 table default
+ip rule add -6 pref 5250 fwmark 0x80000/0xff0000 type unreachable
+ip rule add -6 pref 5255 not fwmark 0x80000/0xff0000 table 52 suppress_prefixlength 0 protocol 52
+ip rule add -6 pref 5260 from 2001:db8::5 uidrange 0-0 table main protocol 52
+ip rule add -6 pref 5260 from fe80::5 uidrange 0-0 table main protocol 52
+ip rule add -6 pref 5270 table 52
+`
 	states := []struct {
 		name string
 		in   *Config
@@ -358,7 +391,7 @@ up
 ip addr add 100.101.102.104/10 dev tailscale0
 ip route add 0.0.0.0/0 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52
-ip route add throw 10.0.0.0/8 table 52` + basic +
+ip route add throw 10.0.0.0/8 table 52` + basicExitV4 +
 				`v4/filter/FORWARD -j ts-forward
 v4/filter/INPUT -j ts-input
 v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
@@ -395,7 +428,45 @@ ip addr add 100.101.102.104/10 dev tailscale0
 ip route add 0.0.0.0/0 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52
 ip route add throw 10.0.0.0/8 table 52
-ip route add throw 192.168.0.0/24 table 52` + basic,
+ip route add throw 192.168.0.0/24 table 52` + basicExitV4,
+		},
+		{
+			name: "exit-node-dual-stack-no-netfilter",
+			in: &Config{
+				LocalAddrs:    mustCIDRs("100.101.102.104/10", "fd7a:115c:a1e0::104/128"),
+				Routes:        mustCIDRs("100.100.100.100/32", "0.0.0.0/0", "::/0"),
+				NetfilterMode: netfilterOff,
+			},
+			want: `
+up
+ip addr add 100.101.102.104/10 dev tailscale0
+ip addr add fd7a:115c:a1e0::104/128 dev tailscale0
+ip route add 0.0.0.0/0 dev tailscale0 table 52
+ip route add 100.100.100.100/32 dev tailscale0 table 52
+ip route add ::/0 dev tailscale0 table 52` + basicExitDual,
+		},
+		{
+			name: "exit-node-v6-only-route",
+			in: &Config{
+				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
+				Routes:        mustCIDRs("::/0"),
+				NetfilterMode: netfilterOff,
+			},
+			want: `
+up
+ip addr add 100.101.102.104/10 dev tailscale0
+ip route add ::/0 dev tailscale0 table 52
+ip rule add -4 pref 5210 fwmark 0x80000/0xff0000 table main
+ip rule add -4 pref 5230 fwmark 0x80000/0xff0000 table default
+ip rule add -4 pref 5250 fwmark 0x80000/0xff0000 type unreachable
+ip rule add -4 pref 5270 table 52
+ip rule add -6 pref 5210 fwmark 0x80000/0xff0000 table main
+ip rule add -6 pref 5230 fwmark 0x80000/0xff0000 table default
+ip rule add -6 pref 5250 fwmark 0x80000/0xff0000 type unreachable
+ip rule add -6 pref 5255 not fwmark 0x80000/0xff0000 table 52 suppress_prefixlength 0 protocol 52
+ip rule add -6 pref 5260 from 2001:db8::5 uidrange 0-0 table main protocol 52
+ip rule add -6 pref 5260 from fe80::5 uidrange 0-0 table main protocol 52
+ip rule add -6 pref 5270 table 52`,
 		},
 		{
 			name: "subnet-routes-connmark-for-rp_filter",
@@ -530,6 +601,8 @@ v6/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
 		// fake netfilter runner's HasIPV6 (noV6) is the authoritative v6 signal
 		// here. See #20447.
 		r.interfaceV6Usable = func() bool { return true }
+		r.underlayAddrs = func() []netip.Addr { return slices.Clone(testUnderlayAddrs) }
+		r.rpFilterStrictV4 = func() bool { return true }
 	})
 	if err := router.Up(); err != nil {
 		t.Fatalf("failed to up router: %v", err)
@@ -1023,6 +1096,11 @@ type fakeOS struct {
 	ips    []string
 	routes []string
 	rules  []string
+	// cmds logs every command run, in order.
+	cmds []string
+	// failRun, if non-nil, is consulted first by run; a non-nil error is
+	// returned as the command's result, without running it.
+	failRun func(args []string) error
 	// This test tests on the router level, so we will not bother
 	// with using iptables or nftables, chose the simpler one.
 	nfr linuxfw.NetfilterRunner
@@ -1083,6 +1161,12 @@ func (o *fakeOS) String() string {
 }
 
 func (o *fakeOS) run(args ...string) error {
+	o.cmds = append(o.cmds, strings.Join(args, " "))
+	if o.failRun != nil {
+		if err := o.failRun(args); err != nil {
+			return err
+		}
+	}
 	unexpected := func() error {
 		o.t.Errorf("unexpected invocation %q", strings.Join(args, " "))
 		return errors.New("unrecognized invocation")
@@ -1200,6 +1284,16 @@ func (o *fakeOS) output(args ...string) ([]byte, error) {
 			ret = append(ret, fmt.Sprintf("3: %s    %s %s scope global %s", dev, fam, cidr, dev))
 		}
 		return []byte(strings.Join(ret, "\n")), nil
+	}
+
+	// "ip -4 route show <routeDef> table 52", as hasRoute runs it.
+	for _, fam := range []string{"ip -4 route show ", "ip -6 route show "} {
+		if def, ok := strings.CutPrefix(got, fam); ok {
+			if slices.Contains(o.routes, def) {
+				return []byte(def), nil
+			}
+			return nil, nil
+		}
 	}
 
 	want := "ip rule list priority 10000"
@@ -1698,6 +1792,12 @@ func newTestLinuxRouter(t *testing.T, configure ...func(*linuxRouter)) (*linuxRo
 		// signal; don't consult the live /proc for the tun's IPv6 state.
 		// See #20447.
 		r.interfaceV6Usable = func() bool { return true }
+		// Don't let the host's real interface addresses leak into
+		// rp_filter underlay source rules; tests opt in with
+		// setTestUnderlayAddrs.
+		r.underlayAddrs = func() []netip.Addr { return nil }
+		// Don't depend on the host's rp_filter sysctls either.
+		r.rpFilterStrictV4 = func() bool { return true }
 	}
 	lr := newTestRouter(logger.Discard, "tailscale0", mon, fake, ht, bus, append([]func(*linuxRouter){defaults}, configure...)...)
 	if err := lr.Up(); err != nil {
@@ -2168,15 +2268,17 @@ func TestOnIPRuleDeletedFamily(t *testing.T) {
 // holding mu.
 //
 // A publisher floods the bus with events whose callbacks read those fields
-// (RuleDeleted reads ipPolicyPrefBase without mu). If a future change
-// subscribes earlier, or writes such a field after subscribing, the race
-// detector reports it. It can only do so under -race; without it this is a
-// smoke test.
+// (RuleDeleted at our priority reads ipPolicyPrefBase and ipRuleAvailable
+// without mu; ChangeDelta reads ipRuleAvailable under mu, which the
+// constructor never takes). If a future change subscribes earlier, or
+// writes such a field after subscribing, the race detector reports it. It
+// can only do so under -race; without it this is a smoke test.
 func TestSubscribeEventsAfterInit(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Close()
 	pubc := bus.Client("test-publisher")
 	ruleDeleted := eventbus.Publish[netmon.RuleDeleted](pubc)
+	netChange := eventbus.Publish[netmon.ChangeDelta](pubc)
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
@@ -2187,13 +2289,14 @@ func TestSubscribeEventsAfterInit(t *testing.T) {
 				return
 			default:
 			}
-			// Just below our priority range, onIPRuleDeleted reads
-			// ipPolicyPrefBase and returns, without scheduling a
-			// restore that would run ip commands on the fake OS.
+			// At the underlay source rule priority, onIPRuleDeleted
+			// returns early (those deletions are our own), without
+			// running ip commands on the fake OS.
 			ruleDeleted.Publish(netmon.RuleDeleted{
 				Table:    uint8(mainRouteTable.Num),
-				Priority: uint32(defaultIPPolicyPrefBase - 1),
+				Priority: uint32(defaultIPPolicyPrefBase + underlaySrcRuleOffset),
 			})
+			netChange.Publish(netmon.ChangeDelta{})
 		}
 	})
 	defer func() {
