@@ -598,40 +598,46 @@ func (i *iptablesRunner) AddConnmarkSaveRule() error {
 // DelConnmarkSaveRule removes conntrack marking rules added by AddConnmarkSaveRule.
 func (i *iptablesRunner) DelConnmarkSaveRule() error {
 	for _, ipt := range i.getTables() {
-		// Delete PREROUTING rule
-		args := []string{
-			"-m", "conntrack",
-			"--ctstate", "ESTABLISHED,RELATED",
-			"-m", "connmark",
-			"!", "--mark", "0x0/" + fwmarkMask,
-			"-j", "CONNMARK",
-			"--restore-mark",
-			"--nfmask", fwmarkMask,
-			"--ctmask", fwmarkMask,
+		if err := delConnmarkRules(ipt); err != nil {
+			return err
 		}
-		if err := ipt.Delete("mangle", "PREROUTING", args...); err != nil {
-			if !isNotExistError(err) {
-				return fmt.Errorf("deleting connmark rule in mangle/PREROUTING: %w", err)
-			}
-			// Rule doesn't exist - this is fine for idempotency
-		}
+	}
+	return nil
+}
 
-		// Delete OUTPUT rule
-		args = []string{
-			"-m", "conntrack",
-			"--ctstate", "NEW",
-			"-m", "mark",
-			"!", "--mark", "0x0/" + fwmarkMask,
-			"-j", "CONNMARK",
-			"--save-mark",
-			"--nfmask", fwmarkMask,
-			"--ctmask", fwmarkMask,
+// delConnmarkRules removes the rules added by AddConnmarkSaveRule from ipt.
+func delConnmarkRules(ipt iptablesInterface) error {
+	// Delete PREROUTING rule
+	args := []string{
+		"-m", "conntrack",
+		"--ctstate", "ESTABLISHED,RELATED",
+		"-m", "connmark",
+		"!", "--mark", "0x0/" + fwmarkMask,
+		"-j", "CONNMARK",
+		"--restore-mark",
+		"--nfmask", fwmarkMask,
+		"--ctmask", fwmarkMask,
+	}
+	if err := ipt.Delete("mangle", "PREROUTING", args...); err != nil {
+		if !isNotExistError(err) {
+			return fmt.Errorf("deleting connmark rule in mangle/PREROUTING: %w", err)
 		}
-		if err := ipt.Delete("mangle", "OUTPUT", args...); err != nil {
-			if !isNotExistError(err) {
-				return fmt.Errorf("deleting connmark rule in mangle/OUTPUT: %w", err)
-			}
-			// Rule doesn't exist - this is fine for idempotency
+	}
+
+	// Delete OUTPUT rule
+	args = []string{
+		"-m", "conntrack",
+		"--ctstate", "NEW",
+		"-m", "mark",
+		"!", "--mark", "0x0/" + fwmarkMask,
+		"-j", "CONNMARK",
+		"--save-mark",
+		"--nfmask", fwmarkMask,
+		"--ctmask", fwmarkMask,
+	}
+	if err := ipt.Delete("mangle", "OUTPUT", args...); err != nil {
+		if !isNotExistError(err) {
+			return fmt.Errorf("deleting connmark rule in mangle/OUTPUT: %w", err)
 		}
 	}
 	return nil
