@@ -218,7 +218,6 @@ jobs:
     # https://github.com/organizations/tailscale/settings/actions/github-hosted-runners/5
     runs-on: ci-windows-github-1
     timeout-minutes: 60
-    needs: gomod-cache
     name: Windows (${{ matrix.name || matrix.shard}})
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
@@ -236,12 +235,12 @@ jobs:
       with:
         path: ${{ github.workspace }}/src
 
-    - name: Restore Go module cache
-      uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+    # This must run before anything uses ./tool/go, as it also provides the Go toolchain.
+    - name: Mount gomodfs
+      id: gomodfs
+      uses: ./src/.github/actions/gomodfs-mount
       with:
-        path: gomodcache
-        key: ${{ needs.gomod-cache.outputs.cache-key }}
-        enableCrossOsArchive: true
+        store-url: ${{ vars.GOMODFS_AZURE_URL }}
 
     - name: Set up cigocacher
       id: cigocacher-setup
@@ -287,6 +286,14 @@ jobs:
         GOCACHEPROG: ${{ env.GOCACHEPROG }}
       run: |
         Invoke-Expression "$env:GOCACHEPROG --stats" | jq .
+
+    - name: Check gomodfs is still running
+      if: always() && steps.gomodfs.outputs.success == 'true'
+      shell: pwsh
+      env:
+        LOG: ${{ steps.gomodfs.outputs.log }}
+        JOB_STATUS: ${{ job.status }}
+      run: ./src/.github/actions/gomodfs-mount/check.ps1
 
   macos:
     runs-on: macos-latest

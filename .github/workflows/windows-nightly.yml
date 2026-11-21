@@ -51,17 +51,12 @@ jobs:
         path: ${{ github.workspace }}/src
         persist-credentials: false
 
-    - name: Compute Go module cache key
-      id: hash
-      shell: bash
-      run: echo "key=gomod-cross3-${{ hashFiles('src/go.mod', 'src/go.sum') }}" >> "$GITHUB_OUTPUT"
-
-    - name: Restore Go module cache
-      uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+    # This must run before anything uses ./tool/go, as it also provides the Go toolchain.
+    - name: Mount gomodfs
+      id: gomodfs
+      uses: ./src/.github/actions/gomodfs-mount
       with:
-        path: gomodcache
-        key: ${{ steps.hash.outputs.key }}
-        enableCrossOsArchive: true
+        store-url: ${{ vars.GOMODFS_AZURE_URL }}
 
     - name: Set up cigocacher
       uses: ./src/.github/actions/go-cache
@@ -92,6 +87,14 @@ jobs:
         path: ${{ github.workspace }}/windows-integration-results.json
         if-no-files-found: ignore
         retention-days: 90
+
+    - name: Check gomodfs is still running
+      if: always() && steps.gomodfs.outputs.success == 'true'
+      shell: pwsh
+      env:
+        LOG: ${{ steps.gomodfs.outputs.log }}
+        JOB_STATUS: ${{ job.status }}
+      run: ./src/.github/actions/gomodfs-mount/check.ps1
 
   notify:
     if: always()
