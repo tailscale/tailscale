@@ -116,12 +116,7 @@ func NewAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, ts *tsn
 //
 // It return when ctx is cancelled or ServeTLS fails.
 func (ap *APIServerProxy) Run(ctx context.Context) error {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", ap.serveDefault)
-	mux.HandleFunc("POST /api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExecSPDY)
-	mux.HandleFunc("GET /api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExecWS)
-	mux.HandleFunc("POST /api/v1/namespaces/{namespace}/pods/{pod}/attach", ap.serveAttachSPDY)
-	mux.HandleFunc("GET /api/v1/namespaces/{namespace}/pods/{pod}/attach", ap.serveAttachWS)
+	mux := ap.newServeMux()
 
 	ap.hs = &http.Server{
 		Handler:      mux,
@@ -187,6 +182,31 @@ func (ap *APIServerProxy) Run(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return ap.hs.Shutdown(shutdownCtx)
+}
+
+// newServeMux returns the request router for the proxy.
+//
+// The exec and attach subresources are registered with and without a trailing
+// slash. The kube-apiserver routes with go-restful's CurlyRouter, which trims a
+// trailing slash before matching (TrimRightSlashEnabled), so it accepts e.g.
+// ".../pods/{pod}/exec/" as an exec request. net/http.ServeMux does not: a
+// pattern ending in "exec" only matches that exact path, so the slashed form
+// would otherwise fall through to serveDefault, which streams the upgraded
+// connection straight through without installing the session recorder. A caller
+// whose access requires recording could then avoid it by appending a slash, so
+// both forms must reach the recording handlers.
+func (ap *APIServerProxy) newServeMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", ap.serveDefault)
+	mux.HandleFunc("POST /api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExecSPDY)
+	mux.HandleFunc("GET /api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExecWS)
+	mux.HandleFunc("POST /api/v1/namespaces/{namespace}/pods/{pod}/attach", ap.serveAttachSPDY)
+	mux.HandleFunc("GET /api/v1/namespaces/{namespace}/pods/{pod}/attach", ap.serveAttachWS)
+	mux.HandleFunc("POST /api/v1/namespaces/{namespace}/pods/{pod}/exec/", ap.serveExecSPDY)
+	mux.HandleFunc("GET /api/v1/namespaces/{namespace}/pods/{pod}/exec/", ap.serveExecWS)
+	mux.HandleFunc("POST /api/v1/namespaces/{namespace}/pods/{pod}/attach/", ap.serveAttachSPDY)
+	mux.HandleFunc("GET /api/v1/namespaces/{namespace}/pods/{pod}/attach/", ap.serveAttachWS)
+	return mux
 }
 
 // APIServerProxy is an [net/http.Handler] that authenticates requests using the Tailscale
