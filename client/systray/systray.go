@@ -444,13 +444,7 @@ func (menu *Menu) eventLoop(ctx context.Context) {
 			menu.updateState()
 			menu.rebuild()
 		case <-menu.connect.ClickedCh:
-			_, err := menu.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
-				Prefs: ipn.Prefs{
-					WantRunning: true,
-				},
-				WantRunningSet: true,
-			})
-			if err != nil {
+			if err := menu.connectNode(ctx); err != nil {
 				log.Printf("error connecting: %v", err)
 			}
 
@@ -496,6 +490,26 @@ func (menu *Menu) eventLoop(ctx context.Context) {
 			systray.Quit()
 		}
 	}
+}
+
+// connectNode starts login when authentication is needed, or resumes a stopped node.
+func (menu *Menu) connectNode(ctx context.Context) error {
+	// Read fresh state because a click can arrive before the menu is rebuilt.
+	status, err := menu.lc.StatusWithoutPeers(ctx)
+	if err != nil {
+		return err
+	}
+	if status.BackendState == ipn.NeedsLogin.String() {
+		// This also re-sends an existing auth URL when WantRunning is already true.
+		return menu.lc.StartLoginInteractive(ctx)
+	}
+	_, err = menu.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			WantRunning: true,
+		},
+		WantRunningSet: true,
+	})
+	return err
 }
 
 // onClick registers a click handler for a menu item.
