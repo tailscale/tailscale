@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
+	"net/netip"
 	"testing"
 
 	"go.uber.org/zap"
@@ -112,6 +113,27 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 				Terminating: new(false),
 			},
 		})
+		expectEqual(t, fc, eps)
+	})
+	t.Run("status_has_no_tailnet_target_ips", func(t *testing.T) {
+		// The proxy could not resolve the tailnet target and so did not
+		// configure any rules; the Pod must not be marked as ready.
+		pod, stateS := podAndSecretForProxyGroup("foo")
+		stBs := serviceStatusForPodIPs(t, svc, pod.Status.PodIPs[0].IP, "", port)
+		st := &egressservices.Status{}
+		if err := json.Unmarshal(stBs, st); err != nil {
+			t.Fatal(err)
+		}
+		st.Services[tailnetSvcName(svc)].TailnetTargetIPs = nil
+		stBs, err := json.Marshal(st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustUpdate(t, fc, "operator-ns", stateS.Name, func(s *corev1.Secret) {
+			mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
+		})
+		expectReconciled(t, er, "operator-ns", "foo")
+		eps.Endpoints = []discoveryv1.Endpoint{}
 		expectEqual(t, fc, eps)
 	})
 	t.Run("status_does_not_match_pod_ip", func(t *testing.T) {
@@ -379,7 +401,7 @@ func serviceStatusForPodIPs(t *testing.T, svc *corev1.Service, ipv4, ipv6 string
 	for _, port := range svc.Spec.Ports {
 		ports[egressservices.PortMap{Protocol: string(port.Protocol), MatchPort: p, TargetPort: uint16(port.Port)}] = struct{}{}
 	}
-	svcSt := egressservices.ServiceStatus{Ports: ports}
+	svcSt := egressservices.ServiceStatus{Ports: ports, TailnetTargetIPs: []netip.Addr{netip.MustParseAddr("100.64.0.1")}}
 	if fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]; fqdn != "" {
 		svcSt.TailnetTarget = egressservices.TailnetTarget{FQDN: fqdn}
 	}
