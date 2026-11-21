@@ -19,6 +19,7 @@ concurrency:
 
 jobs:
   run:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     name: pin-github-actions
     runs-on: ubuntu-latest
     steps:

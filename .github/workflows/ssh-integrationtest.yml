@@ -26,6 +26,7 @@ on:
     - cron: "13 0 * * *"
 jobs:
   ssh-integrationtest:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

@@ -12,6 +12,7 @@ on:
         required: true
 jobs:
   flakehub-publish:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     runs-on: "ubuntu-latest"
     permissions:
       id-token: "write"

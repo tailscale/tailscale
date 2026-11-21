@@ -7,6 +7,7 @@ on:
 
 jobs:
   build:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     strategy:
       matrix:
         GOOS: ["linux", "darwin", "windows"]
@@ -30,6 +31,7 @@ jobs:
         path: cigocacher-${{ matrix.GOOS }}-${{ matrix.GOARCH }}.tar.gz
 
   release:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     runs-on: ubuntu-24.04
     needs: build
     permissions:
