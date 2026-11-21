@@ -322,6 +322,11 @@ func validateIngressClass(ctx context.Context, cl client.Client, ingressClassNam
 	return nil
 }
 
+// appProtocolH2C is the Service port appProtocol value that Kubernetes defines
+// for HTTP/2 over cleartext. The proxy uses h2c for every request to a backend
+// port that has it.
+const appProtocolH2C = "kubernetes.io/h2c"
+
 func handlersForIngress(ctx context.Context, ing *networkingv1.Ingress, cl client.Client, rec record.EventRecorder, tlsHost string, logger *zap.SugaredLogger) (handlers map[string]*ipn.HTTPHandler, err error) {
 	addIngressBackend := func(b *networkingv1.IngressBackend, path string) {
 		if path == "" {
@@ -347,14 +352,22 @@ func handlersForIngress(ctx context.Context, ing *networkingv1.Ingress, cl clien
 			return
 		}
 		var port int32
-		if b.Service.Port.Name != "" {
-			for _, p := range svc.Spec.Ports {
-				if p.Name == b.Service.Port.Name {
-					port = p.Port
-					break
-				}
+		var appProtocol string
+		for _, p := range svc.Spec.Ports {
+			if b.Service.Port.Name != "" && p.Name != b.Service.Port.Name {
+				continue
 			}
-		} else {
+			if b.Service.Port.Name == "" && p.Port != b.Service.Port.Number {
+				continue
+			}
+			port = p.Port
+			if p.AppProtocol != nil {
+				appProtocol = *p.AppProtocol
+			}
+			break
+		}
+		if port == 0 && b.Service.Port.Name == "" {
+			// The Service does not list the port. Use the number as given.
 			port = b.Service.Port.Number
 		}
 		if port == 0 {
@@ -365,9 +378,17 @@ func handlersForIngress(ctx context.Context, ing *networkingv1.Ingress, cl clien
 		if port == 443 || b.Service.Port.Name == "https" {
 			proto = "https+insecure://"
 		}
-		mak.Set(&handlers, path, &ipn.HTTPHandler{
+		h := &ipn.HTTPHandler{
 			Proxy: proto + net.JoinHostPort(svc.Spec.ClusterIP, fmt.Sprint(port)) + path,
-		})
+		}
+		if appProtocol == appProtocolH2C {
+			if proto == "http://" {
+				h.BackendHTTP = ipn.BackendHTTPH2C
+			} else {
+				rec.Eventf(ing, corev1.EventTypeWarning, "InvalidIngressBackend", "backend for path %q has appProtocol %q on a port that is proxied over TLS; ignoring appProtocol", path, appProtocolH2C)
+			}
+		}
+		mak.Set(&handlers, path, h)
 	}
 	addIngressBackend(ing.Spec.DefaultBackend, "/")
 	for _, rule := range ing.Spec.Rules {

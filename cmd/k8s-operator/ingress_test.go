@@ -8,8 +8,10 @@ package main
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -1030,4 +1032,85 @@ func TestTailscaleIngressIPv6(t *testing.T) {
 	secret := expectedSecret(t, fc, opts)
 	secret.Labels[LabelParentName] = "test-ipv6"
 	expectEqual(t, fc, secret)
+}
+
+func TestHandlersForIngressAppProtocol(t *testing.T) {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "backend", Namespace: "default"},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "1.2.3.4",
+			Ports: []corev1.ServicePort{
+				{Name: "plain", Port: 8080},
+				{Name: "connect", Port: 8081, AppProtocol: new("kubernetes.io/h2c")},
+				{Name: "other", Port: 8082, AppProtocol: new("kubernetes.io/ws")},
+				{Name: "https", Port: 8443, AppProtocol: new("kubernetes.io/h2c")},
+			},
+		},
+	}
+	fc := fake.NewFakeClient(svc)
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path := func(path string, port networkingv1.ServiceBackendPort) networkingv1.HTTPIngressPath {
+		return networkingv1.HTTPIngressPath{
+			Path:     path,
+			PathType: new(networkingv1.PathTypePrefix),
+			Backend: networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{Name: "backend", Port: port},
+			},
+		}
+	}
+	ing := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{{
+				IngressRuleValue: networkingv1.IngressRuleValue{
+					HTTP: &networkingv1.HTTPIngressRuleValue{
+						Paths: []networkingv1.HTTPIngressPath{
+							path("/plain", networkingv1.ServiceBackendPort{Name: "plain"}),
+							path("/by-name", networkingv1.ServiceBackendPort{Name: "connect"}),
+							path("/by-number", networkingv1.ServiceBackendPort{Number: 8081}),
+							path("/other", networkingv1.ServiceBackendPort{Name: "other"}),
+							path("/tls", networkingv1.ServiceBackendPort{Name: "https"}),
+							path("/unlisted", networkingv1.ServiceBackendPort{Number: 9000}),
+						},
+					},
+				},
+			}},
+		},
+	}
+
+	rec := record.NewFakeRecorder(10)
+	got, err := handlersForIngress(t.Context(), ing, fc, rec, "test-host", zl.Sugar())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]*ipn.HTTPHandler{
+		"/plain":     {Proxy: "http://1.2.3.4:8080/plain"},
+		"/by-name":   {Proxy: "http://1.2.3.4:8081/by-name", BackendHTTP: ipn.BackendHTTPH2C},
+		"/by-number": {Proxy: "http://1.2.3.4:8081/by-number", BackendHTTP: ipn.BackendHTTPH2C},
+		"/other":     {Proxy: "http://1.2.3.4:8082/other"},
+		"/tls":       {Proxy: "https+insecure://1.2.3.4:8443/tls"},
+		"/unlisted":  {Proxy: "http://1.2.3.4:9000/unlisted"},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("handlers mismatch (-want +got):\n%s", diff)
+	}
+
+	// The TLS port is the only backend that produces an event.
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, "InvalidIngressBackend") || !strings.Contains(ev, `"/tls"`) {
+			t.Errorf("unexpected event %q", ev)
+		}
+	default:
+		t.Error("no event for h2c appProtocol on a TLS port")
+	}
+	select {
+	case ev := <-rec.Events:
+		t.Errorf("unexpected extra event %q", ev)
+	default:
+	}
 }
