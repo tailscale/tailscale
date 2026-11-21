@@ -2860,8 +2860,8 @@ func TestRunServeSetConfig(t *testing.T) {
 		}
 
 		// set-config: apply HTTP-over-unix declarative config; then get-config
-		// should reproduce a target of "http://unix:/var/run/app.sock" without
-		// mangling it through host:port parsing.
+		// should write an HTTP listener that proxies to the socket, without
+		// mangling the path through host:port parsing.
 		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
 		var stdout, stderr bytes.Buffer
 		e := &serveEnv{lc: lc, service: fooSvc, testStdout: &stdout, testStderr: &stderr}
@@ -2877,8 +2877,12 @@ func TestRunServeSetConfig(t *testing.T) {
 		if got := svc.Web["foo.test.ts.net:443"].Handlers["/"].Proxy; got != "unix:/var/run/app.sock" {
 			t.Errorf("Handler Proxy = %q, want %q", got, "unix:/var/run/app.sock")
 		}
-		if stderr.Len() != 0 {
-			t.Errorf("stderr must be empty; got:\n%s", stderr.String())
+		// A 0.0.1 "http://" endpoint is the ambiguous case, so it warns.
+		if !strings.Contains(stderr.String(), "plain-HTTP listeners: svc:foo port 443.") {
+			t.Errorf("missing 0.0.1 plain-HTTP warning; stderr:\n%s", stderr.String())
+		}
+		if stdout.Len() != 0 {
+			t.Errorf("stdout must stay clean, got:\n%s", stdout.String())
 		}
 
 		// Round-trip through get-config.
@@ -2887,8 +2891,10 @@ func TestRunServeSetConfig(t *testing.T) {
 		if err := g.runServeGetConfig(context.Background(), nil); err != nil {
 			t.Fatalf("get-config: %v", err)
 		}
-		if !strings.Contains(gotStdout.String(), `"tcp:443": "http://unix:/var/run/app.sock"`) {
-			t.Errorf("get-config output missing http-over-unix target:\n%s", gotStdout.String())
+		for _, want := range []string{`"version": "0.1.0"`, `"protocol": "http"`, `"url": "unix:/var/run/app.sock"`} {
+			if !strings.Contains(gotStdout.String(), want) {
+				t.Errorf("get-config output missing %s:\n%s", want, gotStdout.String())
+			}
 		}
 	})
 
@@ -2911,8 +2917,10 @@ func TestRunServeSetConfig(t *testing.T) {
 		if err := g.runServeGetConfig(context.Background(), nil); err != nil {
 			t.Fatalf("get-config: %v", err)
 		}
-		if !strings.Contains(gotStdout.String(), `"tcp:443": "https://unix:/var/run/app.sock"`) {
-			t.Errorf("get-config output missing https-over-unix target:\n%s", gotStdout.String())
+		for _, want := range []string{`"protocol": "https"`, `"url": "unix:/var/run/app.sock"`} {
+			if !strings.Contains(gotStdout.String(), want) {
+				t.Errorf("get-config output missing %s:\n%s", want, gotStdout.String())
+			}
 		}
 	})
 
@@ -2947,8 +2955,10 @@ func TestRunServeSetConfig(t *testing.T) {
 		if err := g.runServeGetConfig(context.Background(), nil); err != nil {
 			t.Fatalf("get-config: %v", err)
 		}
-		if !strings.Contains(gotStdout.String(), `"tcp:443": "tls-terminated-tcp://localhost:9481"`) {
-			t.Errorf("get-config output missing tls-terminated-tcp target:\n%s", gotStdout.String())
+		for _, want := range []string{`"protocol": "tls-terminated-tcp"`, `"addr": "localhost:9481"`} {
+			if !strings.Contains(gotStdout.String(), want) {
+				t.Errorf("get-config output missing %s:\n%s", want, gotStdout.String())
+			}
 		}
 	})
 
@@ -2978,4 +2988,188 @@ func TestRunServeSetConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("v0_http_endpoint_warns", func(t *testing.T) {
+		// The "http://" endpoint is applied as a plain-HTTP listener, with a
+		// warning.
+		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
+		var stdout, stderr bytes.Buffer
+		e := &serveEnv{lc: lc, allServices: true, testStdout: &stdout, testStderr: &stderr}
+		path := writeTmpServeConfig(t, `{"version":"0.0.1","services":{"svc:foo":{"endpoints":{"tcp:443":"http://127.0.0.1:30123","tcp:8443":"https://127.0.0.1:30124"}}}}`)
+
+		if err := e.runServeSetConfig(context.Background(), []string{path}); err != nil {
+			t.Fatal(err)
+		}
+		svc := lc.config.Services[fooSvc]
+		if svc == nil || svc.TCP[443] == nil || !svc.TCP[443].HTTP {
+			t.Errorf("svc:foo TCP/443 is not a plain-HTTP listener; got %+v", lc.config.Services)
+		}
+		if !strings.Contains(stderr.String(), "plain-HTTP listeners: svc:foo port 443.") ||
+			!strings.Contains(stderr.String(), serveConfigDocsURL) {
+			t.Errorf("missing or incorrect 0.0.1 plain-HTTP warning; stderr:\n%s", stderr.String())
+		}
+		if stdout.Len() != 0 {
+			t.Errorf("stdout must stay clean, got:\n%s", stdout.String())
+		}
+	})
+
+	t.Run("v1_all_roundtrip", func(t *testing.T) {
+		// get-config --all followed by set-config --all reproduces every
+		// Service exactly, including the tailscale/tailscale#18381 case of an
+		// HTTPS listener with a plain-HTTP back-end.
+		const host = "foo.test.ts.net"
+		barSvc := tailcfg.ServiceName("svc:bar")
+		tunSvc := tailcfg.ServiceName("svc:tun")
+		want := &ipn.ServeConfig{Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+			fooSvc: {
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80:   {HTTP: true},
+					443:  {HTTPS: true},
+					5432: {TCPForward: "127.0.0.1:5432", TerminateTLS: host, ProxyProtocol: 2},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					host + ":80": {Handlers: map[string]*ipn.HTTPHandler{
+						"/": {Redirect: "301:https://${HOST}${REQUEST_URI}"},
+					}},
+					host + ":443": {Handlers: map[string]*ipn.HTTPHandler{
+						"/":      {Proxy: "http://127.0.0.1:30123", AcceptAppCaps: []peercap.Cap{"example.com/cap/x"}},
+						"/rpc":   {Proxy: "http://127.0.0.1:30124", BackendHTTP: ipn.BackendHTTPH2C},
+						"/tls":   {Proxy: "https+insecure://10.0.0.1:8443"},
+						"/hello": {Text: "hello"},
+					}},
+				},
+			},
+			barSvc: {TCP: map[uint16]*ipn.TCPPortHandler{22: {TCPForward: "127.0.0.1:22"}}},
+			tunSvc: {Tun: true},
+		}}
+		lc := &fakeLocalServeClient{
+			config: want.Clone(),
+			prefs:  &ipn.Prefs{AdvertiseServices: []string{fooSvc.String(), tunSvc.String()}},
+		}
+		var exported, stderr bytes.Buffer
+		g := &serveEnv{lc: lc, allServices: true, testStdout: &exported, testStderr: &stderr}
+		if err := g.runServeGetConfig(context.Background(), nil); err != nil {
+			t.Fatalf("get-config: %v", err)
+		}
+
+		lc.config = &ipn.ServeConfig{}
+		lc.prefs = ipn.NewPrefs()
+		e := &serveEnv{lc: lc, allServices: true, testStdout: &bytes.Buffer{}, testStderr: &stderr}
+		if err := e.runServeSetConfig(context.Background(), []string{writeTmpServeConfig(t, exported.String())}); err != nil {
+			t.Fatalf("set-config: %v\nfile:\n%s", err, exported.String())
+		}
+		if diff := cmp.Diff(want, lc.config); diff != "" {
+			t.Errorf("serve config after round trip (-want +got):\n%s\nfile:\n%s", diff, exported.String())
+		}
+		gotAdvertised := slices.Sorted(slices.Values(lc.prefs.AdvertiseServices))
+		if wantAdvertised := []string{fooSvc.String(), tunSvc.String()}; !slices.Equal(gotAdvertised, wantAdvertised) {
+			t.Errorf("AdvertiseServices = %v, want %v", gotAdvertised, wantAdvertised)
+		}
+		if stderr.Len() != 0 {
+			t.Errorf("stderr must be empty; got:\n%s", stderr.String())
+		}
+	})
+
+	t.Run("v1_single_service", func(t *testing.T) {
+		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
+		var stdout, stderr bytes.Buffer
+		e := &serveEnv{lc: lc, service: fooSvc, testStdout: &stdout, testStderr: &stderr}
+		path := writeTmpServeConfig(t, `{"version":"0.1.0","listeners":{"443":{"protocol":"https","routes":{"/":{"proxy":{"url":"http://127.0.0.1:8080","http":"h2c"}}}}}}`)
+
+		if err := e.runServeSetConfig(context.Background(), []string{path}); err != nil {
+			t.Fatal(err)
+		}
+		svc := lc.config.Services[fooSvc]
+		if svc == nil || svc.TCP[443] == nil || !svc.TCP[443].HTTPS {
+			t.Fatalf("svc:foo TCP/443 HTTPS not applied; got %+v", lc.config.Services)
+		}
+		want := &ipn.HTTPHandler{Proxy: "http://127.0.0.1:8080", BackendHTTP: ipn.BackendHTTPH2C}
+		if diff := cmp.Diff(want, svc.Web["foo.test.ts.net:443"].Handlers["/"]); diff != "" {
+			t.Errorf("root handler (-want +got):\n%s", diff)
+		}
+		if stderr.Len() != 0 || stdout.Len() != 0 {
+			t.Errorf("want no output; stdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
+		}
+	})
+
+	t.Run("v1_invalid_keeps_existing", func(t *testing.T) {
+		existing := &ipn.ServeConfig{Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+			fooSvc: {Tun: true},
+		}}
+		lc := &fakeLocalServeClient{config: existing}
+		e := &serveEnv{lc: lc, allServices: true, testStdout: &bytes.Buffer{}, testStderr: &bytes.Buffer{}}
+		path := writeTmpServeConfig(t, `{"version":"0.1.0","services":{"svc:foo":{"listeners":{"443":{"protocol":"https","forward":{"addr":"127.0.0.1:1"}}}}}}`)
+
+		err := e.runServeSetConfig(context.Background(), []string{path})
+		if err == nil || !strings.Contains(err.Error(), `does not take "forward"`) {
+			t.Fatalf("err = %v, want a listener validation error", err)
+		}
+		if lc.setCount != 0 || lc.config.Services[fooSvc] == nil {
+			t.Errorf("existing config must not change; setCount = %d, Services = %+v", lc.setCount, lc.config.Services)
+		}
+	})
+
+	t.Run("v1_directory_mount_gets_trailing_slash", func(t *testing.T) {
+		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
+		e := &serveEnv{lc: lc, allServices: true, testStdout: &bytes.Buffer{}, testStderr: &bytes.Buffer{}}
+		dir := t.TempDir()
+		file := filepath.Join(dir, "file")
+		if err := os.WriteFile(file, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// The directory path has a trailing separator that set-config cleans.
+		routes, err := json.Marshal(map[string]map[string]string{
+			"/docs": {"path": dir + string(filepath.Separator)},
+			"/file": {"path": file},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := writeTmpServeConfig(t, `{"version":"0.1.0","services":{"svc:foo":{"listeners":{"443":{"protocol":"https","routes":`+string(routes)+`}}}}}`)
+
+		if err := e.runServeSetConfig(context.Background(), []string{path}); err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]*ipn.HTTPHandler{
+			"/docs/": {Path: dir},
+			"/file":  {Path: file},
+		}
+		got := lc.config.Services[fooSvc].Web["foo.test.ts.net:443"].Handlers
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("handlers (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("v1_missing_path_errors", func(t *testing.T) {
+		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
+		e := &serveEnv{lc: lc, allServices: true, testStdout: &bytes.Buffer{}, testStderr: &bytes.Buffer{}}
+		missing := filepath.ToSlash(filepath.Join(t.TempDir(), "missing"))
+		path := writeTmpServeConfig(t, `{"version":"0.1.0","services":{"svc:foo":{"listeners":{"443":{"protocol":"https","routes":{"/":{"path":"`+missing+`"}}}}}}}`)
+
+		err := e.runServeSetConfig(context.Background(), []string{path})
+		if err == nil || !strings.Contains(err.Error(), "invalid path") {
+			t.Fatalf("err = %v, want an 'invalid path' error", err)
+		}
+		if lc.setCount != 0 {
+			t.Errorf("setCount = %d, want 0", lc.setCount)
+		}
+	})
+}
+
+// TestRunServeGetConfigUnrepresentable tests that get-config writes nothing
+// when a Service holds state that the file cannot describe. A file that left
+// that Service out would delete it on set-config --all.
+func TestRunServeGetConfigUnrepresentable(t *testing.T) {
+	lc := &fakeLocalServeClient{config: &ipn.ServeConfig{Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+		"svc:good": {Tun: true},
+		"svc:bad":  {TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}}}, // no web handlers
+	}}}
+	var stdout bytes.Buffer
+	e := &serveEnv{lc: lc, allServices: true, testStdout: &stdout, testStderr: &bytes.Buffer{}}
+	err := e.runServeGetConfig(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), `service "svc:bad"`) {
+		t.Fatalf("err = %v, want an error naming svc:bad", err)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout must be empty on error, got:\n%s", stdout.String())
+	}
 }
