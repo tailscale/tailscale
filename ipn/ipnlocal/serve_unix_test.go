@@ -94,7 +94,7 @@ func TestServeUnixSocket(t *testing.T) {
 	b.logf = logf
 
 	// Test creating proxy handler for Unix socket
-	handler, err := b.proxyHandlerForBackend("unix:" + socketPath)
+	handler, err := b.proxyHandlerForBackend("unix:"+socketPath, false)
 	if err != nil {
 		t.Fatalf("proxyHandlerForBackend failed: %v", err)
 	}
@@ -135,14 +135,14 @@ func TestServeUnixSocketErrors(t *testing.T) {
 	b.logf = logf
 
 	// Test empty socket path
-	_, err := b.proxyHandlerForBackend("unix:")
+	_, err := b.proxyHandlerForBackend("unix:", false)
 	if err == nil {
 		t.Error("expected error for empty socket path")
 	}
 
 	// Test non-existent socket - should create handler but fail on request
 	nonExistentSocket := filepath.Join(t.TempDir(), "nonexistent.sock")
-	handler, err := b.proxyHandlerForBackend("unix:" + nonExistentSocket)
+	handler, err := b.proxyHandlerForBackend("unix:"+nonExistentSocket, false)
 	if err != nil {
 		t.Fatalf("proxyHandlerForBackend failed: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestReverseProxyConfigurationUnix(t *testing.T) {
 
 	// Test that Unix socket backend creates proper reverseProxy
 	backend := "unix:/var/run/test.sock"
-	handler, err := b.proxyHandlerForBackend(backend)
+	handler, err := b.proxyHandlerForBackend(backend, false)
 	if err != nil {
 		t.Fatalf("proxyHandlerForBackend failed: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestServeBlocksTailscaledSocket(t *testing.T) {
 	b.sys.SocketPath = tailscaledSocket
 
 	// Direct path to tailscaled socket should be blocked
-	_, err = b.proxyHandlerForBackend("unix:" + tailscaledSocket)
+	_, err = b.proxyHandlerForBackend("unix:"+tailscaledSocket, false)
 	if !errors.Is(err, ErrProxyToTailscaledSocket) {
 		t.Errorf("direct path: got err=%v, want ErrProxyToTailscaledSocket", err)
 	}
@@ -221,7 +221,7 @@ func TestServeBlocksTailscaledSocket(t *testing.T) {
 		t.Fatalf("failed to create symlink: %v", err)
 	}
 
-	_, err = b.proxyHandlerForBackend("unix:" + symlinkPath)
+	_, err = b.proxyHandlerForBackend("unix:"+symlinkPath, false)
 	if !errors.Is(err, ErrProxyToTailscaledSocket) {
 		t.Errorf("symlink: got err=%v, want ErrProxyToTailscaledSocket", err)
 	}
@@ -234,7 +234,7 @@ func TestServeBlocksTailscaledSocket(t *testing.T) {
 	}
 	defer listener2.Close()
 
-	handler, err := b.proxyHandlerForBackend("unix:" + otherSocket)
+	handler, err := b.proxyHandlerForBackend("unix:"+otherSocket, false)
 	if err != nil {
 		t.Errorf("legitimate socket should not be blocked: %v", err)
 	}
@@ -452,5 +452,43 @@ func TestDialServeUnixSocketServesBenignBackend(t *testing.T) {
 	}
 	if !bytes.Equal(got, msg) {
 		t.Fatalf("echo = %q; want %q", got, msg)
+	}
+}
+
+// TestServeUnixSocketH2C tests that a proxy for a Unix socket backend that
+// was declared to speak h2c reaches the socket over HTTP/2.
+func TestServeUnixSocketH2C(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("failed to create unix socket listener: %v", err)
+	}
+	var protocols http.Protocols
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+	testServer := &http.Server{
+		Protocols: &protocols,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Proto-Was", r.Proto)
+		}),
+	}
+	go testServer.Serve(listener)
+	defer testServer.Close()
+
+	b := newTestBackend(t)
+	handler, err := b.proxyHandlerForBackend("unix:"+socketPath, true)
+	if err != nil {
+		t.Fatalf("proxyHandlerForBackend failed: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "http://foo.test.ts.net/", nil)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got, want := rec.Result().Header.Get("Proto-Was"), "HTTP/2.0"; got != want {
+		t.Errorf("backend saw %q, want %q", got, want)
 	}
 }
