@@ -280,6 +280,20 @@ type Server struct {
 	// used.
 	AuthKey string
 
+	// Tailnet, if non-empty, is the tailnet the node asks to join when
+	// it registers. It is a comma-separated list of tailnet identifiers,
+	// each a stable tailnet ID, stable org ID or tailnet SID, and the
+	// server accepts a login to any one of them. By default the server
+	// only recommends the listed tailnets; see TailnetRequired.
+	//
+	// It only takes effect when the node registers, so it does not move
+	// a node that is already logged in.
+	Tailnet string
+
+	// TailnetRequired, if true, makes the server refuse a login to any
+	// tailnet not listed in Tailnet. It requires Tailnet to be set.
+	TailnetRequired bool
+
 	// SSHAuthCallback is called for each new SSH session on listeners
 	// from [Server.ListenSSH]. It receives the peer's Tailscale
 	// identity, the same values as Session.Peer and
@@ -837,9 +851,30 @@ func (s *Server) getAudience() string {
 	return os.Getenv("TS_AUDIENCE")
 }
 
+// registerTailnet returns the [ipn.Prefs.Tailnet] value for s.Tailnet and
+// s.TailnetRequired.
+func (s *Server) registerTailnet() (string, error) {
+	const requiredPrefix = "required:"
+	if strings.HasPrefix(s.Tailnet, requiredPrefix) {
+		return "", fmt.Errorf("tsnet: Tailnet %q has a %q prefix; set TailnetRequired instead", s.Tailnet, requiredPrefix)
+	}
+	if !s.TailnetRequired {
+		return s.Tailnet, nil
+	}
+	if s.Tailnet == "" {
+		return "", errors.New("tsnet: TailnetRequired is set without a Tailnet")
+	}
+	return requiredPrefix + s.Tailnet, nil
+}
+
 func (s *Server) start() (reterr error) {
 	var closePool closeOnErrorPool
 	defer closePool.closeAllIfError(&reterr)
+
+	tailnet, err := s.registerTailnet()
+	if err != nil {
+		return err
+	}
 
 	exe, err := os.Executable()
 	if err != nil {
@@ -1030,6 +1065,7 @@ func (s *Server) start() (reterr error) {
 	prefs.ControlURL = s.getControlURL()
 	prefs.RunWebClient = s.RunWebClient
 	prefs.AdvertiseTags = s.AdvertiseTags
+	prefs.Tailnet = tailnet
 	authKey, err := s.resolveAuthKey()
 	if err != nil {
 		return fmt.Errorf("error resolving auth key: %w", err)

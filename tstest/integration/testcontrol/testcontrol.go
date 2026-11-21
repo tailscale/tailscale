@@ -58,6 +58,7 @@ type Server struct {
 	DERPMap            *tailcfg.DERPMap // nil means to use prod DERP map
 	RequireAuth        bool
 	RequireAuthKey     string // required authkey for all nodes
+	RequireTailnet     string // required RegisterRequest.Tailnet for all nodes
 	RequireMachineAuth bool
 	Verbose            bool
 	DNSConfig          *tailcfg.DNSConfig // nil means no DNS config
@@ -1045,6 +1046,15 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 	if s.RequireAuthKey != "" && (req.Auth == nil || req.Auth.AuthKey != s.RequireAuthKey) {
 		res := must.Get(s.encode(false, tailcfg.RegisterResponse{
 			Error: "invalid authkey",
+		}))
+		w.WriteHeader(200)
+		w.Write(res)
+		return
+	}
+
+	if s.RequireTailnet != "" && req.Tailnet != s.RequireTailnet {
+		res := must.Get(s.encode(false, tailcfg.RegisterResponse{
+			Error: fmt.Sprintf("tailnet %q, want %q", req.Tailnet, s.RequireTailnet),
 		}))
 		w.WriteHeader(200)
 		w.Write(res)
