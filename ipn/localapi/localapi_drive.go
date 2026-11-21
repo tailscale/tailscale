@@ -24,6 +24,10 @@ func init() {
 
 // serveDriveServerAddr handles updates of the Taildrive file server address.
 func (h *Handler) serveDriveServerAddr(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "drive access denied", http.StatusForbidden)
+		return
+	}
 	if r.Method != httpm.PUT {
 		http.Error(w, "only PUT allowed", http.StatusMethodNotAllowed)
 		return
@@ -46,12 +50,20 @@ func (h *Handler) serveDriveServerAddr(w http.ResponseWriter, r *http.Request) {
 // GET - gets a list of all shares, sorted by name
 // POST - renames an existing share
 func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "drive access denied", http.StatusForbidden)
+		return
+	}
 	if !h.b.DriveSharingEnabled() {
 		http.Error(w, `taildrive sharing not enabled, please add the attribute "drive:share" to this node in your ACLs' "nodeAttrs" section`, http.StatusForbidden)
 		return
 	}
 	switch r.Method {
 	case httpm.PUT:
+		if !h.PermitWrite {
+			http.Error(w, "drive write access denied", http.StatusForbidden)
+			return
+		}
 		var share drive.Share
 		err := json.NewDecoder(r.Body).Decode(&share)
 		if err != nil {
@@ -88,6 +100,10 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusCreated)
 	case httpm.DELETE:
+		if !h.PermitWrite {
+			http.Error(w, "drive write access denied", http.StatusForbidden)
+			return
+		}
 		b, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -104,6 +120,10 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	case httpm.POST:
+		if !h.PermitWrite {
+			http.Error(w, "drive write access denied", http.StatusForbidden)
+			return
+		}
 		var names [2]string
 		err := json.NewDecoder(r.Body).Decode(&names)
 		if err != nil {
