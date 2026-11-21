@@ -272,6 +272,89 @@ func TestIngressPGReconciler(t *testing.T) {
 	expectMissing[networkingv1.Ingress](t, fc, ing3.Namespace, ing3.Name)
 }
 
+func TestIngressPGReconciler_RuleHostMatchesShortTLSHost(t *testing.T) {
+	testIngressPGRuleHost(t, "my-svc")
+}
+
+// The FQDN form of the rule host is what worked before short hosts were
+// accepted, so it must keep producing handlers.
+func TestIngressPGReconciler_RuleHostMatchesFQDN(t *testing.T) {
+	testIngressPGRuleHost(t, "my-svc.ts.net")
+}
+
+func testIngressPGRuleHost(t *testing.T, ruleHost string) {
+	t.Helper()
+	ingPGR, fc, _ := setupIngressTest(t)
+
+	mustCreate(t, fc, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.0.0.1",
+			Ports:     []corev1.ServicePort{{Port: 8080}},
+		},
+	})
+
+	ing := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingress",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/proxy-group": "test-pg",
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: new("tailscale"),
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"my-svc"}},
+			},
+			Rules: []networkingv1.IngressRule{{
+				Host: ruleHost,
+				IngressRuleValue: networkingv1.IngressRuleValue{
+					HTTP: &networkingv1.HTTPIngressRuleValue{
+						Paths: []networkingv1.HTTPIngressPath{{
+							Path:     "/",
+							PathType: new(networkingv1.PathTypePrefix),
+							Backend: networkingv1.IngressBackend{
+								Service: &networkingv1.IngressServiceBackend{
+									Name: "test",
+									Port: networkingv1.ServiceBackendPort{Number: 8080},
+								},
+							},
+						}},
+					},
+				},
+			}},
+		},
+	}
+	mustCreate(t, fc, ing)
+
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+	populateTLSSecret(t, fc, "test-pg", "my-svc.ts.net")
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+
+	cm := &corev1.ConfigMap{}
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: "test-pg-ingress-config", Namespace: "operator-ns"}, cm); err != nil {
+		t.Fatalf("getting ConfigMap: %v", err)
+	}
+	cfg := &ipn.ServeConfig{}
+	if err := json.Unmarshal(cm.BinaryData["serve-config.json"], cfg); err != nil {
+		t.Fatalf("unmarshaling serve config: %v", err)
+	}
+	svc := cfg.Services["svc:my-svc"]
+	if svc == nil {
+		t.Fatalf("service svc:my-svc not found in serve config")
+	}
+	web := svc.Web[ipn.HostPort("my-svc.ts.net:443")]
+	if web == nil || len(web.Handlers) == 0 {
+		t.Fatalf("rule with host %q was dropped: Web config %+v", ruleHost, svc.Web)
+	}
+	if _, ok := web.Handlers["/"]; !ok {
+		t.Errorf("missing handler for path /, got %+v", web.Handlers)
+	}
+}
+
 func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
 	ingPGR, fc, ft := setupIngressTest(t)
 

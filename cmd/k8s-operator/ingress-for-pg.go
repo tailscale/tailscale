@@ -266,7 +266,14 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		return svcsChanged, nil
 	}
 	ep := ipn.HostPort(fmt.Sprintf("%s:443", dnsName))
-	handlers, err := handlersForIngress(ctx, ing, r.Client, r.recorder, dnsName, logger)
+	// Rules are matched against the TLS host as written in the Ingress (which
+	// may be a short hostname); the full DNS name of the Tailscale Service is
+	// also accepted, which is what rules had to use before.
+	var tlsHost string
+	if len(ing.Spec.TLS) > 0 && len(ing.Spec.TLS[0].Hosts) > 0 {
+		tlsHost = ing.Spec.TLS[0].Hosts[0]
+	}
+	handlers, err := handlersForIngress(ctx, ing, r.Client, r.recorder, tlsHost, logger, dnsName)
 	if err != nil {
 		return false, fmt.Errorf("failed to get handlers for Ingress: %w", err)
 	}
