@@ -35,7 +35,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tailcfg/peercap"
-	"tailscale.com/types/ipproto"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/prompt"
@@ -174,22 +173,6 @@ const (
 	serveTypeTLSTerminatedTCP
 	serveTypeTUN
 )
-
-func serveTypeFromConfString(sp conffile.ServiceProtocol) (st serveType, ok bool) {
-	switch sp {
-	case conffile.ProtoHTTP:
-		return serveTypeHTTP, true
-	case conffile.ProtoHTTPS, conffile.ProtoHTTPSInsecure, conffile.ProtoFile:
-		return serveTypeHTTPS, true
-	case conffile.ProtoTCP:
-		return serveTypeTCP, true
-	case conffile.ProtoTLSTerminatedTCP:
-		return serveTypeTLSTerminatedTCP, true
-	case conffile.ProtoTUN:
-		return serveTypeTUN, true
-	}
-	return -1, false
-}
 
 const noService tailcfg.ServiceName = ""
 
@@ -694,105 +677,18 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 	}
 	magicDNSSuffix := st.CurrentTailnet.MagicDNSSuffix
 
-	handleService := func(svcName tailcfg.ServiceName, serviceConfig *ipn.ServiceConfig) (*conffile.ServiceDetailsFile, error) {
-		var sdf conffile.ServiceDetailsFile
+	// handleService fails if the Service holds something that the file
+	// cannot describe. The caller then writes nothing.
+	handleService := func(svcName tailcfg.ServiceName, serviceConfig *ipn.ServiceConfig) (*conffile.ServiceFile, error) {
+		svc, err := conffile.ServiceFromServeConfig(svcName, serviceConfig, magicDNSSuffix)
+		if err != nil {
+			return nil, err
+		}
 		// Leave unset for true case since that's the default.
 		if !advertised.Contains(svcName.String()) {
-			sdf.Advertised.Set(false)
+			svc.Advertised.Set(false)
 		}
-
-		if serviceConfig.Tun {
-			mak.Set(&sdf.Endpoints, &tailcfg.ProtoPortRange{Ports: tailcfg.PortRangeAny}, &conffile.Target{
-				Protocol:         conffile.ProtoTUN,
-				Destination:      "",
-				DestinationPorts: tailcfg.PortRange{},
-			})
-		}
-
-		for port, config := range serviceConfig.TCP {
-			sniName := fmt.Sprintf("%s.%s", svcName.WithoutPrefix(), magicDNSSuffix)
-			ppr := tailcfg.ProtoPortRange{Proto: int(ipproto.TCP), Ports: tailcfg.PortRange{First: port, Last: port}}
-			if config.TCPForward != "" {
-				var proto conffile.ServiceProtocol
-				if config.TerminateTLS != "" {
-					proto = conffile.ProtoTLSTerminatedTCP
-				} else {
-					proto = conffile.ProtoTCP
-				}
-				if strings.HasPrefix(config.TCPForward, "unix:") {
-					mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
-						Protocol:    proto,
-						Destination: config.TCPForward,
-					})
-				} else {
-					destHost, destPortStr, err := net.SplitHostPort(config.TCPForward)
-					if err != nil {
-						return nil, fmt.Errorf("parse TCPForward=%q: %w", config.TCPForward, err)
-					}
-					destPort, err := strconv.ParseUint(destPortStr, 10, 16)
-					if err != nil {
-						return nil, fmt.Errorf("parse port %q: %w", destPortStr, err)
-					}
-					mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
-						Protocol:         proto,
-						Destination:      destHost,
-						DestinationPorts: tailcfg.PortRange{First: uint16(destPort), Last: uint16(destPort)},
-					})
-				}
-			} else if config.HTTP || config.HTTPS {
-				webKey := ipn.HostPort(net.JoinHostPort(sniName, strconv.FormatUint(uint64(port), 10)))
-				handlers, ok := serviceConfig.Web[webKey]
-				if !ok {
-					return nil, fmt.Errorf("service %q: HTTP/HTTPS is set but no handlers in config", svcName)
-				}
-				defaultHandler, ok := handlers.Handlers["/"]
-				if !ok {
-					return nil, fmt.Errorf("service %q: root handler not set", svcName)
-				}
-				if defaultHandler.Path != "" {
-					mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
-						Protocol:         conffile.ProtoFile,
-						Destination:      defaultHandler.Path,
-						DestinationPorts: tailcfg.PortRange{},
-					})
-				} else if defaultHandler.Proxy != "" {
-					if strings.HasPrefix(defaultHandler.Proxy, "unix:") {
-						// HTTP over unix socket: h.Proxy is "unix:/path" without "://".
-						// The inbound protocol is HTTP(S); infer from useTLS.
-						httpProto := conffile.ProtoHTTP
-						if config.HTTPS {
-							httpProto = conffile.ProtoHTTPS
-						}
-						mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
-							Protocol:    httpProto,
-							Destination: defaultHandler.Proxy,
-						})
-					} else {
-						proto, rest, ok := strings.Cut(defaultHandler.Proxy, "://")
-						if !ok {
-							return nil, fmt.Errorf("service %q: invalid proxy handler %q", svcName, defaultHandler.Proxy)
-						}
-						host, portStr, err := net.SplitHostPort(rest)
-						if err != nil {
-							return nil, fmt.Errorf("service %q: invalid proxy handler %q: %w", svcName, defaultHandler.Proxy, err)
-						}
-
-						port, err := strconv.ParseUint(portStr, 10, 16)
-						if err != nil {
-							return nil, fmt.Errorf("service %q: parse port %q: %w", svcName, portStr, err)
-						}
-
-						mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
-							Protocol:         conffile.ServiceProtocol(proto),
-							Destination:      host,
-							DestinationPorts: tailcfg.PortRange{First: uint16(port), Last: uint16(port)},
-						})
-					}
-				}
-			}
-		}
-
-		return &sdf, nil
+		return svc, nil
 	}
 
 	var j []byte
@@ -800,8 +696,8 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 	if e.allServices && forSingleService {
 		return errors.New("cannot specify both --all and --service")
 	} else if e.allServices {
-		var scf conffile.ServicesConfigFile
-		scf.Version = "0.0.1"
+		var scf conffile.ServicesFile
+		scf.Version = conffile.ConfigVersionV1
 		for svcName, serviceConfig := range sc.Services {
 			sdf, err := handleService(svcName, serviceConfig)
 			if err != nil {
@@ -822,7 +718,7 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 			if err != nil {
 				return err
 			}
-			sdf.Version = "0.0.1"
+			sdf.Version = conffile.ConfigVersionV1
 			j, err = json.MarshalIndent(sdf, "", "  ")
 			if err != nil {
 				return err
@@ -868,6 +764,58 @@ func legacyNodeLevelFields(sc *ipn.ServeConfig) []string {
 	return fields
 }
 
+const serveV0HTTPListenerWarning = "Warning: %q is a version %s file. " +
+	"That version cannot record whether a port serves HTTP or HTTPS. " +
+	"These \"http://\" endpoints are applied as plain-HTTP listeners: %s. " +
+	"If one of them should serve HTTPS, set it up with `tailscale serve` and " +
+	"save it with `tailscale serve get-config`; see %s\n"
+
+// warnV0HTTPListeners warns if scf, loaded from a 0.0.1 file, has plain-HTTP
+// listeners.
+func warnV0HTTPListeners(w io.Writer, filename string, scf *conffile.ServicesFile) {
+	var ports []string
+	for name, svc := range scf.Services {
+		for port, lis := range svc.Listeners {
+			if lis.Protocol == conffile.ProtoHTTP {
+				ports = append(ports, fmt.Sprintf("%s port %d", name, port))
+			}
+		}
+	}
+	if len(ports) == 0 {
+		return
+	}
+	sort.Strings(ports)
+	fmt.Fprintf(w, serveV0HTTPListenerWarning, filename, conffile.ConfigVersionV0, strings.Join(ports, ", "), serveConfigDocsURL)
+}
+
+// normalizeServicePaths checks the file and directory routes of svc against
+// this machine and rewrites them as "tailscale serve <path>" stores them. It
+// cleans each path, and it adds a trailing "/" to the mount point of a
+// directory.
+func normalizeServicePaths(svc *conffile.ServiceFile) error {
+	for port, lis := range svc.Listeners {
+		for mount, r := range lis.Routes {
+			if r.Path == "" {
+				continue
+			}
+			if version.IsMacAppStore() || version.IsMacSys() {
+				// The Tailscale network extension cannot serve arbitrary paths on macOS due to sandbox restrictions (2024-03-26)
+				return errors.New("Path serving is not supported on macOS due to sandbox restrictions. To use Tailscale Serve on macOS, switch to the open-source tailscaled distribution. See https://tailscale.com/kb/1065/macos-variants for more information.")
+			}
+			r.Path = filepath.Clean(r.Path)
+			fi, err := os.Stat(r.Path)
+			if err != nil {
+				return fmt.Errorf("listener %d: route %q: invalid path %q: %w", port, mount, r.Path, err)
+			}
+			if fi.IsDir() && !strings.HasSuffix(mount, "/") {
+				delete(lis.Routes, mount)
+				lis.Routes[mount+"/"] = r
+			}
+		}
+	}
+	return nil
+}
+
 func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err error) {
 	if len(args) != 1 {
 		return errors.New("must specify filename")
@@ -885,7 +833,7 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 	if forSingleService {
 		forService = e.service.String()
 	}
-	scf, err := conffile.LoadServicesConfig(filename, forService)
+	scf, err := conffile.LoadServicesFile(filename, forService)
 	if err != nil {
 		return fmt.Errorf("could not read config from file %q: %w", filename, err)
 	}
@@ -934,54 +882,19 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 		}
 	}
 
-	// scf.Services is nil for the legacy format, making this loop a no-op then.
-	for name, details := range scf.Services {
-		for ppr, ep := range details.Endpoints {
-			if ep.Protocol == conffile.ProtoTUN {
-				err := e.setServe(sc, name.String(), serveTypeTUN, 0, "", "", false, magicDNSSuffix, nil, 0 /* proxy protocol */, "")
-				if err != nil {
-					return err
-				}
-				// TUN mode is exclusive.
-				break
-			}
+	if scf.Version == conffile.ConfigVersionV0 {
+		warnV0HTTPListeners(e.stderr(), filename, scf)
+	}
 
-			if ppr.Proto != int(ipproto.TCP) {
-				return fmt.Errorf("service %q: source ports must be TCP", name)
-			}
-			serveType, _ := serveTypeFromConfString(ep.Protocol)
-			for port := ppr.Ports.First; port <= ppr.Ports.Last; port++ {
-				var target string
-				if ep.Protocol == conffile.ProtoFile {
-					target = ep.Destination
-				} else if strings.HasPrefix(ep.Destination, "unix:") {
-					// Unix socket target: pass "unix:/path" through to setServe.
-					// Supported for HTTP(S), TCP, and TLS-terminated-TCP inbound.
-					target = ep.Destination
-				} else {
-					// map source port range 1-1 to destination port range
-					destPort := ep.DestinationPorts.First + (port - ppr.Ports.First)
-					portStr := fmt.Sprint(destPort)
-					scheme := ep.Protocol
-					if serveType == serveTypeTCP || serveType == serveTypeTLSTerminatedTCP {
-						// applyTCPServe accepts only tcp and unix target
-						// schemes. TLS termination is carried by the serve
-						// type, so the target uses the tcp scheme.
-						scheme = conffile.ProtoTCP
-					}
-					target = fmt.Sprintf("%s://%s", scheme, net.JoinHostPort(ep.Destination, portStr))
-				}
-				err := e.setServe(sc, name.String(), serveType, port, "/", target, false, magicDNSSuffix, nil, 0 /* proxy protocol */, "")
-				if err != nil {
-					return fmt.Errorf("service %q: %w", name, err)
-				}
-				// Prevent wrapping a maximal uint16 port back to zero.
-				if port == ppr.Ports.Last {
-					break
-				}
-			}
+	// scf.Services is nil for the legacy format, making this loop a no-op then.
+	for name, svc := range scf.Services {
+		if err := normalizeServicePaths(svc); err != nil {
+			return fmt.Errorf("service %q: %w", name, err)
 		}
-		if v, set := details.Advertised.Get(); !set || v {
+		if err := svc.ApplyTo(sc, name, magicDNSSuffix); err != nil {
+			return err
+		}
+		if v, set := svc.Advertised.Get(); !set || v {
 			advertisedServices.Add(name.String())
 		}
 	}
