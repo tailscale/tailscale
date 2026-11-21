@@ -5359,3 +5359,23 @@ func TestUnambiguousNodeKeyOfPingLocked(t *testing.T) {
 		}
 	})
 }
+
+func TestBindSocketAlwaysDERPClosesOldSocket(t *testing.T) {
+	c, _ := newTestConnAndRegistry(t)
+	port := c.LocalPort()
+	if port == 0 {
+		t.Fatal("conn not bound to a UDP port")
+	}
+
+	envknob.SetenvForTest(t, "TS_DEBUG_ALWAYS_USE_DERP", "true")
+	c.Rebind()
+
+	if got := c.LocalPort(); got != 0 {
+		t.Fatalf("LocalPort after rebind = %d, want 0", got)
+	}
+	pc, err := net.ListenUDP("udp4", &net.UDPAddr{Port: int(port)})
+	if err != nil {
+		t.Fatalf("old port %d still in use after rebind: %v", port, err)
+	}
+	pc.Close()
+}

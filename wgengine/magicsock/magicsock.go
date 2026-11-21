@@ -3982,6 +3982,9 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 
 	if debugAlwaysDERP() {
 		c.logf("disabled %v per TS_DEBUG_ALWAYS_USE_DERP", network)
+		if err := ruc.closeLocked(); err != nil {
+			c.logf("magicsock: bindSocket %v close failed: %v", network, err)
+		}
 		ruc.setConnLocked(nil, c.udpSockets, "", c.controlKnobs)
 		return nil
 	}
