@@ -900,10 +900,13 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	defer fq.closeOnCtxDone.Remove(conn)
 
 	if _, err := conn.WriteToUDPAddrPort(fq.packet, ipp); err != nil {
-		metricDNSFwdUDPErrorWrite.Add(1)
 		if err := ctx.Err(); err != nil {
+			// The query is already done (e.g. another upstream answered
+			// first) and its cleanup closed conn, so this isn't an
+			// upstream write failure. Don't count it as one.
 			return nil, err
 		}
+		metricDNSFwdUDPErrorWrite.Add(1)
 		return nil, err
 	}
 	metricDNSFwdUDPWrote.Add(1)
