@@ -250,6 +250,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			fs.UintVar(&e.tcp, "tcp", 0, "Expose a TCP forwarder to forward raw TCP packets at the specified port")
 			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
 			fs.UintVar(&e.proxyProtocol, "proxy-protocol", 0, "PROXY protocol version (1 or 2) for TCP forwarding")
+			fs.StringVar(&e.backendHTTP, "backend-http", "", "HTTP version to speak to a plaintext proxy target; the only value is \"h2c\" (HTTP/2 over cleartext), for targets such as Connect RPC or gRPC servers without TLS")
 			fs.BoolVar(&e.yes, "yes", false, "Update without interactive prompts (default false)")
 		}),
 		UsageFunc: usageFuncNoDefaultValues,
@@ -425,6 +426,14 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		if (srvType == serveTypeHTTP || srvType == serveTypeHTTPS) && e.proxyProtocol != 0 {
 			return fmt.Errorf("PROXY protocol is only supported for TCP forwarding, not HTTP/HTTPS")
 		}
+		if e.backendHTTP != "" {
+			if srvType != serveTypeHTTP && srvType != serveTypeHTTPS {
+				return errors.New("--backend-http is only supported for HTTP and HTTPS serve, not TCP forwarding or TUN mode")
+			}
+			if e.backendHTTP != ipn.BackendHTTPH2C {
+				return fmt.Errorf("invalid --backend-http value %q; must be %q", e.backendHTTP, ipn.BackendHTTPH2C)
+			}
+		}
 		// Validate PROXY protocol version
 		if e.proxyProtocol != 0 && e.proxyProtocol != 1 && e.proxyProtocol != 2 {
 			return fmt.Errorf("invalid PROXY protocol version %d; must be 1 or 2", e.proxyProtocol)
@@ -525,7 +534,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			if err := e.shouldWarnRemoteDestCompatibility(ctx, target); err != nil {
 				return err
 			}
-			err = e.setServe(sc, dnsName, srvType, srvPort, mount, target, funnel, magicDNSSuffix, e.acceptAppCaps, int(e.proxyProtocol))
+			err = e.setServe(sc, dnsName, srvType, srvPort, mount, target, funnel, magicDNSSuffix, e.acceptAppCaps, int(e.proxyProtocol), e.backendHTTP)
 			msg = e.messageForPort(sc, st, dnsName, srvType, srvPort)
 		}
 		if err != nil {
@@ -929,7 +938,7 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 	for name, details := range scf.Services {
 		for ppr, ep := range details.Endpoints {
 			if ep.Protocol == conffile.ProtoTUN {
-				err := e.setServe(sc, name.String(), serveTypeTUN, 0, "", "", false, magicDNSSuffix, nil, 0 /* proxy protocol */)
+				err := e.setServe(sc, name.String(), serveTypeTUN, 0, "", "", false, magicDNSSuffix, nil, 0 /* proxy protocol */, "")
 				if err != nil {
 					return err
 				}
@@ -962,7 +971,7 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 					}
 					target = fmt.Sprintf("%s://%s", scheme, net.JoinHostPort(ep.Destination, portStr))
 				}
-				err := e.setServe(sc, name.String(), serveType, port, "/", target, false, magicDNSSuffix, nil, 0 /* proxy protocol */)
+				err := e.setServe(sc, name.String(), serveType, port, "/", target, false, magicDNSSuffix, nil, 0 /* proxy protocol */, "")
 				if err != nil {
 					return fmt.Errorf("service %q: %w", name, err)
 				}
@@ -1009,12 +1018,12 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 	return e.lc.SetServeConfig(ctx, sc)
 }
 
-func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool, mds string, caps []peercap.Cap, proxyProtocol int) error {
+func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool, mds string, caps []peercap.Cap, proxyProtocol int, backendHTTP string) error {
 	// update serve config based on the type
 	switch srvType {
 	case serveTypeHTTPS, serveTypeHTTP:
 		useTLS := srvType == serveTypeHTTPS
-		err := e.applyWebServe(sc, dnsName, srvPort, useTLS, mount, target, mds, caps)
+		err := e.applyWebServe(sc, dnsName, srvPort, useTLS, mount, target, mds, caps, backendHTTP)
 		if err != nil {
 			return fmt.Errorf("failed apply web serve: %w", err)
 		}
@@ -1091,7 +1100,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		case h.Path != "":
 			return "path", h.Path
 		case h.Proxy != "":
-			return "proxy", h.Proxy
+			return "proxy", proxyHandlerDesc(h)
 		case h.Text != "":
 			return "text", "\"" + elipticallyTruncate(h.Text, 20) + "\""
 		}
@@ -1260,7 +1269,18 @@ func (e *serveEnv) shouldWarnRemoteDestCompatibility(ctx context.Context, target
 	return nil
 }
 
-func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target, mds string, caps []peercap.Cap) error {
+// proxyHandlerDesc returns the description of the proxy handler h that the
+// serve status output shows.
+func proxyHandlerDesc(h *ipn.HTTPHandler) string {
+	if h.BackendHTTP != "" {
+		return h.Proxy + " (" + h.BackendHTTP + ")"
+	}
+	return h.Proxy
+}
+
+// applyWebServe sets the web handler for mount on srvPort of dnsName in sc.
+// backendHTTP is the [ipn.HTTPHandler.BackendHTTP] value for a proxy target.
+func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target, mds string, caps []peercap.Cap, backendHTTP string) error {
 	h := new(ipn.HTTPHandler)
 	switch {
 	case strings.HasPrefix(target, "text:"):
@@ -1269,7 +1289,13 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 			return errors.New("unable to serve; text cannot be an empty string")
 		}
 		h.Text = text
+		if backendHTTP != "" {
+			return errors.New("--backend-http requires a proxy target, not text")
+		}
 	case filepath.IsAbs(target):
+		if backendHTTP != "" {
+			return errors.New("--backend-http requires a proxy target, not a path")
+		}
 		if version.IsMacAppStore() || version.IsMacSys() {
 			// The Tailscale network extension cannot serve arbitrary paths on macOS due to sandbox restrictions (2024-03-26)
 			return errors.New("Path serving is not supported on macOS due to sandbox restrictions. To use Tailscale Serve on macOS, switch to the open-source tailscaled distribution. See https://tailscale.com/kb/1065/macos-variants for more information.")
@@ -1294,8 +1320,12 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 		if err != nil {
 			return err
 		}
+		if backendHTTP == ipn.BackendHTTPH2C && strings.HasPrefix(t, "https") {
+			return errors.New("--backend-http=h2c requires a plaintext target; an HTTPS target negotiates HTTP/2 itself")
+		}
 		h.Proxy = t
 		h.AcceptAppCaps = caps
+		h.BackendHTTP = backendHTTP
 	}
 
 	// TODO: validation needs to check nested foreground configs

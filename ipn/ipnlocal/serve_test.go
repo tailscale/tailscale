@@ -1248,7 +1248,7 @@ func Test_reverseProxyConfiguration(t *testing.T) {
 		}
 		// test that reverseproxies have been set up as expected
 		for _, tt := range tests {
-			rp, ok := b.serveProxyHandlers.Load(tt.backend)
+			rp, ok := b.serveProxyHandlers.Load(serveProxyKey{backend: tt.backend})
 			if !tt.shouldExist && ok {
 				t.Errorf("proxy for backend %s should not exist, but it does", tt.backend)
 			}
@@ -1819,6 +1819,103 @@ func TestServeGRPCProxy(t *testing.T) {
 				t.Errorf("got body %q, want %q", got, msg)
 			}
 		})
+	}
+}
+
+// TestServeDeclaredH2CProxy tests that a handler with BackendHTTP set to h2c
+// reaches its backend over HTTP/2 for every request except an Upgrade, and
+// that an undeclared backend still gets HTTP/1.1 for Connect RPC streaming
+// (tailscale/tailscale#18483).
+func TestServeDeclaredH2CProxy(t *testing.T) {
+	backend := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Proto-Was", r.Proto)
+	}))
+	backend.Config.Protocols = new(http.Protocols)
+	backend.Config.Protocols.SetHTTP1(true)
+	backend.Config.Protocols.SetUnencryptedHTTP2(true)
+	backend.Start()
+	defer backend.Close()
+
+	lb := newTestBackend(t)
+	newProxy := func(h2c bool) http.Handler {
+		return must.Get(lb.proxyHandlerForBackend(backend.URL, h2c))
+	}
+	declared, undeclared := newProxy(true), newProxy(false)
+
+	tests := []struct {
+		name        string
+		proxy       http.Handler
+		protoMajor  int
+		contentType string
+		upgrade     string
+		wantProto   string
+	}{
+		{"declared-connect-streaming-http2", declared, 2, "application/connect+proto", "", "HTTP/2.0"},
+		{"declared-json-http2", declared, 2, "application/json", "", "HTTP/2.0"},
+		{"declared-json-http1", declared, 1, "application/json", "", "HTTP/2.0"},
+		{"declared-upgrade-http1", declared, 1, "", "websocket", "HTTP/1.1"},
+		{"undeclared-connect-streaming-http2", undeclared, 2, "application/connect+proto", "", "HTTP/1.1"},
+		{"undeclared-grpc-http2", undeclared, 2, "application/grpc", "", "HTTP/2.0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("POST", "http://foo/bar", nil)
+			req.ProtoMajor = tt.protoMajor
+			if tt.contentType != "" {
+				req.Header.Set("Content-Type", tt.contentType)
+			}
+			if tt.upgrade != "" {
+				req.Header.Set("Connection", "Upgrade")
+				req.Header.Set("Upgrade", tt.upgrade)
+			}
+			rec := httptest.NewRecorder()
+			tt.proxy.ServeHTTP(rec, req)
+			if got := rec.Result().Header.Get("Proto-Was"); got != tt.wantProto {
+				t.Errorf("backend saw %q, want %q", got, tt.wantProto)
+			}
+		})
+	}
+
+	t.Run("https-backend-ignores-h2c", func(t *testing.T) {
+		rp := must.Get(lb.proxyHandlerForBackend("https://example.com:8443", true)).(*reverseProxy)
+		if rp.h2c {
+			t.Error("h2c set for an https backend")
+		}
+	})
+}
+
+// TestServeProxyHandlersKeyedByBackendHTTP tests that two handlers with the
+// same Proxy URL and different BackendHTTP values get separate reverse proxies.
+func TestServeProxyHandlersKeyedByBackendHTTP(t *testing.T) {
+	b := newTestBackend(t)
+	const backend = "http://127.0.0.1:8080"
+	conf := &ipn.ServeConfig{
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			"example.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+				"/":    {Proxy: backend},
+				"/rpc": {Proxy: backend, BackendHTTP: ipn.BackendHTTPH2C},
+			}},
+		},
+	}
+	if err := b.setServeConfigLocked(conf, ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, h2c := range []bool{false, true} {
+		p, ok := b.serveProxyHandlers.Load(serveProxyKey{backend: backend, h2c: h2c})
+		if !ok {
+			t.Fatalf("no proxy for h2c=%v", h2c)
+		}
+		if got := p.(*reverseProxy).h2c; got != h2c {
+			t.Errorf("proxy for h2c=%v has h2c=%v", h2c, got)
+		}
+	}
+
+	delete(conf.Web["example.ts.net:443"].Handlers, "/rpc")
+	if err := b.setServeConfigLocked(conf, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := b.serveProxyHandlers.Load(serveProxyKey{backend: backend, h2c: true}); ok {
+		t.Error("h2c proxy still present after its handler was removed")
 	}
 }
 
@@ -2626,7 +2723,7 @@ func TestReverseProxyRechecksTailscaledSocketPerDial(t *testing.T) {
 	benign := mkTempSocket(t)
 
 	// Benign at config time, so the handler is built.
-	h, err := b.proxyHandlerForBackend("unix:" + benign)
+	h, err := b.proxyHandlerForBackend("unix:"+benign, false)
 	if err != nil {
 		t.Fatalf("proxyHandlerForBackend(benign) = %v; want handler", err)
 	}

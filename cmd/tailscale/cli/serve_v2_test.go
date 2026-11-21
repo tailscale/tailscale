@@ -1163,6 +1163,89 @@ func TestServeDevConfigMutations(t *testing.T) {
 			}},
 		},
 		{
+			name: "backend_http_h2c",
+			steps: []step{
+				{
+					command: cmd("serve --bg --backend-http=h2c 3000"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {
+									Proxy:       "http://127.0.0.1:3000",
+									BackendHTTP: ipn.BackendHTTPH2C,
+								},
+							}},
+						},
+					},
+				},
+				{ // running the command again without the flag clears it
+					command: cmd("serve --bg 3000"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							}},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:   "backend_http_h2c_unix_socket",
+			skipOn: []string{"windows"},
+			steps: []step{{
+				command: cmd("serve --bg --http=80 --backend-http=h2c unix:/var/run/app.sock"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {
+								Proxy:       "unix:/var/run/app.sock",
+								BackendHTTP: ipn.BackendHTTPH2C,
+							},
+						}},
+					},
+				},
+			}},
+		},
+		{
+			name: "backend_http_invalid_value",
+			steps: []step{{
+				command: cmd("serve --bg --backend-http=h3 3000"),
+				wantErr: anyErr(),
+			}},
+		},
+		{
+			name: "backend_http_h2c_with_https_target",
+			steps: []step{{
+				command: cmd("serve --bg --backend-http=h2c https://localhost:3000"),
+				wantErr: anyErr(),
+			}},
+		},
+		{
+			name: "backend_http_h2c_with_insecure_https_target",
+			steps: []step{{
+				command: cmd("serve --bg --backend-http=h2c https+insecure://localhost:3000"),
+				wantErr: anyErr(),
+			}},
+		},
+		{
+			name: "backend_http_h2c_with_text",
+			steps: []step{{
+				command: cmd("serve --bg --backend-http=h2c text:hello"),
+				wantErr: anyErr(),
+			}},
+		},
+		{
+			name: "backend_http_h2c_with_tcp",
+			steps: []step{{
+				command: cmd("serve --tcp=8000 --backend-http=h2c --bg tcp://localhost:5432"),
+				wantErr: anyErr(),
+			}},
+		},
+		{
 			name: "proxy_protocol_without_tcp",
 			steps: []step{{
 				command: cmd("serve --https=443 --proxy-protocol=1 --bg http://localhost:3000"),
@@ -2254,7 +2337,7 @@ func TestSetServe(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := e.setServe(tt.cfg, tt.dnsName, tt.srvType, tt.srvPort, tt.mountPath, tt.target, tt.allowFunnel, magicDNSSuffix, nil, tt.proxyProtocol)
+			err := e.setServe(tt.cfg, tt.dnsName, tt.srvType, tt.srvPort, tt.mountPath, tt.target, tt.allowFunnel, magicDNSSuffix, nil, tt.proxyProtocol, "")
 			if err != nil && !tt.expectErr {
 				t.Fatalf("got error: %v; did not expect error.", err)
 			}
