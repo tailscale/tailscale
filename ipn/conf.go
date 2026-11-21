@@ -51,6 +51,11 @@ type ConfigVAlpha struct {
 	AutoUpdate      *AutoUpdatePrefs `json:",omitempty"`
 	ServeConfigTemp *ServeConfig     `json:",omitempty"` // TODO(bradfitz,maisem): make separate stable type for this
 
+	// RequiredSTUNServers lists additional STUN host:port destinations to probe
+	// independently on each endpoint discovery, even while idle. Each target
+	// requires an explicit UDP port. IPv6 addresses must be enclosed in brackets.
+	RequiredSTUNServers []string `json:",omitempty"`
+
 	// StaticEndpoints are additional, user-defined endpoints that this node
 	// should advertise amongst its wireguard endpoints.
 	StaticEndpoints []netip.AddrPort `json:",omitempty"`
