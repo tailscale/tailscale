@@ -8,6 +8,7 @@
 # Inputs:
 #   URL: The cigocached server URL.
 #   HOST: The cigocached server host to dial.
+#   BIN_DIR: Optional directory to find or build the cigocacher binary in.
 # Outputs:
 #   success: Whether cigocacher was set up successfully.
 
@@ -25,7 +26,16 @@ fi
 
 BIN_PATH="$(PATH="$PATH:$HOME/bin" command -v cigocacher || true)"
 if [ -z "${BIN_PATH}" ]; then
-  echo "cigocacher not found in PATH, attempting to build or fetch it"
+  EXE=""
+  if [ "${RUNNER_OS:-}" = "Windows" ]; then
+    EXE=".exe"
+  fi
+  BIN_PATH="${BIN_DIR:-${RUNNER_TEMP:-/tmp}}/cigocacher${EXE}"
+fi
+if [ -f "${BIN_PATH}" ]; then
+  echo "Using cigocacher at ${BIN_PATH}"
+else
+  echo "cigocacher not found in PATH or cache, attempting to build or fetch it"
 
   GOPATH=$(command -v go || true)
   if [ -z "${GOPATH}" ]; then
@@ -36,7 +46,7 @@ if [ -z "${BIN_PATH}" ]; then
     GOPATH="./tool/go"
   fi
 
-  BIN_PATH="${RUNNER_TEMP:-/tmp}/cigocacher$(${GOPATH} env GOEXE)"
+  mkdir -p "$(dirname "${BIN_PATH}")"
   if [ -d "cmd/cigocacher" ]; then
     echo "cmd/cigocacher found locally, building from local source"
     "${GOPATH}" build -o "${BIN_PATH}" ./cmd/cigocacher

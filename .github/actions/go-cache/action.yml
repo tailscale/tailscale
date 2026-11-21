@@ -23,6 +23,22 @@ outputs:
 runs:
   using: composite
   steps:
+    # cigocacher has no tailscale.com dependencies outside cmd/cigocacher
+    # (see TestDeps), so its binary depends only on these files.
+    - name: Compute cigocacher cache key
+      id: key
+      if: inputs.cigocached-url != ''
+      shell: bash
+      working-directory: ${{ inputs.checkout-path }}
+      run: echo "key=cigocacher-$RUNNER_OS-$RUNNER_ARCH-$(cat cmd/cigocacher/*.go go.mod go.sum | sha256sum | cut -c1-32)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore cigocacher binary
+      if: inputs.cigocached-url != ''
+      uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # zizmor: ignore[cache-poisoning] v5.0.4
+      with:
+        path: ${{ runner.temp }}/cigocacher-bin
+        key: ${{ steps.key.outputs.key }}
+
     - name: Setup cigocacher
       id: setup
       shell: bash
@@ -30,6 +46,7 @@ runs:
         URL: ${{ inputs.cigocached-url }}
         HOST: ${{ inputs.cigocached-host }}
         CACHE_DIR: ${{ inputs.cache-dir }}
+        BIN_DIR: ${{ runner.temp }}/cigocacher-bin
       working-directory: ${{ inputs.checkout-path }}
       # https://github.com/orgs/community/discussions/25910
       run: $GITHUB_ACTION_PATH/action.sh
