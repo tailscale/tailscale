@@ -526,14 +526,15 @@ func (m *Monitor) Close() error {
 	if m.wallTimer != nil {
 		m.wallTimer.Stop()
 	}
+	started := m.started
+	m.mu.Unlock()
 
+	// Close the OS monitor without holding m.mu, as it may wait for
+	// in-flight OS callbacks that acquire m.mu.
 	var err error
 	if m.om != nil {
 		err = m.om.Close()
 	}
-
-	started := m.started
-	m.mu.Unlock()
 
 	if started {
 		m.goroutines.Wait()
