@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -283,6 +284,121 @@ func TestL7Ingress(t *testing.T) {
 			}
 			if err := testIngressIsReachable(t, newHTTPClient(tnClient), fmt.Sprintf("https://%s:443", hostname)); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// TestL7IngressBackendH2C checks that the Ingress proxy speaks HTTP/2 over
+// cleartext to a backend whose Service port has the appProtocol
+// "kubernetes.io/h2c", and HTTP/1.1 to a backend port without it.
+func TestL7IngressBackendH2C(t *testing.T) {
+	if tnClient == nil {
+		t.Skip("TestL7IngressBackendH2C requires a working tailnet client")
+	}
+	t.Parallel()
+
+	// This nginx accepts HTTP/1.1 and h2c on one port. It answers every
+	// request with the protocol version of that request.
+	conf := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      generateName("nginx-proto"),
+			Namespace: ns,
+		},
+		Data: map[string]string{
+			"default.conf": `server {
+	listen 80;
+	listen [::]:80;
+	http2 on;
+	location / {
+		default_type text/plain;
+		return 200 $server_protocol;
+	}
+}
+`,
+		},
+	}
+	createAndCleanup(t, kubeClient, conf)
+	nginx := nginxDeployment(ns)
+	nginx.Spec.Template.Spec.Volumes = []corev1.Volume{{
+		Name: "conf",
+		VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: conf.Name},
+			},
+		},
+	}}
+	nginx.Spec.Template.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{{
+		Name:      "conf",
+		MountPath: "/etc/nginx/conf.d",
+	}}
+	createAndCleanup(t, kubeClient, nginx)
+
+	for _, tc := range []struct {
+		name        string
+		appProtocol *string
+		want        string
+	}{
+		{"unset", nil, "HTTP/1.1"},
+		{"h2c", new("kubernetes.io/h2c"), "HTTP/2.0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      generateName("test-nginx"),
+					Namespace: ns,
+				},
+				Spec: corev1.ServiceSpec{
+					Selector: map[string]string{
+						"app.kubernetes.io/name": nginx.Name,
+					},
+					Ports: []corev1.ServicePort{
+						{
+							Name:        "http",
+							Port:        80,
+							AppProtocol: tc.appProtocol,
+						},
+					},
+				},
+			}
+			createAndCleanup(t, kubeClient, backend)
+
+			ingress := l7Ingress(ns, backend.Name, nil)
+			createAndCleanup(t, kubeClient, ingress)
+			hostname, err := waitForIngressHostname(t, ns, ingress.Name)
+			if err != nil {
+				t.Fatalf("error waiting for Ingress hostname: %v", err)
+			}
+
+			httpClient := newHTTPClient(tnClient)
+			url := fmt.Sprintf("https://%s:443", hostname)
+			var got string
+			if err := tstest.WaitFor(time.Minute, func() error {
+				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+				defer cancel()
+				req, err := http.NewRequestWithContext(ctx, httpm.GET, url, nil)
+				if err != nil {
+					return err
+				}
+				resp, err := httpClient.Do(req)
+				if err != nil {
+					return err
+				}
+				defer resp.Body.Close()
+				if resp.StatusCode != http.StatusOK {
+					return fmt.Errorf("unexpected status from %s: %d", url, resp.StatusCode)
+				}
+				body, err := io.ReadAll(resp.Body)
+				if err != nil {
+					return err
+				}
+				got = string(body)
+				return nil
+			}); err != nil {
+				t.Fatalf("error trying to reach %s: %v", url, err)
+			}
+			if got != tc.want {
+				t.Errorf("backend saw %q, want %q", got, tc.want)
 			}
 		})
 	}
