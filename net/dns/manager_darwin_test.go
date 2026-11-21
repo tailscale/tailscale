@@ -151,7 +151,7 @@ func TestSetDNSGlobal(t *testing.T) {
 		"d.init",
 		"d.add SearchOrder # 100000",
 		"d.add ServerAddresses * 100.100.100.100 fd7a:115c:a1e0::53",
-		`d.add SupplementalMatchDomains * ""`,
+		`d.add SupplementalMatchDomains * "" tail1234.ts.net`,
 		"d.add SearchDomains * tail1234.ts.net",
 		"set " + macOSGlobalDNSKey,
 		"quit",
@@ -171,6 +171,50 @@ func TestSetDNSGlobal(t *testing.T) {
 	}
 	if !slices.Equal(fileNames, []string{"other.conf"}) {
 		t.Fatalf("expected only unmanaged resolver file after global DNS config, got %v", fileNames)
+	}
+}
+
+func TestSetDNSGlobalSearchDomains(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		domains []dnsname.FQDN
+		want    string
+	}{
+		{
+			name: "none",
+			want: `d.add SupplementalMatchDomains * ""`,
+		},
+		{
+			name:    "single-label",
+			domains: []dnsname.FQDN{"mesh."},
+			want:    `d.add SupplementalMatchDomains * "" mesh`,
+		},
+		{
+			name:    "ordered",
+			domains: []dnsname.FQDN{"tail1234.ts.net.", "office.example."},
+			want:    `d.add SupplementalMatchDomains * "" tail1234.ts.net office.example`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newTestConfigurator(t)
+			var script string
+			c.runScutil = func(s string) (string, error) {
+				script = s
+				return "", nil
+			}
+			if err := c.SetDNS(OSConfig{
+				Nameservers:   []netip.Addr{netip.MustParseAddr("100.100.100.100")},
+				SearchDomains: tt.domains,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			// configd strips SearchDomains from supplemental resolvers. The
+			// search suffixes must also be match domains, while the empty
+			// match domain must remain to handle global DNS queries.
+			if !slices.Contains(strings.Split(script, "\n"), tt.want) {
+				t.Errorf("scutil script missing %q:\n%s", tt.want, script)
+			}
+		})
 	}
 }
 

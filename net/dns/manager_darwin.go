@@ -143,7 +143,16 @@ func (c *darwinConfigurator) setGlobalDNS(cfg OSConfig) error {
 	}
 	script.WriteByte('\n')
 	// An empty SupplementalMatchDomains entry makes this a default resolver.
-	script.WriteString("d.add SupplementalMatchDomains * \"\"\n")
+	// configd strips SearchDomains from supplemental resolvers and builds the
+	// global search list from their non-empty match domains instead. Include
+	// the search suffixes here as well, in control's order, so that single-label
+	// names work without manually configuring search domains on an interface.
+	script.WriteString("d.add SupplementalMatchDomains * \"\"")
+	for _, fqdn := range cfg.SearchDomains {
+		script.WriteByte(' ')
+		writeScutilString(&script, fqdn.WithoutTrailingDot())
+	}
+	script.WriteByte('\n')
 	if len(cfg.SearchDomains) > 0 {
 		script.WriteString("d.add SearchDomains *")
 		for _, fqdn := range cfg.SearchDomains {
