@@ -1,16 +1,20 @@
 name: golangci-lint
 on:
-  # For now, only lint pull requests, not the main branches.
   pull_request:
     paths:
       - ".github/workflows/golangci-lint.yml"
       - "**.go"
       - "go.mod"
       - "go.sum"
-  # TODO(andrew): enable for main branch after an initial waiting period.
-  #push:
-  #  branches:
-  #    - main
+  # Runs on main populate the Go build cache that pull requests restore.
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/golangci-lint.yml"
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
 
   workflow_dispatch:
 
@@ -29,10 +33,25 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      # setup-go's own cache is disabled because its key collides with the
+      # one used by the CodeQL workflow, whose saved build cache lacks the
+      # test packages and export data that golangci-lint needs. We manage
+      # our own cache below instead.
       - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+
+      - name: Restore Go cache
+        id: restore-cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-golangci-lint-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-golangci-lint-
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@b7bcab6379029e905e3f389a6bf301f1bc220662 # head as of 2026-03-04
@@ -44,4 +63,14 @@ jobs:
 
           # Loading packages with a cold cache takes a while:
           args: --timeout=10m
-          
+
+      - name: Save Go cache
+        # Save even on lint failure, but only on main and only once per
+        # go.mod/go.sum hash, as each entry is several GB.
+        if: always() && steps.restore-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-golangci-lint-${{ hashFiles('go.mod', 'go.sum') }}
