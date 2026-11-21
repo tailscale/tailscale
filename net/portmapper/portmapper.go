@@ -397,7 +397,12 @@ func (c *Client) invalidateMappingsLocked(releaseOld bool) {
 	if c.mapping != nil {
 		if releaseOld {
 			c.vlogf("releasing %s mapping", c.mapping.MappingType())
-			c.mapping.Release(context.Background())
+			// Bound the release like the create path does: a router that
+			// is already unreachable at shutdown must not block this
+			// on OS socket timeouts.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			c.mapping.Release(ctx)
+			cancel()
 		}
 		c.mapping = nil
 	}
