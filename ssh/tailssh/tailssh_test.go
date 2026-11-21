@@ -1760,3 +1760,15 @@ func TestIsRootUser(t *testing.T) {
 		}
 	}
 }
+
+// evalSSHPolicy is [conn.evalSSHPolicyWithUserLookup] with the real user
+// lookup, for tests. Production callers go through evaluatePolicy.
+func (c *conn) evalSSHPolicy(pol *tailcfg.SSHPolicy) (*tailcfg.SSHAction, string, []string, *tailcfg.SSHRule, evalResult) {
+	return c.evalSSHPolicyWithUserLookup(pol, userLookup)
+}
+
+// matchRule is [conn.matchRuleWithUserLookup] with the real user lookup,
+// for tests.
+func (c *conn) matchRule(r *tailcfg.SSHRule) (*tailcfg.SSHAction, string, []string, error) {
+	return c.matchRuleWithUserLookup(r, userLookup)
+}
