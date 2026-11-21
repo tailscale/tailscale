@@ -23,6 +23,7 @@ import (
 	"log/syslog"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -62,6 +63,7 @@ func registerIncubator() {
 	childproc.Add("sftp", beSFTP)
 	childproc.Add("ssh-monitor", beMonitor)
 	childproc.Add("ssh-fwd", beFwdChild)
+	childproc.Add(loginCmdChildMode, beLoginCmd)
 }
 
 var ptyName = func(f *os.File) (string, error) {
@@ -577,11 +579,17 @@ func runningAsRoot() bool {
 //
 // 1. login cannot be used to execute commands except on macOS.
 // 2. On Linux and BSD, login requires a TTY to keep running.
+// 3. On macOS, login exits 0 no matter how the command it ran exited.
 //
-// In these cases, tryExecLogin returns (false, nil) to indicate that processing
+// In cases 1 and 2, tryExecLogin returns nil to indicate that processing
 // should fall through to other methods, such as using the su command.
 //
-// Note that this uses unix.Exec to replace the current process, so in cases
+// Case 3 matters for commands and for shells without a TTY; see
+// [incubatorArgs.loginNeedsExitStatusRelay]. For those, login is run as a
+// child instead and the exit status is relayed around it by
+// runLoginRelayingExitStatus, after which this process exits with that status.
+//
+// Otherwise, this uses unix.Exec to replace the current process, so in cases
 // where we actually do run login, no subsequent Go code will execute.
 func tryExecLogin(dlogf logger.Logf, ia incubatorArgs) error {
 	// Only the macOS version of the login command supports executing a
@@ -608,6 +616,19 @@ func tryExecLogin(dlogf logger.Logf, ia incubatorArgs) error {
 		dlogf("failed to get login args: %s", err)
 		return nil
 	}
+
+	if ia.loginNeedsExitStatusRelay(runtime.GOOS) {
+		self, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("finding tailscaled to relay the exit status through login: %w", err)
+		}
+		code, err := runLoginRelayingExitStatus(dlogf, ia, loginCmdPath, self)
+		if err != nil {
+			return err
+		}
+		os.Exit(code)
+	}
+
 	loginArgs := ia.loginArgs(loginCmdPath)
 	dlogf("logging in with %+v", loginArgs)
 
@@ -1382,25 +1403,10 @@ func fileExists(path string) bool {
 func (ia *incubatorArgs) loginArgs(loginCmdPath string) []string {
 	switch runtime.GOOS {
 	case darwin:
-		args := []string{
-			loginCmdPath,
-			"-f", // already authenticated
-
-			// login typically discards the previous environment, but we want to
-			// preserve any environment variables that we currently have.
-			"-p",
-
-			"-h", ia.remoteIP, // -h is "remote host"
-			ia.localUser,
-		}
-		if !ia.hasTTY {
-			args[2] = "-pq" // -q is "quiet" which suppresses the login banner
-		}
 		if ia.cmd != "" {
-			args = append(args, ia.loginShell, "-c", ia.cmd)
+			return ia.darwinLoginArgs(loginCmdPath, ia.loginShell, "-c", ia.cmd)
 		}
-
-		return args
+		return ia.darwinLoginArgs(loginCmdPath)
 	case linux:
 		if distro.Get() == distro.Arch && !fileExists("/etc/pam.d/remote") {
 			// See https://github.com/tailscale/tailscale/issues/4924
@@ -1415,6 +1421,253 @@ func (ia *incubatorArgs) loginArgs(loginCmdPath string) []string {
 		return []string{loginCmdPath, "-fp", "-h", ia.remoteIP, ia.localUser}
 	}
 	panic("unimplemented")
+}
+
+// darwinLoginArgs returns the arguments to exec the macOS login binary at
+// loginCmdPath, which runs prog (a program and its arguments) as ia.localUser,
+// or the user's shell if prog is empty.
+func (ia *incubatorArgs) darwinLoginArgs(loginCmdPath string, prog ...string) []string {
+	args := []string{
+		loginCmdPath,
+		"-f", // already authenticated
+
+		// login typically discards the previous environment, but we want to
+		// preserve any environment variables that we currently have.
+		"-p",
+
+		"-h", ia.remoteIP, // -h is "remote host"
+		ia.localUser,
+	}
+	if !ia.hasTTY {
+		args[2] = "-pq" // -q is "quiet" which suppresses the login banner
+	}
+	return append(args, prog...)
+}
+
+// loginNeedsExitStatusRelay reports whether a session that tryExecLogin hands
+// to login on goos must relay the command's exit status around login rather
+// than exec into it.
+//
+// macOS login runs the program it is given as a child and then exits 0
+// regardless of how that program exited, so exec'ing into it would report
+// every command, and every shell fed a script on stdin ("ssh -T host <
+// script"), as successful to the SSH client. Interactive shells with a TTY
+// and SFTP keep exec'ing into login unchanged.
+func (ia *incubatorArgs) loginNeedsExitStatusRelay(goos string) bool {
+	if goos != darwin || ia.isSFTP {
+		return false
+	}
+	if ia.isShell {
+		return !ia.hasTTY
+	}
+	return ia.cmd != ""
+}
+
+// loginCmdChildMode is the "tailscaled be-child" mode that login runs, in
+// place of the user's shell, when the incubator relays a command's exit
+// status around macOS login. See runLoginRelayingExitStatus.
+const loginCmdChildMode = "ssh-login-cmd"
+
+// loginCmdSpawnPrefix is the argv prefix, after the executable path, that
+// runLoginRelayingExitStatus passes to login to run beLoginCmd. Tests
+// override it to re-exec the test binary.
+var loginCmdSpawnPrefix = []string{"be-child", loginCmdChildMode}
+
+// runLoginRelayingExitStatus runs the session (ia.cmd, or the user's shell if
+// ia.isShell) through the login command at loginCmdPath, like tryExecLogin,
+// but as a child rather than with exec, and returns the session's exit status,
+// which login itself does not report on macOS.
+//
+// login is told to run "self be-child ssh-login-cmd" (beLoginCmd), which runs
+// the user's shell exactly as login would have and writes the shell's exit
+// status to a file created here and owned by the local user. login closes
+// inherited descriptors, so a file named by path is used rather than a pipe.
+// beLoginCmd opens the file and unlinks it as soon as it starts, and the
+// status is read back through this process's own descriptor, so replacing the
+// file at that path cannot make this process, which runs as root, read
+// anything else.
+//
+// login stays in this process's process group, as it would have had this
+// process exec'd into it, so that signals the ssh-monitor sends to the
+// session's group, including its SIGKILL escalation, reach login and the
+// command. With a TTY, that group is the terminal's foreground group, so this
+// process ignores the terminal's SIGINT and SIGQUIT while it waits.
+//
+// If no status is recorded, for instance because beLoginCmd was killed, it
+// returns login's own exit status if that is non-zero, and 1 otherwise. It
+// never reports success for a command whose status is unknown.
+func runLoginRelayingExitStatus(dlogf logger.Logf, ia incubatorArgs, loginCmdPath, self string) (int, error) {
+	// Use /tmp rather than os.TempDir: the local user must be able to reach
+	// the file, and this process's $TMPDIR, if set, may be private to root.
+	f, err := os.CreateTemp("/tmp", "tailscale-ssh-status-")
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	defer removeIfSameFile(f) // in case beLoginCmd never ran
+	if err := f.Chown(ia.uid, ia.gid); err != nil {
+		return 0, err
+	}
+
+	prog := append([]string{self}, loginCmdSpawnPrefix...)
+	prog = append(prog,
+		"--status-file="+f.Name(),
+		"--login-shell="+ia.loginShell,
+	)
+	if ia.isShell {
+		prog = append(prog, "--shell")
+	} else {
+		prog = append(prog, "--cmd="+ia.cmd)
+	}
+	loginArgs := ia.darwinLoginArgs(loginCmdPath, prog...)
+	dlogf("logging in with %+v", loginArgs)
+
+	environ := append(ia.rootExecEnviron(), ia.forwardedEnv...)
+	cmd := loginRelayCommand(loginCmdPath, environ, loginArgs[1:])
+
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGQUIT)
+	defer signal.Stop(sigs)
+
+	runErr := cmd.Run()
+	if runErr != nil {
+		if _, ok := runErr.(*exec.ExitError); !ok {
+			return 0, runErr
+		}
+	}
+
+	if code, ok := readExitStatus(f); ok {
+		return code, nil
+	}
+	dlogf("no exit status recorded by %s; login: %v", loginCmdChildMode, cmd.ProcessState)
+	if code := exitStatus(cmd.ProcessState); code != 0 {
+		return code, nil
+	}
+	return 1, nil
+}
+
+// loginRelayCommand returns the command that runLoginRelayingExitStatus uses
+// to run login. Unlike newCommand, it never puts login in a new process group
+// (not even the terminal's foreground group): login must stay in this
+// process's group, which the ssh-monitor signals to terminate the session.
+func loginRelayCommand(loginCmdPath string, environ, args []string) *exec.Cmd {
+	cmd := exec.Command(loginCmdPath, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = environ
+	return cmd
+}
+
+// removeIfSameFile removes f's path if it still names f.
+func removeIfSameFile(f *os.File) {
+	fi, err := f.Stat()
+	if err != nil {
+		return
+	}
+	if pfi, err := os.Lstat(f.Name()); err == nil && os.SameFile(fi, pfi) {
+		os.Remove(f.Name())
+	}
+}
+
+// readExitStatus reads the exit status that beLoginCmd recorded in f.
+// It reports false if f does not hold a valid exit status.
+func readExitStatus(f *os.File) (code int, ok bool) {
+	var buf [16]byte
+	n, err := f.ReadAt(buf[:], 0)
+	if err != nil && err != io.EOF {
+		return 0, false
+	}
+	code, err = strconv.Atoi(strings.TrimSpace(string(buf[:n])))
+	if err != nil || code < 0 || code > 255 {
+		return 0, false
+	}
+	return code, true
+}
+
+// exitStatus returns the exit status of a process that has exited, using the
+// shell convention of 128+n for a process killed by signal n.
+func exitStatus(ps *os.ProcessState) int {
+	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return 128 + int(ws.Signal())
+	}
+	return ps.ExitCode()
+}
+
+// beLoginCmd is the entrypoint to the "tailscaled be-child ssh-login-cmd"
+// subcommand, which macOS login runs as the local user on behalf of
+// runLoginRelayingExitStatus. It runs --cmd with the user's --login-shell,
+// or with --shell runs the shell itself, and exits with the shell's exit
+// status after writing it to --status-file.
+func beLoginCmd(args []string) error {
+	code, err := runLoginCmd(args)
+	if err != nil {
+		return err
+	}
+	os.Exit(code)
+	return nil
+}
+
+// runLoginCmd implements beLoginCmd, returning the exit status rather than
+// exiting.
+func runLoginCmd(args []string) (int, error) {
+	var statusFile, loginShell, cmdStr string
+	var isShell bool
+	flags := flag.NewFlagSet(loginCmdChildMode, flag.ContinueOnError)
+	flags.StringVar(&statusFile, "status-file", "", "file to write the command's exit status to")
+	flags.StringVar(&loginShell, "login-shell", "", "path to the user's login shell")
+	flags.StringVar(&cmdStr, "cmd", "", "the command to run with the login shell")
+	flags.BoolVar(&isShell, "shell", false, "run the login shell itself rather than --cmd")
+	if err := flags.Parse(args); err != nil {
+		return 0, err
+	}
+	if statusFile == "" || loginShell == "" {
+		return 0, errors.New("--status-file and --login-shell are required")
+	}
+
+	// Open the status file now and unlink it, so that it does not outlive
+	// the session even if this process or the incubator is killed. The
+	// incubator holds its own descriptor to read the status from. If it
+	// cannot be opened, run the command anyway; the incubator then reports
+	// a failure.
+	sf, err := os.OpenFile(statusFile, os.O_WRONLY|os.O_TRUNC, 0)
+	if err == nil {
+		defer sf.Close()
+		os.Remove(statusFile)
+	}
+
+	// Run the shell as a login shell, as login itself would when given it
+	// as the program to run: argv[0] is the shell's name prefixed by "-".
+	var cmd *exec.Cmd
+	if isShell {
+		cmd = exec.Command(loginShell)
+	} else {
+		cmd = exec.Command(loginShell, "-c", cmdStr)
+	}
+	cmd.Args[0] = "-" + filepath.Base(loginShell)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// With a TTY, this process shares the terminal's foreground process
+	// group with the command, so it also receives the terminal's SIGINT and
+	// SIGQUIT. Leave
+	// those to the command and outlive it to record its status. (Signals
+	// caught here are reset to their default action in the command.)
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGQUIT)
+	defer signal.Stop(sigs)
+
+	if err := cmd.Run(); err != nil {
+		if _, ok := err.(*exec.ExitError); !ok {
+			return 0, err
+		}
+	}
+	code := exitStatus(cmd.ProcessState)
+	if sf != nil {
+		fmt.Fprintf(sf, "%d\n", code)
+	}
+	return code, nil
 }
 
 func shellArgs(isShell bool, cmd string) []string {
