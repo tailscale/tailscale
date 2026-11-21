@@ -8,10 +8,58 @@ package main
 import (
 	"net/netip"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestParseProxyTargetIPs(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    []netip.Addr
+		wantErr bool
+	}{
+		{
+			name: "single_v4",
+			in:   "1.2.3.4",
+			want: []netip.Addr{netip.MustParseAddr("1.2.3.4")},
+		},
+		{
+			name: "single_v6",
+			in:   "fd00::1",
+			want: []netip.Addr{netip.MustParseAddr("fd00::1")},
+		},
+		{
+			name: "dual_stack_v4_first",
+			in:   "1.2.3.4,fd00::1",
+			want: []netip.Addr{netip.MustParseAddr("1.2.3.4"), netip.MustParseAddr("fd00::1")},
+		},
+		{
+			name: "dual_stack_v6_first_with_space",
+			in:   "fd00::1, 1.2.3.4",
+			want: []netip.Addr{netip.MustParseAddr("fd00::1"), netip.MustParseAddr("1.2.3.4")},
+		},
+		{name: "not_an_ip", in: "example.com", wantErr: true},
+		{name: "trailing_comma", in: "1.2.3.4,", wantErr: true},
+		{name: "leading_comma", in: ",1.2.3.4", wantErr: true},
+		{name: "empty_element", in: "1.2.3.4,,fd00::1", wantErr: true},
+		{name: "two_v4", in: "1.2.3.4,5.6.7.8", wantErr: true},
+		{name: "two_v6", in: "fd00::1,fd00::2", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseProxyTargetIPs(tt.in)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseProxyTargetIPs(%q) error = %v, wantErr %v", tt.in, err, tt.wantErr)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("parseProxyTargetIPs(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
 
 func Test_parseAcceptDNS(t *testing.T) {
 	tests := []struct {
