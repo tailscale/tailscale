@@ -38,6 +38,7 @@ import (
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tailcfg/peercap"
@@ -1116,21 +1117,38 @@ func TestServeAppCapsConcurrentStreams(t *testing.T) {
 	const rounds = 200
 	var wg sync.WaitGroup
 	errCh := make(chan error, 2*rounds) // both mounts can fail every round
+
+	// Each request in flight may dial testServ. Hundreds of simultaneous
+	// dials overflow its listen backlog, and Windows refuses the excess
+	// connections, so cap the number of requests in flight.
+	sem := syncs.NewSemaphore(8)
+	serve := func(path string) (string, error) {
+		sem.Acquire()
+		defer sem.Release()
+		w := httptest.NewRecorder()
+		b.serveWebHandler(w, newReq(path))
+		if w.Code != http.StatusOK {
+			return "", fmt.Errorf("%s: status %d, body %q", path, w.Code, w.Body.String())
+		}
+		return w.Body.String(), nil
+	}
 	for range rounds {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			w := httptest.NewRecorder()
-			b.serveWebHandler(w, newReq("/ops"))
-			if got := w.Body.String(); got == "" {
+			got, err := serve("/ops")
+			if err != nil {
+				errCh <- err
+			} else if got == "" {
 				errCh <- fmt.Errorf("/ops: capabilities header missing")
 			}
 		}()
 		go func() {
 			defer wg.Done()
-			w := httptest.NewRecorder()
-			b.serveWebHandler(w, newReq("/admin"))
-			if got := w.Body.String(); got != "" {
+			got, err := serve("/admin")
+			if err != nil {
+				errCh <- err
+			} else if got != "" {
 				errCh <- fmt.Errorf("/admin: unexpected capabilities header %q", got)
 			}
 		}()
