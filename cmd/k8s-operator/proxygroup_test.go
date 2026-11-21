@@ -2633,3 +2633,22 @@ func TestProxyGroupOptimisticLockErrorRequeues(t *testing.T) {
 		t.Errorf("got %d events, want none", len(fr.Events))
 	}
 }
+
+func TestAuthKeyFromSecretKubeAPIServerConfig(t *testing.T) {
+	// kube-apiserver ProxyGroup replicas keep their config only in
+	// config.hujson, so the auth key must be read from there.
+	// config.hujson is HuJSON, so comments and trailing commas must parse.
+	s := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-config", Namespace: tsNamespace},
+		Data: map[string][]byte{
+			kubetypes.KubeAPIServerConfigFile: []byte("{\n\t// kube-apiserver config\n\t\"version\": \"v1alpha1\",\n\t\"AuthKey\": \"kube-authkey\",\n}\n"),
+		},
+	}
+	key, err := authKeyFromSecret(s)
+	if err != nil {
+		t.Fatalf("authKeyFromSecret() error: %v", err)
+	}
+	if key == nil || *key != "kube-authkey" {
+		t.Errorf("authKeyFromSecret() got %v, want %q", key, "kube-authkey")
+	}
+}

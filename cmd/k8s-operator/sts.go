@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tailscale/hujson"
 	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -1479,6 +1480,20 @@ func authKeyFromSecret(s *corev1.Secret) (key *string, err error) {
 	conf, err := latestConfigFromSecret(s)
 	if err != nil {
 		return nil, err
+	}
+
+	// kube-apiserver ProxyGroup replicas store their config only in
+	// config.hujson, not in a capver-versioned key. The file is HuJSON,
+	// so standardize it before unmarshaling.
+	if conf == nil && len(s.Data[kubetypes.KubeAPIServerConfigFile]) > 0 {
+		std, err := hujson.Standardize(s.Data[kubetypes.KubeAPIServerConfigFile])
+		if err != nil {
+			return nil, fmt.Errorf("error parsing kube-apiserver config from Secret %q: %w", s.Name, err)
+		}
+		conf = &ipn.ConfigVAlpha{}
+		if err := json.Unmarshal(std, conf); err != nil {
+			return nil, fmt.Errorf("error unmarshaling kube-apiserver config from Secret %q: %w", s.Name, err)
+		}
 	}
 
 	// Allow for configs that don't contain an auth key. Perhaps
