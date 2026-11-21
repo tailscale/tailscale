@@ -12,8 +12,10 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -197,4 +199,100 @@ func TestFwdTCPDialChildExits(t *testing.T) {
 	if err := mc.Ping(ctx); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestFwdConcurrentDialTCP verifies that a blocked forwarding dial in one child
+// does not serialize subsequent forwarding dials or RPC pings on the monitor.
+func TestFwdConcurrentDialTCP(t *testing.T) {
+	gateLn, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gateLn.Close()
+	gateLn.(*net.TCPListener).SetDeadline(time.Now().Add(10 * time.Second))
+
+	stallLn, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stallLn.Close()
+	stallLn.(*net.TCPListener).SetDeadline(time.Now().Add(10 * time.Second))
+
+	fastLn, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fastLn.Close()
+	fastLn.(*net.TCPListener).SetDeadline(time.Now().Add(10 * time.Second))
+
+	uid, gid, groups := fwdBoundIdentity(t)
+	gatedPrefix := append(slices.Clone(testFwdPrefix), "--test-gate-addr="+stallLn.Addr().String()+"="+gateLn.Addr().String())
+	tstest.Replace(t, &testFwdPrefix, gatedPrefix)
+	mc := startFwdTestMonitor(t, uid, gid, groups)
+
+	ctx, cancel := testCtx()
+	defer cancel()
+
+	type dialRes struct {
+		conn *net.TCPConn
+		err  error
+	}
+	slowDone := make(chan dialRes, 1)
+	go func() {
+		c, err := mc.DialTCP(ctx, stallLn.Addr().String())
+		slowDone <- dialRes{conn: c, err: err}
+	}()
+
+	// Wait until the slow forwarding child is spawned and actively waiting inside
+	// monitor.fwdOp before firing parallel fast dials.
+	gateConn, err := gateLn.Accept()
+	if err != nil {
+		t.Fatalf("accept gate: %v", err)
+	}
+	defer gateConn.Close()
+
+	const fastCount = 4
+	var wg sync.WaitGroup
+	for i := range fastCount {
+		wg.Go(func() {
+			c, err := mc.DialTCP(ctx, fastLn.Addr().String())
+			if err != nil {
+				t.Errorf("fast dial %d: %v", i, err)
+				return
+			}
+			c.Close()
+		})
+	}
+	for range fastCount {
+		sc, err := fastLn.Accept()
+		if err != nil {
+			t.Fatalf("fast listener accept: %v", err)
+		}
+		sc.Close()
+	}
+	wg.Wait()
+	if err := mc.Ping(ctx); err != nil {
+		t.Fatalf("ping while slow dial active: %v", err)
+	}
+
+	select {
+	case res := <-slowDone:
+		if res.conn != nil {
+			res.conn.Close()
+		}
+		t.Fatalf("stalled dial finished unexpectedly early: err=%v", res.err)
+	default:
+	}
+
+	gateConn.Close()
+	sc, err := stallLn.Accept()
+	if err != nil {
+		t.Fatalf("stall listener accept: %v", err)
+	}
+	sc.Close()
+	res := <-slowDone
+	if res.err != nil {
+		t.Fatalf("stalled dial after gate release: %v", res.err)
+	}
+	res.conn.Close()
 }
