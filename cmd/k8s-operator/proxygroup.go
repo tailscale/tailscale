@@ -902,7 +902,11 @@ func (r *ProxyGroupReconciler) getAuthKey(ctx context.Context, tsClient tsclient
 		createAuthKey = true
 	} else {
 		var err error
-		cfgAuthKey, err = authKeyFromSecret(existingCfgSecret)
+		if pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
+			cfgAuthKey, err = kubeAPIServerAuthKeyFromSecret(existingCfgSecret)
+		} else {
+			cfgAuthKey, err = authKeyFromSecret(existingCfgSecret)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("error retrieving auth key from existing config Secret: %w", err)
 		}
@@ -945,6 +949,21 @@ func (r *ProxyGroupReconciler) getAuthKey(ctx context.Context, tsClient tsclient
 	}
 
 	return authKey, nil
+}
+
+// kubeAPIServerAuthKeyFromSecret returns the auth key stored in the
+// kube-apiserver config file of a ProxyGroup config Secret, or nil if the
+// Secret has no such file or the config has no auth key.
+func kubeAPIServerAuthKeyFromSecret(s *corev1.Secret) (*string, error) {
+	data := s.Data[kubetypes.KubeAPIServerConfigFile]
+	if len(data) == 0 {
+		return nil, nil
+	}
+	cfg := conf.ConfigV1Alpha1{}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("error unmarshalling kube-apiserver config: %w", err)
+	}
+	return cfg.AuthKey, nil
 }
 
 // ensureStateAddedForProxyGroup ensures the gauge metric for the ProxyGroup resource is updated when the ProxyGroup
