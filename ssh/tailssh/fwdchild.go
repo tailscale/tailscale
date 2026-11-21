@@ -175,6 +175,10 @@ func fwdReadResult(c *net.UnixConn, deadline time.Time, wantFDs int) (ok bool, p
 	var line []byte
 	var received []int
 	defer func() { closeFds(received) }()
+	rc, err := c.SyscallConn()
+	if err != nil {
+		return false, "", nil, err
+	}
 	for {
 		if i := bytes.IndexByte(line, '\n'); i >= 0 {
 			status, rest, _ := strings.Cut(string(line[:i]), " ")
@@ -195,11 +199,35 @@ func fwdReadResult(c *net.UnixConn, deadline time.Time, wantFDs int) (ok bool, p
 			return false, "", nil, fmt.Errorf("child status line exceeds %d bytes", fwdMaxStatus)
 		}
 		buf := make([]byte, 1024)
-		n, oobn, flags, _, rerr := c.ReadMsgUnix(buf, oob)
+		var (
+			n, oobn, flags int
+			rerr           error
+			sets           [][]int
+			ferr           error
+		)
+		// Hold ForkLock around the non-blocking recvmsg+FD_CLOEXEC window so concurrent
+		// execs cannot inherit newly installed SCM_RIGHTS descriptors before CLOEXEC is set.
+		cerr := rc.Read(func(fd uintptr) bool {
+			syscall.ForkLock.RLock()
+			defer syscall.ForkLock.RUnlock()
+			n, oobn, flags, _, rerr = unix.Recvmsg(int(fd), buf, oob, 0)
+			if rerr == unix.EAGAIN || rerr == unix.EWOULDBLOCK || rerr == unix.EINTR {
+				return false
+			}
+			if rerr == nil && (n > 0 || oobn > 0 || flags&unix.MSG_CTRUNC != 0) {
+				sets, ferr = recvFdSets(oob[:oobn], flags)
+			}
+			return true
+		})
+		if cerr != nil {
+			return false, "", nil, fmt.Errorf("waiting for child result: %w", cerr)
+		}
 		if rerr != nil {
 			return false, "", nil, fmt.Errorf("waiting for child result: %w", rerr)
 		}
-		sets, ferr := recvFdSets(oob[:oobn], flags)
+		if n == 0 && oobn == 0 && flags&unix.MSG_CTRUNC == 0 {
+			return false, "", nil, fmt.Errorf("waiting for child result: %w", io.EOF)
+		}
 		if ferr != nil {
 			return false, "", nil, ferr
 		}

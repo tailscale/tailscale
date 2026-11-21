@@ -52,12 +52,30 @@ func TestSSHFwdHelperProcess(t *testing.T) {
 			// itself runs with no environment. The test-only flag is
 			// stripped before the op parser sees it.
 			var childArgs []string
+			var gateSpec string
 			for _, a := range os.Args[i+2:] {
 				if p, ok := strings.CutPrefix(a, "--test-fdinfo="); ok {
 					dumpChildFdsTo(p, "ssh-fwd")
 					continue
 				}
+				if g, ok := strings.CutPrefix(a, "--test-gate-addr="); ok {
+					gateSpec = g
+					continue
+				}
 				childArgs = append(childArgs, a)
+			}
+			if gateSpec != "" {
+				if stallAddr, gateAddr, ok := strings.Cut(gateSpec, "="); ok {
+					for _, a := range childArgs {
+						if a == "--addr="+stallAddr {
+							if gc, err := net.DialTimeout("tcp4", gateAddr, 5*time.Second); err == nil {
+								_, _ = io.ReadAll(gc)
+								gc.Close()
+							}
+							break
+						}
+					}
+				}
 			}
 			if err := beFwdChild(childArgs); err != nil {
 				// The op's outcome was already reported on the result
