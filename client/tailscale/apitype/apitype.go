@@ -30,6 +30,20 @@ const RequestReasonHeader = "X-Tailscale-Reason"
 // See tailscale/corp#26146.
 var RequestReasonKey = ctxkey.New(RequestReasonHeader, "")
 
+// RequestCIIDHeader is the header used to pass an optional client
+// invocation ID ("CIID") on LocalAPI requests. A CIID is an opaque
+// random string generated once per CLI invocation (or equivalent GUI
+// action) and sent on every LocalAPI request made by that invocation,
+// letting tailscaled correlate the requests.
+//
+// tailscaled uses it to briefly extend a caller's write access to
+// later requests in the same invocation after a profile switch drops
+// the operator preference that had been granting that access, as
+// happens during "tailscale login".
+//
+// See tailscale/tailscale#18294.
+const RequestCIIDHeader = "X-Tailscale-Ciid"
+
 // WhoIsResponse is the JSON type returned by tailscaled debug server's /whois?ip=$IP handler.
 // In successful whois responses, Node and UserProfile are never nil.
 type WhoIsResponse struct {
