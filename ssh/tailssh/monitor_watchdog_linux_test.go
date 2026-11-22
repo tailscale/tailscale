@@ -26,7 +26,12 @@ func TestMonitorWatchdogHelperProcess(t *testing.T) {
 			continue
 		}
 		signal.Ignore(syscall.SIGHUP)
-		if err := os.WriteFile(os.Args[i+2], []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+		// Write then rename so the polling test never reads a partial marker.
+		marker := os.Args[i+2]
+		if err := os.WriteFile(marker+".tmp", []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+			os.Exit(3)
+		}
+		if err := os.Rename(marker+".tmp", marker); err != nil {
 			os.Exit(3)
 		}
 		time.Sleep(25 * time.Second)
