@@ -2009,7 +2009,7 @@ func testPingPeerLearnedViaDelta(t *testing.T, pt tailcfg.PingType) {
 
 	// Snapshot s2's node-as-seen-by-control and inject it into s1's
 	// stream as a PeersChanged delta.
-	s2Node := control.Node(s2Key)
+	s2Node := controlNodeReachable(t, control, s2Key)
 	if !control.AddRawMapResponse(s1Key, &tailcfg.MapResponse{
 		PeersChanged: []*tailcfg.Node{s2Node},
 	}) {
@@ -2100,7 +2100,7 @@ func TestPingSubnetRouteOfDeltaPeer(t *testing.T) {
 
 	// Inject s2 into s1 as a PeersChanged delta with the subnet route
 	// in AllowedIPs.
-	s2Node := control.Node(s2Key)
+	s2Node := controlNodeReachable(t, control, s2Key)
 	s2Node.PrimaryRoutes = []netip.Prefix{subnetPrefix}
 	s2Node.AllowedIPs = append(s2Node.AllowedIPs, subnetPrefix)
 	if !control.AddRawMapResponse(s1Key, &tailcfg.MapResponse{
@@ -2845,6 +2845,32 @@ func waitForPeerReachable(t *testing.T, s *Server, peer key.NodePublic) {
 	}); err != nil {
 		t.Fatalf("waitForPeerReachable(%v): %v", peer.ShortString(), err)
 	}
+}
+
+// controlNodeReachable polls control until its record of the node with the
+// given key has a non-zero HomeDERP and endpoints, and returns that record.
+//
+// Tests that hand-craft MapResponse deltas from a control snapshot need this;
+// [startServer] only waits for the node's local DERP connection, and the node
+// may not have reported its HomeDERP and endpoints to control yet.
+func controlNodeReachable(t *testing.T, control *testcontrol.Server, k key.NodePublic) *tailcfg.Node {
+	t.Helper()
+	var n *tailcfg.Node
+	if err := tstest.WaitFor(30*time.Second, func() error {
+		n = control.Node(k)
+		switch {
+		case n == nil:
+			return fmt.Errorf("node %v not in control", k.ShortString())
+		case n.HomeDERP == 0:
+			return fmt.Errorf("node %v: no HomeDERP in control", k.ShortString())
+		case len(n.Endpoints) == 0:
+			return fmt.Errorf("node %v: no endpoints in control", k.ShortString())
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 // setupTwoClientTest creates two tsnet servers for testing.
