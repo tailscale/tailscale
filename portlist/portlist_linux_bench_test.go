@@ -14,6 +14,8 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 // portFixture creates real sockets in the caller's network namespace.  The
@@ -319,26 +321,46 @@ func TestPortlistBackendChurn(t *testing.T) {
 		if diag {
 			requireDiag(t, li)
 		}
-		before, err := li.AppendListeningPorts(nil)
-		if err != nil {
-			t.Fatal(err)
+		// Other sockets in this network namespace may share the closed
+		// listener's port number or come and go concurrently, so track the
+		// closed socket by inode rather than by port or total count.
+		ln := f.listeners[0]
+		key := socketInodeKey(t, ln.(*net.TCPListener))
+		poll := func() []Port {
+			t.Helper()
+			ps, err := li.AppendListeningPorts(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diag && (li.diagFD < 0 || li.diagPermanent) {
+				t.Fatal("diag churn poll fell back to proc")
+			}
+			return ps
 		}
-		if diag && (li.diagFD < 0 || li.diagPermanent) {
-			t.Fatal("diag churn poll fell back to proc")
+		if before := poll(); li.known[key] == nil {
+			t.Fatalf("initial listing missing %s: %v", key, before)
 		}
-		if len(before) == 0 {
-			t.Fatal("empty initial listing")
-		}
-		_ = f.listeners[0].Close()
-		after, err := li.AppendListeningPorts(nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if diag && (li.diagFD < 0 || li.diagPermanent) {
-			t.Fatal("diag churn poll fell back to proc")
-		}
-		if len(after) >= len(before) {
-			t.Fatalf("churn did not remove listener: before=%d after=%d", len(before), len(after))
+		_ = ln.Close()
+		if after := poll(); li.known[key] != nil {
+			t.Fatalf("churn did not remove listener %s: %v", key, after)
 		}
 	}
+}
+
+// socketInodeKey returns the li.known key for ln's socket.
+func socketInodeKey(t *testing.T, ln *net.TCPListener) string {
+	t.Helper()
+	rc, err := ln.SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st unix.Stat_t
+	var serr error
+	if err := rc.Control(func(fd uintptr) { serr = unix.Fstat(int(fd), &st) }); err != nil {
+		t.Fatal(err)
+	}
+	if serr != nil {
+		t.Fatal(serr)
+	}
+	return fmt.Sprintf("socket:[%d]", st.Ino)
 }
