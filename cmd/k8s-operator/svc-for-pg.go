@@ -19,6 +19,7 @@ import (
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -98,6 +99,7 @@ type HAServiceReconciler struct {
 	tsNamespace           string
 	defaultTags           []string
 	operatorID            string // stableID of the operator's Tailscale device
+	ingressClassName      string // class of the Ingresses handled by the HA Ingress reconciler
 
 	clock tstime.Clock
 
@@ -911,5 +913,34 @@ func (r *HAServiceReconciler) validateService(ctx context.Context, svc *corev1.S
 		}
 		errs = append(errs, fmt.Errorf("found duplicate Service %q for hostname %q - multiple HA Services for the same hostname on the same tailnet are not allowed", client.ObjectKeyFromObject(&s), svcName))
 	}
+
+	// An HA Ingress and an HA Service that resolve to the same hostname would
+	// share, and fight over, one Tailscale Service.
+	ingList := &networkingv1.IngressList{}
+	if err := r.List(ctx, ingList); err != nil {
+		errs = append(errs, fmt.Errorf("error listing Ingresses: %w", err))
+		return errors.Join(errs...)
+	}
+	for _, ing := range ingList.Items {
+		if !r.isHAIngress(&ing) || hostnameForIngress(&ing) != svcName {
+			continue
+		}
+		// As above, a hostname collision across tailnets is not a conflict.
+		otherPGName := ing.Annotations[AnnotationProxyGroup]
+		if otherPGName != pg.Name {
+			otherPG := &tsapi.ProxyGroup{}
+			if err := r.Get(ctx, client.ObjectKey{Name: otherPGName}, otherPG); err == nil && otherPG.Spec.Tailnet != pg.Spec.Tailnet {
+				continue
+			}
+		}
+		errs = append(errs, fmt.Errorf("found HA Ingress %q for hostname %q - an HA Service and an HA Ingress cannot use the same hostname on the same tailnet", client.ObjectKeyFromObject(&ing), svcName))
+	}
 	return errors.Join(errs...)
+}
+
+// isHAIngress reports whether ing is exposed by the HA Ingress reconciler.
+func (r *HAServiceReconciler) isHAIngress(ing *networkingv1.Ingress) bool {
+	return ing.Spec.IngressClassName != nil &&
+		*ing.Spec.IngressClassName == r.ingressClassName &&
+		ing.Annotations[AnnotationProxyGroup] != ""
 }

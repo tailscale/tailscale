@@ -13,12 +13,14 @@ import (
 	"math/rand/v2"
 	"net/netip"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -408,6 +410,204 @@ func TestValidateService_DifferentTailnetDoesNotCollide(t *testing.T) {
 		if c.Type == string(tsapi.IngressSvcValid) && c.Status == metav1.ConditionFalse {
 			t.Fatalf("ProxyGroup Service flagged invalid by a Service on a different tailnet with the same hostname: %s", c.Message)
 		}
+	}
+}
+
+// TestServicePGReconciler_DoesNotTakeOverIngressTailscaleService is a
+// test for #22306. An HA Ingress and an HA Service that resolve to
+// the same hostname share one Tailscale Service. The HA Ingress reconciler
+// marks it as owned by this operator only, with no information about the
+// owning resource, so the HA Service reconciler must not treat it as its own.
+func TestServicePGReconciler_DoesNotTakeOverIngressTailscaleService(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		tags []string
+	}{
+		{name: "same_tags"},
+		{name: "different_tags", tags: []string{"tag:other"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pgr, stateSecret, fc, ft, _ := setupServiceTest(t)
+			pgr.operatorID = "operator-1"
+			ctx := t.Context()
+
+			// An HA Ingress with the TLS host "default-my-app" exists as well.
+			pgr.ingressClassName = "tailscale"
+			mustCreate(t, fc, &networkingv1.Ingress{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "my-ingress",
+					Namespace:   "default",
+					UID:         types.UID("my-ingress-uid"),
+					Annotations: map[string]string{AnnotationProxyGroup: "test-pg"},
+				},
+				Spec: networkingv1.IngressSpec{
+					IngressClassName: new("tailscale"),
+					TLS:              []networkingv1.IngressTLS{{Hosts: []string{"default-my-app"}}},
+				},
+			})
+
+			const tsSvcName = "svc:default-my-app"
+
+			tags := tt.tags
+			if tags == nil {
+				tags = pgr.defaultTags
+			}
+			// The Tailscale Service as an HA Ingress with the TLS host
+			// "default-my-app" leaves it: owned by this operator, serving HTTPS.
+			owner, err := json.Marshal(ownerAnnotationValue{
+				OwnerRefs: []OwnerRef{{OperatorID: pgr.operatorID}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := ft.VIPServices().CreateOrUpdate(ctx, tailscale.VIPService{
+				Name:        tsSvcName,
+				Tags:        tags,
+				Ports:       []string{"tcp:443"},
+				Annotations: map[string]string{ownerAnnotation: string(owner)},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			seeded, err := ft.VIPServices().Get(ctx, tsSvcName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantPorts, wantTags, wantOwner := slices.Clone(seeded.Ports), slices.Clone(seeded.Tags), seeded.Annotations[ownerAnnotation]
+
+			// An HA Service whose hostname is "default-my-app" as well.
+			svc, _ := setupTestService(t, "my-app", "", "4.3.2.1", fc, stateSecret)
+			expectReconciled(t, pgr, svc.Namespace, svc.Name)
+
+			got := &corev1.Service{}
+			if err := fc.Get(ctx, client.ObjectKeyFromObject(svc), got); err != nil {
+				t.Fatalf("getting Service: %v", err)
+			}
+			if !slices.ContainsFunc(got.Status.Conditions, func(c metav1.Condition) bool {
+				return c.Type == string(tsapi.IngressSvcValid) && c.Status == metav1.ConditionFalse && c.Reason == reasonIngressSvcInvalid
+			}) {
+				t.Errorf("HA Service was not rejected; conditions: %+v", got.Status.Conditions)
+			}
+
+			fr := pgr.recorder.(*record.FakeRecorder)
+			var events []string
+			for done := false; !done; {
+				select {
+				case ev := <-fr.Events:
+					events = append(events, ev)
+				default:
+					done = true
+				}
+			}
+			if !slices.ContainsFunc(events, func(ev string) bool {
+				return strings.HasPrefix(ev, corev1.EventTypeWarning+" ") && strings.Contains(ev, "default-my-app")
+			}) {
+				t.Errorf("no warning event mentioning the hostname; events: %q", events)
+			}
+
+			// The Ingress's Tailscale Service is left untouched.
+			after, err := ft.VIPServices().Get(ctx, tsSvcName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(after.Ports, wantPorts) || !slices.Equal(after.Tags, wantTags) || after.Annotations[ownerAnnotation] != wantOwner {
+				t.Errorf("Tailscale Service was modified: ports %v -> %v, tags %v -> %v", wantPorts, after.Ports, wantTags, after.Tags)
+			}
+
+			// The HA Service's VIP-to-ClusterIP mapping is not written into the
+			// ProxyGroup's ingress config, which would make the proxies add L3
+			// forwarding rules for the Ingress's VIP.
+			_, cfgs, err := ingressSvcsConfigs(ctx, fc, "test-pg", "operator-ns")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(cfgs) != 0 {
+				t.Errorf("ingress config was modified: %v", cfgs)
+			}
+
+			// Nothing is advertised by the proxies.
+			verifyTailscaledConfig(t, fc, "test-pg", nil)
+		})
+	}
+}
+
+// TestValidateService_HAIngressOnOtherProxyGroup tests that an HA Service
+// is rejected for sharing a hostname with an HA Ingress on another
+// ProxyGroup only if both ProxyGroups are on the same tailnet.
+func TestValidateService_HAIngressOnOtherProxyGroup(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		tailnet     string // tailnet of the ProxyGroup the HA Ingress is on; "" is the default tailnet that test-pg is on
+		wantInvalid bool
+	}{
+		{name: "different_tailnet_does_not_collide", tailnet: "secondary"},
+		{name: "same_tailnet_collides", wantInvalid: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pgr, _, fc, ft, _ := setupServiceTest(t)
+			pgr.ingressClassName = "tailscale"
+			mustCreate(t, fc, &tsapi.ProxyGroup{
+				ObjectMeta: metav1.ObjectMeta{Name: "other-pg", Generation: 1},
+				Spec: tsapi.ProxyGroupSpec{
+					Type:    tsapi.ProxyGroupTypeIngress,
+					Tailnet: tt.tailnet,
+				},
+			})
+			// An HA Ingress on the other ProxyGroup with the conflicting hostname.
+			mustCreate(t, fc, &networkingv1.Ingress{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "other-ingress",
+					Namespace:   "ns-2",
+					UID:         types.UID("other-ingress-uid"),
+					Annotations: map[string]string{AnnotationProxyGroup: "other-pg"},
+				},
+				Spec: networkingv1.IngressSpec{
+					IngressClassName: new("tailscale"),
+					TLS:              []networkingv1.IngressTLS{{Hosts: []string{"my-app"}}},
+				},
+			})
+			// The Service being reconciled: same hostname, on the default ProxyGroup.
+			svc := &corev1.Service{
+				TypeMeta: metav1.TypeMeta{Kind: "Service", APIVersion: "v1"},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "primary-svc",
+					Namespace: "ns-1",
+					UID:       types.UID("primary-svc-uid"),
+					Annotations: map[string]string{
+						"tailscale.com/proxy-group": "test-pg",
+						"tailscale.com/hostname":    "my-app",
+					},
+				},
+				Spec: corev1.ServiceSpec{
+					ClusterIP:         "1.2.3.4",
+					Type:              corev1.ServiceTypeLoadBalancer,
+					LoadBalancerClass: new("tailscale"),
+				},
+			}
+			mustCreate(t, fc, svc)
+			expectReconciled(t, pgr, svc.Namespace, svc.Name)
+
+			got := &corev1.Service{}
+			if err := fc.Get(t.Context(), client.ObjectKeyFromObject(svc), got); err != nil {
+				t.Fatalf("get Service: %v", err)
+			}
+			var invalidReason string
+			for _, c := range got.Status.Conditions {
+				if c.Type == string(tsapi.IngressSvcValid) && c.Status == metav1.ConditionFalse {
+					invalidReason = c.Reason
+				}
+			}
+			if gotInvalid := invalidReason != ""; gotInvalid != tt.wantInvalid {
+				t.Errorf("Service invalid = %v, want %v; conditions: %+v", gotInvalid, tt.wantInvalid, got.Status.Conditions)
+			}
+			if tt.wantInvalid && invalidReason != reasonIngressSvcInvalid {
+				t.Errorf("invalid reason = %q, want %q", invalidReason, reasonIngressSvcInvalid)
+			}
+			// A rejected Service creates no Tailscale Service; an accepted one does.
+			_, err := ft.VIPServices().Get(t.Context(), "svc:my-app")
+			if created := err == nil; created == tt.wantInvalid {
+				t.Errorf("Tailscale Service created = %v, want %v", created, !tt.wantInvalid)
+			}
+		})
 	}
 }
 
