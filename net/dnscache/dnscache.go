@@ -72,6 +72,16 @@ const (
 	srcFallback = "fallback" // Resolver.LookupIPFallback (DERP-based bootstrap DNS)
 )
 
+// ErrNoFallback is returned (possibly wrapped) by a
+// [Resolver.LookupIPFallback] func to say that it doesn't handle the
+// requested host, so the Resolver should return its original error
+// without logging or counting a fallback attempt.
+//
+// net/dnsfallback returns it for any host that isn't one of Tailscale's
+// own, as part of slowly retiring the DERP-based fallback DNS entirely.
+// See https://github.com/tailscale/tailscale/issues/21028.
+var ErrNoFallback = errors.New("no fallback DNS for host")
+
 var (
 	metricDiskFallbackHit    = clientmetric.NewCounter("dnscache_disk_fallback_hit")
 	metricDiskFallbackMiss   = clientmetric.NewCounter("dnscache_disk_fallback_miss")
@@ -122,6 +132,10 @@ type Resolver struct {
 
 	// LookupIPFallback optionally provides a backup DNS mechanism
 	// to use if Forward returns an error or no results.
+	//
+	// If it returns an error wrapping [ErrNoFallback], the Resolver
+	// behaves as if LookupIPFallback were nil for that host and
+	// returns the original error.
 	LookupIPFallback func(ctx context.Context, host string) ([]netip.Addr, error)
 
 	// TTL is how long to keep entries cached
@@ -385,15 +399,18 @@ func (r *Resolver) lookupIP(ctx context.Context, host string) (ip, ip6 netip.Add
 	if (err != nil || len(ips) == 0) && r.LookupIPFallback != nil {
 		lookupCtx, lookupCancel := context.WithTimeout(ctx, 30*time.Second)
 		defer lookupCancel()
-		if err != nil {
-			r.dlogf("resolving %q using fallback resolver due to error", host)
-		} else {
-			r.dlogf("resolving %q using fallback resolver due to no returned IPs", host)
-		}
-		src = srcFallback
-		ips, err = r.LookupIPFallback(lookupCtx, host)
-		if err == nil && len(ips) > 0 {
-			metricDERPFallbackOK.Add(1)
+		fbIPs, fbErr := r.LookupIPFallback(lookupCtx, host)
+		if !errors.Is(fbErr, ErrNoFallback) {
+			if err != nil {
+				r.dlogf("tried fallback resolver for %q due to error", host)
+			} else {
+				r.dlogf("tried fallback resolver for %q due to no returned IPs", host)
+			}
+			src = srcFallback
+			ips, err = fbIPs, fbErr
+			if err == nil && len(ips) > 0 {
+				metricDERPFallbackOK.Add(1)
+			}
 		}
 	}
 	if err != nil {

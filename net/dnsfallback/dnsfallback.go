@@ -4,6 +4,10 @@
 // Package dnsfallback contains a DNS fallback mechanism
 // for starting up Tailscale when the system DNS is broken or otherwise unavailable.
 //
+// It resolves Tailscale's own hostnames by asking DERP servers over HTTPS.
+// We're slowly removing it in favor of caching earlier DNS results on disk
+// (feature/dnsresolvecache); see https://github.com/tailscale/tailscale/issues/21028.
+//
 // The data is backed by a JSON file `dns-fallback-servers.json` that is updated
 // by `update-dns-fallbacks.go`:
 //
@@ -28,6 +32,8 @@ import (
 	"tailscale.com/atomicfile"
 	"tailscale.com/feature"
 	"tailscale.com/health"
+	"tailscale.com/net/dnscache"
+	"tailscale.com/net/dnsfallback/fallbacknames"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/netutil"
@@ -39,7 +45,13 @@ import (
 
 // MakeLookupFunc creates a function that can be used to resolve hostnames
 // (e.g. as a LookupIPFallback from dnscache.Resolver).
-// The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
+// The netMon parameter is optional; if non-nil it's used to do faster interface lookups
+// and to fail fast when no network interface is up.
+//
+// The returned func only resolves Tailscale's own hostnames (see
+// [fallbacknames.IsTailscaleHost]). For any other name it returns an error wrapping
+// [dnscache.ErrNoFallback], so a [dnscache.Resolver] returns its original
+// error instead.
 func MakeLookupFunc(logf logger.Logf, netMon *netmon.Monitor) func(ctx context.Context, host string) ([]netip.Addr, error) {
 	fr := &fallbackResolver{
 		logf:   logf,
@@ -60,14 +72,24 @@ type fallbackResolver struct {
 }
 
 func (fr *fallbackResolver) Lookup(ctx context.Context, host string) ([]netip.Addr, error) {
-	return lookup(ctx, host, fr.logf, fr.healthTracker, fr.netMon)
-}
-
-func lookup(ctx context.Context, host string, logf logger.Logf, ht *health.Tracker, netMon *netmon.Monitor) ([]netip.Addr, error) {
 	if ip, err := netip.ParseAddr(host); err == nil && ip.IsValid() {
 		return []netip.Addr{ip}, nil
 	}
+	// DERP servers only answer for Tailscale's own names, so asking about
+	// any other name can't work. See
+	// https://github.com/tailscale/tailscale/issues/21028.
+	if !fallbacknames.IsTailscaleHost(host) {
+		return nil, dnscache.ErrNoFallback
+	}
+	if fr.netMon != nil && !fr.netMon.InterfaceState().AnyInterfaceUp() {
+		return nil, errNetworkDown
+	}
+	return lookup(ctx, host, fr.logf, fr.healthTracker, fr.netMon)
+}
 
+var errNetworkDown = errors.New("dnsfallback: network is down")
+
+func lookup(ctx context.Context, host string, logf logger.Logf, ht *health.Tracker, netMon *netmon.Monitor) ([]netip.Addr, error) {
 	type nameIP struct {
 		dnsName string
 		ip      netip.Addr
