@@ -1087,7 +1087,7 @@ func TestInterceptOrdering(t *testing.T) {
 	numInboundIntercepts := uint8(3)
 
 	tun.PreFilterPacketInboundFromWireGuard = orderedFilterFn(1)
-	tun.PostFilterPacketInboundFromWireGuardAppConnector = orderedFilterFn(2)
+	tun.PostFilterPacketInboundFromWireGuardAppConnector.Store(orderedFilterFn(2))
 	tun.PostFilterPacketInboundFromWireGuard = ordereredGROFilterFn(3)
 
 	// Write the packet.
@@ -1106,7 +1106,7 @@ func TestInterceptOrdering(t *testing.T) {
 	seq = 0
 	tun.PreFilterPacketOutboundToWireGuardNetstackIntercept = ordereredGROFilterFn(1)
 	tun.PreFilterPacketOutboundToWireGuardEngineIntercept = orderedFilterFn(2)
-	tun.PreFilterPacketOutboundToWireGuardAppConnectorIntercept = orderedFilterFn(3)
+	tun.PreFilterPacketOutboundToWireGuardAppConnectorIntercept.Store(orderedFilterFn(3))
 	tun.PostFilterPacketOutboundToWireGuard = orderedFilterFn(4)
 
 	// Read the packet. chtun.Outbound is unbuffered, and won't be drained until
@@ -1131,7 +1131,7 @@ func TestInjectedReadCallsAppConnectorHook(t *testing.T) {
 
 	bus := eventbustest.NewBus(t)
 	_, tun := newFakeTUN(t.Logf, bus, false)
-	tun.PreFilterPacketOutboundToWireGuardAppConnectorIntercept = hook
+	tun.PreFilterPacketOutboundToWireGuardAppConnectorIntercept.Store(hook)
 	tun.Start()
 	defer tun.Close()
 
@@ -1151,6 +1151,47 @@ func TestInjectedReadCallsAppConnectorHook(t *testing.T) {
 	if !bytes.Equal(wantPkt, gotPkt) {
 		t.Errorf("packet mismatch\nwant:\t% x\ngot:\t% x", wantPkt, gotPkt)
 	}
+}
+
+// TestSetAppConnectorHooksWhileRunning verifies that the app connector
+// hooks can be installed while packets are flowing, as feature/conn25
+// does from LocalBackend.Start after the wireguard-go device is running.
+func TestSetAppConnectorHooksWhileRunning(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	chtun, tun := newChannelTUN(t.Logf, bus, true)
+	defer tun.Close()
+
+	const n = 10
+	go func() {
+		for range n {
+			chtun.Outbound <- udp4("1.2.3.4", "5.6.7.8", 98, 98)
+		}
+	}()
+	go func() {
+		for range n {
+			<-chtun.Inbound
+		}
+	}()
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		tun.ForTest().ReadN(t.Context(), n)
+	}()
+	writeDone := make(chan struct{})
+	go func() {
+		defer close(writeDone)
+		for range n {
+			tun.Write([][]byte{udp4("5.6.7.8", "1.2.3.4", 89, 89)}, 0)
+		}
+	}()
+
+	accept := func(*packet.Parsed, *Wrapper) filter.Response { return filter.Accept }
+	tun.PreFilterPacketOutboundToWireGuardAppConnectorIntercept.Store(accept)
+	tun.PostFilterPacketInboundFromWireGuardAppConnector.Store(accept)
+	tun.OnUnmappedTransitIPMessage.Store(func(packet.TailscaleRejectedHeader) {})
+
+	<-readDone
+	<-writeDone
 }
 
 // Tests SetPeerRoutes's fast path: unchanged inputs (including the

@@ -206,24 +206,24 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 
 	// Intercept packets from the tun device and from WireGuard
 	// to perform DNAT and SNAT.
-	tun.PreFilterPacketOutboundToWireGuardAppConnectorIntercept = func(p *packet.Parsed, tun *tstun.Wrapper) filter.Response {
+	tun.PreFilterPacketOutboundToWireGuardAppConnectorIntercept.Store(func(p *packet.Parsed, tun *tstun.Wrapper) filter.Response {
 		if !e.conn25.isConfigured() {
 			return filter.Accept
 		}
 		return dph.HandlePacketFromTunDevice(p, tun)
-	}
-	tun.PostFilterPacketInboundFromWireGuardAppConnector = func(p *packet.Parsed, tun *tstun.Wrapper) filter.Response {
+	})
+	tun.PostFilterPacketInboundFromWireGuardAppConnector.Store(func(p *packet.Parsed, tun *tstun.Wrapper) filter.Response {
 		if !e.conn25.isConfigured() {
 			return filter.Accept
 		}
 		return dph.HandlePacketFromWireGuard(p, tun)
-	}
-	tun.OnUnmappedTransitIPMessage = func(pkt packet.TailscaleRejectedHeader) {
+	})
+	tun.OnUnmappedTransitIPMessage.Store(func(pkt packet.TailscaleRejectedHeader) {
 		if !e.conn25.isConfigured() {
 			return
 		}
 		e.conn25.client.resendTransitIPMapping(pkt.Dst.Addr())
-	}
+	})
 
 	// The profile state change hook needs to clear all active flows on a
 	// major change (eg. switching tailnets), so make that hook accessible
