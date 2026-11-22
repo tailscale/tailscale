@@ -615,7 +615,9 @@ func TestDialThroughExitNode(t *testing.T) {
 	// Ping to make sure the connection is up.
 	pingCtx, cancelPing := pingTimeout(ctx)
 	defer cancelPing()
-	must.Get(lc2.Ping(pingCtx, s1ip, tailcfg.PingTSMP))
+	if _, err := lc2.Ping(pingCtx, s1ip, tailcfg.PingTSMP); err != nil {
+		t.Fatalf("TSMP ping s2 -> s1: %v", err)
+	}
 
 	must.Get(lc2.EditPrefs(ctx, &ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
@@ -2923,7 +2925,9 @@ func setupTwoClientTest(t *testing.T, useTUN bool) *listenTest {
 
 	pingCtx, cancelPing := pingTimeout(ctx)
 	defer cancelPing()
-	must.Get(lc1.Ping(pingCtx, s2ip4, tailcfg.PingTSMP))
+	if _, err := lc1.Ping(pingCtx, s2ip4, tailcfg.PingTSMP); err != nil {
+		t.Fatalf("TSMP ping s1 -> s2: %v", err)
+	}
 
 	return &listenTest{
 		control: control,
