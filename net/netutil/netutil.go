@@ -6,6 +6,7 @@ package netutil
 
 import (
 	"bufio"
+	"crypto/tls"
 	"io"
 	"net"
 	"net/http"
@@ -23,7 +24,20 @@ import (
 // standard *http.Transport) it returns a clone of it, preserving the existing
 // behavior exactly; otherwise it returns a fresh transport mirroring the
 // stdlib defaults.
+//
+// The returned transport's TLSClientConfig is always non-nil. The stdlib's
+// DefaultTransport only gets a TLSClientConfig as a side effect of its HTTP/2
+// setup, which is skipped when HTTP/2 is disabled (such as with
+// GODEBUG=http2client=0).
 func NewDefaultTransport() *http.Transport {
+	tr := newDefaultTransport()
+	if tr.TLSClientConfig == nil {
+		tr.TLSClientConfig = &tls.Config{}
+	}
+	return tr
+}
+
+func newDefaultTransport() *http.Transport {
 	if tr, ok := http.DefaultTransport.(*http.Transport); ok {
 		return tr.Clone()
 	}

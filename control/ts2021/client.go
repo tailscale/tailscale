@@ -32,6 +32,7 @@ import (
 	"tailscale.com/util/httpbody"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
+	"tailscale.com/util/vizerror"
 )
 
 // Client provides a http.Client to connect to tailcontrol over
@@ -99,6 +100,21 @@ type ClientOpts struct {
 	// protocol version to use instead of the default,
 	// of [tailcfg.CurrentCapabilityVersion].
 	ProtocolVersion uint16
+}
+
+// errNoHTTP2 is returned by [NewClient] when net/http's HTTP/2 support is
+// disabled, which the ts2021 protocol requires.
+var errNoHTTP2 = vizerror.New("unsupported configuration: Tailscale requires Go's HTTP/2 support, but it's disabled (is GODEBUG=http2client=0 set?)")
+
+// transportHasHTTP2 reports whether net/http configured HTTP/2 on tr.
+//
+// net/http sets up HTTP/2 on a Transport once, on first use or Clone, and
+// skips it when HTTP/2 is disabled with GODEBUG=http2client=0 or the
+// nethttpomithttp2 build tag. When it does set it up, it registers an "h2"
+// entry in TLSNextProto, the historical signal that HTTP/2 is enabled.
+func transportHasHTTP2(tr *http.Transport) bool {
+	tr.Clone() // run net/http's one-time HTTP/2 setup on tr
+	return tr.TLSNextProto["h2"] != nil
 }
 
 // NewClient returns a new noiseClient for the provided server and machine key.
@@ -171,6 +187,9 @@ func NewClient(opts ClientOpts) (*Client, error) {
 	// speaks inside the ts2021 Noise encryption. But Go doesn't know about that,
 	// so we use "SetUnencryptedHTTP2" even though it's actually encrypted.
 	tr.Protocols.SetUnencryptedHTTP2(true)
+	if !transportHasHTTP2(tr) {
+		return nil, errNoHTTP2
+	}
 	tr.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		return np.dial(ctx)
 	}
