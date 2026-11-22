@@ -480,7 +480,10 @@ func (m *mux) newChannel(chanType string, direction channelDirection, extraData 
 		mux:              m,
 		packetPool:       make(map[uint32][]byte),
 	}
-	ch.localId = m.chanList.add(ch)
+	if !m.chanList.add(ch) {
+		// The mux has shut down and will not close the channel.
+		ch.close()
+	}
 	return ch
 }
 
