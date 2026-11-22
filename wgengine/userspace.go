@@ -140,6 +140,7 @@ type userspaceEngine struct {
 	closing        bool             // Close was called (even if we're still closing)
 	statusCallback StatusCallback
 	endpoints      []tailcfg.Endpoint
+	lastStatusAsOf time.Time                           // AsOf of the last status from getStatus
 	pendOpen       map[flowtrackTuple]*pendingOpenFlow // see pendopen.go
 
 	// pongCallback is the map of response handlers waiting for disco or TSMP
@@ -1044,9 +1045,17 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	// (See comment in userspaceEngine's declaration.)
 	derpConns := e.magicConn.DERPs()
 
+	// Stamp AsOf when endpoints are read, strictly increasing, so the
+	// status consumer's AsOf ordering check discards any status carrying
+	// stale endpoints, even with coarse clocks.
 	e.mu.Lock()
 	closing := e.closing
 	localAddrs := slices.Clone(e.endpoints)
+	asOf := time.Now()
+	if !asOf.After(e.lastStatusAsOf) {
+		asOf = e.lastStatusAsOf.Add(1)
+	}
+	e.lastStatusAsOf = asOf
 	e.mu.Unlock()
 
 	if closing {
@@ -1072,7 +1081,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	}
 
 	return &Status{
-		AsOf:       time.Now(),
+		AsOf:       asOf,
 		LocalAddrs: localAddrs,
 		Peers:      peers,
 		DERPs:      derpConns,
