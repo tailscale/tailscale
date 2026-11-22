@@ -5,6 +5,8 @@ package captivedetection
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -18,6 +20,7 @@ import (
 	"tailscale.com/derp/derpserver"
 	"tailscale.com/net/netmon"
 	"tailscale.com/syncs"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstest/nettest"
 	"tailscale.com/util/must"
 )
@@ -37,11 +40,66 @@ func TestAvailableEndpointsAlwaysAtLeastTwo(t *testing.T) {
 	}
 }
 
+// localDERPMap returns a DERPMap whose nodes are local HTTP servers using
+// the given handlers, and a counter of requests they received.
+// Callers pass at least five handlers so that detectOnInterface never
+// reaches the non-hermetic Tailscale endpoints sorted after DERP nodes.
+func localDERPMap(t *testing.T, handlers ...http.HandlerFunc) (*tailcfg.DERPMap, *atomic.Int64) {
+	if len(handlers) < 5 {
+		t.Fatalf("got %d handlers; want at least 5", len(handlers))
+	}
+	var hits atomic.Int64
+	dm := &tailcfg.DERPMap{Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{}}
+	for i, h := range handlers {
+		s := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits.Add(1)
+			h(w, r)
+		}))
+		// Endpoints are IPv4-only, so don't let httptest fall back to [::1].
+		s.Listener.Close()
+		s.Listener = must.Get(net.Listen("tcp4", "127.0.0.1:0"))
+		s.Start()
+		t.Cleanup(s.Close)
+		rid := tailcfg.DERPRegionID(i + 1)
+		dm.Regions[rid] = &tailcfg.DERPRegion{
+			RegionID: rid,
+			Nodes: []*tailcfg.DERPNode{{
+				Name:      fmt.Sprintf("%da", rid),
+				RegionID:  rid,
+				IPv4:      s.Listener.Addr().String(),
+				CanPort80: true,
+			}},
+		}
+	}
+	return dm, &hits
+}
+
 func TestDetectCaptivePortalReturnsFalse(t *testing.T) {
+	ok := derpserver.ServeNoContent
+	dm, hits := localDERPMap(t, ok, ok, ok, ok, ok)
 	d := NewDetector(t.Logf)
-	found := d.Detect(context.Background(), netmon.NewStatic(), nil, 0)
+	found := d.Detect(t.Context(), netmon.NewStatic(), dm, 0)
 	if found {
 		t.Errorf("DetectCaptivePortal returned true, expected false.")
+	}
+	if hits.Load() == 0 {
+		t.Skip("no endpoint was reached; no usable non-loopback interface?")
+	}
+}
+
+func TestDetectCaptivePortalReturnsTrue(t *testing.T) {
+	notFound := func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "404 Not Found", http.StatusNotFound)
+	}
+	ok := derpserver.ServeNoContent
+	dm, hits := localDERPMap(t, ok, ok, ok, ok, notFound)
+	d := NewDetector(t.Logf)
+	found := d.Detect(t.Context(), netmon.NewStatic(), dm, 0)
+	if hits.Load() == 0 {
+		t.Skip("no endpoint was reached; no usable non-loopback interface?")
+	}
+	if !found {
+		t.Errorf("DetectCaptivePortal returned false, expected true.")
 	}
 }
 
