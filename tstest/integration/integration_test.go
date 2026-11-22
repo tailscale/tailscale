@@ -1490,7 +1490,6 @@ func startUnattendedModeNode(t *testing.T) (*TestEnv, *TestNode, *Daemon) {
 // jailed node cannot initiate connections to the other node however the other
 // node can initiate connections to the jailed node.
 func TestClientSideJailing(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/17419")
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	registerNode := func() (*TestNode, key.NodePublic) {
@@ -1547,17 +1546,30 @@ func TestClientSideJailing(t *testing.T) {
 		},
 	}
 
-	testDial := func(t *testing.T, lc *local.Client, ip netip.Addr, port uint16, shouldFail bool) {
-		t.Helper()
+	dialOnce := func(lc *local.Client, ip netip.Addr, port uint16) error {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		c, err := lc.DialTCP(ctx, ip.String(), port)
-		failed := err != nil
-		if failed != shouldFail {
-			t.Errorf("failed = %v; want %v", failed, shouldFail)
+		if err != nil {
+			return err
 		}
-		if c != nil {
-			c.Close()
+		c.Close()
+		return nil
+	}
+	testDial := func(t *testing.T, lc *local.Client, ip netip.Addr, port uint16, shouldFail bool) {
+		t.Helper()
+		if shouldFail {
+			if err := dialOnce(lc, ip, port); err == nil {
+				t.Errorf("dial %v succeeded; want failure", ip)
+			}
+			return
+		}
+		// Peer paths arrive asynchronously and WireGuard only retries
+		// a dropped handshake after 5s, so retry.
+		if err := tstest.WaitFor(20*time.Second, func() error {
+			return dialOnce(lc, ip, port)
+		}); err != nil {
+			t.Errorf("dial %v: %v; want success", ip, err)
 		}
 	}
 
