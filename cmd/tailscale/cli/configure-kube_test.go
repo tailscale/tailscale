@@ -255,6 +255,121 @@ users:
 	}
 }
 
+func TestWriteKubeconfig(t *testing.T) {
+	const fqdn = "foo.tail-scale.ts.net"
+	const otherCluster = `apiVersion: v1
+clusters:
+- cluster:
+    server: https://192.168.1.1:8443
+  name: some-cluster
+contexts:
+- context:
+    cluster: some-cluster
+    user: some-auth
+  name: some-cluster
+current-context: some-cluster
+kind: Config
+users:
+- name: some-auth
+  user:
+    token: asdfasdf
+`
+	kubeconfig := func(in, scheme string) string {
+		b, err := updateKubeconfig([]byte(in), scheme, fqdn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	configured := func(scheme string) string {
+		return fmt.Sprintf("kubeconfig configured for %q at URL %q\n", fqdn, scheme+fqdn)
+	}
+
+	tests := []struct {
+		name     string
+		stdout   bool
+		http     bool
+		existing string // contents of $KUBECONFIG before; empty if it doesn't exist
+		wantOut  string
+		wantFile string // contents of $KUBECONFIG after; empty if it mustn't exist
+	}{
+		{
+			name:    "stdout",
+			stdout:  true,
+			wantOut: kubeconfig("", "https://"),
+		},
+		{
+			name:    "stdout_http",
+			stdout:  true,
+			http:    true,
+			wantOut: kubeconfig("", "http://"),
+		},
+		{
+			name:     "stdout_existing_file",
+			stdout:   true,
+			existing: otherCluster,
+			wantOut:  kubeconfig("", "https://"),
+			wantFile: otherCluster,
+		},
+		{
+			name:     "file",
+			wantOut:  configured("https://"),
+			wantFile: kubeconfig("", "https://"),
+		},
+		{
+			name:     "file_existing",
+			http:     true,
+			existing: otherCluster,
+			wantOut:  configured("http://"),
+			wantFile: kubeconfig(otherCluster, "http://"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := "https://"
+			if tt.http {
+				scheme = "http://"
+			}
+			path := filepath.Join(t.TempDir(), ".kube", "config")
+			if tt.existing != "" {
+				if err := os.Mkdir(filepath.Dir(path), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(tt.existing), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("KUBECONFIG", path)
+
+			var out bytes.Buffer
+			if err := writeKubeconfig(&out, tt.stdout, scheme, fqdn); err != nil {
+				t.Fatalf("writeKubeconfig() error = %v", err)
+			}
+			if d := cmp.Diff(tt.wantOut, out.String()); d != "" {
+				t.Errorf("output mismatch (-want +got):\n%s", d)
+			}
+			if !strings.HasSuffix(out.String(), "\n") {
+				t.Errorf("output %q does not end with a newline", out.String())
+			}
+
+			if tt.wantFile == "" {
+				// Neither the file nor its .kube directory should be created.
+				if _, err := os.Stat(filepath.Dir(path)); !os.IsNotExist(err) {
+					t.Errorf("os.Stat(%q) error = %v, want not exist", filepath.Dir(path), err)
+				}
+				return
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d := cmp.Diff(tt.wantFile, string(got)); d != "" {
+				t.Errorf("kubeconfig file mismatch (-want +got):\n%s", d)
+			}
+		})
+	}
+}
+
 func TestCheckKubeconfigWritable(t *testing.T) {
 	t.Run("nonexistent-file-in-writable-dir", func(t *testing.T) {
 		dir := t.TempDir()
