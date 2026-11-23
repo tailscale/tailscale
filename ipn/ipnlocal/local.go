@@ -2014,11 +2014,11 @@ func (b *LocalBackend) applyControlClientStatusLocked(c controlclient.Client, st
 	}
 
 	// notify collects the login, prefs, netmap, and exit node changes from
-	// this status. The deferred send runs on every return.
+	// this status. The deferred call sends it on every return, if any
+	// field was set.
 	var notify ipn.Notify
-	notifyPending := false // true once notify must be sent
 	defer func() {
-		if notifyPending {
+		if !notify.IsZero() {
 			b.sendLocked(notify)
 		}
 	}()
@@ -2048,7 +2048,6 @@ func (b *LocalBackend) applyControlClientStatusLocked(c controlclient.Client, st
 		}
 		b.authReconfigLocked()
 		notify.LoginFinished = &empty.Message{}
-		notifyPending = true
 	}
 
 	prefsChanged := false
@@ -2145,7 +2144,7 @@ func (b *LocalBackend) applyControlClientStatusLocked(c controlclient.Client, st
 			// The Notify built so far is dropped. The replacing path has
 			// already sent its own prefs.
 			b.logf("Ignoring SetControlClientStatus from old client")
-			notifyPending = false
+			notify = ipn.Notify{}
 			return false
 		}
 		// b.cc is nil for a cached netmap applied by startLocked.
@@ -2190,7 +2189,6 @@ func (b *LocalBackend) applyControlClientStatusLocked(c controlclient.Client, st
 			notify.ErrMessage = &msg
 			notify.Prefs = new(b.pm.CurrentPrefs())
 			b.addSuggestedExitNodeLocked(&notify)
-			notifyPending = true
 			return false
 		}
 		if oldNetMap != nil {
@@ -2236,7 +2234,6 @@ func (b *LocalBackend) applyControlClientStatusLocked(c controlclient.Client, st
 		if st.NetMap.SelfNode.Valid() {
 			notify.SelfChange = st.NetMap.SelfNode.AsStruct()
 		}
-		notifyPending = true
 		if b.hasPeerChangeWatcherLocked() {
 			notify.UserProfiles = st.NetMap.UserProfiles
 			notify.PeersChanged = make([]*tailcfg.Node, 0, len(st.NetMap.Peers))
@@ -2270,11 +2267,8 @@ func (b *LocalBackend) applyControlClientStatusLocked(c controlclient.Client, st
 	// by an edit made while b.mu was released for tkaSyncIfNeeded.
 	if prefsChanged {
 		notify.Prefs = new(b.pm.CurrentPrefs())
-		notifyPending = true
 	}
-	if b.addSuggestedExitNodeLocked(&notify) {
-		notifyPending = true
-	}
+	b.addSuggestedExitNodeLocked(&notify)
 	return true
 }
 
@@ -7655,15 +7649,11 @@ func (b *LocalBackend) RefreshExitNode() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var notify ipn.Notify
-	send := false
 	if b.refreshExitNodeLocked() {
 		notify.Prefs = new(b.pm.CurrentPrefs())
-		send = true
 	}
-	if b.addSuggestedExitNodeLocked(&notify) {
-		send = true
-	}
-	if send {
+	b.addSuggestedExitNodeLocked(&notify)
+	if !notify.IsZero() {
 		b.sendLocked(notify)
 	}
 }

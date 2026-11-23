@@ -8,6 +8,7 @@ import (
 	"go/types"
 	"maps"
 	"math/bits"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,10 +16,53 @@ import (
 
 	"golang.org/x/tools/go/packages"
 
+	"tailscale.com/drive"
 	"tailscale.com/health"
 	"tailscale.com/types/empty"
+	"tailscale.com/types/views"
 	"tailscale.com/util/mak"
 )
+
+// TestNotifyIsZero checks that IsZero is true for an empty Notify and false
+// once any single field is set, so a new field cannot be missed.
+func TestNotifyIsZero(t *testing.T) {
+	if !(Notify{}).IsZero() {
+		t.Error("empty Notify is not zero")
+	}
+	rt := reflect.TypeFor[Notify]()
+	for i := range rt.NumField() {
+		f := rt.Field(i)
+		if f.Name == "_" {
+			continue
+		}
+		var n Notify
+		fv := reflect.ValueOf(&n).Elem().Field(i)
+		switch f.Type.Kind() {
+		case reflect.Pointer:
+			fv.Set(reflect.New(f.Type.Elem()))
+		case reflect.Slice:
+			fv.Set(reflect.MakeSlice(f.Type, 1, 1))
+		case reflect.Map:
+			fv.Set(reflect.MakeMap(f.Type))
+		case reflect.String:
+			fv.SetString("x")
+		case reflect.Bool:
+			fv.SetBool(true)
+		case reflect.Struct:
+			switch f.Name {
+			case "DriveShares":
+				n.DriveShares = views.SliceOfViews[*drive.Share, drive.ShareView]([]*drive.Share{{}})
+			default:
+				t.Fatalf("field %s: add a case for struct type %v", f.Name, f.Type)
+			}
+		default:
+			t.Fatalf("field %s: add a case for kind %v", f.Name, f.Type.Kind())
+		}
+		if n.IsZero() {
+			t.Errorf("Notify with %s set reports zero", f.Name)
+		}
+	}
+}
 
 func TestNotifyString(t *testing.T) {
 	for _, tt := range []struct {

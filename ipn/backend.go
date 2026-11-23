@@ -6,6 +6,7 @@ package ipn
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -591,6 +592,11 @@ type PeerState struct {
 	// so a later subscriber's initial snapshot reflects the true transition
 	// time rather than the subscription time.
 	PeerWireGuardStateAt time.Time
+}
+
+// IsZero reports whether no field of n is set.
+func (n Notify) IsZero() bool {
+	return reflect.ValueOf(n).IsZero()
 }
 
 func (n Notify) String() string {
