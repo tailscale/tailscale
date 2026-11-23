@@ -259,6 +259,11 @@ type Server struct {
 	// maps from netip.AddrPort to a client's public key
 	keyOfAddr  map[netip.AddrPort]key.NodePublic
 	rateConfig RateConfig // per-client DERP frame rate limiting config
+	// rateExemptAddrs is the set of client public IPs (from
+	// rateConfig.ExemptAddrs, unmapped) whose rate limit is overridden to 0.
+	// It is only consulted when a client's limiter is (re)configured, never
+	// on the per-frame path.
+	rateExemptAddrs set.Set[netip.Addr]
 }
 
 // clientSet represents 1 or more *sclients.
@@ -675,6 +680,12 @@ type RateConfig struct {
 	// will be increased to [minRateLimitTokenBucketSize] before application. Only
 	// relevant if PerClientRateLimitBytesPerSec is nonzero.
 	PerClientRateBurstBytes uint64 `json:",omitzero"`
+	// ExemptAddrs are client public IPv4 or IPv6 addresses that are exempt
+	// from rate limiting. Clients connecting from these addresses have their
+	// rate limit overridden to 0 (unlimited). IPv4-mapped IPv6 addresses are
+	// treated as their IPv4 equivalent. Only relevant if
+	// PerClientRateLimitBytesPerSec is nonzero.
+	ExemptAddrs []netip.Addr `json:",omitempty"`
 }
 
 // LoadRateConfig reads and JSON-unmarshals a [RateConfig] from the file at path.
@@ -690,6 +701,11 @@ func LoadRateConfig(path string) (RateConfig, error) {
 	if err := json.Unmarshal(b, &rc); err != nil {
 		return RateConfig{}, fmt.Errorf("error parsing rate config: %w", err)
 	}
+	for i, ip := range rc.ExemptAddrs {
+		if !ip.IsValid() {
+			return RateConfig{}, fmt.Errorf("error parsing rate config: invalid ExemptAddrs[%d]", i)
+		}
+	}
 	return rc, nil
 }
 
@@ -701,31 +717,60 @@ func (s *Server) LoadAndApplyRateConfig(path string) error {
 		return err
 	}
 	applied := s.UpdateRateLimits(rc)
-	s.logf("rate config applied: client-rate=%d bytes/sec, client-burst=%d bytes",
-		applied.PerClientRateLimitBytesPerSec, applied.PerClientRateBurstBytes)
+	s.logf("rate config applied: client-rate=%d bytes/sec, client-burst=%d bytes, exempt-addrs=%v",
+		applied.PerClientRateLimitBytesPerSec, applied.PerClientRateBurstBytes, applied.ExemptAddrs)
 	return nil
 }
 
 // UpdateRateLimits sets the receive rate limits, updating all existing client
 // connections. It returns the applied config, which may differ from rc. If the
-// per-client rate limits is 0, rate limiting is disabled. Mesh peers are always
-// exempt from rate limiting.
+// per-client rate limits is 0, rate limiting is disabled. Mesh peers and
+// clients connecting from one of rc.ExemptAddrs are always exempt from rate
+// limiting.
 func (s *Server) UpdateRateLimits(rc RateConfig) (applied RateConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var exempt set.Set[netip.Addr]
 	if rc.PerClientRateLimitBytesPerSec == 0 {
 		// all rate limiting is disabled
 		rc = RateConfig{}
 	} else {
 		rc.PerClientRateBurstBytes = max(rc.PerClientRateBurstBytes, minRateLimitTokenBucketSize)
+		var addrs []netip.Addr
+		for _, ip := range rc.ExemptAddrs {
+			if !ip.IsValid() {
+				continue
+			}
+			ip = ip.Unmap()
+			if exempt.Contains(ip) {
+				continue
+			}
+			exempt.Make()
+			exempt.Add(ip)
+			addrs = append(addrs, ip)
+		}
+		rc.ExemptAddrs = addrs
 	}
 	s.rateConfig = rc
+	s.rateExemptAddrs = exempt
 	for _, cs := range s.clients.All() {
-		cs.ForeachClient(func(c *sclient) {
-			c.setRateLimit(rc.PerClientRateLimitBytesPerSec, rc.PerClientRateBurstBytes)
-		})
+		cs.ForeachClient(s.applyRateLimitLocked)
 	}
 	return rc
+}
+
+// applyRateLimitLocked configures c's receive rate limiter from the server's
+// current rate config. Clients whose remote IP is in [Server.rateExemptAddrs]
+// have their limit overridden to 0, which leaves [sclient.recvLim] nil so that
+// [sclient.rateLimit] does no extra per-frame work for them.
+//
+// s.mu must be held.
+func (s *Server) applyRateLimitLocked(c *sclient) {
+	bytesPerSec := s.rateConfig.PerClientRateLimitBytesPerSec
+	if bytesPerSec != 0 && s.rateExemptAddrs.Contains(c.remoteIPPort.Addr().Unmap()) {
+		bytesPerSec = 0
+	}
+	c.setRateLimit(bytesPerSec, s.rateConfig.PerClientRateBurstBytes)
 }
 
 // HasMeshKey reports whether the server is configured with a mesh key.
@@ -905,7 +950,7 @@ func (s *Server) registerClient(c *sclient) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	c.setRateLimit(s.rateConfig.PerClientRateLimitBytesPerSec, s.rateConfig.PerClientRateBurstBytes)
+	s.applyRateLimitLocked(c)
 
 	cs, ok := s.clients.Load(c.key)
 	if !ok {
@@ -1561,8 +1606,9 @@ func (c *sclient) handleFrameSendPacket(_ derp.FrameType, fl uint32) error {
 	return c.sendPkt(dst, p)
 }
 
-// setRateLimit updates the receive rate limiter. When bytesPerSec is 0, or the
-// client is a mesh peer, the limiter is set to nil so that [sclient.rateLimit] is a no-op.
+// setRateLimit updates the receive rate limiter. When bytesPerSec is 0 (rate
+// limiting disabled or the client's address is exempt), or the client is a mesh
+// peer, the limiter is set to nil so that [sclient.rateLimit] is a no-op.
 func (c *sclient) setRateLimit(bytesPerSec, burst uint64) {
 	if c.canMesh || bytesPerSec == 0 {
 		c.recvLim.Store(nil)
@@ -1601,8 +1647,8 @@ func rateLimitWait(ctx context.Context, lim *xrate.Limiter, n int, now time.Time
 // within the buffered reader to fill back in with data from
 // the TCP socket. Pacing reads acts as a form of natural
 // backpressure via TCP flow control.
-// When rate limiting is disabled or the client is a mesh peer, recvLim is nil
-// and this is a no-op.
+// When rate limiting is disabled, the client is a mesh peer, or the client's
+// address is exempt, recvLim is nil and this is a no-op.
 func (c *sclient) rateLimit(n int) error {
 	if lim := c.recvLim.Load(); lim != nil {
 		newTimer := func(d time.Duration) (<-chan time.Time, func() bool) {
@@ -2161,8 +2207,9 @@ type sclient struct {
 	peerGoneLim *rate.Limiter
 
 	// recvLim is the receive rate limiter. When rate limiting is enabled for a
-	// non-mesh client, it points to a [xrate.Limiter]. When rate limiting
-	// is disabled or the client is a mesh peer, it is nil and [sclient.rateLimit]
+	// non-mesh, non-exempt client, it points to a [xrate.Limiter]. When rate
+	// limiting is disabled, the client is a mesh peer, or the client's remote
+	// IP is in [RateConfig.ExemptAddrs], it is nil and [sclient.rateLimit]
 	// is a no-op. Updated atomically by [sclient.setRateLimit] so that
 	// [sclient.rateLimit] can load it without holding [Server.mu].
 	//
