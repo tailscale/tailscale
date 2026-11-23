@@ -577,6 +577,7 @@ const (
 	missingAppPermissionMessage   = "You do not have permission to use this App"
 	transitIPNotInPoolMessage     = "The transit address is not in a configured transit IP pool"
 	disallowedDestinationMessage  = "Destination address is in a disallowed address range"
+	invalidTokenMessage           = "The destination IP token is missing or did not verify"
 )
 
 // handleConnectorTransitIPRequest creates a ConnectorTransitIPResponse in response
@@ -614,6 +615,15 @@ func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, peerCaps ta
 
 	seen := map[netip.Addr]bool{}
 	for _, each := range ctipr.TransitIPs {
+		token, err := base64.StdEncoding.DecodeString(each.Token)
+		if err != nil || !c.connector.verifyToken(token, each.App, each.DestinationIP) {
+			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
+				Code:    InvalidDestinationIPToken,
+				Message: invalidTokenMessage,
+			})
+			continue
+		}
+
 		// Canonicalize IPv4-in-IPv6 addresses, so that duplicate detection and
 		// the keys we store in the connector's map match the unmapped form the
 		// datapath produces when it parses packets.
@@ -725,6 +735,10 @@ const (
 	// and private addresses, along with addresses within the configured magic and
 	// transit IP pools).
 	DisallowedDestination = 8
+
+	// InvalidDestinationIPToken indicates that the request's token did not
+	// authenticate, or there was no token provided.
+	InvalidDestinationIPToken = 9
 )
 
 // TransitIPResponse is the response to a TransitIPRequest
