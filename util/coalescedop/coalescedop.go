@@ -22,6 +22,7 @@ import "sync"
 // The zero value is not valid; use [New].
 type CoalescedOp struct {
 	mu      sync.Mutex
+	idle    sync.Cond // on mu; signaled when running becomes false
 	fn      func()
 	running bool
 	pending bool
@@ -29,7 +30,9 @@ type CoalescedOp struct {
 
 // New returns a CoalescedOp that calls fn.
 func New(fn func()) *CoalescedOp {
-	return &CoalescedOp{fn: fn}
+	c := &CoalescedOp{fn: fn}
+	c.idle.L = &c.mu
+	return c
 }
 
 // Do requests that the operation be run. If no execution is in
@@ -50,6 +53,16 @@ func (c *CoalescedOp) Do() {
 	go c.run()
 }
 
+// Wait blocks until no execution is in progress or pending.
+// It must not be called from the function itself.
+func (c *CoalescedOp) Wait() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for c.running {
+		c.idle.Wait()
+	}
+}
+
 func (c *CoalescedOp) run() {
 	for {
 		c.fn()
@@ -57,6 +70,7 @@ func (c *CoalescedOp) run() {
 		c.mu.Lock()
 		if !c.pending {
 			c.running = false
+			c.idle.Broadcast()
 			c.mu.Unlock()
 			return
 		}
