@@ -4,15 +4,28 @@
 package magicsock
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
+	"net/netip"
+	"strings"
 	"testing"
+	"time"
 
+	"tailscale.com/derp/derpserver"
+	// Registers the WebSocket fallback for DERP dials in this test binary,
+	// which TestRebindKeepsWebSocketDERP needs.
+	_ "tailscale.com/feature/derpwebsocket"
 	"tailscale.com/health"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netcheck"
+	"tailscale.com/net/netmon"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/types/key"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/eventbus/eventbustest"
+	"tailscale.com/util/usermetric"
 )
 
 func CheckDERPHeuristicTimes(t *testing.T) {
@@ -128,5 +141,116 @@ func TestSetDERPMapDoReStun(t *testing.T) {
 	c.SetDERPMap(derpMap2)
 	if reSTUNCalls != 1 {
 		t.Errorf("SetDERPMap: got %d ReSTUN calls, want 1", reSTUNCalls)
+	}
+}
+
+// TestRebindKeepsWebSocketDERP checks that a rebind doesn't close a DERP
+// connection that came up over WebSocket. Such a connection can't report
+// its local address, so it must get the post-rebind ping instead.
+func TestRebindKeepsWebSocketDERP(t *testing.T) {
+	// The DERP reader and server goroutines can still log while the
+	// connections shut down, after the test has returned.
+	base := tstest.WhileTestRunningLogger(t)
+	pingResult := make(chan string, 1)
+	logf := func(format string, args ...any) {
+		msg := fmt.Sprintf(format, args...)
+		var res string
+		switch {
+		case strings.Contains(msg, "post-rebind ping of DERP region 1 okay"):
+			res = "ok"
+		case strings.Contains(msg, "rebind-ping-fail"):
+			res = "failed"
+		}
+		if res != "" {
+			select {
+			case pingResult <- res:
+			default:
+			}
+		}
+		base(format, args...)
+	}
+
+	// Refuse "Upgrade: DERP" so the client falls back to WebSocket.
+	derpMap, cleanup := runDERPAndStunWithHandler(t, logf, localhostListener{}, netaddr.IPv4(127, 0, 0, 1), func(d *derpserver.Server) http.Handler {
+		derpOnly := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.EqualFold(r.Header.Get("Upgrade"), "derp") {
+				http.Error(w, "DERP upgrade blocked", http.StatusForbidden)
+				return
+			}
+			derpserver.Handler(d).ServeHTTP(w, r)
+		})
+		return derpserver.AddWebSocketSupport(d, derpOnly)
+	})
+	defer cleanup()
+
+	bus := eventbustest.NewBus(t)
+	netMon, err := netmon.New(bus, logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { netMon.Close() })
+
+	conn, err := NewConn(Options{
+		Logf:                   logf,
+		NetMon:                 netMon,
+		EventBus:               bus,
+		HealthTracker:          health.NewTracker(bus),
+		Metrics:                new(usermetric.Registry),
+		DisablePortMapper:      true,
+		TestOnlyPacketListener: localhostListener{},
+		EndpointsFunc:          func([]tailcfg.Endpoint) {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	conn.SetDERPMap(derpMap)
+	if err := conn.SetPrivateKey(key.NewNode()); err != nil {
+		t.Fatal(err)
+	}
+	conn.WaitReady(t)
+
+	var ad activeDerp
+	if err := tstest.WaitFor(10*time.Second, func() error {
+		conn.mu.Lock()
+		ad = conn.activeDerp[1]
+		conn.mu.Unlock()
+		if ad.c == nil {
+			return errors.New("no DERP connection")
+		}
+		la, err := ad.c.LocalAddr()
+		if err != nil {
+			return err
+		}
+		if la.IsValid() {
+			return fmt.Errorf("LocalAddr = %v; want invalid, as for a WebSocket connection", la)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	conn.maybeCloseDERPsOnRebind([]netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")})
+
+	sameConn := func() bool {
+		conn.mu.Lock()
+		defer conn.mu.Unlock()
+		after, ok := conn.activeDerp[1]
+		return ok && after.c == ad.c
+	}
+	if !sameConn() {
+		t.Fatal("rebind closed the WebSocket DERP connection")
+	}
+	select {
+	case res := <-pingResult:
+		if res != "ok" {
+			t.Fatalf("post-rebind ping %s", res)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no post-rebind ping result")
+	}
+	if !sameConn() {
+		t.Fatal("WebSocket DERP connection was replaced after the post-rebind ping")
 	}
 }

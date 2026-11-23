@@ -119,9 +119,15 @@ func (c *Conn) WaitReady(t testing.TB) {
 }
 
 func runDERPAndStun(t *testing.T, logf logger.Logf, ln nettype.PacketListener, stunIP netip.Addr) (derpMap *tailcfg.DERPMap, cleanup func()) {
+	return runDERPAndStunWithHandler(t, logf, ln, stunIP, derpserver.Handler)
+}
+
+// runDERPAndStunWithHandler is like runDERPAndStun, but serves DERP with
+// the HTTP handler that newHandler returns for the DERP server.
+func runDERPAndStunWithHandler(t *testing.T, logf logger.Logf, ln nettype.PacketListener, stunIP netip.Addr, newHandler func(*derpserver.Server) http.Handler) (derpMap *tailcfg.DERPMap, cleanup func()) {
 	d := derpserver.New(key.NewNode(), logf)
 
-	httpsrv := httptest.NewUnstartedServer(derpserver.Handler(d))
+	httpsrv := httptest.NewUnstartedServer(newHandler(d))
 	httpsrv.Config.ErrorLog = logger.StdLogger(logf)
 	httpsrv.Config.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler))
 	httpsrv.StartTLS()
