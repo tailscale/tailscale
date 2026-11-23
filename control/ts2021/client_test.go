@@ -14,6 +14,8 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptrace"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -456,4 +458,38 @@ func (up *Upgrader) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	up.h2srv.ServeConn(cbConn, &http2.ServeConnOpts{
 		BaseConfig: up.httpBaseConfig,
 	})
+}
+
+// TestNewClientNoHTTP2 verifies that NewClient fails with a clear error when
+// net/http's HTTP/2 support is disabled. See tailscale/tailscale#22578.
+// It runs in a child process because GODEBUG=http2client=0 must be set at
+// process start.
+func TestNewClientNoHTTP2(t *testing.T) {
+	newClient := func() error {
+		nc, err := NewClient(ClientOpts{
+			Logf:         t.Logf,
+			PrivKey:      testPrivKey,
+			ServerPubKey: testServerPub,
+			ServerURL:    "https://unused.example",
+			Dialer:       tsdial.NewDialer(netmon.NewStatic()),
+		})
+		if err == nil {
+			nc.Close()
+		}
+		return err
+	}
+	if os.Getenv("TS_TEST_TS2021_CHILD") == "1" {
+		if err := newClient(); err != errNoHTTP2 {
+			t.Fatalf("NewClient error = %v; want %v", err, errNoHTTP2)
+		}
+		return
+	}
+	if err := newClient(); err != nil {
+		t.Fatalf("NewClient with HTTP/2 enabled: %v", err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestNewClientNoHTTP2$")
+	cmd.Env = append(os.Environ(), "TS_TEST_TS2021_CHILD=1", "GODEBUG=http2client=0")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("with GODEBUG=http2client=0: %v\n%s", err, out)
+	}
 }

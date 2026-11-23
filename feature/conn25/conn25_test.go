@@ -5,6 +5,7 @@ package conn25
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -641,7 +643,7 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 								i, j, len(wantLookup))
 						}
 						pip, tip, wantDip := wantLookup[0], wantLookup[1], wantLookup[2]
-						gotDip, _ := c.connector.lookupAddrBySrcIPAndTransitIP(pip, tip)
+						gotDip, _ := c.connector.lookupAddrBySrcIPAndTransitIPLocked(pip, tip)
 						if gotDip != wantDip {
 							t.Errorf("wrong result on lookup[%d][%d] ([%v], [%v]): got [%v] expected [%v]",
 								i, j, pip, tip, gotDip, wantDip)
@@ -2339,14 +2341,6 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 		{A: netip.MustParseAddr("5.6.7.8").As4()},
 	})
 
-	nonINETQuestionResp := makeDNSResponseForSections(t, []dnsmessage.Question{
-		{
-			Name:  dnsMessageName,
-			Type:  dnsmessage.TypeA,
-			Class: dnsmessage.ClassCHAOS,
-		},
-	}, nil, nil)
-
 	for _, tt := range []struct {
 		name     string
 		toMap    *resolver.Response
@@ -2380,18 +2374,6 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 				[]netip.Addr{
 					netip.MustParseAddr("2606:4700::6812:100"),
 					netip.MustParseAddr("2606:4700::6812:101"),
-				},
-			),
-		},
-		{
-			name: "ipv6-4in6-answer-dropped",
-			toMap: makeV6DNSResponse(t, domainName, []*dnsmessage.AAAAResource{
-				{AAAA: netip.MustParseAddr("::ffff:1.2.3.4").As16()},
-				{AAAA: netip.MustParseAddr("2606:4700::6812:1a78").As16()},
-			}),
-			assertFx: assertParsesToAnswers(
-				[]netip.Addr{
-					netip.MustParseAddr("2606:4700::6812:100"),
 				},
 			),
 		},
@@ -2453,36 +2435,6 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 			assertFx: assertServFail,
 		},
 		{
-			name:     "not-inet-question",
-			toMap:    nonINETQuestionResp,
-			assertFx: assertBytes(nonINETQuestionResp.Bs),
-		},
-		{
-			name: "not-inet-answer",
-			toMap: makeDNSResponseForSections(
-				t,
-				[]dnsmessage.Question{
-					{
-						Name:  dnsMessageName,
-						Type:  dnsmessage.TypeA,
-						Class: dnsmessage.ClassINET,
-					},
-				},
-				[]dnsmessage.Resource{
-					{
-						Header: dnsmessage.ResourceHeader{
-							Name:  dnsMessageName,
-							Type:  dnsmessage.TypeA,
-							Class: dnsmessage.ClassCHAOS,
-						},
-						Body: &dnsmessage.AResource{A: netip.MustParseAddr("1.2.3.4").As4()},
-					},
-				},
-				nil,
-			),
-			assertFx: assertParsesToAnswers(nil),
-		},
-		{
 			name: "answer-domain-mismatch",
 			toMap: makeDNSResponseForSections(
 				t,
@@ -2506,72 +2458,6 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 				nil,
 			),
 			assertFx: assertParsesToAnswers(nil),
-		},
-		{
-			name: "answer-type-mismatch-want-v4",
-			toMap: makeDNSResponseForSections(
-				t,
-				[]dnsmessage.Question{
-					{
-						Name:  dnsMessageName,
-						Type:  dnsmessage.TypeA,
-						Class: dnsmessage.ClassINET,
-					},
-				},
-				[]dnsmessage.Resource{
-					{
-						Header: dnsmessage.ResourceHeader{
-							Name:  dnsMessageName,
-							Type:  dnsmessage.TypeAAAA,
-							Class: dnsmessage.ClassINET,
-						},
-						Body: &dnsmessage.AAAAResource{AAAA: netip.MustParseAddr("1.2.3.4").As16()},
-					},
-					{
-						Header: dnsmessage.ResourceHeader{
-							Name:  dnsMessageName,
-							Type:  dnsmessage.TypeA,
-							Class: dnsmessage.ClassINET,
-						},
-						Body: &dnsmessage.AResource{A: netip.MustParseAddr("5.6.7.8").As4()},
-					},
-				},
-				nil,
-			),
-			assertFx: assertParsesToAnswers([]netip.Addr{netip.MustParseAddr("100.64.0.0")}),
-		},
-		{
-			name: "answer-type-mismatch-want-v6",
-			toMap: makeDNSResponseForSections(
-				t,
-				[]dnsmessage.Question{
-					{
-						Name:  dnsMessageName,
-						Type:  dnsmessage.TypeAAAA,
-						Class: dnsmessage.ClassINET,
-					},
-				},
-				[]dnsmessage.Resource{
-					{
-						Header: dnsmessage.ResourceHeader{
-							Name:  dnsMessageName,
-							Type:  dnsmessage.TypeAAAA,
-							Class: dnsmessage.ClassINET,
-						},
-						Body: &dnsmessage.AAAAResource{AAAA: netip.MustParseAddr("2606:4700::6812:1a78").As16()},
-					},
-					{
-						Header: dnsmessage.ResourceHeader{
-							Name:  dnsMessageName,
-							Type:  dnsmessage.TypeA,
-							Class: dnsmessage.ClassINET,
-						},
-						Body: &dnsmessage.AResource{A: netip.MustParseAddr("5.6.7.8").As4()},
-					},
-				},
-				nil,
-			),
-			assertFx: assertParsesToAnswers([]netip.Addr{netip.MustParseAddr("2606:4700::6812:100")}),
 		},
 		{
 			name: "cname-resolves-to-magic-ip",
@@ -2710,41 +2596,6 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 				nil,
 			),
 			assertFx: assertParsesToAnswers([]netip.Addr{netip.MustParseAddr("100.64.0.0")}),
-		},
-		{
-			name: "cname-has-loop",
-			toMap: makeDNSResponseForSections(
-				t,
-				[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
-				[]dnsmessage.Resource{
-					{
-						Header: dnsmessage.ResourceHeader{
-							Name:  dnsMessageName,
-							Type:  dnsmessage.TypeCNAME,
-							Class: dnsmessage.ClassINET,
-						},
-						Body: &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("a.example.com.")},
-					},
-					{
-						Header: dnsmessage.ResourceHeader{
-							Name:  dnsmessage.MustNewName("a.example.com."),
-							Type:  dnsmessage.TypeCNAME,
-							Class: dnsmessage.ClassINET,
-						},
-						Body: &dnsmessage.CNAMEResource{CNAME: dnsMessageName},
-					},
-					{
-						Header: dnsmessage.ResourceHeader{
-							Name:  dnsmessage.MustNewName("z.example.com."),
-							Type:  dnsmessage.TypeA,
-							Class: dnsmessage.ClassINET,
-						},
-						Body: &dnsmessage.AResource{A: netip.MustParseAddr("1.2.3.4").As4()},
-					},
-				},
-				nil,
-			),
-			assertFx: assertParsesToAnswers(nil),
 		},
 		{
 			name: "https-record-strips-address-hints",
@@ -4338,5 +4189,660 @@ func TestExtraDNSRoutesHook(t *testing.T) {
 	ext.profileStateChange(ipn.LoginProfileView{}, testPrefsNotConnector, false)
 	if got := hook(); got != nil {
 		t.Errorf("routes after switching node = %v, want nil", got)
+	}
+}
+
+func TestValidateAndGetQuestion(t *testing.T) {
+	aQuestion := dnsmessage.Question{
+		Name:  dnsmessage.MustNewName("example.com."),
+		Type:  dnsmessage.TypeA,
+		Class: dnsmessage.ClassINET,
+	}
+	httpsQuestion := dnsmessage.Question{
+		Name:  dnsmessage.MustNewName("example.com."),
+		Type:  dnsmessage.TypeHTTPS,
+		Class: dnsmessage.ClassINET,
+	}
+	for _, tt := range []struct {
+		name      string
+		questions []dnsmessage.Question
+		want      dnsmessage.Question
+		wantOK    bool
+	}{
+		{
+			name:      "zero-questions",
+			questions: nil,
+			wantOK:    false,
+		},
+		{
+			name:      "two-questions",
+			questions: []dnsmessage.Question{aQuestion, aQuestion},
+			wantOK:    false,
+		},
+		{
+			name: "non-inet-class",
+			questions: []dnsmessage.Question{{
+				Name:  dnsmessage.MustNewName("example.com."),
+				Type:  dnsmessage.TypeA,
+				Class: dnsmessage.ClassCHAOS,
+			}},
+			wantOK: false,
+		},
+		{
+			name: "pass-through-type-mx",
+			questions: []dnsmessage.Question{{
+				Name:  dnsmessage.MustNewName("example.com."),
+				Type:  dnsmessage.TypeMX,
+				Class: dnsmessage.ClassINET,
+			}},
+			wantOK: false,
+		},
+		{
+			name: "pass-through-type-naptr",
+			questions: []dnsmessage.Question{{
+				Name:  dnsmessage.MustNewName("example.com."),
+				Type:  dnsmessage.Type(35), // NAPTR
+				Class: dnsmessage.ClassINET,
+			}},
+			wantOK: false,
+		},
+		{
+			name:      "single-a-question",
+			questions: []dnsmessage.Question{aQuestion},
+			want:      aQuestion,
+			wantOK:    true,
+		},
+		{
+			name:      "single-https-question",
+			questions: []dnsmessage.Question{httpsQuestion},
+			want:      httpsQuestion,
+			wantOK:    true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := validateAndGetQuestion(tt.questions)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if got != tt.want {
+				t.Errorf("question = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseQuestion(t *testing.T) {
+	name := dnsmessage.MustNewName("example.com.")
+	validA := makeDNSResponse(t, "example.com.", []*dnsmessage.AResource{
+		{A: netip.MustParseAddr("1.2.3.4").As4()},
+	}).Bs
+
+	// A response carrying two questions, which validateAndGetQuestion rejects:
+	// parseQuestion should report "not interested" (ok=false) without an error.
+	twoQuestions := makeDNSResponseForSections(t, []dnsmessage.Question{
+		{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET},
+		{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET},
+	}, nil, nil).Bs
+
+	// A single question of a pass-through type is also "not interested".
+	passThrough := makeDNSResponseForSections(t, []dnsmessage.Question{
+		{Name: name, Type: dnsmessage.TypeMX, Class: dnsmessage.ClassINET},
+	}, nil, nil).Bs
+
+	t.Run("unparseable", func(t *testing.T) {
+		parser, ok := parseQuestion([]byte{1, 2, 3, 4})
+		if ok {
+			t.Errorf("ok = true, want false")
+		}
+		if parser != nil {
+			t.Errorf("parser = %v, want nil", parser)
+		}
+	})
+
+	t.Run("valid-a-response", func(t *testing.T) {
+		parser, ok := parseQuestion(validA)
+		if !ok {
+			t.Fatalf("ok=%v, want ok=true", ok)
+		}
+		if parser.p == nil {
+			t.Error("parser.p is nil, want a parser positioned at the answers")
+		}
+		if parser.question.Type != dnsmessage.TypeA {
+			t.Errorf("question.Type = %v, want A", parser.question.Type)
+		}
+		if got, want := parser.queriedDomain, dnsname.FQDN("example.com."); got != want {
+			t.Errorf("queriedDomain = %q, want %q", got, want)
+		}
+		if !parser.hdr.Response {
+			t.Error("hdr.Response = false, want true")
+		}
+		if _, err := parser.p.AnswerHeader(); err != nil {
+			t.Errorf("AnswerHeader after parseQuestion: %v, want the first answer", err)
+		}
+	})
+
+	t.Run("two-questions-not-interested", func(t *testing.T) {
+		parser, ok := parseQuestion(twoQuestions)
+		if ok {
+			t.Errorf("ok = true, want false")
+		}
+		if parser != nil {
+			t.Errorf("parser = %v, want nil", parser)
+		}
+	})
+
+	t.Run("pass-through-type-not-interested", func(t *testing.T) {
+		parser, ok := parseQuestion(passThrough)
+		if ok {
+			t.Errorf("ok = true, want false")
+		}
+		if parser != nil {
+			t.Errorf("parser = %v, want nil", parser)
+		}
+	})
+}
+
+func TestMatchToApp(t *testing.T) {
+	sn := makeSelfNode(
+		t,
+		[]appctype.AppConnectorAttr{
+			{Name: "one", Domains: []string{"*.example.com", "example.com"}, Connectors: []string{"tag:one"}, Mode: appctype.MagicIP},
+			{Name: "two", Domains: []string{"sub.example.com", "example.com"}, Connectors: []string{"tag:two"}, Mode: appctype.MagicIP},
+			{Name: "self-routed", Domains: []string{"*.wildcard.com"}, Connectors: []string{"tag:self-routed"}, Mode: appctype.MagicIP},
+		},
+		appctype.Conn25PoolsAttr{},
+		[]string{"tag:self-routed"},
+	)
+	cfg := mustConfig(t, sn)
+
+	for _, tt := range []struct {
+		name                    string
+		queriedDomain           dnsname.FQDN
+		prefsAdvertiseConnector bool
+		wantOK                  bool
+		wantAppName             string
+	}{
+		{
+			name:          "matches-first-app",
+			queriedDomain: "example.com.",
+			wantOK:        true,
+			wantAppName:   "one",
+		},
+		{
+			name:          "no-matching-app",
+			queriedDomain: "nomatch.com.",
+			wantOK:        false,
+		},
+		{
+			name:          "empty-domain",
+			queriedDomain: "",
+			wantOK:        false,
+		},
+		{
+			name:                    "self-routed-suppressed-when-advertising",
+			queriedDomain:           "sub.wildcard.com.",
+			prefsAdvertiseConnector: true,
+			wantOK:                  false,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			appName, ok := matchToApp(tt.queriedDomain, cfg, tt.prefsAdvertiseConnector)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if ok && appName != tt.wantAppName {
+				t.Errorf("appName = %q, want %q", appName, tt.wantAppName)
+			}
+			if !ok && appName != "" {
+				t.Errorf("appName = %q, want empty on no match", appName)
+			}
+		})
+	}
+}
+
+func resolveAnswersFor(t *testing.T, resp *resolver.Response) ([]addrTTL, error) {
+	t.Helper()
+	parser, ok := parseQuestion(resp.Bs)
+	if !ok {
+		t.Fatalf("parseQuestion: ok=%v, want a usable parser", ok)
+	}
+	return parser.resolveAnswers()
+}
+
+func cnameResource(t *testing.T, name, target string) dnsmessage.Resource {
+	t.Helper()
+	return dnsmessage.Resource{
+		Header: dnsmessage.ResourceHeader{
+			Name:  dnsmessage.MustNewName(name),
+			Type:  dnsmessage.TypeCNAME,
+			Class: dnsmessage.ClassINET,
+		},
+		Body: &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName(target)},
+	}
+}
+
+func aResource(t *testing.T, name, addr string, ttl uint32) dnsmessage.Resource {
+	t.Helper()
+	return dnsmessage.Resource{
+		Header: dnsmessage.ResourceHeader{
+			Name:  dnsmessage.MustNewName(name),
+			Type:  dnsmessage.TypeA,
+			Class: dnsmessage.ClassINET,
+			TTL:   ttl,
+		},
+		Body: &dnsmessage.AResource{A: netip.MustParseAddr(addr).As4()},
+	}
+}
+
+var addrTTLOpts = []cmp.Option{
+	cmp.AllowUnexported(addrTTL{}),
+	cmpopts.EquateComparable(netip.Addr{}),
+	cmpopts.EquateEmpty(),
+}
+
+func TestResolveAnswers(t *testing.T) {
+	name := dnsmessage.MustNewName("example.com.")
+	aQuestion := []dnsmessage.Question{{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}}
+	aaaaQuestion := []dnsmessage.Question{{Name: name, Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET}}
+	httpsQuestion := []dnsmessage.Question{{Name: name, Type: dnsmessage.TypeHTTPS, Class: dnsmessage.ClassINET}}
+
+	for _, tt := range []struct {
+		name     string
+		question []dnsmessage.Question
+		answers  []dnsmessage.Resource
+		want     []addrTTL // nil means "expect no resolved answers"
+	}{
+		{
+			name:     "https-question-returns-empty",
+			question: httpsQuestion,
+		},
+		{
+			name:     "single-direct-a",
+			question: aQuestion,
+			answers:  []dnsmessage.Resource{aResource(t, "example.com.", "1.2.3.4", 42)},
+			want:     []addrTTL{{a: netip.MustParseAddr("1.2.3.4"), ttl: 42}},
+		},
+		{
+			name:     "multiple-a-in-order",
+			question: aQuestion,
+			answers: []dnsmessage.Resource{
+				aResource(t, "example.com.", "1.2.3.4", 10),
+				aResource(t, "example.com.", "5.6.7.8", 20),
+			},
+			want: []addrTTL{
+				{a: netip.MustParseAddr("1.2.3.4"), ttl: 10},
+				{a: netip.MustParseAddr("5.6.7.8"), ttl: 20},
+			},
+		},
+		{
+			name:     "cname-chain-resolves",
+			question: aQuestion,
+			answers: []dnsmessage.Resource{
+				cnameResource(t, "example.com.", "a.example.com."),
+				cnameResource(t, "a.example.com.", "b.example.com."),
+				aResource(t, "b.example.com.", "1.2.3.4", 99),
+			},
+			want: []addrTTL{{a: netip.MustParseAddr("1.2.3.4"), ttl: 99}},
+		},
+		{
+			// a -> b -> a is a loop; the final A on an unreachable name is not
+			// in the chain from the queried domain and must be skipped (no hang).
+			name:     "cname-loop-skips-answer",
+			question: aQuestion,
+			answers: []dnsmessage.Resource{
+				cnameResource(t, "example.com.", "a.example.com."),
+				cnameResource(t, "a.example.com.", "b.example.com."),
+				cnameResource(t, "b.example.com.", "a.example.com."),
+				aResource(t, "unreachable.example.com.", "1.2.3.4", 1),
+			},
+		},
+		{
+			// An A answer to an AAAA question must be skipped.
+			name:     "type-mismatch-skipped",
+			question: aaaaQuestion,
+			answers:  []dnsmessage.Resource{aResource(t, "example.com.", "1.2.3.4", 1)},
+		},
+		{
+			// A mismatched answer is skipped, but a matching answer later in the
+			// section is still resolved.
+			name:     "type-mismatch-skipped-keeps-matching",
+			question: aQuestion,
+			answers: []dnsmessage.Resource{
+				{
+					Header: dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET},
+					Body:   &dnsmessage.AAAAResource{AAAA: netip.MustParseAddr("2606:4700::6812:1a78").As16()},
+				},
+				aResource(t, "example.com.", "5.6.7.8", 7),
+			},
+			want: []addrTTL{{a: netip.MustParseAddr("5.6.7.8"), ttl: 7}},
+		},
+		{
+			name:     "non-inet-class-answer-skipped",
+			question: aQuestion,
+			answers: []dnsmessage.Resource{
+				{
+					Header: dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassCHAOS},
+					Body:   &dnsmessage.AResource{A: netip.MustParseAddr("1.2.3.4").As4()},
+				},
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := makeDNSResponseForSections(t, tt.question, tt.answers, nil)
+			got, err := resolveAnswersFor(t, resp)
+			if err != nil {
+				t.Fatalf("resolveAnswers: %v", err)
+			}
+			if diff := cmp.Diff(tt.want, got, addrTTLOpts...); diff != "" {
+				t.Errorf("answers mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+
+	t.Run("aaaa-4in6-skipped", func(t *testing.T) {
+		before := metricDNSResponseSkippedAAAA4In6.Value()
+		resp := makeV6DNSResponse(t, "example.com.", []*dnsmessage.AAAAResource{
+			{AAAA: netip.MustParseAddr("::ffff:1.2.3.4").As16()},
+			{AAAA: netip.MustParseAddr("2606:4700::6812:1a78").As16()},
+		})
+		got, err := resolveAnswersFor(t, resp)
+		if err != nil {
+			t.Fatalf("resolveAnswers: %v", err)
+		}
+		want := []addrTTL{{a: netip.MustParseAddr("2606:4700::6812:1a78"), ttl: 0}}
+		if diff := cmp.Diff(want, got, addrTTLOpts...); diff != "" {
+			t.Errorf("answers mismatch (-want +got):\n%s", diff)
+		}
+		if got, want := metricDNSResponseSkippedAAAA4In6.Value()-before, int64(1); got != want {
+			t.Errorf("metricDNSResponseSkippedAAAA4In6 delta = %d, want %d", got, want)
+		}
+	})
+
+	t.Run("truncated-answer-errors", func(t *testing.T) {
+		resp := makeDNSResponseForSections(t, aQuestion, []dnsmessage.Resource{
+			aResource(t, "example.com.", "1.2.3.4", 1),
+		}, nil)
+		parser, ok := parseQuestion(resp.Bs[:len(resp.Bs)-1])
+		if !ok {
+			t.Fatalf("parseQuestion: ok=%v", ok)
+		}
+		if _, err := parser.resolveAnswers(); err == nil {
+			t.Error("resolveAnswers err = nil, want a parse error so the caller servfails")
+		}
+	})
+}
+
+func TestMakeServFail(t *testing.T) {
+	t.Run("echoes-question-and-sets-servfail", func(t *testing.T) {
+		question := dnsmessage.Question{
+			Name:  dnsmessage.MustNewName("example.com."),
+			Type:  dnsmessage.TypeA,
+			Class: dnsmessage.ClassINET,
+		}
+		p := &dnsResponseParser{
+			hdr:      dnsmessage.Header{ID: 1234},
+			question: question,
+		}
+		bs := p.makeServFail(logger.Discard)
+		if len(bs) == 0 {
+			t.Fatal("makeServFail returned no bytes")
+		}
+
+		var parser dnsmessage.Parser
+		hdr, err := parser.Start(bs)
+		if err != nil {
+			t.Fatalf("parsing servfail: %v", err)
+		}
+		if !hdr.Response {
+			t.Error("hdr.Response = false, want true")
+		}
+		if !hdr.Authoritative {
+			t.Error("hdr.Authoritative = false, want true")
+		}
+		if hdr.RCode != dnsmessage.RCodeServerFailure {
+			t.Errorf("RCode = %v, want %v", hdr.RCode, dnsmessage.RCodeServerFailure)
+		}
+		questions, err := parser.AllQuestions()
+		if err != nil {
+			t.Fatalf("reading questions: %v", err)
+		}
+		if len(questions) != 1 {
+			t.Fatalf("got %d questions, want 1", len(questions))
+		}
+		if got := questions[0]; got.Name.String() != question.Name.String() ||
+			got.Type != question.Type || got.Class != question.Class {
+			t.Errorf("question = %+v, want %+v", got, question)
+		}
+		answers, err := parser.AllAnswers()
+		if err != nil {
+			t.Fatalf("reading answers: %v", err)
+		}
+		if len(answers) != 0 {
+			t.Errorf("got %d answers, want 0", len(answers))
+		}
+	})
+
+	t.Run("unencodable-question-returns-empty", func(t *testing.T) {
+		var logged bool
+		logf := func(string, ...any) { logged = true }
+		p := &dnsResponseParser{}
+		bs := p.makeServFail(logf)
+		if len(bs) != 0 {
+			t.Errorf("got %d bytes, want 0", len(bs))
+		}
+		if !logged {
+			t.Error("expected an error to be logged")
+		}
+	})
+}
+
+func mintTokenLines(t *testing.T, c *Conn25, peerCap tailcfg.PeerCapMap, appParam string, raw []byte) []string {
+	t.Helper()
+	fph := fakePeerAPIHandler{peerCaps: peerCap}
+	requestURL := "http://peerapi:1234/dns-query"
+	if appParam != "" {
+		requestURL = fmt.Sprintf("%s?app=%s", requestURL, url.QueryEscape(appParam))
+	}
+	r := must.Get(http.NewRequest("POST", requestURL, nil))
+	pr := &ipnlocal.PeerAPIDNSResponse{Raw: raw, Header: http.Header{}}
+	c.mintTokensForDNSResponse(fph, r, pr)
+	return pr.Header.Values(TokenHeader)
+}
+
+func decodeTokenLine(t *testing.T, line string) (netip.Addr, []byte) {
+	t.Helper()
+	addrStr, tokenStr, ok := strings.Cut(line, " ")
+	if !ok {
+		t.Fatalf("malformed token line %q", line)
+	}
+	addr, err := netip.ParseAddr(addrStr)
+	if err != nil {
+		t.Fatalf("parsing address in token line %q: %v", line, err)
+	}
+	token, err := base64.StdEncoding.DecodeString(tokenStr)
+	if err != nil {
+		t.Fatalf("decoding token in line %q: %v", line, err)
+	}
+	return addr, token
+}
+
+// assertMintedFor checks that lines contains exactly one verifiable TokenHeader
+// per address in wantAddrs (order-independent), each binding to app.
+func assertMintedFor(t *testing.T, c *Conn25, app string, lines []string, wantAddrs ...netip.Addr) {
+	t.Helper()
+	if len(lines) != len(wantAddrs) {
+		t.Fatalf("got %d token lines, want %d: %v", len(lines), len(wantAddrs), lines)
+	}
+	got := map[netip.Addr]bool{}
+	for _, line := range lines {
+		addr, token := decodeTokenLine(t, line)
+		if !c.connector.verifyToken(token, app, addr) {
+			t.Errorf("verifyToken(token, %q, %v) = false, want true", app, addr)
+		}
+		got[addr] = true
+	}
+	for _, want := range wantAddrs {
+		if !got[want] {
+			t.Errorf("no token minted for %v", want)
+		}
+	}
+}
+
+func TestMintTokensForDNSResponse(t *testing.T) {
+	const app = "app1"
+	app1 := appctype.AppConnectorAttr{
+		Name:       app,
+		Connectors: []string{"tag:woo"},
+		Domains:    []string{"example.com", "*.example.com"},
+		Mode:       appctype.MagicIP,
+	}
+	appCap := tailcfg.PeerCapMap{
+		peercap.Conn25Prefix.ToAttribute(app): []tailcfg.RawMessage{`"*"`},
+	}
+	aQuestion := []dnsmessage.Question{{Name: dnsmessage.MustNewName("example.com."), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}}
+
+	newConfiguredConnector := func(t *testing.T) *Conn25 {
+		t.Helper()
+		c := newConn25(logger.Discard)
+		sn := makeSelfNode(t, []appctype.AppConnectorAttr{app1}, arbitraryPools, []string{"tag:woo"})
+		c.reconfig(mustConfig(t, sn))
+		c.prefsAdvertiseConnector.Store(true)
+		return c
+	}
+
+	v4 := netip.MustParseAddr("1.2.3.4")
+	v4b := netip.MustParseAddr("5.6.7.8")
+	v6 := netip.MustParseAddr("2606:4700::6812:1a78")
+
+	for _, tt := range []struct {
+		name      string
+		raw       []byte
+		wantAddrs []netip.Addr
+	}{
+		{
+			name:      "single-a",
+			raw:       makeDNSResponse(t, "example.com.", []*dnsmessage.AResource{{A: v4.As4()}}).Bs,
+			wantAddrs: []netip.Addr{v4},
+		},
+		{
+			name:      "multiple-a-one-token-each",
+			raw:       makeDNSResponse(t, "example.com.", []*dnsmessage.AResource{{A: v4.As4()}, {A: v4b.As4()}}).Bs,
+			wantAddrs: []netip.Addr{v4, v4b},
+		},
+		{
+			name:      "aaaa",
+			raw:       makeV6DNSResponse(t, "example.com.", []*dnsmessage.AAAAResource{{AAAA: v6.As16()}}).Bs,
+			wantAddrs: []netip.Addr{v6},
+		},
+		{
+			name: "cname-chain-mints-for-resolved-ip",
+			raw: makeDNSResponseForSections(t, aQuestion, []dnsmessage.Resource{
+				cnameResource(t, "example.com.", "a.example.com."),
+				aResource(t, "a.example.com.", v4.String(), 300),
+			}, nil).Bs,
+			wantAddrs: []netip.Addr{v4},
+		},
+		{
+			// The 4-in-6 answer is dropped; only the real v6 address gets a token.
+			name: "aaaa-4in6-skipped",
+			raw: makeV6DNSResponse(t, "example.com.", []*dnsmessage.AAAAResource{
+				{AAAA: netip.MustParseAddr("::ffff:1.2.3.4").As16()},
+				{AAAA: v6.As16()},
+			}).Bs,
+			wantAddrs: []netip.Addr{v6},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newConfiguredConnector(t)
+			lines := mintTokenLines(t, c, appCap, app, tt.raw)
+			assertMintedFor(t, c, app, lines, tt.wantAddrs...)
+		})
+	}
+
+	t.Run("token-binds-to-requested-app", func(t *testing.T) {
+		c := newConfiguredConnector(t)
+		raw := makeDNSResponse(t, "example.com.", []*dnsmessage.AResource{{A: v4.As4()}}).Bs
+		lines := mintTokenLines(t, c, appCap, app, raw)
+		if len(lines) != 1 {
+			t.Fatalf("got %d token lines, want 1: %v", len(lines), lines)
+		}
+		_, token := decodeTokenLine(t, lines[0])
+		if c.connector.verifyToken(token, "other-app", v4) {
+			t.Error("verifyToken with a different app = true, want false")
+		}
+	})
+
+	// Cases that must mint nothing. mutate, if set, is applied to the otherwise
+	// configured connector; peerCap and appParam default to the valid values.
+	validRaw := makeDNSResponse(t, "example.com.", []*dnsmessage.AResource{{A: v4.As4()}}).Bs
+	for _, tt := range []struct {
+		name     string
+		mutate   func(*Conn25)
+		peerCap  tailcfg.PeerCapMap
+		appParam string
+		raw      []byte
+	}{
+		{
+			name:     "source-not-allowed-when-not-connector",
+			mutate:   func(c *Conn25) { c.prefsAdvertiseConnector.Store(false) },
+			peerCap:  appCap,
+			appParam: app,
+			raw:      validRaw,
+		},
+		{
+			name:     "peer-lacks-app-capability",
+			peerCap:  tailcfg.PeerCapMap{},
+			appParam: app,
+			raw:      validRaw,
+		},
+		{
+			// Source is allowed (valid app + cap), but the queried domain is not
+			// one of the app's domains, so no token should be minted for it.
+			name:     "name-not-allowed",
+			peerCap:  appCap,
+			appParam: app,
+			raw:      makeDNSResponse(t, "notours.example.net.", []*dnsmessage.AResource{{A: v4.As4()}}).Bs,
+		},
+		{
+			// No app query param: handleHookReplyToDNSQueries rejects the source.
+			name:     "missing-app-param",
+			peerCap:  appCap,
+			appParam: "",
+			raw:      validRaw,
+		},
+		{
+			name:     "unparseable-response",
+			peerCap:  appCap,
+			appParam: app,
+			raw:      []byte{1, 2, 3, 4},
+		},
+		{
+			name:     "pass-through-question-type",
+			peerCap:  appCap,
+			appParam: app,
+			raw: makeDNSResponseForSections(t, []dnsmessage.Question{
+				{Name: dnsmessage.MustNewName("example.com."), Type: dnsmessage.TypeMX, Class: dnsmessage.ClassINET},
+			}, nil, nil).Bs,
+		},
+		{
+			// An A question with no answers resolves to nothing, so no tokens.
+			name:     "no-address-answers",
+			peerCap:  appCap,
+			appParam: app,
+			raw:      makeDNSResponseForSections(t, aQuestion, nil, nil).Bs,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newConfiguredConnector(t)
+			if tt.mutate != nil {
+				tt.mutate(c)
+			}
+			if lines := mintTokenLines(t, c, tt.peerCap, tt.appParam, tt.raw); len(lines) != 0 {
+				t.Errorf("got %d token lines, want 0: %v", len(lines), lines)
+			}
+		})
 	}
 }

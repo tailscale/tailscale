@@ -10,13 +10,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"net/url"
 	"reflect"
 	"testing"
 
 	"tailscale.com/tstest"
-	"tailscale.com/tstest/nettest"
 )
 
 func BenchmarkHandleBootstrapDNS(b *testing.B) {
@@ -79,110 +77,41 @@ func getBootstrapDNS(t *testing.T, q string) map[string][]net.IP {
 	return m
 }
 
-func TestUnpublishedDNS(t *testing.T) {
-	nettest.SkipIfNoNetwork(t)
-
-	const published = "login.tailscale.com"
-	const unpublished = "log.tailscale.com"
-
-	prev1, prev2 := *bootstrapDNS, *unpublishedDNS
-	*bootstrapDNS = published
-	*unpublishedDNS = unpublished
-	t.Cleanup(func() {
-		*bootstrapDNS = prev1
-		*unpublishedDNS = prev2
-	})
-
-	refreshBootstrapDNS()
-	refreshUnpublishedDNS()
-
-	hasResponse := func(q string) bool {
-		_, found := getBootstrapDNS(t, q)[q]
-		return found
-	}
-
-	if !hasResponse(published) {
-		t.Errorf("expected response for: %s", published)
-	}
-	if !hasResponse(unpublished) {
-		t.Errorf("expected response for: %s", unpublished)
-	}
-
-	// Verify that querying for a random query or a real query does not
-	// leak our unpublished domain
-	m1 := getBootstrapDNS(t, published)
-	if _, found := m1[unpublished]; found {
-		t.Errorf("found unpublished domain %s: %+v", unpublished, m1)
-	}
-	m2 := getBootstrapDNS(t, "random.example.com")
-	if _, found := m2[unpublished]; found {
-		t.Errorf("found unpublished domain %s: %+v", unpublished, m2)
-	}
-}
-
 func resetMetrics(tb testing.TB) {
 	tstest.AssertNotParallel(tb)
 	publishedDNSHits.Set(0)
 	publishedDNSMisses.Set(0)
-	unpublishedDNSHits.Set(0)
-	unpublishedDNSMisses.Set(0)
+	unknownDNSNames.Set(0)
 	bootstrapLookupMap.Clear()
 }
 
-// Verify that we don't count an empty list in the unpublishedDNSCache as a
-// cache hit in our metrics.
-func TestUnpublishedDNSEmptyList(t *testing.T) {
+func TestBootstrapDNSMetrics(t *testing.T) {
 	pub := &dnsEntryMap{
-		IPs: map[string][]net.IP{"tailscale.com": {net.IPv4(10, 10, 10, 10)}},
+		IPs: map[string][]net.IP{"controlplane.tailscale.com": {net.IPv4(1, 2, 3, 4)}},
 	}
 	setDNSCache(t, pub)
 
-	unpublishedDNSCache.Store(&dnsEntryMap{
-		IPs: map[string][]net.IP{
-			"log.tailscale.com":          {},
-			"controlplane.tailscale.com": {net.IPv4(1, 2, 3, 4)},
-		},
-		Percent: map[string]float64{
-			"log.tailscale.com":          1.0,
-			"controlplane.tailscale.com": 1.0,
-		},
-	})
-
-	t.Run("CacheMiss", func(t *testing.T) {
-		// One domain in map but empty, one not in map at all
-		for _, q := range []string{"log.tailscale.com", "login.tailscale.com"} {
-			resetMetrics(t)
-			ips := getBootstrapDNS(t, q)
-
-			// Expected our public map to be returned on a cache miss
-			if !reflect.DeepEqual(ips, pub.IPs) {
-				t.Errorf("got ips=%+v; want %+v", ips, pub.IPs)
-			}
-			if v := unpublishedDNSHits.Value(); v != 0 {
-				t.Errorf("got hits=%d; want 0", v)
-			}
-			if v := unpublishedDNSMisses.Value(); v != 1 {
-				t.Errorf("got misses=%d; want 1", v)
-			}
-		}
-	})
-
-	// Verify that we do get a valid response and metric.
-	t.Run("CacheHit", func(t *testing.T) {
+	for _, tt := range []struct {
+		q                  string
+		hits, misses, unkn int64
+	}{
+		{"controlplane.tailscale.com", 1, 0, 0},
+		{"headscale.example.com", 0, 0, 1},
+	} {
 		resetMetrics(t)
-		ips := getBootstrapDNS(t, "controlplane.tailscale.com")
-		want := map[string][]net.IP{"controlplane.tailscale.com": {net.IPv4(1, 2, 3, 4)}}
-		if !reflect.DeepEqual(ips, want) {
-			t.Errorf("got ips=%+v; want %+v", ips, want)
+		if ips := getBootstrapDNS(t, tt.q); !reflect.DeepEqual(ips, pub.IPs) {
+			t.Errorf("q=%q: got ips=%+v; want %+v", tt.q, ips, pub.IPs)
 		}
-		if v := unpublishedDNSHits.Value(); v != 1 {
-			t.Errorf("got hits=%d; want 1", v)
+		if got := publishedDNSHits.Value(); got != tt.hits {
+			t.Errorf("q=%q: published hits = %d; want %d", tt.q, got, tt.hits)
 		}
-		if v := unpublishedDNSMisses.Value(); v != 0 {
-			t.Errorf("got misses=%d; want 0", v)
+		if got := publishedDNSMisses.Value(); got != tt.misses {
+			t.Errorf("q=%q: published misses = %d; want %d", tt.q, got, tt.misses)
 		}
-	})
-
+		if got := unknownDNSNames.Value(); got != tt.unkn {
+			t.Errorf("q=%q: unknown names = %d; want %d", tt.q, got, tt.unkn)
+		}
+	}
 }
 
 func TestLookupMetric(t *testing.T) {
@@ -199,53 +128,21 @@ func TestLookupMetric(t *testing.T) {
 	}
 }
 
-func TestRemoteAddrMatchesPercent(t *testing.T) {
-	tests := []struct {
-		remoteAddr string
-		percent    float64
-		want       bool
+func TestValidateBootstrapDNSNames(t *testing.T) {
+	for _, tt := range []struct {
+		flag    string
+		wantErr bool
 	}{
-		// 0% and 100%.
-		{"10.0.0.1:1234", 0.0, false},
-		{"10.0.0.1:1234", 1.0, true},
-
-		// Invalid IP.
-		{"", 1.0, true},
-		{"", 0.0, false},
-		{"", 0.5, false},
-
-		// Small manual sample at 50%. The func uses a deterministic PRNG seed.
-		{"1.2.3.4:567", 0.5, true},
-		{"1.2.3.5:567", 0.5, true},
-		{"1.2.3.6:567", 0.5, false},
-		{"1.2.3.7:567", 0.5, true},
-		{"1.2.3.8:567", 0.5, false},
-		{"1.2.3.9:567", 0.5, true},
-		{"1.2.3.10:567", 0.5, true},
-	}
-	for _, tt := range tests {
-		got := remoteAddrMatchesPercent(tt.remoteAddr, tt.percent)
-		if got != tt.want {
-			t.Errorf("remoteAddrMatchesPercent(%q, %v) = %v; want %v", tt.remoteAddr, tt.percent, got, tt.want)
+		{"", false},
+		{"log.tailscale.io,log.tailscale.com,login.tailscale.com,controlplane.tailscale.com,login.us.tailscale.com", false},
+		{"controlplane.tailscale.com,headscale.example.com", true},
+		{"log.tailscale.com/log-percent.tailscale.com", true},
+		{"controlplane.tailscale.com,", true},
+	} {
+		tstest.Replace(t, bootstrapDNS, tt.flag)
+		err := validateBootstrapDNSNames()
+		if (err != nil) != tt.wantErr {
+			t.Errorf("validateBootstrapDNSNames with %q = %v; want error: %v", tt.flag, err, tt.wantErr)
 		}
-	}
-
-	var match, all int
-	const wantPercent = 0.5
-	for a := range 256 {
-		for b := range 256 {
-			all++
-			if remoteAddrMatchesPercent(
-				netip.AddrPortFrom(netip.AddrFrom4([4]byte{1, 2, byte(a), byte(b)}), 12345).String(),
-				wantPercent) {
-				match++
-			}
-		}
-	}
-	gotPercent := float64(match) / float64(all)
-	const tolerance = 0.005
-	t.Logf("got percent %v (goal %v)", gotPercent, wantPercent)
-	if gotPercent < wantPercent-tolerance || gotPercent > wantPercent+tolerance {
-		t.Errorf("got %v; want %v ± %v", gotPercent, wantPercent, tolerance)
 	}
 }

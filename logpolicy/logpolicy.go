@@ -40,6 +40,7 @@ import (
 	"tailscale.com/logtail/filch"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
+	"tailscale.com/net/dnsfallback/fallbacknames"
 	"tailscale.com/net/netknob"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
@@ -862,12 +863,17 @@ func dialContext(ctx context.Context, netw, addr string, dial, cachedDial netx.D
 	}
 
 	// Either regular DNS (via logDNSCache) failed or the IPs it gave us
-	// didn't work, so try again with IPs from bootstrap DNS.
-	logf("logtail: dial %q failed: %v (in %v), trying bootstrap...", addr, err, d)
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
+	// didn't work, so try again with IPs from bootstrap DNS, but only for
+	// Tailscale's own log servers. See
+	// https://github.com/tailscale/tailscale/issues/21028.
+	host, _, splitErr := net.SplitHostPort(addr)
+	if splitErr != nil {
+		return nil, splitErr
+	}
+	if !fallbacknames.IsTailscaleHost(host) {
 		return nil, err
 	}
+	logf("logtail: dial %q failed: %v (in %v), trying bootstrap...", addr, err, d)
 	ips, err := dnsfallback.MakeLookupFunc(logf, netMon)(ctx, host)
 	if err != nil {
 		return nil, err

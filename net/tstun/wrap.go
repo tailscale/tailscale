@@ -157,7 +157,8 @@ type Wrapper struct {
 	PreFilterPacketInboundFromWireGuard FilterFunc
 	// PostFilterPacketInboundFromWireGuardAppConnector runs after the filter, but before PostFilterPacketInboundFromWireGuard.
 	// Non-app connector traffic is passed along. Invalid app connector traffic is dropped.
-	PostFilterPacketInboundFromWireGuardAppConnector FilterFunc
+	// It may be set while the Wrapper is running.
+	PostFilterPacketInboundFromWireGuardAppConnector syncs.AtomicValue[FilterFunc]
 	// PostFilterPacketInboundFromWireGuard is the inbound filter function that runs after the main filter.
 	PostFilterPacketInboundFromWireGuard GROFilterFunc
 	// PreFilterPacketOutboundToWireGuardNetstackIntercept is a filter function that runs before the main filter
@@ -172,8 +173,8 @@ type Wrapper struct {
 	PreFilterPacketOutboundToWireGuardEngineIntercept FilterFunc
 	// PreFilterPacketOutboundToWireGuardAppConnectorIntercept runs after PreFilterPacketOutboundToWireGuardEngineIntercept
 	// for app connector specific traffic. Non-app connector traffic is passed along. Invalid app connector traffic is
-	// dropped.
-	PreFilterPacketOutboundToWireGuardAppConnectorIntercept FilterFunc
+	// dropped. It may be set while the Wrapper is running.
+	PreFilterPacketOutboundToWireGuardAppConnectorIntercept syncs.AtomicValue[FilterFunc]
 	// PostFilterPacketOutboundToWireGuard is the outbound filter function that runs after the main filter.
 	PostFilterPacketOutboundToWireGuard FilterFunc
 
@@ -187,8 +188,9 @@ type Wrapper struct {
 
 	// OnUnmappedTransitIPMessage, if non-nil, is called when a TSMP message is
 	// received indicating that a packet was rejected by a connector due to a
-	// missing transit IP->real IP mapping.
-	OnUnmappedTransitIPMessage func(packet.TailscaleRejectedHeader)
+	// missing transit IP->real IP mapping. It may be set while the Wrapper
+	// is running.
+	OnUnmappedTransitIPMessage syncs.AtomicValue[func(packet.TailscaleRejectedHeader)]
 
 	// PeerAPIPort, if non-nil, returns the peerapi port that's
 	// running for the given IP address.
@@ -794,8 +796,8 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 			return res, gro
 		}
 	}
-	if t.PreFilterPacketOutboundToWireGuardAppConnectorIntercept != nil {
-		if res := t.PreFilterPacketOutboundToWireGuardAppConnectorIntercept(p, t); res.IsDrop() {
+	if f := t.PreFilterPacketOutboundToWireGuardAppConnectorIntercept.Load(); f != nil {
+		if res := f(p, t); res.IsDrop() {
 			// Handled by userspaceEngine's configured hook for Connectors 2025 app connectors.
 			return res, gro
 		}
@@ -1108,8 +1110,8 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, slab []byte, packets []tun.R
 	//
 	// Cross-tailnet conn25 app connector connections are not supported,
 	// so at most one of this hook and the following pc.snat should modify the packet.
-	if t.PreFilterPacketOutboundToWireGuardAppConnectorIntercept != nil {
-		if r := t.PreFilterPacketOutboundToWireGuardAppConnectorIntercept(p, t); r.IsDrop() {
+	if f := t.PreFilterPacketOutboundToWireGuardAppConnectorIntercept.Load(); f != nil {
+		if r := f(p, t); r.IsDrop() {
 			metricPacketOut.Add(1)
 			metricPacketOutDrop.Add(1)
 			return 0, nil
@@ -1168,7 +1170,7 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook pa
 			}
 		} else if data, ok := p.AsTailscaleRejectedHeader(); ok {
 			if data.Reason == packet.RejectedDueToUnknownAppConnectorTransitIP {
-				if f := t.OnUnmappedTransitIPMessage; f != nil {
+				if f := t.OnUnmappedTransitIPMessage.Load(); f != nil {
 					f(data)
 				}
 			}
@@ -1254,8 +1256,8 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook pa
 		return filter.Drop, gro
 	}
 
-	if t.PostFilterPacketInboundFromWireGuardAppConnector != nil {
-		if res := t.PostFilterPacketInboundFromWireGuardAppConnector(p, t); res.IsDrop() {
+	if f := t.PostFilterPacketInboundFromWireGuardAppConnector.Load(); f != nil {
+		if res := f(p, t); res.IsDrop() {
 			// Handled by userspaceEngine's configured hook for Connectors 2025 app connectors.
 			return res, gro
 		}
@@ -1605,6 +1607,8 @@ func (t *Wrapper) SetConnectionCounter(fn netlogfunc.ConnectionCounter) {
 }
 
 var (
+	metricQueues = clientmetric.NewGauge("tstun_queues")
+
 	metricPacketIn              = clientmetric.NewCounter("tstun_in_from_wg")
 	metricPacketInDrop          = clientmetric.NewCounter("tstun_in_from_wg_drop")
 	metricPacketInDropFilter    = clientmetric.NewCounter("tstun_in_from_wg_drop_filter")

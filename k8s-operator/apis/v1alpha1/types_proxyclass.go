@@ -133,8 +133,8 @@ func (prs PortRanges) All() iter.Seq[uint16] {
 				end = pr.Port
 			}
 
-			for port := pr.Port; port <= end; port++ {
-				if !yield(port) {
+			for port := int(pr.Port); port <= int(end); port++ {
+				if !yield(uint16(port)) {
 					return
 				}
 			}

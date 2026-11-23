@@ -3963,6 +3963,13 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 	// from the perspective of ruc receive functions.
 	ruc.mu.Lock()
 	defer ruc.mu.Unlock()
+	defer func() {
+		m := metricUDPSocketsIPv4
+		if network == "udp6" {
+			m = metricUDPSocketsIPv6
+		}
+		m.Set(int64(ruc.group.bound))
+	}()
 
 	if c.closing.Load() {
 		return net.ErrClosed
@@ -4448,6 +4455,9 @@ type discoInfo struct {
 var (
 	metricNumPeers     = clientmetric.NewGauge("magicsock_netmap_num_peers")
 	metricNumDERPConns = clientmetric.NewGauge("magicsock_num_derp_conns")
+
+	metricUDPSocketsIPv4 = clientmetric.NewGauge("magicsock_udp_sockets_ipv4")
+	metricUDPSocketsIPv6 = clientmetric.NewGauge("magicsock_udp_sockets_ipv6")
 
 	metricRebindCalls     = clientmetric.NewCounter("magicsock_rebind_calls")
 	metricReSTUNCalls     = clientmetric.NewCounter("magicsock_restun_calls")

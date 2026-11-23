@@ -179,7 +179,7 @@ type transitIPExpiryEntry struct {
 func (c *connector) realIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.lookupAddrBySrcIPAndTransitIP(srcIP, transitIP)
+	return c.lookupAddrBySrcIPAndTransitIPLocked(srcIP, transitIP)
 }
 
 // transitIPInPool reports whether tip is within the transit IP pool of its
@@ -245,7 +245,7 @@ func (c *connector) ingressAllow(p packet.Parsed) (bool, string) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	aa, ok := c.lookupAppAddrBySrcIPAndTransitIP(p.Src.Addr(), p.Dst.Addr())
+	aa, ok := c.lookupAppAddrBySrcIPAndTransitIPLocked(p.Src.Addr(), p.Dst.Addr())
 	if !ok {
 		return true, packetFilterAllowReason
 	}
@@ -255,15 +255,21 @@ func (c *connector) ingressAllow(p packet.Parsed) (bool, string) {
 	return true, packetFilterAllowReason
 }
 
-func (c *connector) lookupAddrBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (netip.Addr, bool) {
-	v, ok := c.lookupAppAddrBySrcIPAndTransitIP(srcIP, transitIP)
+// lookupAddrBySrcIPAndTransitIPLocked returns the real destination IP that the
+// peer at srcIP registered for transitIP, or (zero, false) if it registered
+// none. c.mu must be held.
+func (c *connector) lookupAddrBySrcIPAndTransitIPLocked(srcIP, transitIP netip.Addr) (netip.Addr, bool) {
+	v, ok := c.lookupAppAddrBySrcIPAndTransitIPLocked(srcIP, transitIP)
 	if !ok {
 		return netip.Addr{}, false
 	}
 	return v.addr, true
 }
 
-func (c *connector) lookupAppAddrBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (appAddr, bool) {
+// lookupAppAddrBySrcIPAndTransitIPLocked returns the whole mapping the peer at
+// srcIP registered for transitIP, or (zero, false) if it registered none.
+// c.mu must be held.
+func (c *connector) lookupAppAddrBySrcIPAndTransitIPLocked(srcIP, transitIP netip.Addr) (appAddr, bool) {
 	m, ok := c.transitIPs[srcIP]
 	if !ok || m == nil {
 		return appAddr{}, false

@@ -7,6 +7,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"os/exec"
 	"runtime"
 	"testing"
 	"time"
@@ -52,6 +54,27 @@ func TestOneConnListener(t *testing.T) {
 	ln = NewOneConnListener(c1, nil)
 	if ln.Addr() == nil {
 		t.Errorf("nil Addr")
+	}
+}
+
+// TestNewDefaultTransportNoHTTP2 is a regression test for
+// tailscale/tailscale#22578. http.DefaultTransport only gets a TLSClientConfig
+// from its one-time HTTP/2 setup, so it runs the GODEBUG=http2client=0 case
+// in a child process.
+func TestNewDefaultTransportNoHTTP2(t *testing.T) {
+	if os.Getenv("TS_TEST_NETUTIL_CHILD") == "1" {
+		if NewDefaultTransport().TLSClientConfig == nil {
+			t.Fatal("TLSClientConfig = nil; want non-nil")
+		}
+		return
+	}
+	if NewDefaultTransport().TLSClientConfig == nil {
+		t.Error("TLSClientConfig = nil; want non-nil")
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestNewDefaultTransportNoHTTP2$")
+	cmd.Env = append(os.Environ(), "TS_TEST_NETUTIL_CHILD=1", "GODEBUG=http2client=0")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("with GODEBUG=http2client=0: %v\n%s", err, out)
 	}
 }
 
@@ -102,6 +125,9 @@ func TestNewDefaultTransport(t *testing.T) {
 	}
 	if tr.DialContext == nil {
 		t.Error("fallback DialContext = nil; want non-nil")
+	}
+	if tr.TLSClientConfig == nil {
+		t.Error("fallback TLSClientConfig = nil; want non-nil")
 	}
 	if tr.Proxy == nil {
 		t.Error("fallback Proxy = nil; want non-nil")

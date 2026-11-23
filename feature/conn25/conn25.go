@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"container/list"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -91,6 +92,7 @@ func init() {
 	ipnlocal.HookReplyToDNSQueries.Add(handleHookReplyToDNSQueries)
 	localapi.Register("conn25/state", serveLocalAPIStateGet)
 	ipnlocal.RegisterC2N("GET /conn25/state", serveC2NStateGet)
+	ipnlocal.HookPeerAPIDNSResponse.Add(handleHookPeerAPIDNSResponse)
 }
 
 func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
@@ -204,24 +206,24 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 
 	// Intercept packets from the tun device and from WireGuard
 	// to perform DNAT and SNAT.
-	tun.PreFilterPacketOutboundToWireGuardAppConnectorIntercept = func(p *packet.Parsed, tun *tstun.Wrapper) filter.Response {
+	tun.PreFilterPacketOutboundToWireGuardAppConnectorIntercept.Store(func(p *packet.Parsed, tun *tstun.Wrapper) filter.Response {
 		if !e.conn25.isConfigured() {
 			return filter.Accept
 		}
 		return dph.HandlePacketFromTunDevice(p, tun)
-	}
-	tun.PostFilterPacketInboundFromWireGuardAppConnector = func(p *packet.Parsed, tun *tstun.Wrapper) filter.Response {
+	})
+	tun.PostFilterPacketInboundFromWireGuardAppConnector.Store(func(p *packet.Parsed, tun *tstun.Wrapper) filter.Response {
 		if !e.conn25.isConfigured() {
 			return filter.Accept
 		}
 		return dph.HandlePacketFromWireGuard(p, tun)
-	}
-	tun.OnUnmappedTransitIPMessage = func(pkt packet.TailscaleRejectedHeader) {
+	})
+	tun.OnUnmappedTransitIPMessage.Store(func(pkt packet.TailscaleRejectedHeader) {
 		if !e.conn25.isConfigured() {
 			return
 		}
 		e.conn25.client.resendTransitIPMapping(pkt.Dst.Addr())
-	}
+	})
 
 	// The profile state change hook needs to clear all active flows on a
 	// major change (eg. switching tailnets), so make that hook accessible
@@ -1016,7 +1018,8 @@ type dnsResponseRewrite struct {
 	token         string
 }
 
-func makeServFail(logf logger.Logf, h dnsmessage.Header, q dnsmessage.Question) []byte {
+func (p *dnsResponseParser) makeServFail(logf logger.Logf) []byte {
+	h := p.hdr
 	h.Response = true
 	h.Authoritative = true
 	h.RCode = dnsmessage.RCodeServerFailure
@@ -1026,7 +1029,7 @@ func makeServFail(logf logger.Logf, h dnsmessage.Header, q dnsmessage.Question) 
 		logf("error making servfail: %v", err)
 		return []byte{}
 	}
-	err = b.Question(q)
+	err = b.Question(p.question)
 	if err != nil {
 		logf("error making servfail: %v", err)
 		return []byte{}
@@ -1046,12 +1049,6 @@ var (
 	// on an error rewriting response for an app connector domain.
 	metricDNSResponseRewriteErrorServfail = clientmetric.NewCounter(
 		"conn25_map_dns_response_rewrite_error_servfail",
-	)
-
-	// metricDNSResponseRewriteUnsupportedQuestionTypeErrorServfail increments servfail returns
-	// on an error rewriting empty answers to an unsupported question type for an app connector domain.
-	metricDNSResponseRewriteUnsupportedQuestionTypeErrorServfail = clientmetric.NewCounter(
-		"conn25_map_dns_response_rewrite_unsupported_question_type_error_servfail",
 	)
 
 	// metricDNSResponseSkippedAAAA4In6 increments when an AAAA answer for an
@@ -1085,117 +1082,109 @@ type connectorAddr struct {
 	token string
 }
 
-// mapDNSResponse parses and inspects the DNS response. If the domain
-// is determined to belong to app this node is client for, it assigns addresses
-// for connecting and rewrites the response to contain Magic IPs.
-func (e *extension) mapDNSResponse(res *resolver.Response) []byte {
-	c := e.conn25
-	buf := res.Bs
-	// If there's no DoH metadata, we know this response didn't come
-	// from a connector's PeerAPI DoH.
-	if res.DoHMeta == nil {
-		return buf
-	}
-
-	var p dnsmessage.Parser
-	hdr, err := p.Start(buf)
-	if err != nil {
-		return buf
-	}
-	questions, err := p.AllQuestions()
-	if err != nil {
-		return buf
-	}
+func validateAndGetQuestion(questions []dnsmessage.Question) (dnsmessage.Question, bool) {
 	// Any message we are interested in has one question (RFC 9619)
 	if len(questions) != 1 {
-		return buf
+		return dnsmessage.Question{}, false
 	}
 	question := questions[0]
 	// The other Class types are not commonly used and supporting them hasn't been considered.
 	if question.Class != dnsmessage.ClassINET {
-		return buf
+		return dnsmessage.Question{}, false
 	}
+	// Write through record types we are sure are unrelated to conn25, as we try our best not to break
+	// user's application. If this causes problems in the future, it could be reasonable to not write through anything.
+	if passThroughQuestionTypes.Contains(question.Type) {
+		return dnsmessage.Question{}, false
+	}
+	return question, true
+}
+
+// dnsResponseParser uses a dnsmessage.Parser to process a DNS response.
+// conn25 observes the DoH DNS responses on this client and dnsResponseParser
+// checks whether the response is something conn25 is interested in (valid,
+// for a domain we're configured for) and then can follow the cname chain and
+// resolve a map of domain -> address in a conn25 canonical way.
+type dnsResponseParser struct {
+	p             *dnsmessage.Parser
+	queriedDomain dnsname.FQDN
+	hdr           dnsmessage.Header
+	question      dnsmessage.Question
+}
+
+func parseQuestion(buf []byte) (*dnsResponseParser, bool) {
+	parseResult := &dnsResponseParser{}
+	var p dnsmessage.Parser
+	hdr, err := p.Start(buf)
+	if err != nil {
+		return nil, false
+	}
+	parseResult.hdr = hdr
+	parseResult.p = &p
+
+	questions, err := p.AllQuestions()
+	if err != nil {
+		return nil, false
+	}
+	question, ok := validateAndGetQuestion(questions)
+	if !ok {
+		return nil, false
+	}
+	parseResult.question = question
+
 	queriedDomain, err := normalizeDNSName(question.Name.String())
 	if err != nil {
-		return buf
+		return nil, false
 	}
-
-	cfg, ok := c.getConfig()
-	if !ok {
-		return buf
+	if queriedDomain == "" {
+		return nil, false
 	}
+	parseResult.queriedDomain = queriedDomain
+	return parseResult, true
+}
 
-	appNames := cfg.getAppsForConnectorDomain(queriedDomain, c.prefsAdvertiseConnector.Load())
+func matchToApp(queriedDomain dnsname.FQDN, cfg *config, prefsAdvertiseConnector bool) (string, bool) {
+	if queriedDomain == "" {
+		return "", false
+	}
+	appNames := cfg.getAppsForConnectorDomain(queriedDomain, prefsAdvertiseConnector)
 	if len(appNames) == 0 {
-		return buf
+		// There's no apps covering this domain.
+		return "", false
 	}
-
-	connectorNode, err := e.extractConnectorFromRequestURL(res.DoHMeta.RequestURL)
-	if err != nil {
-		c.logf("could not identify the connector that answered a DNS query: %v", err)
-		return buf
-	}
-
 	// There is guaranteed to be at least one matching app, so just take the first one for now
 	// TODO(tailscale/corp#50408): We have access to res.DoHMeta.RequestURL, so we can easily see the requested
 	// app name. So we can make sure we have that configured, bail if not, and use that instead
 	// of just taking the first one. We can also verify the connector node advertises the app in its
 	// CapMap.
 	appName := appNames[0]
+	return appName, true
+}
 
-	// Write through record types we are sure are unrelated to conn25, as we try our best not to break
-	// user's application. If this causes problems in the future, it could be reasonable to not write through anything.
-	if passThroughQuestionTypes.Contains(question.Type) {
-		return buf
+type addrTTL struct {
+	a   netip.Addr
+	ttl uint32
+}
+
+func (p *dnsResponseParser) resolveAnswers() ([]addrTTL, error) {
+	resolvedAnswers := []addrTTL{}
+	if p.question.Type != dnsmessage.TypeA && p.question.Type != dnsmessage.TypeAAAA {
+		return resolvedAnswers, nil
 	}
-
-	// Now we know this is a dns response we think we should rewrite, we're going to provide our response which
-	// currently means we will:
-	//  * Write the questions through as they are
-	//  * Not send through the additional section
-	//  * Provide our answers, or no answers if we don't handle those answers
-	//  * We handle A, AAAA and HTTPS type questions
-	//  * We drop all others
-
-	// Question Type HTTPS
-	if question.Type == dnsmessage.TypeHTTPS {
-		newBuf, err := rewriteHTTPSResponse(hdr, questions, &p)
-		if err != nil {
-			metricDNSResponseRewriteErrorServfail.Add(1)
-			c.logf("error rewriting HTTPS dns response: %v", err)
-			return makeServFail(c.logf, hdr, question)
-		}
-		return newBuf
-	}
-
-	// Other Question Types dropped
-	if question.Type != dnsmessage.TypeA && question.Type != dnsmessage.TypeAAAA {
-		newBuf, err := c.client.rewriteDNSResponse(appName, hdr, questions, []dnsResponseRewrite{})
-		if err != nil {
-			metricDNSResponseRewriteUnsupportedQuestionTypeErrorServfail.Add(1)
-			c.logf("error writing empty response for unsupported type: %v", err)
-			return makeServFail(c.logf, hdr, question)
-		}
-		return newBuf
-	}
-
-	tokens := tokensFromHeader(res.DoHMeta.ResponseHeader)
-
 	// Question Type A/AAAA
-	var answers []dnsResponseRewrite
 	var cnameChain map[dnsname.FQDN]dnsname.FQDN
 	for {
-		h, err := p.AnswerHeader()
+		h, err := p.p.AnswerHeader()
 		if err == dnsmessage.ErrSectionDone {
 			break
 		}
 		if err != nil {
-			return makeServFail(c.logf, hdr, question)
+			return nil, err
 		}
 		// other classes are unsupported, and we checked the question was for ClassINET already
 		if h.Class != dnsmessage.ClassINET {
-			if err := p.SkipAnswer(); err != nil {
-				return makeServFail(c.logf, hdr, question)
+			if err := p.p.SkipAnswer(); err != nil {
+				return nil, err
 			}
 			continue
 		}
@@ -1211,38 +1200,38 @@ func (e *extension) mapDNSResponse(res *resolver.Response) []byte {
 			// cname chain so we can rewrite the final A/AAAA record to eg:
 			//
 			// a.example.com A (some magic IP that is associated with 1.1.1.1)
-			r, err := p.CNAMEResource()
+			r, err := p.p.CNAMEResource()
 			if err != nil {
-				return makeServFail(c.logf, hdr, question)
+				return nil, err
 			}
 			src, err := normalizeDNSName(h.Name.String())
 			if err != nil {
-				return makeServFail(c.logf, hdr, question)
+				return nil, err
 			}
 			target, err := normalizeDNSName(r.CNAME.String())
 			if err != nil {
-				return makeServFail(c.logf, hdr, question)
+				return nil, err
 			}
 			mak.Set(&cnameChain, src, target)
 		case dnsmessage.TypeA, dnsmessage.TypeAAAA:
-			if h.Type != question.Type {
+			if h.Type != p.question.Type {
 				// would not expect a v4 response to a v6 question or vice versa, don't add a rewrite for this.
-				if err := p.SkipAnswer(); err != nil {
-					return makeServFail(c.logf, hdr, question)
+				if err := p.p.SkipAnswer(); err != nil {
+					return nil, err
 				}
 				continue
 			}
 			answerDomain, err := normalizeDNSName(h.Name.String())
 			if err != nil {
-				return makeServFail(c.logf, hdr, question)
+				return nil, err
 			}
 			// If answerDomain is not the same domain as the domain that was queried for,
 			// try to walk down the cname chain from the queried domain until we find the answerDomain.
 			// If we can't, skip the answer.
 			// If we can, then we will rewrite the dns response to an A/AAAA record pointing
 			// the queriedDomain to the magic IP.
-			if answerDomain != queriedDomain {
-				d := queriedDomain
+			if answerDomain != p.queriedDomain {
+				d := p.queriedDomain
 				found := false
 				seen := set.Set[dnsname.FQDN]{} // avoid following cname record loops
 				for {
@@ -1258,23 +1247,23 @@ func (e *extension) mapDNSResponse(res *resolver.Response) []byte {
 					d = target
 				}
 				if !found {
-					if err := p.SkipAnswer(); err != nil {
-						return makeServFail(c.logf, hdr, question)
+					if err := p.p.SkipAnswer(); err != nil {
+						return nil, err
 					}
 					continue
 				}
 			}
 			var dstAddr netip.Addr
 			if h.Type == dnsmessage.TypeA {
-				r, err := p.AResource()
+				r, err := p.p.AResource()
 				if err != nil {
-					return makeServFail(c.logf, hdr, question)
+					return nil, err
 				}
 				dstAddr = netip.AddrFrom4(r.A)
 			} else {
-				r, err := p.AAAAResource()
+				r, err := p.p.AAAAResource()
 				if err != nil {
-					return makeServFail(c.logf, hdr, question)
+					return nil, err
 				}
 				dstAddr = netip.AddrFrom16(r.AAAA)
 
@@ -1284,32 +1273,93 @@ func (e *extension) mapDNSResponse(res *resolver.Response) []byte {
 					continue
 				}
 			}
+			resolvedAnswers = append(resolvedAnswers, addrTTL{a: dstAddr, ttl: h.TTL})
+		default:
+			// we already checked the question was for a supported type, this answer is unexpected
+			if err := p.p.SkipAnswer(); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return resolvedAnswers, nil
+}
 
+// mapDNSResponse parses and inspects the DNS response. If the domain
+// is determined to belong to app this node is client for, it assigns addresses
+// for connecting and rewrites the response to contain Magic IPs.
+func (e *extension) mapDNSResponse(res *resolver.Response) []byte {
+	c := e.conn25
+	buf := res.Bs
+	// If there's no DoH metadata, we know this response didn't come
+	// from a connector's PeerAPI DoH.
+	if res.DoHMeta == nil {
+		return buf
+	}
+	cfg, ok := c.getConfig()
+	if !ok {
+		return buf
+	}
+	prefsAdvertiseConnector := c.prefsAdvertiseConnector.Load()
+
+	parser, ok := parseQuestion(buf)
+	if !ok {
+		return buf
+	}
+
+	appName, ok := matchToApp(parser.queriedDomain, cfg, prefsAdvertiseConnector)
+	if !ok {
+		return buf
+	}
+
+	// We've determined this is a conn25 concern. From now on if we can't rewrite
+	// the response we servfail.
+
+	if parser.question.Type == dnsmessage.TypeHTTPS {
+		newBuf, err := rewriteHTTPSResponse(parser.hdr, parser.question, parser.p)
+		if err != nil {
+			metricDNSResponseRewriteErrorServfail.Add(1)
+			c.logf("error rewriting HTTPS dns response: %v", err)
+			return parser.makeServFail(c.logf)
+		}
+		return newBuf
+	}
+
+	resolvedAnswers, err := parser.resolveAnswers()
+	if err != nil {
+		return parser.makeServFail(c.logf)
+	}
+
+	var answers []dnsResponseRewrite
+	if len(resolvedAnswers) > 0 {
+		tokens := tokensFromHeader(res.DoHMeta.ResponseHeader)
+		connectorNode, err := e.extractConnectorFromRequestURL(res.DoHMeta.RequestURL)
+		if err != nil {
+			c.logf("could not identify the connector that answered a DNS query: %v", err)
+			// TODO(fran) this should be servfail
+			return buf
+		}
+		for _, ans := range resolvedAnswers {
 			// The connector may or may not send a token.
 			// If it doesn't, we don't want to bail.
 			// If it does, it may require that the token
 			// be sent back in the TransitIPRequest.
-			token := tokens[dstAddr]
+			token := tokens[ans.a]
 
 			answers = append(answers, dnsResponseRewrite{
-				domain:        queriedDomain,
-				dst:           dstAddr,
-				ttlSeconds:    h.TTL,
+				domain:        parser.queriedDomain,
+				dst:           ans.a,
+				ttlSeconds:    ans.ttl,
 				connectorNode: connectorNode,
 				token:         token,
 			})
-		default:
-			// we already checked the question was for a supported type, this answer is unexpected
-			if err := p.SkipAnswer(); err != nil {
-				return makeServFail(c.logf, hdr, question)
-			}
 		}
 	}
-	newBuf, err := c.client.rewriteDNSResponse(appName, hdr, questions, answers)
+
+	newBuf, err := c.client.rewriteDNSResponse(appName, parser.hdr, parser.question, answers)
 	if err != nil {
 		metricDNSResponseRewriteErrorServfail.Add(1)
 		c.logf("error rewriting dns response: %v", err)
-		return makeServFail(c.logf, hdr, question)
+		return parser.makeServFail(c.logf)
 	}
 	return newBuf
 }
@@ -1319,16 +1369,14 @@ func (e *extension) mapDNSResponse(res *resolver.Response) []byte {
 // should replace with magic IPs). p must be positioned at the start of the
 // answer section (i.e. questions already consumed). The additional section is
 // dropped.
-func rewriteHTTPSResponse(hdr dnsmessage.Header, questions []dnsmessage.Question, p *dnsmessage.Parser) ([]byte, error) {
+func rewriteHTTPSResponse(hdr dnsmessage.Header, question dnsmessage.Question, p *dnsmessage.Parser) ([]byte, error) {
 	b := dnsmessage.NewBuilder(nil, hdr)
 	b.EnableCompression()
 	if err := b.StartQuestions(); err != nil {
 		return nil, err
 	}
-	for _, q := range questions {
-		if err := b.Question(q); err != nil {
-			return nil, err
-		}
+	if err := b.Question(question); err != nil {
+		return nil, err
 	}
 	if err := b.StartAnswers(); err != nil {
 		return nil, err
@@ -1476,4 +1524,52 @@ func tokensFromHeader(hdr http.Header) map[netip.Addr]string {
 		mak.Set(&tokens, addr, token)
 	}
 	return tokens
+}
+
+func handleHookPeerAPIDNSResponse(h ipnlocal.PeerAPIHandler, r *http.Request, pr *ipnlocal.PeerAPIDNSResponse) {
+	e, ok := ipnlocal.GetExt[*extension](h.LocalBackend())
+	if !ok {
+		return
+	}
+	if !e.conn25.isConfigured() {
+		return
+	}
+	e.conn25.mintTokensForDNSResponse(h, r, pr)
+}
+
+// mintTokensForDNSResponse mints a destination IP token for each A/AAAA answer
+// in the DoH response pr, and writes them as [TokenHeader] header lines.
+func (c *Conn25) mintTokensForDNSResponse(h ipnlocal.PeerAPIHandler, r *http.Request, pr *ipnlocal.PeerAPIDNSResponse) {
+	// handleHookReplyToDNSQueries is called by connectors before forwarding the
+	// DNS request upstream. But it's possible for a connector to forward a DNS
+	// request upstream for other reasons also, so we must call it again here and
+	// check this DNS request is something we should route for conn25 (we are a
+	// connector for the requested app, the netmap says the peer may use the app,
+	// and that the app named in the HTTP query parameter contains the domain in
+	// the DNS query.)
+	sourceAllowed, nameAllowed := c.handleHookReplyToDNSQueries(h, r)
+	if !sourceAllowed {
+		return
+	}
+	parser, ok := parseQuestion(pr.Raw)
+	if !ok {
+		return
+	}
+	if !nameAllowed(parser.queriedDomain.WithTrailingDot()) {
+		return
+	}
+	answers, err := parser.resolveAnswers()
+	if err != nil {
+		return
+	}
+	// checked to have len == 1 in handleHookReplyToDNSQueries
+	appName := r.URL.Query()["app"][0]
+	for _, answer := range answers {
+		token, err := c.connector.mintToken(appName, answer.a)
+		if err != nil {
+			c.logf("error minting destination IP token: %v", err)
+			continue
+		}
+		pr.Header.Add(TokenHeader, answer.a.String()+" "+base64.StdEncoding.EncodeToString(token))
+	}
 }

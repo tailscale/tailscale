@@ -157,8 +157,8 @@ func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip
 	if existing, ok := c.assignments.lookupByDomainDst(domain, dst); ok {
 		// We have the domain/dst, but it's possible this came from another connector
 		// and the original connector is dead, in which case we currently don't
-		// call enqueueAddressAssignment and register the TransitIP with the other
-		// connector. And we don't install the new connector's node key in WireGuard.
+		// call enqueueAddressAssignmentLocked and register the TransitIP with the
+		// other connector. And we don't install the new connector's node key in WireGuard.
 		//
 		// The correct action would be to allocate a new TransitIP associated
 		// with that new connector, and then register the TransitIP address, and
@@ -241,7 +241,7 @@ func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip
 		transitPool.returnAddr(tip)
 		return nil, err
 	}
-	if err := c.enqueueAddressAssignment(as); err != nil {
+	if err := c.enqueueAddressAssignmentLocked(as); err != nil {
 		c.assignments.remove(as)
 		magicPool.returnAddr(mip)
 		transitPool.returnAddr(tip)
@@ -269,9 +269,9 @@ var errQueueFull = errors.New("queue full")
 // no longer accepts address assignments.
 var errClientShutdown = errors.New("conn25 client shut down")
 
-// enqueueAddressAssignment queues addrs to be registered with its connector by
-// sendLoop. c.mu must be held.
-func (c *client) enqueueAddressAssignment(addrs *addrs) error {
+// enqueueAddressAssignmentLocked queues addrs to be registered with its
+// connector by sendLoop. c.mu must be held.
+func (c *client) enqueueAddressAssignmentLocked(addrs *addrs) error {
 	if c.closed {
 		return errClientShutdown
 	}
@@ -355,16 +355,14 @@ func (c *client) extraWireGuardAllowedIPs(id tailcfg.NodeID) views.Slice[netip.P
 	return views.SliceOf(tips)
 }
 
-func (c *client) rewriteDNSResponse(appName string, hdr dnsmessage.Header, questions []dnsmessage.Question, answers []dnsResponseRewrite) ([]byte, error) {
+func (c *client) rewriteDNSResponse(appName string, hdr dnsmessage.Header, question dnsmessage.Question, answers []dnsResponseRewrite) ([]byte, error) {
 	b := dnsmessage.NewBuilder(nil, hdr)
 	b.EnableCompression()
 	if err := b.StartQuestions(); err != nil {
 		return nil, err
 	}
-	for _, q := range questions {
-		if err := b.Question(q); err != nil {
-			return nil, err
-		}
+	if err := b.Question(question); err != nil {
+		return nil, err
 	}
 	if err := b.StartAnswers(); err != nil {
 		return nil, err
@@ -491,7 +489,7 @@ func (c *client) resendTransitIPMapping(transitIP netip.Addr) {
 		// We have no mappings for this transit IP, so nothing to resend.
 		return
 	}
-	err := c.enqueueAddressAssignment(mapping)
+	err := c.enqueueAddressAssignmentLocked(mapping)
 	if err != nil {
 		c.logf("error enqueueing address assignment for resend: %v", err)
 	}

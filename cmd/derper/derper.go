@@ -77,8 +77,7 @@ var (
 	secretsURL      = flag.String("secrets-url", "", "SETEC server URL for secrets retrieval of mesh key")
 	secretPrefix    = flag.String("secrets-path-prefix", "prod/derp", "setec path prefix for \""+setecMeshKeyName+"\" secret for DERP mesh key")
 	secretsCacheDir = flag.String("secrets-cache-dir", defaultSetecCacheDir(), "directory to cache setec secrets in (required if --secrets-url is set)")
-	bootstrapDNS    = flag.String("bootstrap-dns-names", "", "optional comma-separated list of hostnames to make available at /bootstrap-dns")
-	unpublishedDNS  = flag.String("unpublished-bootstrap-dns-names", "", "optional comma-separated list of hostnames to make available at /bootstrap-dns and not publish in the list. If an entry contains a slash, the second part names a DNS record to poll for its TXT record with a `0` to `100` value for rollout percentage.")
+	bootstrapDNS    = flag.String("bootstrap-dns-names", "", "optional comma-separated list of hostnames to make available at /bootstrap-dns for Tailscale clients' fallback DNS; each must be one of Tailscale's own hostnames, which are the only ones clients ask for (see https://github.com/tailscale/tailscale/issues/21028)")
 
 	verifyClients    = flag.Bool("verify-clients", false, "verify clients to this DERP server through a local tailscaled instance.")
 	verifyClientURL  = flag.String("verify-client-url", "", "if non-empty, an admission controller URL for permitting client connections; see tailcfg.DERPAdmitClientRequest")
@@ -172,6 +171,9 @@ func main() {
 	if *versionFlag {
 		fmt.Println(version.Long())
 		return
+	}
+	if err := validateBootstrapDNSNames(); err != nil {
+		log.Fatal(err)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

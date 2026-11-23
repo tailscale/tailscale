@@ -160,8 +160,13 @@ func (p *Pipe) Close() error {
 	return nil
 }
 
+// deadlineTimer arranges to wake blocked readers and writers at t, returning
+// a func that cancels that, or nil if there's nothing to cancel. It must be
+// called with p.mu held.
 func (p *Pipe) deadlineTimer(t time.Time) func() {
-	if t.IsZero() {
+	// A closed pipe has no one left to wake, and nothing would ever cancel
+	// a timer armed now: Close cancels only the ones it finds.
+	if t.IsZero() || p.closed {
 		return nil
 	}
 	if t.Before(time.Now()) {

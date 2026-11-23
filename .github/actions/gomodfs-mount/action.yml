@@ -1,0 +1,58 @@
+name: gomodfs-mount
+description: Mount the Go module cache and Go toolchain from a gomodfs remote store (Windows only)
+
+inputs:
+  store-url:
+    description: URL of the gomodfs store API server. If empty, a built-in default is used.
+  drive:
+    description: Drive letter to mount gomodfs on
+    default: "M:"
+
+outputs:
+  success:
+    description: Whether gomodfs is mounted and GOMODCACHE points at it
+    value: ${{ steps.use.outputs.success == 'true' }}
+  log:
+    description: Path to gomodfs's log file
+    value: ${{ steps.start.outputs.log }}
+
+runs:
+  using: composite
+  steps:
+    # The version must match the server's gomodfs version, so the remote
+    # store protocol matches. Keep it in sync with GOMODFS_VERSION below.
+    - name: Restore gomodfs.exe
+      uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # zizmor: ignore[cache-poisoning] v5.0.4
+      with:
+        path: ${{ runner.temp }}/gomodfs-bin
+        key: gomodfs-exe-windows-amd64-954c541eeafc
+
+    - name: Start gomodfs
+      id: start
+      shell: pwsh
+      env:
+        GOMODFS_VERSION: 954c541eeafc
+        # An empty input (e.g. an unset repo variable) overrides an input
+        # default, so the default URL is here instead.
+        STORE_URL: ${{ inputs.store-url || 'http://ci-gocached-azure-1:8090' }}
+        DRIVE: ${{ inputs.drive }}
+        BIN_DIR: ${{ runner.temp }}/gomodfs-bin
+      run: '& "$env:GITHUB_ACTION_PATH\start.ps1"'
+
+    # This is a separate step so it runs after the runner has cleaned up
+    # the previous step's processes. Only then is it safe to point
+    # GOMODCACHE and the toolchain at the mount.
+    - name: Use gomodfs
+      id: use
+      if: steps.start.outputs.started == 'true'
+      shell: pwsh
+      env:
+        DRIVE: ${{ inputs.drive }}
+        LOG: ${{ steps.start.outputs.log }}
+      run: '& "$env:GITHUB_ACTION_PATH\use.ps1"'
+
+    - name: Report fallback
+      if: steps.use.outputs.success != 'true'
+      shell: pwsh
+      run: |
+        "::warning::gomodfs is not in use; Go will download modules and the toolchain directly"

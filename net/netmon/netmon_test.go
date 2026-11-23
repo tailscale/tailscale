@@ -4,11 +4,13 @@
 package netmon
 
 import (
+	"errors"
 	"flag"
 	"net"
 	"net/netip"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,6 +31,53 @@ func TestMonitorStartClose(t *testing.T) {
 	mon.Start()
 	if err := mon.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// callbackWaitingOSMon is an osMon whose Close, like the Windows
+// winipcfg Unregister methods, waits for an in-flight OS callback
+// that needs the Monitor's mutex.
+type callbackWaitingOSMon struct {
+	m      *Monitor
+	closed chan struct{}
+}
+
+func (om *callbackWaitingOSMon) Close() error {
+	close(om.closed)
+	var wg sync.WaitGroup
+	wg.Go(func() { om.m.InterfaceState() })
+	wg.Wait()
+	return nil
+}
+
+func (om *callbackWaitingOSMon) Receive() (message, error) {
+	<-om.closed
+	return nil, errors.New("closed")
+}
+
+func TestMonitorCloseWaitsForOSCallback(t *testing.T) {
+	bus := eventbus.New()
+	defer bus.Close()
+
+	mon, err := New(bus, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mon.om.Close(); err != nil {
+		t.Fatal(err)
+	}
+	mon.om = &callbackWaitingOSMon{m: mon, closed: make(chan struct{})}
+	mon.Start()
+
+	done := make(chan error, 1)
+	go func() { done <- mon.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Monitor.Close deadlocked waiting for OS callback")
 	}
 }
 

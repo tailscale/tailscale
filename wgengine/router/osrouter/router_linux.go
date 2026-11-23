@@ -283,6 +283,11 @@ func useAmbientCaps() bool {
 
 var forceIPCommand = envknob.RegisterBool("TS_DEBUG_USE_IP_COMMAND")
 
+// disableSrcValidMark, if true, disables setting
+// net.ipv4.conf.all.src_valid_mark=1, which is normally enabled along with the
+// connmark-based rp_filter workaround.
+var disableSrcValidMark = envknob.RegisterBool("TS_DEBUG_DISABLE_SRC_VALID_MARK")
+
 // useIPCommand reports whether r should use the "ip" command (or its
 // fake commandRunner for tests) instead of netlink.
 func (r *linuxRouter) useIPCommand() bool {
@@ -570,7 +575,9 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 		// connmark restore in mangle/PREROUTING is ineffective — rp_filter
 		// does its routing lookup with fwmark=0, ignoring the restored
 		// bypass mark, and drops reply packets as martians.
-		if err := writeSysctl("net.ipv4.conf.all.src_valid_mark", "1"); err != nil {
+		if disableSrcValidMark() {
+			r.logf("skipping src_valid_mark sysctl (disabled via TS_DEBUG_DISABLE_SRC_VALID_MARK)")
+		} else if err := writeSysctl("net.ipv4.conf.all.src_valid_mark", "1"); err != nil {
 			r.logf("warning: failed to enable src_valid_mark: %v", err)
 		}
 	default:

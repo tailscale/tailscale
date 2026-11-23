@@ -414,6 +414,29 @@ func TestDiskCacheHooks(t *testing.T) {
 			t.Errorf("persist calls = %+v; want %+v", persisted, want)
 		}
 	})
+
+	t.Run("no-fallback-keeps-original-error", func(t *testing.T) {
+		defer HookLookupDiskCache.SetForTest(func(host string) ([]netip.Addr, bool) {
+			return nil, false
+		})()
+		r := &Resolver{
+			Logf: t.Logf,
+			LookupIPForTest: func(ctx context.Context, host string) ([]netip.Addr, error) {
+				return nil, errFailed
+			},
+			LookupIPFallback: func(ctx context.Context, host string) ([]netip.Addr, error) {
+				return nil, ErrNoFallback
+			},
+		}
+		derp0 := metricDERPFallbackOK.Value()
+		_, _, _, err := r.LookupIP(t.Context(), "other.example.com")
+		if !errors.Is(err, errFailed) {
+			t.Errorf("err = %v; want original error %v", err, errFailed)
+		}
+		if d := metricDERPFallbackOK.Value() - derp0; d != 0 {
+			t.Errorf("DERP fallback ok metric delta = %d; want 0", d)
+		}
+	})
 }
 
 func newTestCert(t *testing.T, dnsName string) (tls.Certificate, *x509.Certificate) {

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
@@ -699,6 +700,60 @@ drain:
 		t.Fatal("Unexpected policy changed notification")
 	case <-time.After(policyReloadMaxDelay):
 	}
+}
+
+// unobservableStore is a [source.Store] that doesn't report policy changes,
+// like the Windows Registry when edited without a Group Policy refresh.
+type unobservableStore struct{ source.Store }
+
+func TestForcedReloadUpdatesOtherPolicies(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		settingA := setting.NewDefinition("TestSettingA", setting.DeviceSetting, setting.StringValue)
+		if err := setting.SetDefinitionsForTest(t, settingA); err != nil {
+			t.Fatalf("SetDefinitionsForTest failed: %v", err)
+		}
+
+		store := source.NewTestStoreOf[string](t)
+		if _, err := RegisterStoreForTest(t, "TestSource", setting.DeviceScope, unobservableStore{store}); err != nil {
+			t.Fatalf("Failed to register policy store: %v", err)
+		}
+
+		// Both the device and the user policies read from the same device store.
+		devicePolicy, err := policyForTest(t, setting.DeviceScope)
+		if err != nil {
+			t.Fatalf("Failed to get device policy: %v", err)
+		}
+		userPolicy, err := policyForTest(t, setting.UserScopeOf("test-user"))
+		if err != nil {
+			t.Fatalf("Failed to get user policy: %v", err)
+		}
+
+		policyChanged := make(chan policyclient.PolicyChange, 1)
+		t.Cleanup(devicePolicy.RegisterChangeCallback(func(pc policyclient.PolicyChange) { policyChanged <- pc }))
+
+		// Forcibly reloading the user policy must also update the device policy.
+		store.SetStrings(source.TestSettingOf(settingA.Key(), "A"))
+		if _, err := userPolicy.Reload(); err != nil {
+			t.Fatalf("Reload failed: %v", err)
+		}
+		if got, want := userPolicy.Get().Get(settingA.Key()), "A"; got != want {
+			t.Errorf("User policy: setting %q: got %q; want %q", settingA.Key(), got, want)
+		}
+
+		time.Sleep(policyReloadMaxDelay)
+		synctest.Wait()
+		select {
+		case pc := <-policyChanged:
+			if !pc.HasChanged(settingA.Key()) {
+				t.Errorf("Policy setting %q has not changed", settingA.Key())
+			}
+		default:
+			t.Fatal("Device policy change callback was not invoked")
+		}
+		if got, want := devicePolicy.Get().Get(settingA.Key()), "A"; got != want {
+			t.Errorf("Device policy: setting %q: got %q; want %q", settingA.Key(), got, want)
+		}
+	})
 }
 
 func TestClosePolicySource(t *testing.T) {

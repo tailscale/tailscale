@@ -6,13 +6,16 @@ package dnsfallback
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
+	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -218,5 +221,36 @@ func TestBootstrapDNSMapNilNetMon(t *testing.T) {
 	_, err := bootstrapDNSMap(ctx, "derp1.tailscale.com", netip.MustParseAddr("192.0.2.1"), "controlplane.tailscale.com", t.Logf, nil, nil)
 	if err == nil {
 		t.Fatal("expected error from canceled context")
+	}
+}
+
+// TestLookupSkips verifies that [fallbackResolver.Lookup] fails without
+// asking any DERP server for names that aren't Tailscale's and when the
+// network is down.
+func TestLookupSkips(t *testing.T) {
+	// The context is already canceled, so if Lookup got as far as dialing
+	// a DERP server, it would fail with a context error instead of the
+	// errors checked for below.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	fr := &fallbackResolver{logf: t.Logf}
+	_, err := fr.Lookup(ctx, "headscale.example.com")
+	if !errors.Is(err, dnscache.ErrNoFallback) {
+		t.Errorf("Lookup of non-Tailscale host: err = %v; want %v", err, dnscache.ErrNoFallback)
+	}
+	if err != nil && strings.Contains(err.Error(), "headscale") {
+		t.Errorf("error %q mentions the non-Tailscale host", err)
+	}
+
+	// A Monitor with no interface state reports no interface as up.
+	fr.netMon = new(netmon.Monitor)
+	if _, err := fr.Lookup(ctx, "controlplane.tailscale.com"); !errors.Is(err, errNetworkDown) {
+		t.Errorf("Lookup with network down: err = %v; want %v", err, errNetworkDown)
+	}
+
+	addrs, err := fr.Lookup(ctx, "192.0.2.1")
+	if err != nil || len(addrs) != 1 || addrs[0] != netip.MustParseAddr("192.0.2.1") {
+		t.Errorf("Lookup of IP literal = %v, %v; want [192.0.2.1], nil", addrs, err)
 	}
 }

@@ -25,6 +25,9 @@ func TestUDPSockets(t *testing.T) {
 		if got := ruc.group.bound; got != sockets {
 			t.Fatalf("bound %d sockets, want %d", got, sockets)
 		}
+		if got := metricUDPSocketsIPv4.Value(); got != int64(sockets) {
+			t.Errorf("metric reports %d sockets, want %d", got, sockets)
+		}
 		for i, pconn := range ruc.group.conns[:ruc.group.bound] {
 			if got := uint16(pconn.LocalAddr().(*net.UDPAddr).Port); got != ruc.Port() {
 				t.Errorf("socket %d bound to port %d, want %d", i, got, ruc.Port())

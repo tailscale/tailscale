@@ -184,21 +184,6 @@
 				}
 			]
 		},
-		"6": {
-			"RegionID": 6,
-			"RegionCode": "r6",
-			"RegionName": "r6",
-			"Nodes": [
-				{
-					"Name": "6a",
-					"RegionID": 6,
-					"HostName": "derp6.tailscale.com",
-					"IPv4": "68.183.90.120",
-					"IPv6": "2400:6180:100:d0::982:d001",
-					"CanPort80": true
-				}
-			]
-		},
 		"7": {
 			"RegionID": 7,
 			"RegionCode": "r7",

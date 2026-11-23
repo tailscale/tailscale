@@ -43,8 +43,9 @@ import (
 // except on Kubernetes, where we use the state store.
 type certStore interface {
 	// Read returns the cert and key for domain, if they exist and are valid
-	// for now. If they're expired, it returns errCertExpired.
-	// If they don't exist, it returns ipn.ErrStateNotExist.
+	// for now. If they're expired, it returns errCertExpired. If they fail
+	// verification for another reason, it returns an error wrapping
+	// errCertInvalid. If they don't exist, it returns ipn.ErrStateNotExist.
 	Read(domain string, now time.Time) (*ipnlocal.TLSCertKeyPair, error)
 	// ACMEKey returns the value previously stored via WriteACMEKey.
 	// It is a PEM encoded ECDSA key.
@@ -55,7 +56,10 @@ type certStore interface {
 	WriteTLSCertAndKey(domain string, cert, key []byte) error
 }
 
-var errCertExpired = errors.New("cert expired")
+var (
+	errCertExpired = errors.New("cert expired")
+	errCertInvalid = errors.New("cert invalid")
+)
 
 var testX509Roots *x509.CertPool // set non-nil by tests
 
@@ -147,8 +151,8 @@ func (f certFileStore) Read(domain string, now time.Time) (*ipnlocal.TLSCertKeyP
 		}
 		return nil, err
 	}
-	if !validCertPEM(domain, keyPEM, certPEM, f.testRoots, now) {
-		return nil, errCertExpired
+	if err := validCertPEM(domain, keyPEM, certPEM, f.testRoots, now); err != nil {
+		return nil, err
 	}
 	return &ipnlocal.TLSCertKeyPair{CertPEM: certPEM, KeyPEM: keyPEM, Cached: true}, nil
 }
@@ -213,8 +217,8 @@ func (s certStateStore) Read(domain string, now time.Time) (*ipnlocal.TLSCertKey
 		if err != nil {
 			return nil, err
 		}
-		if !validCertPEM(domain, key, cert, s.testRoots, now) {
-			return nil, errCertExpired
+		if err := validCertPEM(domain, key, cert, s.testRoots, now); err != nil {
+			return nil, err
 		}
 		return &ipnlocal.TLSCertKeyPair{CertPEM: cert, KeyPEM: key, Cached: true}, nil
 	}
@@ -228,8 +232,8 @@ func (s certStateStore) Read(domain string, now time.Time) (*ipnlocal.TLSCertKey
 	if err != nil {
 		return nil, err
 	}
-	if !validCertPEM(domain, keyPEM, certPEM, s.testRoots, now) {
-		return nil, errCertExpired
+	if err := validCertPEM(domain, keyPEM, certPEM, s.testRoots, now); err != nil {
+		return nil, err
 	}
 	return &ipnlocal.TLSCertKeyPair{CertPEM: certPEM, KeyPEM: keyPEM, Cached: true}, nil
 }
@@ -291,8 +295,10 @@ func certFile(dir, domain string) string {
 // getCertPEMCached returns a non-nil keyPair if a cached keypair for
 // domain exists in the certStore that is valid at the provided now time.
 //
-// If the keypair is expired, it returns errCertExpired.
-// If the keypair doesn't exist, it returns ipn.ErrStateNotExist.
+// If the keypair is expired, it returns errCertExpired. If it fails
+// verification for another reason, it returns an error wrapping
+// errCertInvalid. If the keypair doesn't exist, it returns
+// ipn.ErrStateNotExist.
 func getCertPEMCached(cs certStore, domain string, now time.Time) (p *ipnlocal.TLSCertKeyPair, err error) {
 	if !validLookingCertDomain(domain) {
 		// Before we read files from disk using it, validate it's halfway
@@ -403,18 +409,20 @@ func (e *extension) acmeClient(cs certStore) (*xacme.Client, error) {
 	}, nil
 }
 
-// validCertPEM reports whether the given certificate is valid for
-// domain at now.
+// validCertPEM checks whether the given certificate is valid for domain
+// at now. It returns errCertExpired if the leaf is past its NotAfter, or
+// an error wrapping errCertInvalid if it fails verification for any
+// other reason.
 //
 // If roots != nil, it is used instead of the system root pool. This is
 // meant to support testing; production code should pass roots == nil.
-func validCertPEM(domain string, keyPEM, certPEM []byte, roots *x509.CertPool, now time.Time) bool {
+func validCertPEM(domain string, keyPEM, certPEM []byte, roots *x509.CertPool, now time.Time) error {
 	if len(keyPEM) == 0 || len(certPEM) == 0 {
-		return false
+		return fmt.Errorf("%w: empty cert or key", errCertInvalid)
 	}
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
-		return false
+		return fmt.Errorf("%w: %w", errCertInvalid, err)
 	}
 
 	var leaf *x509.Certificate
@@ -422,7 +430,7 @@ func validCertPEM(domain string, keyPEM, certPEM []byte, roots *x509.CertPool, n
 	for i, certDER := range tlsCert.Certificate {
 		cert, err := x509.ParseCertificate(certDER)
 		if err != nil {
-			return false
+			return fmt.Errorf("%w: %w", errCertInvalid, err)
 		}
 		if i == 0 {
 			leaf = cert
@@ -430,16 +438,23 @@ func validCertPEM(domain string, keyPEM, certPEM []byte, roots *x509.CertPool, n
 			intermediates.AddCert(cert)
 		}
 	}
-	return validateLeaf(leaf, intermediates, domain, now, roots)
+	// Verify folds not-yet-valid into the same error as expired, so check NotAfter ourselves.
+	if now.After(leaf.NotAfter) {
+		return errCertExpired
+	}
+	if err := validateLeaf(leaf, intermediates, domain, now, roots); err != nil {
+		return fmt.Errorf("%w: %w", errCertInvalid, err)
+	}
+	return nil
 }
 
 // validateLeaf is a helper for [validCertPEM].
 //
 // If called with roots == nil, it will use the system root pool as well
 // as the baked-in roots. If non-nil, only those roots are used.
-func validateLeaf(leaf *x509.Certificate, intermediates *x509.CertPool, domain string, now time.Time, roots *x509.CertPool) bool {
+func validateLeaf(leaf *x509.Certificate, intermediates *x509.CertPool, domain string, now time.Time, roots *x509.CertPool) error {
 	if leaf == nil {
-		return false
+		return errors.New("no leaf certificate")
 	}
 	_, err := leaf.Verify(x509.VerifyOptions{
 		DNSName:       domain,
@@ -455,7 +470,7 @@ func validateLeaf(leaf *x509.Certificate, intermediates *x509.CertPool, domain s
 	}
 
 	if err == nil {
-		return true
+		return nil
 	}
 
 	// When pointed at a non-prod ACME server, we don't expect to have the CA
@@ -466,11 +481,11 @@ func validateLeaf(leaf *x509.Certificate, intermediates *x509.CertPool, domain s
 	if errors.As(err, &x509.UnknownAuthorityError{}) {
 		acmeURL := envknob.String("TS_DEBUG_ACME_DIRECTORY_URL")
 		if !isDefaultDirectoryURL(acmeURL) {
-			return true
+			return nil
 		}
 	}
 
-	return false
+	return err
 }
 
 func isDefaultDirectoryURL(u string) bool {
