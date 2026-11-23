@@ -169,6 +169,11 @@ var Features = map[FeatureTag]FeatureMeta{
 		Sym:  "CacheNetMap",
 		Desc: "Cache the netmap on disk between runs",
 	},
+	"netmapcachesqlite": {
+		Sym:  "NetmapCacheSQLite",
+		Desc: "SQLite-backed store for the netmap cache",
+		Deps: []FeatureTag{"cachenetmap"},
+	},
 	"captiveportal": {Sym: "CaptivePortal", Desc: "Captive portal detection"},
 	"capture":       {Sym: "Capture", Desc: "Packet capture"},
 	"cli":           {Sym: "CLI", Desc: "embed the CLI into the tailscaled binary"},

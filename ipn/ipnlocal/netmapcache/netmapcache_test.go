@@ -493,14 +493,14 @@ func TestClearStore(t *testing.T) {
 
 func TestOpenStore(t *testing.T) {
 	t.Run("non_exist", func(t *testing.T) {
-		if store, err := netmapcache.OpenStore(t.Context(), "/not/here"); store != nil || err != nil {
+		if store, err := netmapcache.OpenStore(t.Context(), "/not/here", t.Logf); store != nil || err != nil {
 			t.Errorf("expected a nil store and a nil error, got store: %+v, err: %s", store, err)
 		}
 	})
 
 	t.Run("exist", func(t *testing.T) {
 		dir := t.TempDir()
-		store, err := netmapcache.NewStore(t.Context(), dir)
+		store, err := netmapcache.NewStore(t.Context(), dir, t.Logf)
 		if err != nil {
 			t.Fatalf("error creating store: %s", err)
 		}
@@ -510,7 +510,7 @@ func TestOpenStore(t *testing.T) {
 		if err := store.Close(t.Context()); err != nil {
 			t.Fatalf("error closing store: %s", err)
 		}
-		if store, err := netmapcache.OpenStore(t.Context(), dir); store == nil || err != nil {
+		if store, err := netmapcache.OpenStore(t.Context(), dir, t.Logf); store == nil || err != nil {
 			t.Errorf("expected a store and a nil error, got store: %+v, err: %s", store, err)
 		}
 		if err := store.Close(t.Context()); err != nil {

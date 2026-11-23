@@ -79,7 +79,7 @@ func (b *LocalBackend) ensureDiskCacheLocked() error {
 	}
 	if c := b.diskCache; c.cache == nil || c.dir != dir {
 		b.closeDiskCacheLocked() // if we changed the dir, close the previous cache.
-		store, err := netmapcache.NewStore(b.ctx, dir)
+		store, err := netmapcache.NewStore(b.ctx, dir, b.logf)
 		if err != nil {
 			return fmt.Errorf("unable to open store: %s", err)
 		}
@@ -100,7 +100,7 @@ func (b *LocalBackend) loadDiskCacheLocked() (om *netmap.NetworkMap, ok bool) {
 	}
 	if c := b.diskCache; c.cache == nil || c.dir != dir {
 		b.closeDiskCacheLocked() // if we changed the dir, close the previous cache.
-		store, err := netmapcache.NewStore(b.currentNode().Context(), dir)
+		store, err := netmapcache.NewStore(b.currentNode().Context(), dir, b.logf)
 		if err != nil {
 			b.logf("unable to open store: %s", err)
 			return nil, false
@@ -173,7 +173,7 @@ func (b *LocalBackend) ClearNetmapCache(ctx context.Context) error {
 		dir := b.profileDataPathLocked(p.ID(), "netmap-cache")
 
 		// Open and clear the configured store for this profile.
-		if store, err := netmapcache.OpenStore(ctx, dir); err != nil {
+		if store, err := netmapcache.OpenStore(ctx, dir, b.logf); err != nil {
 			errs = append(errs, fmt.Errorf("open store for profile %q: %w", p.ID(), err))
 		} else if store == nil {
 			continue // store does not exist
