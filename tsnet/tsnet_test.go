@@ -1971,6 +1971,7 @@ func TestFallbackTCPHandler(t *testing.T) {
 //
 // See tailscale/corp#43394.
 func TestPingPeerLearnedViaDelta(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/22562")
 	for _, pt := range []tailcfg.PingType{tailcfg.PingDisco, tailcfg.PingTSMP} {
 		t.Run(string(pt), func(t *testing.T) {
 			testPingPeerLearnedViaDelta(t, pt)
