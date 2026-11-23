@@ -49,7 +49,11 @@ func TestConnectorExpireTransitIPs(t *testing.T) {
 
 	register := func(peer tailcfg.NodeView, tip, dst netip.Addr) {
 		c.handleConnectorTransitIPRequest(peer, peerCap, ConnectorTransitIPRequest{
-			TransitIPs: []TransitIPRequest{{TransitIP: tip, DestinationIP: dst, App: appName}},
+			TransitIPs: []TransitIPRequest{withValidDstToken(t, c.connector, TransitIPRequest{
+				TransitIP:     tip,
+				DestinationIP: dst,
+				App:           appName,
+			})},
 		})
 	}
 
@@ -250,7 +254,7 @@ func TestConnectorDisallowedDestinations(t *testing.T) {
 			}
 
 			resp := c.handleConnectorTransitIPRequest(peerNode, peerCap, ConnectorTransitIPRequest{
-				TransitIPs: []TransitIPRequest{{TransitIP: transitIP, DestinationIP: dst, App: appName}},
+				TransitIPs: []TransitIPRequest{withValidDstToken(t, c.connector, TransitIPRequest{TransitIP: transitIP, DestinationIP: dst, App: appName})},
 			})
 			if len(resp.TransitIPs) != 1 {
 				t.Fatalf("got %d responses, want 1", len(resp.TransitIPs))

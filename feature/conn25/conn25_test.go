@@ -60,6 +60,15 @@ func mustIPSetFromPrefix(s string) *netipx.IPSet {
 	return set
 }
 
+func mustValidDstToken(t *testing.T, c *connector, app string, dst netip.Addr) string {
+	return base64.StdEncoding.EncodeToString(mustMint(t, c, app, dst))
+}
+
+func withValidDstToken(t *testing.T, c *connector, tipr TransitIPRequest) TransitIPRequest {
+	tipr.Token = mustValidDstToken(t, c, tipr.App, tipr.DestinationIP)
+	return tipr
+}
+
 // TestHandleConnectorTransitIPRequest tests that if sent a
 // request with a transit addr and a destination addr we store that mapping
 // and can retrieve it.
@@ -612,6 +621,12 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 				}
 				if tt.missingPeerCap {
 					peerCap = nil
+				}
+
+				// add a valid token to each TransitIPRequest
+				for i := range req.TransitIPs {
+					tipr := &req.TransitIPs[i]
+					tipr.Token = mustValidDstToken(t, c.connector, tipr.App, tipr.DestinationIP)
 				}
 
 				resp := c.handleConnectorTransitIPRequest(peer, peerCap, req)
@@ -4840,6 +4855,69 @@ func TestMintTokensForDNSResponse(t *testing.T) {
 			}
 			if lines := mintTokenLines(t, c, tt.peerCap, tt.appParam, tt.raw); len(lines) != 0 {
 				t.Errorf("got %d token lines, want 0: %v", len(lines), lines)
+			}
+		})
+	}
+}
+
+func TestHandleConnectorTransitIPRequestVerifiesToken(t *testing.T) {
+	const appName = "app"
+
+	peerV4 := netip.MustParseAddr("100.101.101.101")
+	peerNode := (&tailcfg.Node{ID: 1, Addresses: []netip.Prefix{netip.PrefixFrom(peerV4, 32)}}).View()
+	peerCap := tailcfg.PeerCapMap{
+		peercap.Conn25Prefix.ToAttribute(appName): []tailcfg.RawMessage{`"*"`},
+	}
+
+	transitIP := netip.MustParseAddr("169.254.0.1")
+
+	newConfigured := func() *Conn25 {
+		c := newConn25(logger.Discard)
+		c.reconfig(&config{
+			isConfigured: true,
+			appsByName: map[string]appctype.AppConnectorAttr{
+				appName: {Name: appName, Mode: appctype.MagicIP},
+			},
+			ipSets: ipSets{v4Transit: mustIPSetFromPrefix("169.254.0.0/24")},
+		})
+		return c
+	}
+
+	tests := []struct {
+		name  string
+		token string
+	}{
+		{
+			name:  "missing_token",
+			token: "",
+		},
+		{
+			name:  "bad_token",
+			token: "not a token",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newConfigured()
+			resp := c.handleConnectorTransitIPRequest(peerNode, peerCap, ConnectorTransitIPRequest{
+				TransitIPs: []TransitIPRequest{{
+					TransitIP:     transitIP,
+					DestinationIP: netip.MustParseAddr("1.2.3.4"),
+					App:           appName,
+					Token:         tt.token,
+				}},
+			})
+			if len(resp.TransitIPs) != 1 {
+				t.Fatalf("got %d responses, want 1", len(resp.TransitIPs))
+			}
+			if got := resp.TransitIPs[0].Code; got != InvalidDestinationIPToken {
+				t.Fatalf("code = %d, want %d", got, InvalidDestinationIPToken)
+			}
+
+			gotDst, ok := c.connector.realIPForTransitIPConnection(peerV4, transitIP)
+			if ok {
+				t.Errorf("rejected request left a mapping: %v", gotDst)
 			}
 		})
 	}
