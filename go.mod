@@ -57,12 +57,12 @@ require (
 	github.com/go4org/plan9netshell v0.0.0-20250324183649-788daa080737
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/gokrazy/breakglass v0.0.0-20260711072910-0f882c44303e
-	github.com/gokrazy/firmware v0.0.0-20261103105416-6bd1fd16a2e2
+	github.com/gokrazy/firmware v0.0.0-20261117115341-d8b761d7b4ca
 	github.com/gokrazy/gokrazy v0.0.0-20260916140236-39fe3e5557b8
-	github.com/gokrazy/kernel.amd64 v0.0.0-20261111110037-eb0ff0075854
-	github.com/gokrazy/kernel.arm64 v0.0.0-20261111111623-595ae821533a
-	github.com/gokrazy/kernel.rpi v0.0.0-20261103170006-85ea215f0624
-	github.com/gokrazy/rpi-eeprom v0.0.0-20261031093638-30711eb43bb5
+	github.com/gokrazy/kernel.amd64 v0.0.0-20261122110609-17ff614bf8bc
+	github.com/gokrazy/kernel.arm64 v0.0.0-20261122124656-03045c240b24
+	github.com/gokrazy/kernel.rpi v0.0.0-20261122104422-a4a58496f7f6
+	github.com/gokrazy/rpi-eeprom v0.0.0-20261118113622-fb3324aa4fc1
 	github.com/gokrazy/serial-busybox v0.0.0-20250119153030-ac58ba7574e7
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8
 	github.com/golang/snappy v1.0.0
