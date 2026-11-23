@@ -68,7 +68,7 @@ func (c *client) transitIPRoutableLocked(as *addrs) bool {
 func (c *client) linkLocalAllow(p packet.Parsed) (bool, string) {
 	ok := c.isKnownTransitIP(p.Dst.Addr())
 	if ok {
-		return true, packetFilterAllowReason
+		return true, clientEgressReason
 	}
 	return false, ""
 }

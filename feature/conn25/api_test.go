@@ -14,6 +14,7 @@ import (
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/must"
 )
@@ -66,10 +67,10 @@ func TestGetActiveState(t *testing.T) {
 			netip.MustParseAddr("11.0.0.1"): {
 				// A mapping whose grant restricts the protocols and ports it
 				// may carry; the others were granted nothing and carry none.
-				netip.MustParseAddr("169.254.0.5"): {app: "zapp", addr: netip.MustParseAddr("10.0.0.5"), ports: []tailcfg.ProtoPortRange{
+				netip.MustParseAddr("169.254.0.5"): {app: "zapp", addr: netip.MustParseAddr("10.0.0.5"), ports: views.SliceOf([]tailcfg.ProtoPortRange{
 					{Proto: int(ipproto.TCP), Ports: tailcfg.PortRange{First: 443, Last: 443}},
 					{Ports: tailcfg.PortRangeAny},
-				}},
+				})},
 				netip.MustParseAddr("169.254.0.6"): {app: "app1", addr: netip.MustParseAddr("10.0.0.6")},
 			},
 		}

@@ -318,6 +318,9 @@ func TestConnectorLinkLocalAllow(t *testing.T) {
 // IP with no registered mapping still gets through so the datapath can answer
 // with the re-registration TSMP, and that addresses outside the transit pools
 // are refused outright.
+//
+// The per-protocol matching itself is covered in more detail by
+// [TestProtoPortRangesAllow].
 func TestConnectorIngressAllow(t *testing.T) {
 	const appName = "app"
 
@@ -332,6 +335,9 @@ func TestConnectorIngressAllow(t *testing.T) {
 	type probe struct {
 		proto ipproto.Proto
 		port  uint16
+		// flags are the packet's TCP flags. A TCP probe that names none is
+		// sent as a lone SYN, the case the grant is actually consulted for.
+		flags packet.TCPFlag
 		dst   netip.Addr // defaults to transitIP
 		src   netip.Addr // defaults to peerIP
 		want  bool
@@ -375,8 +381,21 @@ func TestConnectorIngressAllow(t *testing.T) {
 				{proto: ipproto.TCP, port: 80, want: true},
 				{proto: ipproto.UDP, port: 80, want: true},
 				{proto: ipproto.TCP, port: 443, want: false},
-				// A protocol-less range covers TCP+UDP+ICMP, not SCTP.
+				// A protocol-less range covers TCP and UDP, not SCTP.
 				{proto: ipproto.SCTP, port: 80, want: false},
+			},
+		},
+		{
+			// Following the packet filter, only a lone SYN is held to the
+			// grant's ports; continuations of an existing session are let
+			// through so that return traffic arrives. See
+			// [protoPortRangesAllow].
+			name:  "tcp-non-syn-not-held-to-ports",
+			grant: []tailcfg.RawMessage{`"tcp:443"`},
+			probes: []probe{
+				{proto: ipproto.TCP, port: 22, flags: packet.TCPAck, want: true},
+				{proto: ipproto.TCP, port: 22, flags: packet.TCPSynAck, want: true},
+				{proto: ipproto.TCP, port: 22, flags: packet.TCPSyn, want: false},
 			},
 		},
 		{
@@ -472,10 +491,16 @@ func TestConnectorIngressAllow(t *testing.T) {
 				if !dst.IsValid() {
 					dst = transitIP
 				}
+				flags := p.flags
+				if p.proto == ipproto.TCP && flags == 0 {
+					flags = packet.TCPSyn
+				}
 				got, _ := c.connector.ingressAllow(packet.Parsed{
-					IPProto: p.proto,
-					Src:     netip.AddrPortFrom(src, 12345),
-					Dst:     netip.AddrPortFrom(dst, p.port),
+					IPVersion: 4,
+					IPProto:   p.proto,
+					TCPFlags:  flags,
+					Src:       netip.AddrPortFrom(src, 12345),
+					Dst:       netip.AddrPortFrom(dst, p.port),
 				})
 				if got != p.want {
 					t.Errorf("ingressAllow(%v %v -> %v:%d) = %v, want %v",
@@ -579,7 +604,7 @@ func TestConnectorGrantRegistration(t *testing.T) {
 			if !ok {
 				t.Fatal("no mapping registered")
 			}
-			if diff := cmp.Diff(tt.wantPorts, aa.ports); diff != "" {
+			if diff := cmp.Diff(tt.wantPorts, aa.ports.AsSlice()); diff != "" {
 				t.Errorf("stored ports mismatch (-want +got):\n%s", diff)
 			}
 		})

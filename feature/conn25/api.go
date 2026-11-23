@@ -171,7 +171,7 @@ func (c *connector) getActiveState() appctype.Conn25ConnectorState {
 		for _, transitIP := range slices.SortedFunc(maps.Keys(transitToAddr), netip.Addr.Compare) {
 			addr := transitToAddr[transitIP]
 			var ports []string
-			for _, p := range addr.ports {
+			for _, p := range addr.ports.All() {
 				ports = append(ports, p.String())
 			}
 			apiAddr := appctype.Conn25ConnectorAddressState{

@@ -15,6 +15,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/views"
 )
 
 type appAddr struct {
@@ -24,11 +25,11 @@ type appAddr struct {
 	// reach through app at the moment it registered this mapping. See
 	// [appProtoPortRanges] for where they come from, and
 	// [connector.ingressAllow] for how they are enforced.
-	ports       []tailcfg.ProtoPortRange
+	ports       views.Slice[tailcfg.ProtoPortRange]
 	expiryEntry *list.Element
 }
 
-func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr, peerV6 netip.Addr, tipr TransitIPRequest, ports []tailcfg.ProtoPortRange) TransitIPResponse {
+func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr, peerV6 netip.Addr, tipr TransitIPRequest, ports views.Slice[tailcfg.ProtoPortRange]) TransitIPResponse {
 	if tipr.TransitIP.Is4() != tipr.DestinationIP.Is4() {
 		c.logf("[Unexpected] peer attempt to map a transit IP to dest IP did not have matching families: node: %s, tIPv4: %v dIPv4: %v",
 			n.StableID(), tipr.TransitIP.Is4(), tipr.DestinationIP.Is4())
@@ -162,7 +163,7 @@ func (c *connector) destinationInPools(dst netip.Addr) bool {
 // decided by [connector.ingressAllow].
 func (c *connector) linkLocalAllow(p packet.Parsed) (bool, string) {
 	if c.transitIPInPool(p.Dst.Addr()) {
-		return true, packetFilterAllowReason
+		return true, connectorTransitIPReason
 	}
 	return false, ""
 }
@@ -190,12 +191,9 @@ func (c *connector) ingressAllow(p packet.Parsed) (bool, string) {
 	defer c.mu.Unlock()
 	aa, ok := c.lookupAppAddrBySrcIPAndTransitIPLocked(p.Src.Addr(), p.Dst.Addr())
 	if !ok {
-		return true, packetFilterAllowReason
+		return true, connectorUnmappedReason
 	}
-	if !protoPortRangesAllow(aa.ports, p.IPProto, p.Dst.Port()) {
-		return false, ""
-	}
-	return true, packetFilterAllowReason
+	return protoPortRangesAllow(aa.ports, p)
 }
 
 // lookupAppAddrBySrcIPAndTransitIPLocked returns the mapping the peer at srcIP
