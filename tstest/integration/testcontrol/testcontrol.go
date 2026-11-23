@@ -69,6 +69,13 @@ type Server struct {
 	// grants rules.
 	PeerRelayGrants bool
 
+	// TailnetID, if non-empty, is set as [tailcfg.Node.StableTailnetID] on
+	// newly registered nodes. A RegisterRequest for a new node whose
+	// Tailnet is "required:" followed by a list that does not contain
+	// TailnetID is rejected. Requests for nodes that are already
+	// registered are not checked.
+	TailnetID tailcfg.StableTailnetID
+
 	// SSHPolicy, if non-nil, is sent to every node in MapResponses.
 	// Each node also gets [tailcfg.CapabilitySSH] added to its capability
 	// map, permitting "tailscale up --ssh".
@@ -1051,6 +1058,18 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 		return
 	}
 
+	s.mu.Lock()
+	_, known := s.nodes[req.NodeKey]
+	s.mu.Unlock()
+	if want, ok := strings.CutPrefix(req.Tailnet, "required:"); ok && !known && !slices.Contains(strings.Split(want, ","), string(s.TailnetID)) {
+		res := must.Get(s.encode(false, tailcfg.RegisterResponse{
+			Error: fmt.Sprintf("tailnet %q is not one of the required tailnets %q", s.TailnetID, want),
+		}))
+		w.WriteHeader(200)
+		w.Write(res)
+		return
+	}
+
 	// If this is a followup request, wait until interactive followup URL visit complete.
 	isFollowup := req.Followup != ""
 	if isFollowup {
@@ -1138,6 +1157,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 			Cap:               req.Version,
 			CapMap:            capMap,
 			Capabilities:      slices.Collect(maps.Keys(capMap)),
+			StableTailnetID:   s.TailnetID,
 		}
 		if s.TagOwners != nil && req.Hostinfo != nil {
 			// Trust the requested tags at signup; ownership checks
