@@ -352,6 +352,19 @@ type Server struct {
 	// that the control server will allow the node to adopt that tag.
 	AdvertiseTags []string
 
+	// Tailnet, if non-empty, is the only tailnet this Server may join.
+	// It is the tailnet's stable ID, as shown in the admin console and
+	// reported in [ipnstate.TailnetStatus.StableID].
+	//
+	// When the node registers, the control server refuses a login to any
+	// other tailnet. [Server.Up] also returns an error if the node is
+	// already logged in to a different tailnet, such as from state saved
+	// before Tailnet was set, or if the control server does not report
+	// which tailnet the node is in.
+	//
+	// This field must be set before calling Start.
+	Tailnet tailcfg.StableTailnetID
+
 	// Tun, if non-nil, specifies a custom tun.Device to use for packet I/O.
 	//
 	// This field must be set before calling Start.
@@ -623,6 +636,9 @@ func (s *Server) Up(ctx context.Context) (*ipnstate.Status, error) {
 				if len(status.TailscaleIPs) == 0 {
 					return nil, errors.New("tsnet.Up: running, but no ip")
 				}
+				if err := s.checkTailnet(status); err != nil {
+					return nil, fmt.Errorf("tsnet.Up: %w", err)
+				}
 
 				// The first time Up is run, clear the persisted serve config
 				// and Service advertisements. We do this to prevent messy
@@ -659,6 +675,25 @@ func (s *Server) Up(ctx context.Context) (*ipnstate.Status, error) {
 			// briefly see these states. It would be nice to fix.
 		}
 	}
+}
+
+// checkTailnet returns an error if [Server.Tailnet] is set and st does
+// not show the node in that tailnet.
+func (s *Server) checkTailnet(st *ipnstate.Status) error {
+	if s.Tailnet == "" {
+		return nil
+	}
+	var got tailcfg.StableTailnetID
+	if st.CurrentTailnet != nil {
+		got = st.CurrentTailnet.StableID
+	}
+	if got == "" {
+		return fmt.Errorf("control server did not report a tailnet ID; want tailnet %q", s.Tailnet)
+	}
+	if got != s.Tailnet {
+		return fmt.Errorf("node is in tailnet %q; want tailnet %q", got, s.Tailnet)
+	}
+	return nil
 }
 
 // Close stops the server.
@@ -1030,6 +1065,9 @@ func (s *Server) start() (reterr error) {
 	prefs.ControlURL = s.getControlURL()
 	prefs.RunWebClient = s.RunWebClient
 	prefs.AdvertiseTags = s.AdvertiseTags
+	if s.Tailnet != "" {
+		prefs.Tailnet = "required:" + string(s.Tailnet)
+	}
 	authKey, err := s.resolveAuthKey()
 	if err != nil {
 		return fmt.Errorf("error resolving auth key: %w", err)
