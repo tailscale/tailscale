@@ -4138,6 +4138,142 @@ func TestHandleHookReplyToDNSQueries(t *testing.T) {
 // for the app domains in the self node's capabilities, and supplies none
 // before the self node is known, when this node is itself a connector, or
 // after a switch to a different node.
+func TestAppDNSRoutes(t *testing.T) {
+	app := func(name string, mode appctype.Mode, domains ...string) appctype.AppConnectorAttr {
+		return appctype.AppConnectorAttr{
+			Name:       name,
+			Domains:    domains,
+			Connectors: []string{"tag:" + name},
+			Mode:       mode,
+		}
+	}
+	resolver := func(appName string) []*dnstype.Resolver {
+		return []*dnstype.Resolver{{Addr: fmt.Sprintf("%s:%s", DNSAddrScheme, appName), UseWithExitNode: true}}
+	}
+
+	for _, tt := range []struct {
+		name string
+		apps []appctype.AppConnectorAttr
+		want map[string][]*dnstype.Resolver
+	}{
+		{
+			name: "no-apps", // an unconfigured config has no routes.
+		},
+		{
+			name: "only-subnet-apps", // no conn25 apps means unconfigured.
+			apps: []appctype.AppConnectorAttr{app("subnet-app", appctype.Subnet, "subnet.example.com")},
+		},
+		{
+			name: "single-app",
+			apps: []appctype.AppConnectorAttr{app("app1", appctype.MagicIP, "example.com")},
+			want: map[string][]*dnstype.Resolver{
+				"example.com": resolver("app1"),
+			},
+		},
+		{
+			name: "single-app-multi-domain",
+			apps: []appctype.AppConnectorAttr{app("app3", appctype.MagicIP, "woo.b.example.com", "hoo.b.example.com")},
+			want: map[string][]*dnstype.Resolver{
+				"woo.b.example.com": resolver("app3"),
+				"hoo.b.example.com": resolver("app3"),
+			},
+		},
+		{
+			name: "multi-app-no-overlap",
+			apps: []appctype.AppConnectorAttr{
+				app("app1", appctype.MagicIP, "example.com"),
+				app("app2", appctype.MagicIP, "a.example.com"),
+			},
+			want: map[string][]*dnstype.Resolver{
+				"example.com":   resolver("app1"),
+				"a.example.com": resolver("app2"),
+			},
+		},
+		{
+			name: "domain-collision-last-wins",
+			apps: []appctype.AppConnectorAttr{
+				app("app3", appctype.MagicIP, "woo.b.example.com", "hoo.b.example.com"),
+				app("app4", appctype.MagicIP, "woo.b.example.com", "c.example.com"),
+			},
+			want: map[string][]*dnstype.Resolver{
+				// app4 is listed last, so takes the shared domain.
+				"woo.b.example.com": resolver("app4"),
+				"hoo.b.example.com": resolver("app3"),
+				"c.example.com":     resolver("app4"),
+			},
+		},
+		{
+			name: "wildcard-collision-last-wins",
+			apps: []appctype.AppConnectorAttr{
+				app("app1", appctype.MagicIP, "*.example.com"),
+				app("app2", appctype.MagicIP, "*.example.com"),
+			},
+			want: map[string][]*dnstype.Resolver{
+				"example.com": resolver("app2"),
+			},
+		},
+		{
+			name: "exact-beats-wildcard",
+			apps: []appctype.AppConnectorAttr{
+				app("app1", appctype.MagicIP, "example.com"),
+				app("app2", appctype.MagicIP, "*.example.com"),
+			},
+			want: map[string][]*dnstype.Resolver{
+				// The exact app wins even though the wildcard app is listed last.
+				"example.com": resolver("app1"),
+			},
+		},
+		{
+			name: "wildcards-are-stripped-and-deduped",
+			apps: []appctype.AppConnectorAttr{app("app5", appctype.MagicIP, "*.example.com", "example.com")},
+			want: map[string][]*dnstype.Resolver{
+				// *.example.com and example.com should both normalize to example.com.
+				"example.com": resolver("app5"),
+			},
+		},
+		{
+			name: "domains-are-normalized-and-deduped",
+			apps: []appctype.AppConnectorAttr{app("app6", appctype.MagicIP, "*.Example.com", "EXAMPLE.com", "EXAMPLE.COM", "example.com.")},
+			want: map[string][]*dnstype.Resolver{
+				// All variants should normalize to example.com.
+				"example.com": resolver("app6"),
+			},
+		},
+		{
+			name: "sub-domains-and-top-domains-do-not-collide",
+			apps: []appctype.AppConnectorAttr{
+				app("app2", appctype.MagicIP, "a.example.com"),
+				app("app5", appctype.MagicIP, "*.example.com", "example.com"),
+			},
+			want: map[string][]*dnstype.Resolver{
+				// *.example.com normalizes to example.com; a.example.com remains distinct.
+				"a.example.com": resolver("app2"),
+				"example.com":   resolver("app5"),
+			},
+		},
+		{
+			name: "only-conn25-processed",
+			apps: []appctype.AppConnectorAttr{
+				app("app1", appctype.MagicIP, "example.com"),
+				app("subnet-app", appctype.Subnet, "subnet.example.com"),
+			},
+			want: map[string][]*dnstype.Resolver{
+				// The app that's a subnet router should not show up here,
+				// since we only deal with conn25 apps.
+				"example.com": resolver("app1"),
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := mustConfig(t, makeSelfNode(t, tt.apps, appctype.Conn25PoolsAttr{}, nil))
+			got := cfg.appDNSRoutes()
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Fatalf("appDNSRoutes (-want, +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestExtraDNSRoutesHook(t *testing.T) {
 	ext := &extension{
 		conn25:  newConn25(logger.Discard),

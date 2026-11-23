@@ -86,9 +86,7 @@ func TestOmitAppConnectors(t *testing.T) {
 	deptest.DepChecker{
 		GOOS:   "linux",
 		GOARCH: "amd64",
-		// conn25 also uses appc, so omit it too to check that nothing
-		// else pulls appc in.
-		Tags: "ts_omit_appconnectors,ts_omit_conn25,ts_include_cli",
+		Tags:   "ts_omit_appconnectors,ts_include_cli",
 		BadDeps: map[string]string{
 			"tailscale.com/appc":                  msg,
 			"tailscale.com/feature/appconnectors": msg,

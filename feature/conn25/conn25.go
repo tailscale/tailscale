@@ -26,7 +26,6 @@ import (
 
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
-	"tailscale.com/appc"
 	"tailscale.com/feature"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
@@ -169,9 +168,9 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 		return errors.New("dns manager resolver not ready")
 	}
 
-	if err := r.RegisterCustomScheme(appc.DNSAddrScheme, func(addr string) (string, error) {
+	if err := r.RegisterCustomScheme(DNSAddrScheme, func(addr string) (string, error) {
 		scheme, appName, ok := strings.Cut(addr, ":")
-		if !ok || scheme != appc.DNSAddrScheme {
+		if !ok || scheme != DNSAddrScheme {
 			return "", fmt.Errorf("unexpected conn25 scheme %q", scheme)
 		}
 
@@ -266,7 +265,7 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 	})
 
 	// Route DNS queries for app domains to the connector that serves
-	// them, chosen at query time via the [appc.DNSAddrScheme] scheme.
+	// them, chosen at query time via the [DNSAddrScheme] scheme.
 	e.host.Hooks().ExtraDNSRoutes.Set(func() map[string][]*dnstype.Resolver {
 		if !e.conn25.isConfigured() {
 			return nil
@@ -468,7 +467,7 @@ func (e *extension) onSelfChange(selfNode tailcfg.NodeView) {
 	}
 	// Store the routes only once the config parsed, so a bad self node
 	// leaves the previous routes and config in place together.
-	e.conn25.appDNSRoutes.Store(appc.AppDNSRoutes(selfNode.HasCap, selfNode))
+	e.conn25.appDNSRoutes.Store(cfg.appDNSRoutes())
 	e.conn25.reconfig(cfg)
 }
 
@@ -508,7 +507,7 @@ type Conn25 struct {
 	prefsAdvertiseConnector atomic.Bool
 
 	// appDNSRoutes holds the split DNS routes for the app domains in the
-	// self node's capabilities, as returned by [appc.AppDNSRoutes]. It is
+	// self node's capabilities, as returned by [config.appDNSRoutes]. It is
 	// recomputed on each self node change and served to
 	// [ipnext.Hooks.ExtraDNSRoutes]. The map must not be mutated once stored.
 	appDNSRoutes syncs.AtomicValue[map[string][]*dnstype.Resolver]
@@ -748,6 +747,11 @@ type ConnectorTransitIPResponse struct {
 const (
 	AppConnectorAttrName                     = "tailscale.com/app-connectors"
 	AppConnectorsExperimentalIPPoolsAttrName = "tailscale.com/app-connectors-experimental-ippools"
+
+	// DNSAddrScheme is the custom URI scheme used for conn25-managed split DNS
+	// entries to determine the destination at query time rather than configuration
+	// time.
+	DNSAddrScheme = "tailscale-app"
 )
 
 // ipSets wraps all the IPSets the config needs.
@@ -891,6 +895,33 @@ func (cfg *config) getAppsForConnectorDomain(domain dnsname.FQDN, prefsAdvertise
 		return nil
 	}
 	return appNames
+}
+
+// appDNSRoutes returns split DNS routes, keyed by domain suffix, for the app
+// domains in cfg. Each route resolves via the [DNSAddrScheme] scheme naming
+// the app, so the connector that serves it is chosen at query time. It
+// returns nil if cfg is not configured.
+func (cfg *config) appDNSRoutes() map[string][]*dnstype.Resolver {
+	if !cfg.isConfigured {
+		return nil
+	}
+	m := make(map[string][]*dnstype.Resolver, len(cfg.appNamesByDomain)+len(cfg.appNamesByWCDomain))
+	add := func(byDomain map[dnsname.FQDN][]string) {
+		for domain, appNames := range byDomain {
+			if len(appNames) == 0 {
+				continue
+			}
+			// In the case of multiple apps specifying the same domain (which is misconfiguration
+			// that should be validated at point of input), the last one in the config list wins.
+			appName := appNames[len(appNames)-1]
+			m[domain.WithoutTrailingDot()] = []*dnstype.Resolver{{Addr: fmt.Sprintf("%s:%s", DNSAddrScheme, appName), UseWithExitNode: true}}
+		}
+	}
+	// If an exact and a wildcard domain coincide, the exact domain's app
+	// takes the route, so add it last.
+	add(cfg.appNamesByWCDomain)
+	add(cfg.appNamesByDomain)
+	return m
 }
 
 func (e *extension) sendLoop(ctx context.Context) {
