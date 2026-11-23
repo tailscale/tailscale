@@ -274,8 +274,8 @@ func TestConnectorDisallowedDestinations(t *testing.T) {
 			if tt.wantCode == OK {
 				wantDst = unmapped
 			}
-			if got, _ := c.connector.lookupAddrBySrcIPAndTransitIPLocked(peerIP, transitIP); got != wantDst {
-				t.Errorf("lookup(%v, %v) = %v, want %v", peerIP, transitIP, got, wantDst)
+			if got, _ := c.connector.lookupAppAddrBySrcIPAndTransitIPLocked(peerIP, transitIP); got.addr != wantDst {
+				t.Errorf("lookup(%v, %v) = %v, want %v", peerIP, transitIP, got.addr, wantDst)
 			}
 		})
 	}
