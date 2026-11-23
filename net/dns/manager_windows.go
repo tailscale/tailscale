@@ -325,7 +325,8 @@ func (m *windowsManager) writeHosts(hosts []*HostEntry) error {
 	if err != nil {
 		return err
 	}
-	hostsFile := filepath.Join(systemDir, "drivers", "etc", "hosts")
+	driversDir := filepath.Join(systemDir, "drivers")
+	hostsFile := filepath.Join(driversDir, "etc", "hosts")
 	b, err := os.ReadFile(hostsFile)
 	switch {
 	case err == nil:
@@ -345,8 +346,21 @@ func (m *windowsManager) writeHosts(hosts []*HostEntry) error {
 		return nil
 	}
 
-	const fileMode = 0 // ignored on windows.
-	return atomicfile.WriteFile(hostsFile, outB, fileMode)
+	// Stage the new file outside of the etc directory, where creating
+	// and removing a temporary file would make the DNS Client service
+	// (Dnscache) reload the hosts file. It must be on the same volume
+	// as the hosts file to replace it.
+	tmpFile := filepath.Join(driversDir, "tailscale-hosts.tmp")
+	defer os.Remove(tmpFile) // no-op if the file is renamed
+	f, err := os.Create(tmpFile)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(outB)
+	if err := errors.Join(err, f.Sync(), f.Close()); err != nil {
+		return err
+	}
+	return atomicfile.Rename(tmpFile, hostsFile)
 }
 
 // setPrimaryDNS sets the given resolvers and domains as the Tailscale
