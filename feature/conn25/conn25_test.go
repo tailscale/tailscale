@@ -41,6 +41,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/dnstype"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
@@ -4842,6 +4843,67 @@ func TestMintTokensForDNSResponse(t *testing.T) {
 			}
 			if lines := mintTokenLines(t, c, tt.peerCap, tt.appParam, tt.raw); len(lines) != 0 {
 				t.Errorf("got %d token lines, want 0: %v", len(lines), lines)
+			}
+		})
+	}
+}
+
+func TestProtoPortRangesAllow(t *testing.T) {
+	ppr := func(s string) tailcfg.ProtoPortRange {
+		var p tailcfg.ProtoPortRange
+		if err := p.UnmarshalText([]byte(s)); err != nil {
+			t.Fatalf("parsing %q: %v", s, err)
+		}
+		return p
+	}
+
+	tests := []struct {
+		name   string
+		ranges []tailcfg.ProtoPortRange
+		proto  ipproto.Proto
+		port   uint16
+		want   bool
+	}{
+		{name: "nil-denies-tcp", proto: ipproto.TCP, port: 80},
+		{name: "nil-denies-icmp", proto: ipproto.ICMPv4},
+		{name: "empty-denies-icmp", ranges: []tailcfg.ProtoPortRange{}, proto: ipproto.ICMPv4},
+
+		{name: "wildcard-tcp", ranges: []tailcfg.ProtoPortRange{ppr("*")}, proto: ipproto.TCP, port: 1, want: true},
+		{name: "wildcard-udp", ranges: []tailcfg.ProtoPortRange{ppr("*")}, proto: ipproto.UDP, port: 65535, want: true},
+		{name: "wildcard-icmp6", ranges: []tailcfg.ProtoPortRange{ppr("*")}, proto: ipproto.ICMPv6, want: true},
+		// "*" is protocol-less, which means TCP+UDP+ICMP, not every protocol.
+		{name: "wildcard-not-sctp", ranges: []tailcfg.ProtoPortRange{ppr("*")}, proto: ipproto.SCTP, port: 80},
+
+		{name: "tcp-match", ranges: []tailcfg.ProtoPortRange{ppr("tcp:443")}, proto: ipproto.TCP, port: 443, want: true},
+		{name: "tcp-wrong-port", ranges: []tailcfg.ProtoPortRange{ppr("tcp:443")}, proto: ipproto.TCP, port: 80},
+		{name: "tcp-wrong-proto", ranges: []tailcfg.ProtoPortRange{ppr("tcp:443")}, proto: ipproto.UDP, port: 443},
+		// ICMP is permitted by any grant, even a TCP-only one.
+		{name: "tcp-grant-allows-icmp", ranges: []tailcfg.ProtoPortRange{ppr("tcp:443")}, proto: ipproto.ICMPv4, want: true},
+
+		{name: "tcp-any-port", ranges: []tailcfg.ProtoPortRange{ppr("tcp:*")}, proto: ipproto.TCP, port: 9999, want: true},
+		{name: "tcp-any-port-not-udp", ranges: []tailcfg.ProtoPortRange{ppr("tcp:*")}, proto: ipproto.UDP, port: 9999},
+
+		{name: "range-low", ranges: []tailcfg.ProtoPortRange{ppr("tcp:80-90")}, proto: ipproto.TCP, port: 79},
+		{name: "range-first", ranges: []tailcfg.ProtoPortRange{ppr("tcp:80-90")}, proto: ipproto.TCP, port: 80, want: true},
+		{name: "range-last", ranges: []tailcfg.ProtoPortRange{ppr("tcp:80-90")}, proto: ipproto.TCP, port: 90, want: true},
+		{name: "range-high", ranges: []tailcfg.ProtoPortRange{ppr("tcp:80-90")}, proto: ipproto.TCP, port: 91},
+
+		{name: "protoless-tcp", ranges: []tailcfg.ProtoPortRange{ppr("80")}, proto: ipproto.TCP, port: 80, want: true},
+		{name: "protoless-udp", ranges: []tailcfg.ProtoPortRange{ppr("80")}, proto: ipproto.UDP, port: 80, want: true},
+		{name: "protoless-wrong-port", ranges: []tailcfg.ProtoPortRange{ppr("80")}, proto: ipproto.TCP, port: 81},
+
+		{name: "numeric-proto", ranges: []tailcfg.ProtoPortRange{ppr("132:9")}, proto: ipproto.SCTP, port: 9, want: true},
+
+		{name: "union-first", ranges: []tailcfg.ProtoPortRange{ppr("tcp:443"), ppr("udp:53")}, proto: ipproto.TCP, port: 443, want: true},
+		{name: "union-second", ranges: []tailcfg.ProtoPortRange{ppr("tcp:443"), ppr("udp:53")}, proto: ipproto.UDP, port: 53, want: true},
+		{name: "union-neither", ranges: []tailcfg.ProtoPortRange{ppr("tcp:443"), ppr("udp:53")}, proto: ipproto.UDP, port: 443},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := protoPortRangesAllow(tt.ranges, tt.proto, tt.port); got != tt.want {
+				t.Errorf("protoPortRangesAllow(%v, %v, %d) = %v, want %v",
+					tt.ranges, tt.proto, tt.port, got, tt.want)
 			}
 		})
 	}

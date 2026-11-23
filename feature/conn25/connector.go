@@ -7,16 +7,13 @@ import (
 	"container/list"
 	"context"
 	"net/netip"
-	"slices"
 	"sync"
 	"time"
 
 	"tailscale.com/net/packet"
 	"tailscale.com/net/routelimits"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tstime"
-	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 )
 
@@ -87,61 +84,6 @@ func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr
 	})
 	peerMap[tipr.TransitIP] = appAddr{addr: tipr.DestinationIP, app: tipr.App, ports: ports, expiryEntry: elem}
 	return TransitIPResponse{}
-}
-
-// appProtoPortRanges returns the protocol and port combinations peerCaps
-// permits the peer to reach through app, as granted by the "ip" field of the
-// grant that produced the peer's [peercap.Conn25Prefix] capability for it.
-//
-// It reports hasCap false if the peer holds no capability for app at all. A
-// capability that is present but carries no values permits no traffic, and
-// comes back as an empty slice with hasCap true: the app stays resolvable and
-// registrable, which keeps the misconfiguration diagnosable, but
-// [connector.ingressAllow] lets nothing through.
-func appProtoPortRanges(peerCaps tailcfg.PeerCapMap, app string) (ranges []tailcfg.ProtoPortRange, hasCap bool, err error) {
-	cap := peercap.Conn25Prefix.ToAttribute(app)
-	if !peerCaps.HasCapability(cap) {
-		return nil, false, nil
-	}
-	ranges, err = tailcfg.UnmarshalCapJSON[tailcfg.ProtoPortRange](peerCaps, cap)
-	if err != nil {
-		return nil, true, err
-	}
-	return ranges, true, nil
-}
-
-// protolessGrantProtos is the set of protocols a [tailcfg.ProtoPortRange] with
-// no protocol (e.g. "*" or "80") covers. It is the same set the packet filter
-// uses for a [tailcfg.FilterRule] that names no protocol, and the set
-// [tailcfg.ProtoPortRange] documents for a zero Proto.
-var protolessGrantProtos = []ipproto.Proto{ipproto.TCP, ipproto.UDP, ipproto.ICMPv4, ipproto.ICMPv6}
-
-// protoPortRangesAllow reports whether ranges, the protocol and port
-// combinations a peer was granted for an app, permit a packet of protocol
-// proto addressed to port.
-//
-// ICMP carries no port, so it is permitted whenever the peer was granted
-// anything at all for the app. That mirrors the packet filter, which allows
-// ICMP to any destination the source may reach on any port by any protocol
-// (see matchIPsOnly in [tailscale.com/wgengine/filter]), so a "tcp:443" grant
-// does not break ping.
-func protoPortRangesAllow(ranges []tailcfg.ProtoPortRange, proto ipproto.Proto, port uint16) bool {
-	if proto == ipproto.ICMPv4 || proto == ipproto.ICMPv6 {
-		return len(ranges) > 0
-	}
-	for _, r := range ranges {
-		if r.Proto == 0 {
-			if !slices.Contains(protolessGrantProtos, proto) {
-				continue
-			}
-		} else if ipproto.Proto(r.Proto) != proto {
-			continue
-		}
-		if port >= r.Ports.First && port <= r.Ports.Last {
-			return true
-		}
-	}
-	return false
 }
 
 // connectorTransitIPExpiry is the minimum length of time a peer+transitIP -> dstIP mapping will be held in the connector.
