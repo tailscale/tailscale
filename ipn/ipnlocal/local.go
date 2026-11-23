@@ -465,10 +465,6 @@ type LocalBackend struct {
 	// avoid unnecessary churn between multiple equally-good options.
 	lastSuggestedExitNode tailcfg.StableNodeID
 
-	// suggestedExitNodePending is set when lastSuggestedExitNode changed and
-	// no broadcast [ipn.Notify] has carried the new value yet.
-	suggestedExitNodePending bool
-
 	// allowedSuggestedExitNodes is a set of exit nodes permitted by the most recent
 	// [pkey.AllowedSuggestedExitNodes] value. The allowedSuggestedExitNodesMu
 	// mutex guards access to this set.
@@ -2096,7 +2092,7 @@ func (b *LocalBackend) applyControlClientStatusLocked(c controlclient.Client, st
 	// switch is about to happen.
 	// TODO(nickkhyl): remove this once we improve handling of implicit profile switching
 	// in tailscale/corp#28014 and we apply syspolicy when the switch actually happens.
-	if b.reconcilePrefsLocked(prefs) {
+	if b.reconcilePrefsLocked(prefs, &notify) {
 		prefsChanged = true
 	}
 
@@ -2188,7 +2184,6 @@ func (b *LocalBackend) applyControlClientStatusLocked(c controlclient.Client, st
 			}
 			notify.ErrMessage = &msg
 			notify.Prefs = new(b.pm.CurrentPrefs())
-			b.addSuggestedExitNodeLocked(&notify)
 			return false
 		}
 		if oldNetMap != nil {
@@ -2252,12 +2247,12 @@ func (b *LocalBackend) applyControlClientStatusLocked(c controlclient.Client, st
 		}
 
 		// Recalculate the suggested exit node against the new netmap. A
-		// changed suggestion is added to notify below.
-		b.suggestExitNodeLocked()
+		// changed suggestion is recorded in notify.
+		b.suggestExitNodeLocked(&notify)
 
 		// Re-resolve the exit node against the new netmap. The resolved
 		// prefs ride in the same Notify as the peers they select.
-		if b.refreshExitNodeLocked() {
+		if b.refreshExitNodeLocked(&notify) {
 			prefsChanged = true
 		}
 	}
@@ -2268,7 +2263,6 @@ func (b *LocalBackend) applyControlClientStatusLocked(c controlclient.Client, st
 	if prefsChanged {
 		notify.Prefs = new(b.pm.CurrentPrefs())
 	}
-	b.addSuggestedExitNodeLocked(&notify)
 	return true
 }
 
@@ -2511,10 +2505,7 @@ func (b *LocalBackend) reconcilePrefs() (_ ipn.PrefsView, anyChange bool) {
 	defer b.mu.Unlock()
 
 	prefs := b.pm.CurrentPrefs().AsStruct()
-	if !b.reconcilePrefsLocked(prefs) {
-		// Reconciling can recompute the exit node suggestion even when
-		// the prefs end up unchanged.
-		b.sendSuggestedExitNodeLocked()
+	if !b.reconcilePrefsLocked(prefs, nil) {
 		return prefs.View(), false
 	}
 	return b.setPrefsLocked(prefs), true
@@ -2596,16 +2587,16 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	var notify *ipn.Notify // non-nil if we need to send a Notify
+	// notify collects the peer changes, the resolved exit node prefs, and a
+	// changed suggestion from this delta.
+	var notify ipn.Notify
 	defer func() {
 		// Sent while b.mu is still held, so it reflects the state this
-		// delta produced and nothing newer.
-		if b.suggestedExitNodePending && notify == nil {
-			notify = &ipn.Notify{}
-		}
-		if notify != nil {
-			b.addSuggestedExitNodeLocked(notify)
-			b.sendLocked(*notify)
+		// delta produced and nothing newer. In tests, every delta sends a
+		// Notify, even an empty one, as a wake-up for end-to-end tests in
+		// another repo.
+		if !notify.IsZero() || testenv.InTest() {
+			b.sendLocked(notify)
 		}
 	}()
 
@@ -2702,13 +2693,10 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	// path resolves the exit node in
 	// [LocalBackend.setControlClientStatusLocked]. Resolve it here too,
 	// before the reconfig below, so the routes are installed once.
-	if b.exitNodeDeltaNeedsResolveLocked(muts, deltaRes.RemovedPeers) && b.resolveExitNodeLocked() {
+	if b.exitNodeDeltaNeedsResolveLocked(muts, deltaRes.RemovedPeers) && b.resolveExitNodeLocked(&notify) {
 		// Deliver the new prefs in the same Notify as the peer changes
 		// below, so a GUI never sees prefs select a peer it has not been
 		// told about.
-		if notify == nil {
-			notify = &ipn.Notify{}
-		}
 		notify.Prefs = new(b.pm.CurrentPrefs())
 		needsAuthReconfig = true
 	}
@@ -2738,7 +2726,7 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	// which should influence which exit nodes are considered valid to suggest.
 	if cn.NetMap() != nil && mutationsAreWorthyOfRecalculatingSuggestedExitNode(muts, cn, b.lastSuggestedExitNode) {
 		// Recompute the suggested exit node
-		b.suggestExitNodeLocked()
+		b.suggestExitNodeLocked(&notify)
 	}
 
 	if cn.NetMap() == nil {
@@ -2771,9 +2759,6 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	// into full Nodes for watchers that asked for PeerChanges but not
 	// PeerPatches).
 	if peersUpsertedOrRemoved || mutationsAreWorthyOfTellingIPNBus(muts) {
-		if notify == nil {
-			notify = &ipn.Notify{}
-		}
 		for _, m := range muts {
 			switch m := m.(type) {
 			case netmap.NodeMutationUpsert:
@@ -2787,11 +2772,6 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		} else if !ok {
 			b.logf("[unexpected] got mutations worthy of telling IPN bus but failed to convert to peer changes")
 		}
-	} else if testenv.InTest() && notify == nil {
-		// In tests, send an empty Notify as a wake-up so end-to-end
-		// integration tests in another repo can check on the status of
-		// LocalBackend after processing deltas.
-		notify = new(ipn.Notify)
 	}
 	return true
 }
@@ -3050,9 +3030,10 @@ func mutationsAreWorthyOfTellingIPNBus(muts []netmap.NodeMutation) bool {
 
 // resolveAutoExitNodeLocked computes a suggested exit node and updates prefs
 // to use it if AutoExitNode is enabled, and reports whether prefs was mutated.
+// notify is passed to [LocalBackend.suggestExitNodeLocked].
 //
 // b.mu must be held.
-func (b *LocalBackend) resolveAutoExitNodeLocked(prefs *ipn.Prefs) (prefsChanged bool) {
+func (b *LocalBackend) resolveAutoExitNodeLocked(prefs *ipn.Prefs, notify *ipn.Notify) (prefsChanged bool) {
 	if !buildfeatures.HasUseExitNode {
 		return false
 	}
@@ -3069,7 +3050,7 @@ func (b *LocalBackend) resolveAutoExitNodeLocked(prefs *ipn.Prefs) (prefsChanged
 	if !prefs.AutoExitNode.IsSet() {
 		return false
 	}
-	if _, err := b.suggestExitNodeLocked(); err != nil && !errors.Is(err, ErrNoPreferredDERP) {
+	if _, err := b.suggestExitNodeLocked(notify); err != nil && !errors.Is(err, ErrNoPreferredDERP) {
 		b.logf("failed to select auto exit node: %v", err) // non-fatal, see below
 	}
 	var newExitNodeID tailcfg.StableNodeID
@@ -3365,11 +3346,15 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 	// Reset the always-on override whenever Start is called.
 	b.resetAlwaysOnOverrideLocked()
 
+	// notify is sent with the prefs below. Reconciling records a changed
+	// exit node suggestion in it.
+	var notify ipn.Notify
+
 	// Apply any syspolicy overrides, resolve exit node ID, etc.
 	// As of 2025-07-03, this is primarily needed in two cases:
 	//  - when opts.UpdatePrefs is not nil
 	//  - when Always Mode is enabled and we need to set WantRunning to true
-	if b.reconcilePrefsLocked(newPrefs) {
+	if b.reconcilePrefsLocked(newPrefs, &notify) {
 		prefsChanged = true
 		prefsChangedWhy = append(prefsChangedWhy, "reconcilePrefsLocked")
 	}
@@ -3532,8 +3517,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 
 	blid := b.backendLogID.String()
 	b.logf("Backend: logs: be:%v fe:%v", blid, opts.FrontendLogID)
-	notify := ipn.Notify{Prefs: &prefs}
-	b.addSuggestedExitNodeLocked(&notify)
+	notify.Prefs = &prefs
 	b.sendToLocked(notify, allClients)
 
 	// initialize Taildrive shares from saved state
@@ -4161,12 +4145,11 @@ func (b *LocalBackend) buildInitialNotifyLocked(sb *ipnstate.StatusBuilder, sess
 		ini.Health = b.HealthTracker().CurrentState()
 	}
 	if mask&ipn.NotifyInitialSuggestedExitNode != 0 {
-		if en, err := b.suggestExitNodeLocked(); err == nil {
+		// A changed suggestion is broadcast to the existing sessions at
+		// once. ini carries the current one for the new session.
+		if en, err := b.suggestExitNodeLocked(nil); err == nil {
 			ini.SuggestedExitNode = &en.ID
 		}
-		// Existing sessions do not receive the initial Notify. Broadcast
-		// a changed suggestion to them.
-		b.sendSuggestedExitNodeLocked()
 	}
 	if mask&ipn.NotifyInitialClientVersion != 0 {
 		if prefs := b.pm.CurrentPrefs(); prefs.Valid() && prefs.AutoUpdate().Check {
@@ -5674,7 +5657,7 @@ func (b *LocalBackend) changeDisablesExitNodeLocked(prefs ipn.PrefsView, change 
 	// and resolve the exit node in the prefs.
 	tmpPrefs := prefs.AsStruct()
 	tmpPrefs.ApplyEdits(tmpChange)
-	b.resolveExitNodeInPrefsLocked(tmpPrefs)
+	b.resolveExitNodeInPrefsLocked(tmpPrefs, nil)
 
 	// If ExitNodeID is empty after applying the changes,
 	// but wasn't empty before, then the change disables
@@ -5841,10 +5824,6 @@ func (b *LocalBackend) editPrefsLocked(actor ipnauth.Actor, mp *ipn.MaskedPrefs)
 	syncs.RequiresMutex(&b.mu)
 	p0 := b.pm.CurrentPrefs()
 
-	// The access check below can recompute the exit node suggestion. The
-	// returns that send no prefs still announce a changed suggestion.
-	defer b.sendSuggestedExitNodeLocked()
-
 	// Check if the changes in mp are allowed.
 	if err := b.checkEditPrefsAccessLocked(actor, p0, mp); err != nil {
 		b.logf("EditPrefs(%v): %v", mp.Pretty(), err)
@@ -5921,8 +5900,10 @@ func (b *LocalBackend) setPrefsLocked(newp *ipn.Prefs) ipn.PrefsView {
 	// Apply reconciliation to the prefs, such as policy overrides,
 	// exit node resolution, and so on. The call returns whether it updated
 	// newp, but everything in this function treats newp as completely new
-	// anyway, so its return value can be ignored here.
-	b.reconcilePrefsLocked(newp)
+	// anyway, so its return value can be ignored here. A changed exit node
+	// suggestion is recorded in notify, which is sent with the prefs below.
+	var notify ipn.Notify
+	b.reconcilePrefsLocked(newp, &notify)
 
 	// We do this to avoid holding the lock while doing everything else.
 
@@ -6000,8 +5981,7 @@ func (b *LocalBackend) setPrefsLocked(newp *ipn.Prefs) ipn.PrefsView {
 		}
 	}
 
-	notify := ipn.Notify{Prefs: &prefs}
-	b.addSuggestedExitNodeLocked(&notify)
+	notify.Prefs = &prefs
 	b.sendLocked(notify)
 	return prefs
 }
@@ -7649,10 +7629,9 @@ func (b *LocalBackend) RefreshExitNode() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var notify ipn.Notify
-	if b.refreshExitNodeLocked() {
+	if b.refreshExitNodeLocked(&notify) {
 		notify.Prefs = new(b.pm.CurrentPrefs())
 	}
-	b.addSuggestedExitNodeLocked(&notify)
 	if !notify.IsZero() {
 		b.sendLocked(notify)
 	}
@@ -7660,11 +7639,11 @@ func (b *LocalBackend) RefreshExitNode() {
 
 // refreshExitNodeLocked is like RefreshExitNode but requires b.mu be held.
 // If it reports true, the caller must send an [ipn.Notify] carrying
-// b.pm.CurrentPrefs().
-func (b *LocalBackend) refreshExitNodeLocked() (changed bool) {
+// b.pm.CurrentPrefs(). notify is passed to [LocalBackend.suggestExitNodeLocked].
+func (b *LocalBackend) refreshExitNodeLocked(notify *ipn.Notify) (changed bool) {
 	syncs.RequiresMutex(&b.mu)
 
-	if !b.resolveExitNodeLocked() {
+	if !b.resolveExitNodeLocked(notify) {
 		return false
 	}
 	b.authReconfigLocked()
@@ -7681,8 +7660,10 @@ func (b *LocalBackend) refreshExitNodeLocked() (changed bool) {
 // selected exit node, if needed. It reports false if the prefs could not
 // be saved, so the caller acts only on prefs that are in effect.
 //
+// notify is passed to [LocalBackend.suggestExitNodeLocked].
+//
 // b.mu must be held.
-func (b *LocalBackend) resolveExitNodeLocked() (changed bool) {
+func (b *LocalBackend) resolveExitNodeLocked(notify *ipn.Notify) (changed bool) {
 	syncs.RequiresMutex(&b.mu)
 
 	if !buildfeatures.HasUseExitNode {
@@ -7692,7 +7673,7 @@ func (b *LocalBackend) resolveExitNodeLocked() (changed bool) {
 	nm := b.currentNode().NetMap()
 	oldPrefs := b.pm.CurrentPrefs()
 	prefs := oldPrefs.AsStruct()
-	if !b.resolveExitNodeInPrefsLocked(prefs) {
+	if !b.resolveExitNodeInPrefsLocked(prefs, notify) {
 		return false
 	}
 
@@ -7729,12 +7710,14 @@ func (b *LocalBackend) resolveExitNodeLocked() (changed bool) {
 //
 // It must not perform any reconfiguration, as the prefs are not yet effective.
 //
+// notify is passed to [LocalBackend.suggestExitNodeLocked].
+//
 // b.mu must be held.
-func (b *LocalBackend) reconcilePrefsLocked(prefs *ipn.Prefs) (changed bool) {
+func (b *LocalBackend) reconcilePrefsLocked(prefs *ipn.Prefs, notify *ipn.Notify) (changed bool) {
 	if buildfeatures.HasSystemPolicy && b.applySysPolicyLocked(prefs) {
 		changed = true
 	}
-	if buildfeatures.HasUseExitNode && b.resolveExitNodeInPrefsLocked(prefs) {
+	if buildfeatures.HasUseExitNode && b.resolveExitNodeInPrefsLocked(prefs, notify) {
 		changed = true
 	}
 	if changed {
@@ -7746,14 +7729,15 @@ func (b *LocalBackend) reconcilePrefsLocked(prefs *ipn.Prefs) (changed bool) {
 // resolveExitNodeInPrefsLocked determines which exit node to use
 // based on the specified prefs and netmap. It updates the exit node ID
 // in the prefs if needed, and returns true if the exit node has changed.
+// notify is passed to [LocalBackend.suggestExitNodeLocked].
 //
 // b.mu must be held.
-func (b *LocalBackend) resolveExitNodeInPrefsLocked(prefs *ipn.Prefs) (changed bool) {
+func (b *LocalBackend) resolveExitNodeInPrefsLocked(prefs *ipn.Prefs, notify *ipn.Notify) (changed bool) {
 	syncs.RequiresMutex(&b.mu)
 	if !buildfeatures.HasUseExitNode {
 		return false
 	}
-	if b.resolveAutoExitNodeLocked(prefs) {
+	if b.resolveAutoExitNodeLocked(prefs, notify) {
 		changed = true
 	}
 	if b.resolveExitNodeIPLocked(prefs) {
@@ -8930,7 +8914,6 @@ func (b *LocalBackend) resetForProfileChangeLocked() error {
 	b.lastServeConfJSON = mem.B(nil)
 	b.serveConfig = ipn.ServeConfigView{}
 	b.lastSuggestedExitNode = ""
-	b.suggestedExitNodePending = false
 	b.keyExpired = false
 	b.setNodeRemovedLocked(false)
 	b.resetAlwaysOnOverrideLocked()
@@ -9250,13 +9233,12 @@ var ErrNoPreferredDERP = errors.New("no preferred DERP, try again later")
 // When the client has [tailcfg.NodeAttrClientSideReachabilityRouteCheck] in its CapMap,
 // it will use [HookRouteCheckReport] to get the latest cached routecheck report.
 //
-// It does not notify clients of a changed suggestion. A caller that goes on
-// to broadcast an [ipn.Notify] must call [LocalBackend.addSuggestedExitNodeLocked]
-// on it first. A caller that broadcasts nothing else must call
-// [LocalBackend.sendSuggestedExitNodeLocked] instead.
+// If the suggestion changed and notify is non-nil, the new suggestion is
+// recorded in notify for the caller to send with its other changes. If
+// notify is nil, it is broadcast at once.
 //
 // b.mu must be held.
-func (b *LocalBackend) suggestExitNodeLocked() (response apitype.ExitNodeSuggestionResponse, err error) {
+func (b *LocalBackend) suggestExitNodeLocked(notify *ipn.Notify) (response apitype.ExitNodeSuggestionResponse, err error) {
 	if !buildfeatures.HasUseExitNode {
 		return response, feature.ErrUnavailable
 	}
@@ -9283,37 +9265,15 @@ func (b *LocalBackend) suggestExitNodeLocked() (response apitype.ExitNodeSuggest
 		return res, err
 	}
 	if prevSuggestion != res.ID {
-		b.suggestedExitNodePending = true
+		if notify != nil {
+			notify.SuggestedExitNode = new(res.ID)
+		} else {
+			b.sendLocked(ipn.Notify{SuggestedExitNode: new(res.ID)})
+		}
 	}
 	b.lastSuggestedExitNode = res.ID
 
 	return res, err
-}
-
-// addSuggestedExitNodeLocked sets n.SuggestedExitNode to the current
-// suggestion if it changed since the last broadcast, marks it as sent, and
-// reports whether it set the field. The caller must then send n to all
-// clients.
-//
-// b.mu must be held.
-func (b *LocalBackend) addSuggestedExitNodeLocked(n *ipn.Notify) (added bool) {
-	if !b.suggestedExitNodePending {
-		return false
-	}
-	n.SuggestedExitNode = new(b.lastSuggestedExitNode)
-	b.suggestedExitNodePending = false
-	return true
-}
-
-// sendSuggestedExitNodeLocked broadcasts the current exit node suggestion
-// if it changed since the last broadcast.
-//
-// b.mu must be held.
-func (b *LocalBackend) sendSuggestedExitNodeLocked() {
-	var n ipn.Notify
-	if b.addSuggestedExitNodeLocked(&n) {
-		b.sendLocked(n)
-	}
 }
 
 // SuggestExitNode computes an exit-node suggestion based on the current netmap and
@@ -9326,9 +9286,7 @@ func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionRes
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	response, err = b.suggestExitNodeLocked()
-	b.sendSuggestedExitNodeLocked()
-	return response, err
+	return b.suggestExitNodeLocked(nil)
 }
 
 // getAllowedSuggestions returns a set of exit nodes permitted by the most recent

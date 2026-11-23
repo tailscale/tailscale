@@ -1729,79 +1729,63 @@ func TestSuggestExitNodeNotifies(t *testing.T) {
 	nw.check()
 }
 
-// TestSuggestedExitNodePendingFlushed checks that every entry point that can
-// recompute the exit node suggestion announces a pending change before it
-// returns, including the paths that send no prefs of their own.
-func TestSuggestedExitNodePendingFlushed(t *testing.T) {
-	self := makePeer(1, withName("self"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.1/32")))
-	tests := []struct {
-		name string
-		run  func(t *testing.T, b *LocalBackend)
-	}{
-		{"SetControlClientStatus without netmap", func(t *testing.T, b *LocalBackend) {
-			b.SetControlClientStatus(b.cc, controlclient.Status{})
-		}},
-		{"UpdateNetmapDelta without mutations", func(t *testing.T, b *LocalBackend) {
-			if !b.UpdateNetmapDelta(nil) {
-				t.Fatal("UpdateNetmapDelta returned false")
-			}
-		}},
-		{"EditPrefs no-op", func(t *testing.T, b *LocalBackend) {
-			if _, err := b.EditPrefs(&ipn.MaskedPrefs{}); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{"reconcilePrefs no-op", func(t *testing.T, b *LocalBackend) {
-			if _, changed := b.reconcilePrefs(); changed {
-				t.Fatal("reconcilePrefs reported a change")
-			}
-		}},
-		{"RefreshExitNode no-op", func(t *testing.T, b *LocalBackend) {
-			b.RefreshExitNode()
-		}},
-		{"SuggestExitNode", func(t *testing.T, b *LocalBackend) {
-			b.SuggestExitNode()
-		}},
-		{"Start", func(t *testing.T, b *LocalBackend) {
-			if err := b.Start(ipn.Options{}); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{"WatchNotifications initial suggestion", func(t *testing.T, b *LocalBackend) {
-			second := newNotificationWatcher(t, b, ipnauth.Self)
-			second.watch(ipn.NotifyInitialSuggestedExitNode, nil, func(testing.TB, ipnauth.Actor, *ipn.Notify) bool { return false })
-		}},
+// TestSuggestExitNodeLockedNotify checks that a changed suggestion is
+// recorded in the caller's Notify when one is given, and broadcast at once
+// when none is.
+func TestSuggestExitNodeLockedNotify(t *testing.T) {
+	report := &netcheck.Report{
+		RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
+			1: 5 * time.Millisecond,
+			2: 10 * time.Millisecond,
+		},
+		PreferredDERP: 1,
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			b := newTestLocalBackend(t)
-			b.SetControlClientStatus(b.cc, controlclient.Status{NetMap: buildNetmapWithPeers(self), LoggedIn: true})
+	exitNode1 := makeExitNode(1, withName("node-1"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.1/32")))
+	exitNode2 := makeExitNode(2, withName("node-2"), withDERP(2), withAddresses(netip.MustParsePrefix("100.64.1.2/32")))
+	selfNode := makeExitNode(3, withName("node-3"), withDERP(1), withAddresses(netip.MustParsePrefix("100.64.1.3/32")))
+	nm := buildNetmapWithPeers(selfNode, exitNode1, exitNode2)
 
-			nw := newNotificationWatcher(t, b, ipnauth.Self)
-			nw.watch(0, []wantedNotification{{
-				name: "suggested exit node",
-				cond: func(_ testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
-					return n.SuggestedExitNode != nil
-				},
-			}})
+	lb := newTestLocalBackend(t)
+	lb.sys.MagicSock.Get().AddNetcheckReportForTest(nm.DERPMap, report, time.Now())
+	lb.currentNode().SetNetMap(nm)
 
-			// Pretend a suggestion changed without being announced yet.
-			b.mu.Lock()
-			b.lastSuggestedExitNode = "stale"
-			b.suggestedExitNodePending = true
-			b.mu.Unlock()
-
-			tt.run(t, b)
-			nw.check()
-
-			b.mu.Lock()
-			pending := b.suggestedExitNodePending
-			b.mu.Unlock()
-			if pending {
-				t.Error("suggestedExitNodePending still set after the call")
-			}
-		})
+	// With a Notify, the change is recorded there and nothing is sent.
+	nw := newNotificationWatcher(t, lb, ipnauth.Self)
+	nw.watch(0, nil, func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+		if n.SuggestedExitNode != nil {
+			t.Errorf("suggestion broadcast despite a caller Notify: %v", n)
+		}
+		return false
+	})
+	var n ipn.Notify
+	lb.mu.Lock()
+	_, err := lb.suggestExitNodeLocked(&n)
+	lb.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
 	}
+	if n.SuggestedExitNode == nil || *n.SuggestedExitNode != exitNode1.StableID() {
+		t.Fatalf("Notify.SuggestedExitNode = %v, want %q", n.SuggestedExitNode, exitNode1.StableID())
+	}
+	nw.check()
+
+	// Without one, the change is broadcast.
+	lb.mu.Lock()
+	lb.lastSuggestedExitNode = ""
+	lb.mu.Unlock()
+	nw.watch(0, []wantedNotification{{
+		name: "suggested exit node",
+		cond: func(_ testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+			return n.SuggestedExitNode != nil && *n.SuggestedExitNode == exitNode1.StableID()
+		},
+	}})
+	lb.mu.Lock()
+	_, err = lb.suggestExitNodeLocked(nil)
+	lb.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	nw.check()
 }
 
 func TestInternalAndExternalInterfaces(t *testing.T) {
@@ -4721,7 +4705,7 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			b.pm = pm
 			b.lastSuggestedExitNode = test.lastSuggestedExitNode
 			prefs := b.pm.prefs.AsStruct()
-			if changed := b.reconcilePrefsLocked(prefs); changed != test.prefsChanged {
+			if changed := b.reconcilePrefsLocked(prefs, nil); changed != test.prefsChanged {
 				t.Errorf("wanted prefs changed %v, got prefs changed %v", test.prefsChanged, changed)
 			}
 
