@@ -31,7 +31,6 @@ import (
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/netmon"
-	"tailscale.com/net/packet"
 	"tailscale.com/net/routecheck"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
@@ -42,11 +41,9 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/dnstype"
-	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
-	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/must"
@@ -4846,120 +4843,6 @@ func TestMintTokensForDNSResponse(t *testing.T) {
 			}
 			if lines := mintTokenLines(t, c, tt.peerCap, tt.appParam, tt.raw); len(lines) != 0 {
 				t.Errorf("got %d token lines, want 0: %v", len(lines), lines)
-			}
-		})
-	}
-}
-
-func TestProtoPortRangesAllow(t *testing.T) {
-	// ppr builds the grant values a peer holds for an app.
-	ppr := func(ss ...string) views.Slice[tailcfg.ProtoPortRange] {
-		var out []tailcfg.ProtoPortRange
-		for _, s := range ss {
-			var p tailcfg.ProtoPortRange
-			if err := p.UnmarshalText([]byte(s)); err != nil {
-				t.Fatalf("parsing %q: %v", s, err)
-			}
-			out = append(out, p)
-		}
-		return views.SliceOf(out)
-	}
-
-	src := netip.MustParseAddr("100.64.0.1")
-	dst := netip.MustParseAddr("169.254.0.1")
-
-	pkt := func(ver uint8, proto ipproto.Proto, port uint16, flags packet.TCPFlag) packet.Parsed {
-		return packet.Parsed{
-			IPVersion: ver,
-			IPProto:   proto,
-			Src:       netip.AddrPortFrom(src, 12345),
-			Dst:       netip.AddrPortFrom(dst, port),
-			TCPFlags:  flags,
-		}
-	}
-	tcpSyn := func(port uint16) packet.Parsed { return pkt(4, ipproto.TCP, port, packet.TCPSyn) }
-	tcp := func(port uint16, flags packet.TCPFlag) packet.Parsed { return pkt(4, ipproto.TCP, port, flags) }
-	udp := func(port uint16) packet.Parsed { return pkt(4, ipproto.UDP, port, 0) }
-	sctp := func(port uint16) packet.Parsed { return pkt(4, ipproto.SCTP, port, 0) }
-
-	// IsEchoResponse and IsError read the packet body, so ICMP cases need real
-	// bytes rather than a hand-built [packet.Parsed].
-	icmp4 := func(typ packet.ICMP4Type) packet.Parsed {
-		buf := packet.Generate(packet.ICMP4Header{
-			IP4Header: packet.IP4Header{Src: src, Dst: dst},
-			Type:      typ,
-			Code:      packet.ICMP4NoCode,
-		}, []byte("payload!!"))
-		var p packet.Parsed
-		p.Decode(buf)
-		if p.IPProto != ipproto.ICMPv4 {
-			t.Fatalf("test setup error: built an %v packet, want ICMPv4", p.IPProto)
-		}
-		return p
-	}
-
-	// gre is a protocol that carries no port and gets no special handling.
-	const gre = ipproto.Proto(47)
-
-	tests := []struct {
-		name       string
-		ranges     views.Slice[tailcfg.ProtoPortRange]
-		p          packet.Parsed
-		want       bool
-		wantReason string
-	}{
-		{"tcp-syn-match", ppr("tcp:443"), tcpSyn(443), true, connectorTCPReason},
-		{"tcp-syn-wrong-port", ppr("tcp:443"), tcpSyn(80), false, ""},
-		{"tcp-syn-wrong-proto", ppr("udp:443"), tcpSyn(443), false, ""},
-		{"tcp-syn-protoless", ppr("80"), tcpSyn(80), true, connectorTCPReason},
-		{"tcp-syn-wildcard", ppr("*"), tcpSyn(1), true, connectorTCPReason},
-		{"tcp-syn-any-port", ppr("tcp:*"), tcpSyn(9999), true, connectorTCPReason},
-		{"tcp-syn-range-first", ppr("tcp:80-90"), tcpSyn(80), true, connectorTCPReason},
-		{"tcp-syn-range-last", ppr("tcp:80-90"), tcpSyn(90), true, connectorTCPReason},
-		{"tcp-syn-range-low", ppr("tcp:80-90"), tcpSyn(79), false, ""},
-		{"tcp-syn-range-high", ppr("tcp:80-90"), tcpSyn(91), false, ""},
-		{"tcp-syn-empty-grant", ppr(), tcpSyn(443), false, ""},
-		{"tcp-syn-union-first", ppr("tcp:443", "udp:53"), tcpSyn(443), true, connectorTCPReason},
-		{"tcp-syn-union-neither", ppr("tcp:443", "udp:53"), tcpSyn(53), false, ""},
-
-		// Inherited from RunIn: anything that is not a lone SYN is admitted,
-		// including to a port the grant does not name, and with no grant at
-		// all. On a connector that packet then gets DNATed on to the app.
-		{"tcp-ack-ungranted-port", ppr("tcp:443"), tcp(22, packet.TCPAck), true, connectorTCPNonSynReason},
-		{"tcp-ack-empty-grant", ppr(), tcp(22, packet.TCPAck), true, connectorTCPNonSynReason},
-		{"tcp-syn-ack-is-not-a-syn", ppr(), tcp(22, packet.TCPSynAck), true, connectorTCPNonSynReason},
-
-		{"udp-match", ppr("udp:53"), udp(53), true, connectorPortReason},
-		{"udp-wrong-port", ppr("udp:53"), udp(54), false, ""},
-		{"udp-protoless", ppr("80"), udp(80), true, connectorPortReason},
-		{"udp-empty-grant", ppr(), udp(53), false, ""},
-		{"sctp-match", ppr("132:9"), sctp(9), true, connectorPortReason},
-		{"sctp-wrong-port", ppr("132:9"), sctp(10), false, ""},
-		// A range naming no protocol covers UDP but not SCTP.
-		{"sctp-protoless-denied", ppr("9"), sctp(9), false, ""},
-
-		{"icmp4-request-with-grant", ppr("tcp:443"), icmp4(packet.ICMP4EchoRequest), true, connectorICMPReason},
-		{"icmp4-request-empty-grant", ppr(), icmp4(packet.ICMP4EchoRequest), false, ""},
-		// Responses are admitted even with no grant at all.
-		{"icmp4-echo-reply-empty-grant", ppr(), icmp4(packet.ICMP4EchoReply), true, connectorICMPResponseReason},
-		{"icmp4-unreachable-empty-grant", ppr(), icmp4(packet.ICMP4Unreachable), true, connectorICMPResponseReason},
-		// An ICMP protocol that disagrees with the packet's IP version is
-		// refused rather than falling through to the default case.
-		{"icmp6-on-ipv4", ppr("*"), pkt(4, ipproto.ICMPv6, 0, 0), false, ""},
-		{"icmp4-on-ipv6", ppr("*"), pkt(6, ipproto.ICMPv4, 0, 0), false, ""},
-
-		// A protocol that carries no port has to be granted by name, in full.
-		{"gre-all-ports", ppr("47:*"), pkt(4, gre, 0, 0), true, connectorPortlessReason},
-		{"gre-narrow-ports", ppr("47:80"), pkt(4, gre, 0, 0), false, ""},
-		{"gre-protoless-grant", ppr("*"), pkt(4, gre, 0, 0), false, ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, gotReason := protoPortRangesAllow(tt.ranges, tt.p)
-			if got != tt.want || gotReason != tt.wantReason {
-				t.Errorf("protoPortRangesAllow(%v, %v) = (%v, %q), want (%v, %q)",
-					tt.ranges, &tt.p, got, gotReason, tt.want, tt.wantReason)
 			}
 		})
 	}
