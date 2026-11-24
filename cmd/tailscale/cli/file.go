@@ -84,6 +84,69 @@ var fileCpCmd = &ffcli.Command{
 	})(),
 }
 
+func init() {
+	ffcomplete.Args(fileCpCmd, completeFileCp)
+	ffcomplete.Args(fileGetCmd, completeFileGet)
+}
+
+// completeFileGet completes the single <target-directory> argument of
+// "tailscale file get", which must be a directory, not a file.
+func completeFileGet(args []string) ([]string, ffcomplete.ShellCompDirective, error) {
+	if len(args) > 1 {
+		return nil, ffcomplete.ShellCompDirectiveNoFileComp, nil
+	}
+	if strings.HasPrefix(ffcomplete.LastArg(args), "-") {
+		// Completing a flag name: let the flag suggestions through.
+		return nil, ffcomplete.ShellCompDirectiveDefault, nil
+	}
+	return nil, ffcomplete.ShellCompDirectiveFilterDirs, nil
+}
+
+// completeFileCp completes the positional arguments of "tailscale file cp":
+// local files, followed by a final "<target>:".
+func completeFileCp(args []string) ([]string, ffcomplete.ShellCompDirective, error) {
+	if cpArgs.targets {
+		// --targets takes no arguments.
+		return nil, ffcomplete.ShellCompDirectiveNoFileComp, nil
+	}
+	if len(args) <= 1 {
+		// The first argument is always a file to send, never the target.
+		return nil, ffcomplete.ShellCompDirectiveDefault, nil
+	}
+	return completeFileCpTarget(ffcomplete.LastArg(args))
+}
+
+// completeFileCpTarget returns "<name>:" completions for the names of devices
+// that can receive files, for use as the final argument of "tailscale file cp".
+//
+// It is only meaningful after at least one file argument. Only names with the
+// given prefix are returned. If none match, nothing is returned and the shell
+// falls back to completing local file names.
+func completeFileCpTarget(arg string) ([]string, ffcomplete.ShellCompDirective, error) {
+	// Anything that looks like a path is a file, not a target.
+	if strings.ContainsAny(arg, `/\`) || strings.HasPrefix(arg, ".") || strings.HasPrefix(arg, "~") {
+		return nil, ffcomplete.ShellCompDirectiveDefault, nil
+	}
+	fts, err := localClient.FileTargets(context.Background())
+	if err != nil {
+		// Fall back to file completion if the daemon is unreachable.
+		return nil, ffcomplete.ShellCompDirectiveDefault, nil
+	}
+	var words []string
+	for _, ft := range fts {
+		name := ft.Node.ComputedName
+		if name == "" || !strings.HasPrefix(name, arg) {
+			continue
+		}
+		words = append(words, name+":")
+	}
+	if len(words) == 0 {
+		return nil, ffcomplete.ShellCompDirectiveDefault, nil
+	}
+	// NoSpace: the user may want to keep typing after the colon.
+	return words, ffcomplete.ShellCompDirectiveNoSpace, nil
+}
+
 var cpArgs struct {
 	name           string
 	verbose        bool
