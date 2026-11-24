@@ -71,6 +71,7 @@ func TestComplete(t *testing.T) {
 		showFlags bool
 		showDescs bool
 		wantComp  []string
+		wantNone  bool
 		wantDir   ffcomplete.ShellCompDirective
 	}{
 		{
@@ -123,6 +124,19 @@ func TestComplete(t *testing.T) {
 			// https://go.dev/play/p/UCtftQqVhOD.
 			args:     []string{"--root-str", "--", "--", "--r"},
 			wantComp: nil,
+		},
+		{
+			// Nothing after a '--' terminator is a flag, even a bare '--'.
+			args:     []string{"debug", "--", "--"},
+			wantNone: true,
+		},
+		{
+			args:     []string{"debug", "--", "--de"},
+			wantNone: true,
+		},
+		{
+			args:     []string{"debug", "--", ""},
+			wantNone: true,
 		},
 		{
 			args:     []string{"--root-bool="},
@@ -211,6 +225,9 @@ func TestComplete(t *testing.T) {
 			}
 
 			// Test the results match our expectation.
+			if test.wantNone && len(complete) != 0 {
+				t.Errorf("got completions %q, want none", complete)
+			}
 			if test.wantComp != nil {
 				if diff := cmp.Diff(test.wantComp, complete); diff != "" {
 					t.Errorf("unexpected completion directives (-want +got):\n%s", diff)
