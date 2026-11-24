@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/appctype"
@@ -479,6 +481,70 @@ func TestTransitIPConnMapping(t *testing.T) {
 	// to a restarted connector)
 	if err := conn25.client.addTransitIPForConnector(forConnector(connectorPeers[1])); err != nil {
 		t.Errorf("error adding duplicate transitIP for a connector: %v", err)
+	}
+}
+
+// TestLookupTransitIPsByConnIDOrder covers the stable-order requirement that
+// [ipnext.Hooks.ExtraWireGuardAllowedIPs], which this lookup feeds, places on
+// its results: an unchanged set of Transit IPs has to come back in an unchanged
+// order, or the consumer reads it as a change and resyncs the connector's
+// WireGuard peer on every reconfig. byConnID stores the Transit IPs in a
+// map-backed set, which iterates in a different order each time, so this only
+// holds because the lookup sorts.
+func TestLookupTransitIPsByConnIDOrder(t *testing.T) {
+	const appName = "a"
+	conn25 := newConn25(t.Logf)
+	conn25.reconfig(&config{
+		isConfigured: true,
+		appsByName:   map[string]appctype.AppConnectorAttr{appName: {}},
+		ipSets: ipSets{
+			v4Magic:   mustIPSetFromPrefix("100.64.0.0/24"),
+			v6Magic:   mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0100::/80"),
+			v4Transit: mustIPSetFromPrefix("169.254.0.0/24"),
+			v6Transit: mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0200::/80"),
+		},
+	})
+	c := conn25.client
+
+	// Reserve a handful of assignments against one connector, mixing families
+	// so the result spans the v4/v6 boundary.
+	var reserved []*addrs
+	for i := range 4 {
+		for _, dst := range []netip.Addr{
+			netip.MustParseAddr(fmt.Sprintf("0.0.0.%d", i+1)),
+			netip.MustParseAddr(fmt.Sprintf("2001:db8::%d", i+1)),
+		} {
+			as, err := c.reserveAddresses(appName, "example.com.", dst, time.Minute, testConnectorPeer, "")
+			if err != nil {
+				t.Fatalf("reserveAddresses(%v): %v", dst, err)
+			}
+			reserved = append(reserved, as)
+		}
+	}
+	// Register them in reverse, so insertion order isn't the sorted order.
+	for i := len(reserved) - 1; i >= 0; i-- {
+		if err := c.addTransitIPForConnector(*reserved[i]); err != nil {
+			t.Fatalf("addTransitIPForConnector(%v): %v", reserved[i].connectorAddr.transit, err)
+		}
+	}
+
+	want := make([]netip.Prefix, 0, len(reserved))
+	for _, as := range reserved {
+		tip := as.connectorAddr.transit
+		want = append(want, netip.PrefixFrom(tip, tip.BitLen()))
+	}
+	tsaddr.SortPrefixes(want)
+
+	// Repeat the lookup: one sorted result could be the luck of the map, but
+	// a run of identical ones can only come from sorting.
+	for range 10 {
+		got, ok := c.lookupTransitIPsByConnID(testConnectorPeer.ID())
+		if !ok {
+			t.Fatalf("no Transit IPs registered for connector %d", testConnectorPeer.ID())
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("Transit IPs out of order:\n got %v\nwant %v", got, want)
+		}
 	}
 }
 

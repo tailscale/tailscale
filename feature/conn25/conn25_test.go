@@ -3275,7 +3275,6 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 				if ok != lu.expectedOk {
 					t.Fatalf("unexpected ok result at index %d wanted %v, got %v", i, lu.expectedOk, ok)
 				}
-				slices.SortFunc(got, func(a, b netip.Prefix) int { return a.Compare(b) })
 				if diff := cmp.Diff(lu.expectedIPs, got, cmpopts.EquateComparable(netip.Prefix{})); diff != "" {
 					t.Fatalf("transit IPs mismatch at index %d, (-want +got):\n%s", i, diff)
 				}
