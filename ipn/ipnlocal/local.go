@@ -5725,12 +5725,6 @@ func (b *LocalBackend) onEditPrefsLocked(_ ipnauth.Actor, mp *ipn.MaskedPrefs, o
 		}
 	}
 
-	if mp.AdvertiseServicesSet {
-		if ns, ok := b.sys.Netstack.GetOK(); ok {
-			ns.UpdateActiveVIPServices(newPrefs.AdvertiseServices())
-		}
-	}
-
 	// This is recorded here in the EditPrefs path, not the setPrefs path on purpose.
 	// recordForEdit records metrics related to edits and changes, not the final state.
 	// If, in the future, we want to record gauge-metrics related to the state of prefs,
@@ -5945,6 +5939,15 @@ func (b *LocalBackend) setPrefsLocked(newp *ipn.Prefs) ipn.PrefsView {
 	b.pauseOrResumeControlClientLocked() // for prefs.Sync changes
 	b.updateWarnSync(prefs)
 	b.updateNoSNATExitNodeWarning(prefs)
+
+	// Netstack handles traffic to a Tailscale Service IP locally only when
+	// this node advertises that Service. Update its set here so that every
+	// path that changes prefs keeps it current, including config file reloads.
+	if buildfeatures.HasServe && (!oldp.Valid() || !views.SliceEqual(oldp.AdvertiseServices(), prefs.AdvertiseServices())) {
+		if ns, ok := b.sys.Netstack.GetOK(); ok {
+			ns.UpdateActiveVIPServices(prefs.AdvertiseServices())
+		}
+	}
 
 	if oldp.ShieldsUp() != newp.ShieldsUp || hostInfoChanged {
 		b.doSetHostinfoFilterServicesLocked()
