@@ -4,6 +4,7 @@
 package tsnet
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -46,6 +47,21 @@ func startFakeDNS(t *testing.T, addrs map[string][]netip.Addr) *fakeDNS {
 	f := &fakeDNS{t: t, pc: pc, addrs: addrs}
 	t.Cleanup(func() { pc.Close() })
 	go f.serve()
+	return f
+}
+
+func useFakeHostDNS(t *testing.T, s *Server, addrs map[string][]netip.Addr) *fakeDNS {
+	t.Helper()
+	// Fake DNS server responds with NXDOMAIN for unknown addresses,
+	// unlike some OS resolvers which return temporary errors.
+	f := startFakeDNS(t, addrs)
+	s.dnsResolver().hostResolver = &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, network, f.addr())
+		},
+	}
 	return f
 }
 
@@ -195,6 +211,9 @@ func TestLookupIPSearchSplitMagicDNS(t *testing.T) {
 		Routes: map[string][]*dnstype.Resolver{
 			"corp.example.com.": {{Addr: upstream.addr()}},
 		},
+	})
+	_ = useFakeHostDNS(t, s, map[string][]netip.Addr{
+		"localhost.": {netip.MustParseAddr("127.0.0.1")},
 	})
 	selfIP, _ := s.TailscaleIPs()
 
