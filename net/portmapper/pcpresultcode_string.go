@@ -12,25 +12,29 @@ func _() {
 	// Re-run the stringer command to generate them again.
 	var x [1]struct{}
 	_ = x[pcpCodeOK-0]
+	_ = x[pcpCodeUnsupportedVersion-1]
 	_ = x[pcpCodeNotAuthorized-2]
+	_ = x[pcpCodeMalformedRequest-3]
+	_ = x[pcpCodeUnsupportedOpcode-4]
+	_ = x[pcpCodeUnsupportedOption-5]
+	_ = x[pcpCodeMalformedOption-6]
+	_ = x[pcpCodeNetworkFailure-7]
+	_ = x[pcpCodeNoResources-8]
+	_ = x[pcpCodeUnsupportedProtocol-9]
+	_ = x[pcpCodeUserExceededQuota-10]
+	_ = x[pcpCodeCannotProvideExternal-11]
 	_ = x[pcpCodeAddressMismatch-12]
+	_ = x[pcpCodeExcessiveRemotePeers-13]
 }
 
-const (
-	_pcpResultCode_name_0 = "OK"
-	_pcpResultCode_name_1 = "NotAuthorized"
-	_pcpResultCode_name_2 = "AddressMismatch"
-)
+const _pcpResultCode_name = "OKUnsupportedVersionNotAuthorizedMalformedRequestUnsupportedOpcodeUnsupportedOptionMalformedOptionNetworkFailureNoResourcesUnsupportedProtocolUserExceededQuotaCannotProvideExternalAddressMismatchExcessiveRemotePeers"
+
+var _pcpResultCode_index = [...]uint8{0, 2, 20, 33, 49, 66, 83, 98, 112, 123, 142, 159, 180, 195, 215}
 
 func (i pcpResultCode) String() string {
-	switch {
-	case i == 0:
-		return _pcpResultCode_name_0
-	case i == 2:
-		return _pcpResultCode_name_1
-	case i == 12:
-		return _pcpResultCode_name_2
-	default:
+	idx := int(i) - 0
+	if i < 0 || idx >= len(_pcpResultCode_index)-1 {
 		return "pcpResultCode(" + strconv.FormatInt(int64(i), 10) + ")"
 	}
+	return _pcpResultCode_name[_pcpResultCode_index[idx]:_pcpResultCode_index[idx+1]]
 }

@@ -1138,11 +1138,38 @@ func (c *Client) Probe(ctx context.Context) (res portmappertype.ProbeResult, err
 						res.PCP = false
 						metricPCPAddressMismatch.Add(1)
 						continue
+					case pcpCodeUnsupportedVersion:
+						// TODO(fmarier): this is a PCP-only server rejecting our NAT-PMP
+						// request, so we should remember that NAT-PMP is not supported and
+						// continue (#21799).
+						metricPCPUnsupportedVersion.Add(1)
+					case pcpCodeMalformedRequest:
+						metricPCPMalformedRequest.Add(1)
+					case pcpCodeUnsupportedOpcode:
+						metricPCPUnsupportedOpcode.Add(1)
+					case pcpCodeUnsupportedOption:
+						metricPCPUnsupportedOption.Add(1)
+					case pcpCodeMalformedOption:
+						metricPCPMalformedOption.Add(1)
+					case pcpCodeNetworkFailure:
+						metricPCPNetworkFailure.Add(1)
+					case pcpCodeNoResources:
+						metricPCPNoResources.Add(1)
+					case pcpCodeUnsupportedProtocol:
+						metricPCPUnsupportedProtocol.Add(1)
+					case pcpCodeUserExceededQuota:
+						metricPCPUserExceededQuota.Add(1)
+					case pcpCodeCannotProvideExternal:
+						metricPCPCannotProvideExternal.Add(1)
+					case pcpCodeExcessiveRemotePeers:
+						metricPCPExcessiveRemotePeers.Add(1)
 					default:
-						// Fall through to unexpected log line.
+						metricPCPUnhandledResponseCode.Add(1)
 					}
+					// Fall through to unexpected log line.
+				} else {
+					metricPCPUnhandledOpcode.Add(1)
 				}
-				metricPCPUnhandledResponseCode.Add(1)
 				c.logf("unexpected PCP probe response: %+v", pres)
 			}
 			if pres, ok := parsePMPResponse(buf[:n]); ok {
@@ -1256,7 +1283,7 @@ var uPnPIGDPacket = []byte("M-SEARCH * HTTP/1.1\r\n" +
 	"MAN: \"ssdp:discover\"\r\n" +
 	"MX: 2\r\n\r\n")
 
-// PCP/PMP metrics
+// PCP/PMP Probe metrics
 var (
 	// metricPXPResponse counts the number of times we received a PMP/PCP response.
 	metricPXPResponse = clientmetric.NewCounter("portmap_pxp_response")
@@ -1279,6 +1306,54 @@ var (
 	// metricPCPUnhandledResponseCode counts the number of times
 	// we received an (as yet) unhandled PCP result code.
 	metricPCPUnhandledResponseCode = clientmetric.NewCounter("portmap_pcp_unhandled_response_code")
+
+	// metricPCPUnhandledOpcode counts the number of times
+	// we received an unhandled PCP opcode.
+	metricPCPUnhandledOpcode = clientmetric.NewCounter("portmap_pcp_unhandled_opcode")
+
+	// metricPCPUnsupportedVersion counts the number of times
+	// we received a PCP unsupported version result code.
+	metricPCPUnsupportedVersion = clientmetric.NewCounter("portmap_pcp_unsupported_version")
+
+	// metricPCPMalformedRequest counts the number of times
+	// we received a PCP malformed request result code.
+	metricPCPMalformedRequest = clientmetric.NewCounter("portmap_pcp_malformed_request")
+
+	// metricPCPUnsupportedOpcode counts the number of times
+	// we received a PCP unsupported opcode result code.
+	metricPCPUnsupportedOpcode = clientmetric.NewCounter("portmap_pcp_unsupported_opcode")
+
+	// metricPCPUnsupportedOption counts the number of times
+	// we received a PCP unsupported option result code.
+	metricPCPUnsupportedOption = clientmetric.NewCounter("portmap_pcp_unsupported_option")
+
+	// metricPCPMalformedOption counts the number of times
+	// we received a PCP malformed option result code.
+	metricPCPMalformedOption = clientmetric.NewCounter("portmap_pcp_malformed_option")
+
+	// metricPCPNetworkFailure counts the number of times
+	// we received a PCP network failure result code.
+	metricPCPNetworkFailure = clientmetric.NewCounter("portmap_pcp_network_failure")
+
+	// metricPCPNoResources counts the number of times
+	// we received a PCP no resources result code.
+	metricPCPNoResources = clientmetric.NewCounter("portmap_pcp_no_resources")
+
+	// metricPCPUnsupportedProtocol counts the number of times
+	// we received a PCP unsupported protocol result code.
+	metricPCPUnsupportedProtocol = clientmetric.NewCounter("portmap_pcp_unsupported_protocol")
+
+	// metricPCPUserExceededQuota counts the number of times
+	// we received a PCP user exceeded quota result code.
+	metricPCPUserExceededQuota = clientmetric.NewCounter("portmap_pcp_user_exceeded_quota")
+
+	// metricPCPCannotProvideExternal counts the number of times
+	// we received a PCP cannot provide external result code.
+	metricPCPCannotProvideExternal = clientmetric.NewCounter("portmap_pcp_cannot_provide_external")
+
+	// metricPCPExcessiveRemotePeers counts the number of times
+	// we received a PCP excessive remote peers result code.
+	metricPCPExcessiveRemotePeers = clientmetric.NewCounter("portmap_pcp_excessive_remote_peers")
 
 	// metricPMPSent counts the number of times we sent a PMP request.
 	metricPMPSent = clientmetric.NewCounter("portmap_pmp_sent")
@@ -1308,7 +1383,7 @@ var (
 	metricPMPNotAuthorized = clientmetric.NewCounter("portmap_pmp_not_authorized")
 )
 
-// UPnP metrics
+// UPnP Probe metrics
 var (
 	// metricUPnPSent counts the number of times we sent a UPnP request.
 	metricUPnPSent = clientmetric.NewCounter("portmap_upnp_sent")

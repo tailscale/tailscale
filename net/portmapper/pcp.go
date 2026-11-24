@@ -29,14 +29,25 @@ const (
 	// the IP assignment is valid for.
 	pcpMapLifetimeSec = 7200
 
-	pcpCodeOK            pcpResultCode = 0
-	pcpCodeNotAuthorized pcpResultCode = 2
+	pcpCodeOK                    pcpResultCode = 0
+	pcpCodeUnsupportedVersion    pcpResultCode = 1
+	pcpCodeNotAuthorized         pcpResultCode = 2
+	pcpCodeMalformedRequest      pcpResultCode = 3
+	pcpCodeUnsupportedOpcode     pcpResultCode = 4
+	pcpCodeUnsupportedOption     pcpResultCode = 5
+	pcpCodeMalformedOption       pcpResultCode = 6
+	pcpCodeNetworkFailure        pcpResultCode = 7
+	pcpCodeNoResources           pcpResultCode = 8
+	pcpCodeUnsupportedProtocol   pcpResultCode = 9
+	pcpCodeUserExceededQuota     pcpResultCode = 10
+	pcpCodeCannotProvideExternal pcpResultCode = 11
 	// From RFC 6887:
 	// ADDRESS_MISMATCH: The source IP address of the request packet does
 	// not match the contents of the PCP Client's IP Address field, due
 	// to an unexpected NAT on the path between the PCP client and the
 	// PCP-controlled NAT or firewall.
-	pcpCodeAddressMismatch pcpResultCode = 12
+	pcpCodeAddressMismatch      pcpResultCode = 12
+	pcpCodeExcessiveRemotePeers pcpResultCode = 13
 
 	pcpOpReply    = 0x80 // OR'd into request's op code on response
 	pcpOpAnnounce = 0
