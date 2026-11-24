@@ -331,9 +331,12 @@ type sortedKVs struct {
 //
 // It also exports the Go runtime/metrics in [runtimeMetricSpecs] and
 // the legacy memstats_* metrics, both read from runtime/metrics.
+//
+// The optional "match" and "interval" query parameters filter the
+// output and turn on streaming, respectively. See [ReadStream] for the
+// details and the stream format.
 func Handler(w http.ResponseWriter, r *http.Request) {
-	ExpvarDoHandler(expvarDo)(w, r)
-	runtimeMetrics.writeTo(w)
+	varzSource{do: expvarDo, runtime: true}.serveHTTP(w, r)
 }
 
 // ExpvarDoHandler handler returns a Handler like above, but takes an optional
@@ -342,22 +345,51 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 //
 // Unlike [Handler], it does not export the Go runtime/metrics.
 func ExpvarDoHandler(expvarDoFunc func(f func(expvar.KeyValue))) func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain;version=0.0.4;charset=utf-8")
+	return varzSource{do: expvarDoFunc}.serveHTTP
+}
 
-		s := sortedKVsPool.Get().(*sortedKVs)
-		defer sortedKVsPool.Put(s)
-		s.kvs = s.kvs[:0]
-		expvarDoFunc(func(kv expvar.KeyValue) {
-			s.kvs = append(s.kvs, sortedKV{kv, removeTypePrefixes(kv.Key)})
-		})
-		sort.Slice(s.kvs, func(i, j int) bool {
-			return s.kvs[i].sortKey < s.kvs[j].sortKey
-		})
-		for _, e := range s.kvs {
-			writePromExpVar(w, "", e.KeyValue)
-		}
+const contentType = "text/plain;version=0.0.4;charset=utf-8"
+
+// varzSource is a set of metrics served by [Handler] or
+// [ExpvarDoHandler].
+type varzSource struct {
+	do      func(func(expvar.KeyValue)) // enumerates the vars
+	runtime bool                        // whether to include the Go runtime metrics
+}
+
+func (s varzSource) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL != nil && r.URL.RawQuery != "" { // some callers pass new(http.Request)
+		s.serveQuery(w, r)
+		return
 	}
+	w.Header().Set("Content-Type", contentType)
+	s.writeTo(w)
+}
+
+// writeTo writes all of s's metrics to w, with the vars sorted by name
+// with type prefixes removed.
+func (s varzSource) writeTo(w io.Writer) {
+	kvs := sortedKVsPool.Get().(*sortedKVs)
+	defer sortedKVsPool.Put(kvs)
+	s.sortVars(kvs)
+	for _, e := range kvs.kvs {
+		writePromExpVar(w, "", e.KeyValue)
+	}
+	if s.runtime {
+		runtimeMetrics.writeTo(w)
+	}
+}
+
+// sortVars sets kvs to s's top-level vars, sorted by name with type
+// prefixes removed.
+func (s varzSource) sortVars(kvs *sortedKVs) {
+	kvs.kvs = kvs.kvs[:0]
+	s.do(func(kv expvar.KeyValue) {
+		kvs.kvs = append(kvs.kvs, sortedKV{kv, removeTypePrefixes(kv.Key)})
+	})
+	sort.Slice(kvs.kvs, func(i, j int) bool {
+		return kvs.kvs[i].sortKey < kvs.kvs[j].sortKey
+	})
 }
 
 var binaryName = sync.OnceValue(func() string {
