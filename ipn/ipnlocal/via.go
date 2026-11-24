@@ -155,9 +155,9 @@ func generateViaAdvertisedAllowlist(advertisedRoutes views.Slice[netip.Prefix]) 
 		restrictedBuilder.AddPrefix(prefix)
 	}
 
+	singleIPs := make(set.Set[netip.Addr])
+	siteIDs := make(set.Set[uint32])
 	var sb netipx.IPSetBuilder
-	// Possible optimization: intersect with advertisedRoutes if that makes
-	// envAdditions shorter.
 
 	// Loopback and link-local addresses that are normally restricted by
 	// [routelimits.IsDisallowed] are permitted if there is a specific enough
@@ -179,7 +179,7 @@ func generateViaAdvertisedAllowlist(advertisedRoutes views.Slice[netip.Prefix]) 
 
 		siteID, unmappedAddr := tsaddr.UnmapViaWithSiteID(mappedPrefix.Addr())
 		if mappedPrefix.IsSingleIP() && routelimits.IsCloudMetadata()(unmappedAddr) {
-			sb.AddPrefix(mappedPrefix)
+			singleIPs.Add(mappedPrefix.Addr())
 			continue
 		}
 
@@ -194,14 +194,26 @@ func generateViaAdvertisedAllowlist(advertisedRoutes views.Slice[netip.Prefix]) 
 			// As an additional safety measure for addresses in
 			// routelimits.isCloudMetadata, they require an exact match to be allowed.
 			sb.AddPrefix(mappedPrefix)
+			siteIDs.Add(siteID)
 			break
-		}
-
-		for _, addr := range viaHostLocalAdvertisableAddrs {
 		}
 	}
 
-	for _, pfx := range advertisedRoutes.All() {
+	for _, cloudMetaPrefix := range routelimits.CloudMetadataPrefixes().All() {
+		if !cloudMetaPrefix.Addr().Is4() {
+			continue
+		}
+		for siteID := range siteIDs {
+			via, err := tsaddr.MapVia(siteID, cloudMetaPrefix)
+			if err != nil {
+				continue
+			}
+			sb.RemovePrefix(via)
+		}
+	}
+
+	for addr := range singleIPs {
+		sb.Add(addr)
 	}
 
 	s, err := sb.IPSet()

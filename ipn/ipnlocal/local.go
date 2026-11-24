@@ -4936,7 +4936,7 @@ func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 	} else {
 		filtered := views.SliceOf(tsaddr.FilterPrefixesCopy(p.AdvertiseRoutes(), tsaddr.IsViaPrefix))
 		b.containsViaIPFuncAtomic.Store(ipset.NewContainsIPFunc(filtered))
-		b.allowViaLocalIPFuncAtomic.Store(generateViaTargetAllowed(filtered))
+		b.allowViaLocalIPFuncAtomic.Store(generateViaAdvertisedAllowlist(filtered))
 		b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(p)
 	}
 }
