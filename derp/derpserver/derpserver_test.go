@@ -38,6 +38,7 @@ import (
 	qt "github.com/frankban/quicktest"
 	"go4.org/mem"
 	"golang.org/x/time/rate"
+	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derpconst"
 	"tailscale.com/tstest/tlstest"
@@ -2760,6 +2761,7 @@ func (c *frameCountConn) SetWriteDeadline(time.Time) error { return nil }
 // packet drain forever: a pong queued during the flood is written
 // after at most a queue's depth worth of further packets.
 func TestWriterFloodDoesNotStarveControlFrames(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/22614")
 	s := New(key.NewNode(), t.Logf)
 	defer s.Close()
 	depth := s.perClientSendQueueDepth
