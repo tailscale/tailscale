@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/netip"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -31,6 +32,10 @@ const (
 	nextDNSBase  = "https://dns.nextdns.io/"
 	controlDBase = "https://dns.controld.com/"
 )
+
+// nextDNSProfileIDRegexp matches both the legacy and upcoming NextDNS
+// profile ID formats.
+var nextDNSProfileIDRegexp = regexp.MustCompile(`^[0-9a-z]{6,10}$`)
 
 // DoHEndpointFromIP returns the DNS-over-HTTPS base URL for a given IP
 // and whether it's DoH-only (not speaking DNS on port 53).
@@ -99,12 +104,12 @@ func DoHIPsOfBase(dohBase string) []netip.Addr {
 	if s := dohIPsOfBase[dohBase]; len(s) > 0 {
 		return s
 	}
-	if hexStr, ok := strings.CutPrefix(dohBase, nextDNSBase); ok {
-		// The path is of the form /<profile-hex>[/<hostname>/<model>/<device id>...]
-		// or /<profile-hex>?<query params>
-		// but only the <profile-hex> is required. Ignore the rest:
-		if i := strings.IndexFunc(hexStr, isSlashOrQuestionMark); i != -1 {
-			hexStr = hexStr[:i]
+	if profileID, ok := strings.CutPrefix(dohBase, nextDNSBase); ok {
+		// The path is of the form /<profile-id>[/<hostname>/<model>/<device id>...]
+		// or /<profile-id>?<query params> but only the <profile-id> is required.
+		// Ignore the rest:
+		if i := strings.IndexFunc(profileID, isSlashOrQuestionMark); i != -1 {
+			profileID = profileID[:i]
 		}
 
 		// TODO(bradfitz): using the NextDNS anycast addresses works but is not
@@ -112,17 +117,23 @@ func DoHIPsOfBase(dohBase string) []netip.Addr {
 		// which we could get by first resolving A/AAAA "dns.nextdns.io" over
 		// DoH using their anycast address. For now we only use the anycast
 		// addresses. The IPv4 IPs we use are just the first one in their ranges.
-		// For IPv6 we put the profile ID in the lower bytes, but that seems just
-		// conventional for them and not required (it'll already be in the DoH path).
 		// (Really we shouldn't use either IPv4 or IPv6 anycast for DoH once we
 		// resolve "dns.nextdns.io".)
-		if b, err := hex.DecodeString(hexStr); err == nil && len(b) <= 12 && len(b) > 0 {
+		//
+		// Older NextDNS profile IDs are hex-encoded into the IPv6 address, so
+		// preserve the IPv6 anycast addresses for them. Newer IDs can contain
+		// letters beyond 'f' and are not encoded into the IPv6 address, so only
+		// use the IPv4 anycast addresses for those.
+		if b, err := hex.DecodeString(profileID); err == nil && len(b) <= 12 && len(b) > 0 {
 			return []netip.Addr{
 				nextDNSv4One,
 				nextDNSv4Two,
 				nextDNSv6Gen(nextDNSv6RangeA.Addr(), b),
 				nextDNSv6Gen(nextDNSv6RangeB.Addr(), b),
 			}
+		}
+		if nextDNSProfileIDRegexp.MatchString(profileID) {
+			return []netip.Addr{nextDNSv4One, nextDNSv4Two}
 		}
 	}
 	if strings.HasPrefix(dohBase, controlDBase) {
