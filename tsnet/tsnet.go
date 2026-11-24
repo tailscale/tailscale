@@ -229,6 +229,10 @@ import (
 	"tailscale.com/wgengine/netstack"
 )
 
+// errServerClosed is returned by [Server.Start] and the methods that call it
+// after a call to [Server.Close].
+var errServerClosed = errors.New("tsnet: Server closed")
+
 // Server is an embedded Tailscale server.
 //
 // Its exported fields may be changed until the first method call.
@@ -370,8 +374,13 @@ type Server struct {
 	// This field must be set before calling Start.
 	Tun tun.Device
 
-	initOnce            sync.Once
-	initErr             error
+	startMu        sync.Mutex // protects start, shutdown, and closed fields
+	startDone      chan struct{}
+	startErr       error
+	shutdownCtx    context.Context
+	shutdownCancel context.CancelFunc
+	closed         bool
+
 	lb                  *ipnlocal.LocalBackend
 	sys                 *tsd.System
 	netstack            *netstack.Impl
@@ -379,8 +388,6 @@ type Server struct {
 	dnsRes              lazy.SyncValue[*dnsResolver] // lazily created by dnsResolver
 	rootPath            string                       // the state directory
 	hostname            string
-	shutdownCtx         context.Context
-	shutdownCancel      context.CancelFunc
 	proxyCred           string        // SOCKS5 proxy auth for loopbackListener
 	localAPICred        string        // basic auth password for loopbackListener
 	loopbackListener    net.Listener  // optional loopback for localapi and proxies
@@ -398,7 +405,6 @@ type Server struct {
 	fallbackTCPHandlers set.HandleSet[FallbackTCPHandler]
 	dialer              *tsdial.Dialer
 	advertisedServices  map[tailcfg.ServiceName]int
-	closeOnce           sync.Once
 }
 
 // FallbackTCPHandler describes the callback which
@@ -417,6 +423,9 @@ type FallbackTCPHandler func(src, dst netip.AddrPort) (handler func(net.Conn), i
 // Dial connects to the address on the tailnet.
 // It will start the server if it has not been started yet.
 func (s *Server) Dial(ctx context.Context, network, address string) (net.Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := s.Start(); err != nil {
 		return nil, err
 	}
@@ -601,13 +610,53 @@ func (h *localSecHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Optional: any calls to Dial/Listen will also call Start.
 func (s *Server) Start() error {
 	hostinfo.SetPackage("tsnet")
-	s.initOnce.Do(s.doInit)
-	return s.initErr
+
+	s.startMu.Lock()
+	if s.closed {
+		s.startMu.Unlock()
+		return errServerClosed
+	}
+
+	if s.startErr != nil {
+		s.startMu.Unlock()
+		return s.startErr
+	}
+
+	done := s.startDone
+	if done != nil { // wait for other Start to finish
+		s.startMu.Unlock()
+		<-done
+		return s.startErr
+	}
+	done = make(chan struct{})
+	s.startDone = done
+	defer close(done)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	s.shutdownCtx, s.shutdownCancel = ctx, cancel
+	s.startMu.Unlock()
+
+	err := s.start()
+	if err != nil {
+		err = fmt.Errorf("tsnet: %w", err)
+	} else if ctx.Err() != nil {
+		err = errServerClosed
+	}
+	if err != nil {
+		s.startMu.Lock()
+		s.startErr = err
+		s.startMu.Unlock()
+	}
+	return err
 }
 
 // Up connects the server to the tailnet and waits until it is running.
 // On success it returns the current status, including a Tailscale IP address.
 func (s *Server) Up(ctx context.Context) (*ipnstate.Status, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("tsnet.Up: %w", err)
+	}
+
 	lc, err := s.LocalClient() // calls Start
 	if err != nil {
 		return nil, fmt.Errorf("tsnet.Up: %w", err)
@@ -697,17 +746,24 @@ func (s *Server) checkTailnet(st *ipnstate.Status) error {
 }
 
 // Close stops the server.
-//
-// It must not be called before or concurrently with Start.
 func (s *Server) Close() error {
-	didClose := false
-	s.closeOnce.Do(func() {
-		didClose = true
-		s.close()
-	})
-	if !didClose {
+	s.startMu.Lock()
+	if s.closed {
+		s.startMu.Unlock()
 		return fmt.Errorf("tsnet: %w", net.ErrClosed)
 	}
+
+	s.closed = true
+	if s.shutdownCancel != nil {
+		s.shutdownCancel()
+	}
+	startDone := s.startDone
+	s.startMu.Unlock()
+
+	if startDone != nil {
+		<-startDone
+	}
+	s.close()
 	return nil
 }
 
@@ -750,6 +806,11 @@ func (s *Server) close() {
 	if s.lb != nil {
 		s.lb.Shutdown()
 	}
+	if s.sys != nil {
+		if eng, ok := s.sys.Engine.GetOK(); ok && eng != nil {
+			eng.Close()
+		}
+	}
 	if s.netMon != nil {
 		s.netMon.Close()
 	}
@@ -764,22 +825,13 @@ func (s *Server) close() {
 	}
 
 	wg.Wait()
-	// s.sys is only assigned partway through doInit, so it is still nil if
-	// Start failed before that point. Close is reachable in that state --
-	// Start is idempotent via initOnce and returns the stored initErr, so
-	// callers that `defer Close()` before checking the error land here.
+	// s.sys is only assigned partway through Start, so it is still nil if
+	// Start failed before that point, or if Close is called before Start.
 	// Use GetOK rather than Get so an unset Bus cannot panic either.
 	if s.sys != nil {
 		if bus, ok := s.sys.Bus.GetOK(); ok && bus != nil {
 			bus.Close()
 		}
-	}
-}
-
-func (s *Server) doInit() {
-	s.shutdownCtx, s.shutdownCancel = context.WithCancel(context.Background())
-	if err := s.start(); err != nil {
-		s.initErr = fmt.Errorf("tsnet: %w", err)
 	}
 }
 
@@ -873,8 +925,11 @@ func (s *Server) getAudience() string {
 }
 
 func (s *Server) start() (reterr error) {
-	var closePool closeOnErrorPool
-	defer closePool.closeAllIfError(&reterr)
+	defer func() {
+		if reterr != nil {
+			s.close()
+		}
+	}()
 
 	exe, err := os.Executable()
 	if err != nil {
@@ -942,7 +997,7 @@ func (s *Server) start() (reterr error) {
 
 	sys := tsd.NewSystem()
 	s.sys = sys
-	if err := s.startLogger(&closePool, sys.HealthTracker.Get(), tsLogf); err != nil {
+	if err := s.startLogger(sys.HealthTracker.Get(), tsLogf); err != nil {
 		return err
 	}
 
@@ -950,7 +1005,6 @@ func (s *Server) start() (reterr error) {
 	if err != nil {
 		return err
 	}
-	closePool.add(s.netMon)
 
 	s.dialer = &tsdial.Dialer{Logf: tsLogf} // mutated below (before used)
 	s.dialer.SetBus(sys.Bus.Get())
@@ -974,7 +1028,6 @@ func (s *Server) start() (reterr error) {
 	if err != nil {
 		return err
 	}
-	closePool.add(s.dialer)
 	sys.Set(eng)
 	sys.HealthTracker.Get().SetMetricsRegistry(sys.UserMetricsRegistry())
 
@@ -1058,7 +1111,6 @@ func (s *Server) start() (reterr error) {
 	if err := ns.Start(lb); err != nil {
 		return fmt.Errorf("failed to start netstack: %w", err)
 	}
-	closePool.addFunc(func() { s.lb.Shutdown() })
 	prefs := ipn.NewPrefs()
 	prefs.Hostname = s.hostname
 	prefs.WantRunning = true
@@ -1113,7 +1165,6 @@ func (s *Server) start() (reterr error) {
 			s.logf("localapi serve error: %v", err)
 		}
 	}()
-	closePool.add(s.localAPIListener)
 	return nil
 }
 
@@ -1171,7 +1222,7 @@ func (s *Server) resolveAuthKey() (string, error) {
 	return authKey, nil
 }
 
-func (s *Server) startLogger(closePool *closeOnErrorPool, health *health.Tracker, tsLogf logger.Logf) error {
+func (s *Server) startLogger(health *health.Tracker, tsLogf logger.Logf) error {
 	if !buildfeatures.HasLogTail || testenv.InTest() {
 		return nil
 	}
@@ -1195,7 +1246,6 @@ func (s *Server) startLogger(closePool *closeOnErrorPool, health *health.Tracker
 	if err != nil {
 		return fmt.Errorf("error creating filch: %w", err)
 	}
-	closePool.add(s.logbuffer)
 	c := logtail.Config{
 		Collection:   lpc.Collection,
 		PrivateID:    lpc.PrivateID,
@@ -1207,20 +1257,7 @@ func (s *Server) startLogger(closePool *closeOnErrorPool, health *health.Tracker
 		MetricsDelta: clientmetric.EncodeLogTailMetricsDelta,
 	}
 	s.logtail = logtail.NewLogger(c, tsLogf)
-	closePool.addFunc(func() { s.logtail.Shutdown(context.Background()) })
 	return nil
-}
-
-type closeOnErrorPool []func()
-
-func (p *closeOnErrorPool) add(c io.Closer)   { *p = append(*p, func() { c.Close() }) }
-func (p *closeOnErrorPool) addFunc(fn func()) { *p = append(*p, fn) }
-func (p closeOnErrorPool) closeAllIfError(errp *error) {
-	if *errp != nil {
-		for _, closeFn := range p {
-			closeFn()
-		}
-	}
 }
 
 func (s *Server) logf(format string, a ...any) {
