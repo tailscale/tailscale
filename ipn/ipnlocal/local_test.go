@@ -1730,8 +1730,8 @@ func TestSuggestExitNodeNotifies(t *testing.T) {
 }
 
 // TestSuggestExitNodeLockedNotify checks that a changed suggestion is
-// recorded in the caller's Notify when one is given, and broadcast at once
-// when none is.
+// recorded in the caller's Notify and that suggestExitNodeLocked sends
+// nothing itself.
 func TestSuggestExitNodeLockedNotify(t *testing.T) {
 	report := &netcheck.Report{
 		RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
@@ -1749,11 +1749,10 @@ func TestSuggestExitNodeLockedNotify(t *testing.T) {
 	lb.sys.MagicSock.Get().AddNetcheckReportForTest(nm.DERPMap, report, time.Now())
 	lb.currentNode().SetNetMap(nm)
 
-	// With a Notify, the change is recorded there and nothing is sent.
 	nw := newNotificationWatcher(t, lb, ipnauth.Self)
 	nw.watch(0, nil, func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
 		if n.SuggestedExitNode != nil {
-			t.Errorf("suggestion broadcast despite a caller Notify: %v", n)
+			t.Errorf("suggestExitNodeLocked sent a notification itself: %v", n)
 		}
 		return false
 	})
@@ -1769,23 +1768,17 @@ func TestSuggestExitNodeLockedNotify(t *testing.T) {
 	}
 	nw.check()
 
-	// Without one, the change is broadcast.
+	// The same suggestion again records nothing.
+	n = ipn.Notify{}
 	lb.mu.Lock()
-	lb.lastSuggestedExitNode = ""
-	lb.mu.Unlock()
-	nw.watch(0, []wantedNotification{{
-		name: "suggested exit node",
-		cond: func(_ testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
-			return n.SuggestedExitNode != nil && *n.SuggestedExitNode == exitNode1.StableID()
-		},
-	}})
-	lb.mu.Lock()
-	_, err = lb.suggestExitNodeLocked(nil)
+	_, err = lb.suggestExitNodeLocked(&n)
 	lb.mu.Unlock()
 	if err != nil {
 		t.Fatal(err)
 	}
-	nw.check()
+	if !n.IsZero() {
+		t.Errorf("unchanged suggestion was recorded: %v", n)
+	}
 }
 
 func TestInternalAndExternalInterfaces(t *testing.T) {
@@ -4705,7 +4698,7 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			b.pm = pm
 			b.lastSuggestedExitNode = test.lastSuggestedExitNode
 			prefs := b.pm.prefs.AsStruct()
-			if changed := b.reconcilePrefsLocked(prefs, nil); changed != test.prefsChanged {
+			if changed := b.reconcilePrefsLocked(prefs, new(ipn.Notify)); changed != test.prefsChanged {
 				t.Errorf("wanted prefs changed %v, got prefs changed %v", test.prefsChanged, changed)
 			}
 

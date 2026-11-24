@@ -2504,8 +2504,16 @@ func (b *LocalBackend) reconcilePrefs() (_ ipn.PrefsView, anyChange bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	// A changed exit node suggestion is sent on return. When the prefs
+	// changed, setPrefsLocked sends them first.
+	var notify ipn.Notify
+	defer func() {
+		if !notify.IsZero() {
+			b.sendLocked(notify)
+		}
+	}()
 	prefs := b.pm.CurrentPrefs().AsStruct()
-	if !b.reconcilePrefsLocked(prefs, nil) {
+	if !b.reconcilePrefsLocked(prefs, &notify) {
 		return prefs.View(), false
 	}
 	return b.setPrefsLocked(prefs), true
@@ -2592,10 +2600,8 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	var notify ipn.Notify
 	defer func() {
 		// Sent while b.mu is still held, so it reflects the state this
-		// delta produced and nothing newer. In tests, every delta sends a
-		// Notify, even an empty one, as a wake-up for end-to-end tests in
-		// another repo.
-		if !notify.IsZero() || testenv.InTest() {
+		// delta produced and nothing newer.
+		if !notify.IsZero() {
 			b.sendLocked(notify)
 		}
 	}()
@@ -2772,6 +2778,11 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		} else if !ok {
 			b.logf("[unexpected] got mutations worthy of telling IPN bus but failed to convert to peer changes")
 		}
+	} else if testenv.InTest() && notify.IsZero() {
+		// In tests, send a Notify for every delta as a wake-up for
+		// end-to-end tests in another repo. Version makes it non-zero;
+		// sendToLocked sets it on every Notify anyway.
+		notify.Version = version.Long()
 	}
 	return true
 }
@@ -3347,8 +3358,14 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 	b.resetAlwaysOnOverrideLocked()
 
 	// notify is sent with the prefs below. Reconciling records a changed
-	// exit node suggestion in it.
+	// exit node suggestion in it. The deferred send covers the error
+	// returns before the prefs are sent.
 	var notify ipn.Notify
+	defer func() {
+		if !notify.IsZero() {
+			b.sendToLocked(notify, allClients)
+		}
+	}()
 
 	// Apply any syspolicy overrides, resolve exit node ID, etc.
 	// As of 2025-07-03, this is primarily needed in two cases:
@@ -3517,8 +3534,11 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 
 	blid := b.backendLogID.String()
 	b.logf("Backend: logs: be:%v fe:%v", blid, opts.FrontendLogID)
+	// Sent now rather than at return. Clear notify so the deferred send
+	// does not repeat it.
 	notify.Prefs = &prefs
 	b.sendToLocked(notify, allClients)
+	notify = ipn.Notify{}
 
 	// initialize Taildrive shares from saved state
 	if fs, ok := b.sys.DriveForRemote.GetOK(); ok {
@@ -4145,10 +4165,14 @@ func (b *LocalBackend) buildInitialNotifyLocked(sb *ipnstate.StatusBuilder, sess
 		ini.Health = b.HealthTracker().CurrentState()
 	}
 	if mask&ipn.NotifyInitialSuggestedExitNode != 0 {
-		// A changed suggestion is broadcast to the existing sessions at
-		// once. ini carries the current one for the new session.
-		if en, err := b.suggestExitNodeLocked(nil); err == nil {
+		// ini carries the current suggestion for the new session. A
+		// changed suggestion is also broadcast to the existing sessions.
+		var changed ipn.Notify
+		if en, err := b.suggestExitNodeLocked(&changed); err == nil {
 			ini.SuggestedExitNode = &en.ID
+		}
+		if !changed.IsZero() {
+			b.sendLocked(changed)
 		}
 	}
 	if mask&ipn.NotifyInitialClientVersion != 0 {
@@ -5657,7 +5681,13 @@ func (b *LocalBackend) changeDisablesExitNodeLocked(prefs ipn.PrefsView, change 
 	// and resolve the exit node in the prefs.
 	tmpPrefs := prefs.AsStruct()
 	tmpPrefs.ApplyEdits(tmpChange)
-	b.resolveExitNodeInPrefsLocked(tmpPrefs, nil)
+	// Resolving can change the exit node suggestion. That is broadcast
+	// even though tmpPrefs is discarded.
+	var notify ipn.Notify
+	b.resolveExitNodeInPrefsLocked(tmpPrefs, &notify)
+	if !notify.IsZero() {
+		b.sendLocked(notify)
+	}
 
 	// If ExitNodeID is empty after applying the changes,
 	// but wasn't empty before, then the change disables
@@ -9233,9 +9263,8 @@ var ErrNoPreferredDERP = errors.New("no preferred DERP, try again later")
 // When the client has [tailcfg.NodeAttrClientSideReachabilityRouteCheck] in its CapMap,
 // it will use [HookRouteCheckReport] to get the latest cached routecheck report.
 //
-// If the suggestion changed and notify is non-nil, the new suggestion is
-// recorded in notify for the caller to send with its other changes. If
-// notify is nil, it is broadcast at once.
+// A changed suggestion is recorded in notify, which the caller sends.
+// notify must not be nil.
 //
 // b.mu must be held.
 func (b *LocalBackend) suggestExitNodeLocked(notify *ipn.Notify) (response apitype.ExitNodeSuggestionResponse, err error) {
@@ -9265,11 +9294,7 @@ func (b *LocalBackend) suggestExitNodeLocked(notify *ipn.Notify) (response apity
 		return res, err
 	}
 	if prevSuggestion != res.ID {
-		if notify != nil {
-			notify.SuggestedExitNode = new(res.ID)
-		} else {
-			b.sendLocked(ipn.Notify{SuggestedExitNode: new(res.ID)})
-		}
+		notify.SuggestedExitNode = new(res.ID)
 	}
 	b.lastSuggestedExitNode = res.ID
 
@@ -9286,7 +9311,13 @@ func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionRes
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.suggestExitNodeLocked(nil)
+	var notify ipn.Notify
+	defer func() {
+		if !notify.IsZero() {
+			b.sendLocked(notify)
+		}
+	}()
+	return b.suggestExitNodeLocked(&notify)
 }
 
 // getAllowedSuggestions returns a set of exit nodes permitted by the most recent
