@@ -21,6 +21,7 @@ import (
 	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/types/nettype"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
@@ -120,6 +121,16 @@ type FunnelConn struct {
 	// node which is relaying the connection. That address
 	// can be found in Conn.RemoteAddr.
 	Src netip.AddrPort
+}
+
+// CloseWrite implements [nettype.TCPWriteCloser].
+// As of 2026-11-25, the [net.Conn] embedded inside a [FunnelConn] always comes
+// from PeerAPI, so it is always a TCP connection that supports CloseWrite().
+func (fc *FunnelConn) CloseWrite() error {
+	if hc, ok := fc.Conn.(nettype.TCPWriteCloser); ok {
+		return hc.CloseWrite()
+	}
+	return nil
 }
 
 // WebServerConfig describes a web server's configuration.

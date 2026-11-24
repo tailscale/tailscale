@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pires/go-proxyproto"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
@@ -48,6 +49,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/nettype"
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
@@ -2759,5 +2761,197 @@ func TestGetTLSServeCertForPortLowercasesSNI(t *testing.T) {
 	}
 	if _, err := getCert(&tls.ClientHelloInfo{ServerName: "Other.Example.TS.net"}); err == nil {
 		t.Error("unconfigured name: got cert, want error")
+	}
+}
+
+// TestForwardTCPHalfClose reproduces tailscale/tailscale#20880.
+//
+// A client sends its whole request and then half-closes its write side.
+// The backend waits for EOF before writing its response. The forwarder
+// must pass the client's FIN to the backend and keep the backend-to-client
+// direction open until the backend is done.
+func TestForwardTCPHalfClose(t *testing.T) {
+	b := newTestBackend(t)
+
+	request := bytes.Repeat([]byte("q"), 1<<20)
+	response := bytes.Repeat([]byte("r"), 256<<10)
+
+	// tcpResponder reads something, expects it to be equal to `request`,
+	// then writes back `response`.
+	// If `expectHeader` is non-nil, it first reads a header and expects
+	// it to equal `expectHeader`.
+	tcpResponder := func(ln net.Listener, errc chan<- error, expectHeader <-chan []byte) {
+		errc <- func() error {
+			c, err := ln.Accept()
+			if err != nil {
+				return err
+			}
+			defer c.Close()
+			if expectHeader != nil {
+				wantHeader := <-expectHeader
+				gotHeader := make([]byte, len(wantHeader))
+				_, err := c.Read(gotHeader)
+				if err != nil {
+					return fmt.Errorf("responder read header: %w", err)
+				}
+				if !bytes.Equal(gotHeader, wantHeader) {
+					return fmt.Errorf("responder got a different header than expected (want len %v, got len %v)", len(wantHeader), len(gotHeader))
+				}
+			}
+			got, err := io.ReadAll(c)
+			if err != nil {
+				return fmt.Errorf("responder read: %w", err)
+			}
+			if !bytes.Equal(request, got) {
+				return fmt.Errorf("responder read %d bytes, want %d", len(got), len(request))
+			}
+			if _, err := c.Write(response); err != nil {
+				return fmt.Errorf("responder write: %w", err)
+			}
+			return nil
+		}()
+	}
+
+	// tcpInitiator writes `request`, indicates that it's done writing,
+	// then reads something and expects it to equal `response`.
+	tcpInitiator := func(ln net.Listener, errc chan<- error, expectHeader <-chan []byte) {
+		errc <- func() error {
+			c, err := ln.Accept()
+			if err != nil {
+				return err
+			}
+			defer c.Close()
+			if expectHeader != nil {
+				wantHeader := <-expectHeader
+				gotHeader := make([]byte, len(wantHeader))
+				_, err := c.Read(gotHeader)
+				if err != nil {
+					return fmt.Errorf("initiator read header: %w", err)
+				}
+				if !bytes.Equal(gotHeader, wantHeader) {
+					return fmt.Errorf("initiator got a different header than expected (want len %v, got len %v)", len(wantHeader), len(gotHeader))
+				}
+			}
+			if _, err := c.Write(request); err != nil {
+				return fmt.Errorf("initiator write: %w", err)
+			}
+			if err := c.(nettype.TCPWriteCloser).CloseWrite(); err != nil {
+				return fmt.Errorf("initiator closewrite: %w", err)
+			}
+			got, err := io.ReadAll(c)
+			if err != nil {
+				return fmt.Errorf("inititator read: %w", err)
+			}
+			if !bytes.Equal(got, response) {
+				return fmt.Errorf("initiator read %d bytes, want %d", len(got), len(response))
+			}
+			return nil
+		}()
+	}
+
+	tests := []struct {
+		name    string
+		backend func(ln net.Listener, errc chan<- error, expectHeader <-chan []byte)
+		client  func(ln net.Listener, errc chan<- error, expectHeader <-chan []byte)
+	}{
+		{
+			name:    "client-initiates",
+			backend: tcpResponder,
+			client:  tcpInitiator,
+		},
+		{
+			name:    "backend-initiates",
+			backend: tcpInitiator,
+			client:  tcpResponder,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srcAddr := netip.MustParseAddrPort("100.64.0.1:12345")
+			dstPort := uint16(443)
+			proxyVersion := 1
+
+			backendLn, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer backendLn.Close()
+			backendErr := make(chan error, 1)
+			// We need to have [backConn] to construct the header we want, but
+			// we also need to create the backend before we have [backConn],
+			// so send the header over later (after the backend starts a TCP
+			// connection, but before anything is sent over it).
+			expectHeaderOnBackend := make(chan []byte, 1)
+			go tt.backend(backendLn, backendErr, expectHeaderOnBackend)
+
+			clientLn, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer clientLn.Close()
+			clientErr := make(chan error, 1)
+			go tt.client(clientLn, clientErr, nil)
+
+			conn, err := net.Dial("tcp", clientLn.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+
+			backConn, err := b.dialer.SystemDial(t.Context(), "tcp", backendLn.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			header := &proxyproto.Header{
+				Version:    byte(proxyVersion),
+				Command:    proxyproto.PROXY,
+				SourceAddr: net.TCPAddrFromAddrPort(srcAddr),
+				DestinationAddr: &net.TCPAddr{
+					IP:   net.ParseIP("100.150.151.151"), // This is the IP of the self-node in [newTestBackend], and we want this to be the IP of the self-node.
+					Port: backConn.RemoteAddr().(*net.TCPAddr).Port,
+				},
+				TransportProtocol: proxyproto.TCPv4,
+			}
+			// The only error from this function is for an unsupported version
+			// header, and we use a supported version in this test always.
+			proxyHeader, _ := header.Format()
+
+			// Tell the backend what header it should be looking for.
+			expectHeaderOnBackend <- proxyHeader
+
+			forwardErr := make(chan error, 1)
+			go func() {
+				defer conn.Close()
+				defer backConn.Close()
+				forwardErr <- b.forwardTCPWithProxyProtocol(conn, backConn, 1, srcAddr, dstPort, backendLn.Addr().String())
+			}()
+
+			select {
+			case err := <-clientErr:
+				if err != nil {
+					t.Errorf("client: %v", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Error("client did not finish")
+			}
+			select {
+			case err := <-backendErr:
+				if err != nil {
+					t.Errorf("backend: %v", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Error("backend did not finish")
+			}
+			select {
+			case err := <-forwardErr:
+				if err != nil {
+					t.Errorf("forwardTCPWithProxyProtocol: %v", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Error("forwarder did not finish")
+			}
+		})
 	}
 }
