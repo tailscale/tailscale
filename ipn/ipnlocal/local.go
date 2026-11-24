@@ -4926,6 +4926,7 @@ func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 
 	if !p.Valid() {
 		b.containsViaIPFuncAtomic.Store(ipset.FalseContainsIPFunc())
+		b.allowViaLocalIPFuncAtomic.Store(ipset.FalseContainsIPFunc())
 		b.setTCPPortsIntercepted(nil)
 		if f, ok := hookServeClearVIPServicesTCPPortsInterceptedLocked.GetOk(); ok {
 			f(b)
@@ -4933,10 +4934,9 @@ func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 		b.lastServeConfJSON = mem.B(nil)
 		b.serveConfig = ipn.ServeConfigView{}
 	} else {
-		filtered := tsaddr.FilterPrefixesCopy(p.AdvertiseRoutes(), tsaddr.IsViaPrefix)
-		b.containsViaIPFuncAtomic.Store(ipset.NewContainsIPFunc(views.SliceOf(filtered)))
-		viaLocalPrefixes :=
-		b.containsViaIPFuncAtomic.Store(ipset.NewContainsIPFunc(views.SliceOf(filtered)))
+		filtered := views.SliceOf(tsaddr.FilterPrefixesCopy(p.AdvertiseRoutes(), tsaddr.IsViaPrefix))
+		b.containsViaIPFuncAtomic.Store(ipset.NewContainsIPFunc(filtered))
+		b.allowViaLocalIPFuncAtomic.Store(generateViaTargetAllowed(filtered))
 		b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(p)
 	}
 }
@@ -7486,7 +7486,13 @@ func (b *LocalBackend) ShouldHandleViaIP(ip netip.Addr) bool {
 // The packet filter only sees the outer via address of a 4via6 flow, so this
 // is the sole policy check on the embedded target.
 func (b *LocalBackend) ShouldForwardToVia(via netip.Addr) bool {
-	return viaTargetAllowed(tsaddr.UnmapVia(via))
+	// Configured exceptions take place before unmapping
+	if f, ok := b.allowViaLocalIPFuncAtomic.LoadOk(); ok {
+		if f(via) {
+			return true
+		}
+	}
+	return
 }
 
 // Logout logs out the current profile, if any, and waits for the logout to

@@ -20,12 +20,12 @@ import (
 // v4BroadcastAddr is 255.255.255.255, the limited broadcast address.
 var v4BroadcastAddr = netip.AddrFrom4([4]byte{255, 255, 255, 255})
 
-// isCloudMetadata returns true for IP addresses (v4 or v6) that are known to
-// potentially contain cloud metadata. Most cloud providers document single
-// addresses (/128) but sometimes they have multiple addresses, so all ULA IPv6
-// addresses are recorded as their entire ULA prefix (/48).
-var isCloudMetadata = sync.OnceValue(func() func(netip.Addr) bool {
-	prefixes := []netip.Prefix{
+// CloudMetadataPrefixes is a list of prefixes that are known to potentially
+// contain cloud metadata. Most cloud providers document single addresses
+// (IPv4 /32 or IPv6 /128) but sometimes they have multiple IPv6 addresses, so
+// all ULA IPv6 addresses are recorded as their entire ULA prefix (/48).
+var CloudMetadataPrefixes = sync.OnceValue(func() views.Slice[netip.Prefix] {
+	return views.SliceOf([]netip.Prefix{
 		netip.MustParsePrefix("169.254.169.254/32"),  // standard IPv4 address
 		netip.MustParsePrefix("fe80::a9fe:a9fe/128"), // commonly used link local IPv6 address
 
@@ -69,9 +69,17 @@ var isCloudMetadata = sync.OnceValue(func() func(netip.Addr) bool {
 
 		// Alibaba
 		netip.MustParsePrefix("100.100.100.200/32"),
-	}
+	})
+})
 
-	return ipset.NewContainsIPFunc(views.SliceOf(prefixes))
+// IsCloudMetadata returns true for IP addresses (v4 or v6) that are known to
+// potentially contain cloud metadata. Most cloud providers document single
+// addresses (/128) but sometimes they have multiple addresses, so all ULA IPv6
+// addresses are recorded as their entire ULA prefix (/48).
+// When adding new IPv4 addresses here, also consider adding them to
+// ipnlocal.viaHostLocalAdvertisableAddrs.
+var IsCloudMetadata = sync.OnceValue(func() func(netip.Addr) bool {
+	return ipset.NewContainsIPFunc(CloudMetadataPrefixes())
 })
 
 // IsDisallowed reports whether addr is an IP address in an IP range
@@ -88,7 +96,7 @@ func IsDisallowed(addr netip.Addr) bool {
 		// it's hard to detect when forwarding would be OK, so deny always
 		return true
 	}
-	if isCloudMetadata()(addr) {
+	if IsCloudMetadata()(addr) {
 		return true
 	}
 	return false

@@ -307,6 +307,18 @@ func UnmapVia(ip netip.Addr) netip.Addr {
 	return ip
 }
 
+// UnmapViaWithSiteID returns the IPv4 address and site ID that corresponds to
+// the provided Tailscale "via" IPv4-in-IPv6 address.
+//
+// If ip is not a via address, it returns netip.IPV4Unspecified() with 0 siteID.
+func UnmapViaWithSiteID(ip netip.Addr) (siteID uint32, v4 netip.Addr) {
+	if TailscaleViaRange().Contains(ip) {
+		a := ip.As16()
+		return binary.BigEndian.Uint32(a[8:]), netip.AddrFrom4(*(*[4]byte)(a[12:16]))
+	}
+	return 0, netip.IPv4Unspecified()
+}
+
 // MapVia returns an IPv6 "via" route for an IPv4 CIDR in a given siteID.
 func MapVia(siteID uint32, v4 netip.Prefix) (via netip.Prefix, err error) {
 	if !v4.Addr().Is4() {
