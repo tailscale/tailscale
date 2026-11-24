@@ -6,6 +6,7 @@ package dns
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -27,6 +28,8 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/backoff"
+	"tailscale.com/util/coalescedop"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/syspolicy/pkey"
@@ -60,8 +63,15 @@ type windowsManager struct {
 
 	unregisterPolicyChangeCb func() // called when the manager is closing
 
+	hostsOp *coalescedop.CoalescedOp // calls syncHosts
+
 	mu      syncs.Mutex
 	closing bool
+	hosts   []*HostEntry // most recently requested hosts file entries
+	// hostsCtx is done when hosts is superseded by a newer request,
+	// or it's time to give up on writing it.
+	hostsCtx    context.Context
+	hostsCancel context.CancelFunc
 }
 
 // NewOSConfigurator created a new OS configurator.
@@ -78,6 +88,7 @@ func NewOSConfigurator(logf logger.Logf, health *health.Tracker, bus *eventbus.B
 		polc:       polc,
 		wslManager: newWSLManager(logf, health),
 	}
+	ret.hostsOp = coalescedop.New(ret.syncHosts)
 
 	if err := ret.checkInterfaces(); err != nil {
 		return nil, err
@@ -269,13 +280,53 @@ func setTailscaleHosts(logf logger.Logf, prevHostsFile []byte, hosts []*HostEntr
 	return out.Bytes(), nil
 }
 
-// setHosts sets the hosts file to contain the given host entries.
-func (m *windowsManager) setHosts(hosts []*HostEntry) error {
+const (
+	hostsRetryInitialWait = 250 * time.Millisecond
+	hostsRetryMaxWait     = 30 * time.Second // in total
+)
+
+// setHosts requests that the hosts file contain the given host entries.
+// The file is updated in the background, as other processes, such as
+// the DNS Client service (Dnscache), may briefly have it open in a way
+// that prevents it from being replaced.
+func (m *windowsManager) setHosts(hosts []*HostEntry) {
+	m.mu.Lock()
+	if m.hostsCancel != nil {
+		m.hostsCancel()
+	}
+	m.hosts = hosts
+	m.hostsCtx, m.hostsCancel = context.WithTimeout(context.Background(), hostsRetryMaxWait)
+	m.mu.Unlock()
+	m.hostsOp.Do()
+}
+
+// syncHosts writes the most recently requested entries to the hosts file,
+// retrying on failure until they are superseded by a newer request,
+// which then gets its own run.
+func (m *windowsManager) syncHosts() {
+	m.mu.Lock()
+	ctx, hosts := m.hostsCtx, m.hosts
+	m.mu.Unlock()
+	bo := backoff.NewBackoff("hosts", m.logf, hostsRetryMaxWait,
+		backoff.WithInitialBackoff(hostsRetryInitialWait))
+	for ctx.Err() == nil {
+		err := m.writeHosts(hosts)
+		if err == nil {
+			return
+		}
+		m.logf("failed to update the hosts file: %v", err)
+		bo.BackOff(ctx, err)
+	}
+}
+
+// writeHosts sets the hosts file to contain the given host entries.
+func (m *windowsManager) writeHosts(hosts []*HostEntry) error {
 	systemDir, err := windows.GetSystemDirectory()
 	if err != nil {
 		return err
 	}
-	hostsFile := filepath.Join(systemDir, "drivers", "etc", "hosts")
+	driversDir := filepath.Join(systemDir, "drivers")
+	hostsFile := filepath.Join(driversDir, "etc", "hosts")
 	b, err := os.ReadFile(hostsFile)
 	switch {
 	case err == nil:
@@ -295,17 +346,21 @@ func (m *windowsManager) setHosts(hosts []*HostEntry) error {
 		return nil
 	}
 
-	const fileMode = 0 // ignored on windows.
-
-	// This can fail spuriously with an access denied error, so retry it a
-	// few times.
-	for range 5 {
-		if err = atomicfile.WriteFile(hostsFile, outB, fileMode); err == nil {
-			return nil
-		}
-		time.Sleep(10 * time.Millisecond)
+	// Stage the new file outside of the etc directory, where creating
+	// and removing a temporary file would make the DNS Client service
+	// (Dnscache) reload the hosts file. It must be on the same volume
+	// as the hosts file to replace it.
+	tmpFile := filepath.Join(driversDir, "tailscale-hosts.tmp")
+	defer os.Remove(tmpFile) // no-op if the file is renamed
+	f, err := os.Create(tmpFile)
+	if err != nil {
+		return err
 	}
-	return err
+	_, err = f.Write(outB)
+	if err := errors.Join(err, f.Sync(), f.Close()); err != nil {
+		return err
+	}
+	return atomicfile.Rename(tmpFile, hostsFile)
 }
 
 // setPrimaryDNS sets the given resolvers and domains as the Tailscale
@@ -457,9 +512,7 @@ func (m *windowsManager) SetDNS(cfg OSConfig) error {
 			// host names the hosts file just as we do when we're not the primary resolver.
 			hosts = cfg.Hosts
 		}
-		if err := m.setHosts(hosts); err != nil {
-			return err
-		}
+		m.setHosts(hosts)
 		if err := m.setPrimaryDNS(cfg.Nameservers, cfg.SearchDomains); err != nil {
 			return err
 		}
@@ -484,9 +537,7 @@ func (m *windowsManager) SetDNS(cfg OSConfig) error {
 			// explicitly set some single name hosts to ensure that we can resolve
 			// them quickly and get around the 2.3s delay that otherwise occurs due
 			// to multicast timeouts.
-			if err := m.setHosts(cfg.Hosts); err != nil {
-				return err
-			}
+			m.setHosts(cfg.Hosts)
 		}
 	}
 
@@ -539,6 +590,8 @@ func (m *windowsManager) Close() error {
 	}
 
 	err := m.SetDNS(OSConfig{})
+	// Our hosts file entries must be gone before the process exits.
+	m.hostsOp.Wait()
 	if m.nrptDB != nil {
 		m.nrptDB.Close()
 		m.nrptDB = nil

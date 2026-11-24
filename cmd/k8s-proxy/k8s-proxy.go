@@ -233,6 +233,48 @@ func run(logger *zap.SugaredLogger) error {
 		return fmt.Errorf("error getting local client: %w", err)
 	}
 
+	// Serve the local endpoints before Up, so /livez answers while Up runs and
+	// while waiting for a reissued auth key.
+	var mux *http.ServeMux
+	if cfg.Parsed.HealthCheckEnabled.EqualBool(true) || cfg.Parsed.MetricsEnabled.EqualBool(true) {
+		addr := podIP
+		if addr == "" {
+			addr = cfg.GetLocalAddr()
+		}
+
+		addrPort := getLocalAddrPort(addr, cfg.GetLocalPort())
+		mux = http.NewServeMux()
+		localSrv := &http.Server{Addr: addrPort, Handler: mux}
+
+		if cfg.Parsed.MetricsEnabled.EqualBool(true) {
+			logger.Infof("Running metrics endpoint at %s/metrics", addrPort)
+			metrics.RegisterMetricsHandlers(mux, lc, "")
+		}
+
+		if cfg.Parsed.HealthCheckEnabled.EqualBool(true) {
+			registerHealthChecks(mux, lc, logger.Infof)
+		}
+
+		group.Go(func() error {
+			errChan := make(chan error)
+			go func() {
+				if err := localSrv.ListenAndServe(); err != nil {
+					errChan <- err
+				}
+				close(errChan)
+			}()
+
+			select {
+			case <-ctx.Done():
+				sCtx, scancel := context.WithTimeout(serveCtx, 10*time.Second)
+				defer scancel()
+				return localSrv.Shutdown(sCtx)
+			case err := <-errChan:
+				return err
+			}
+		})
+	}
+
 	// Make sure we crash loop if Up doesn't complete in reasonable time.
 	upCtx, upCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer upCancel()
@@ -293,57 +335,23 @@ func run(logger *zap.SugaredLogger) error {
 		}
 	}
 
-	if cfg.Parsed.HealthCheckEnabled.EqualBool(true) || cfg.Parsed.MetricsEnabled.EqualBool(true) {
-		addr := podIP
-		if addr == "" {
-			addr = cfg.GetLocalAddr()
+	// /healthz reports the node's tailnet IPs, so it can only be registered after Up.
+	if cfg.Parsed.HealthCheckEnabled.EqualBool(true) {
+		ipV4, ipV6 := ts.TailscaleIPs()
+		var v4, v6 string
+		if ipV4.IsValid() {
+			v4 = ipV4.String()
 		}
-
-		addrPort := getLocalAddrPort(addr, cfg.GetLocalPort())
-		mux := http.NewServeMux()
-		localSrv := &http.Server{Addr: addrPort, Handler: mux}
-
-		if cfg.Parsed.MetricsEnabled.EqualBool(true) {
-			logger.Infof("Running metrics endpoint at %s/metrics", addrPort)
-			metrics.RegisterMetricsHandlers(mux, lc, "")
+		if ipV6.IsValid() {
+			v6 = ipV6.String()
 		}
-
-		if cfg.Parsed.HealthCheckEnabled.EqualBool(true) {
-			ipV4, ipV6 := ts.TailscaleIPs()
-			var v4, v6 string
-			if ipV4.IsValid() {
-				v4 = ipV4.String()
-			}
-			if ipV6.IsValid() {
-				v6 = ipV6.String()
-			}
-			hz := healthz.RegisterHealthHandlers(mux, v4, v6, logger.Infof)
-			group.Go(func() error {
-				err := hz.MonitorHealth(ctx, lc)
-				if errors.Is(err, context.Canceled) {
-					return nil
-				}
-				return err
-			})
-		}
-
+		hz := healthz.RegisterHealthHandlers(mux, v4, v6, logger.Infof)
 		group.Go(func() error {
-			errChan := make(chan error)
-			go func() {
-				if err := localSrv.ListenAndServe(); err != nil {
-					errChan <- err
-				}
-				close(errChan)
-			}()
-
-			select {
-			case <-ctx.Done():
-				sCtx, scancel := context.WithTimeout(serveCtx, 10*time.Second)
-				defer scancel()
-				return localSrv.Shutdown(sCtx)
-			case err := <-errChan:
-				return err
+			err := hz.MonitorHealth(ctx, lc)
+			if errors.Is(err, context.Canceled) {
+				return nil
 			}
+			return err
 		})
 	}
 

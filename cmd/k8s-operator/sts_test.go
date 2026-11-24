@@ -354,7 +354,7 @@ func Test_applyHealthzProbes(t *testing.T) {
 				t.Fatalf("unmarshaling proxy template: %v", err)
 			}
 			ss.Spec.Template.Spec.Containers[0].Env = append(ss.Spec.Template.Spec.Containers[0].Env, tt.env...)
-			applyHealthzProbes(tt.pc, &ss)
+			applyHealthzProbes(tt.pc, &ss, false)
 			c := ss.Spec.Template.Spec.Containers[0]
 
 			if got := c.LivenessProbe != nil; got != tt.wantLiveness {

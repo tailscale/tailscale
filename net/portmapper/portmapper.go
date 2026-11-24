@@ -665,10 +665,10 @@ func (c *Client) createOrGetMapping(ctx context.Context) (mapping mapping, exter
 	if c.lastProbe.After(now.Add(-5*time.Second)) && !haveRecentPMP && !haveRecentPCP {
 		c.mu.Unlock()
 		// fallback to UPnP portmapping
+		c.vlogf("attempting fallback to UPnP due to no PCP and PMP failed")
 		if external, ok := c.getUPnPPortMapping(ctx, gw, internalAddr, prevPort); ok {
 			return nil, external, nil
 		}
-		c.vlogf("fallback to UPnP due to no PCP and PMP failed")
 		return nil, netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 	}
 
@@ -735,6 +735,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (mapping mapping, exter
 				return nil, netip.AddrPort{}, err
 			}
 			// fallback to UPnP portmapping
+			c.vlogf("attempting fallback to UPnP due to timeout")
 			if mapping, ok := c.getUPnPPortMapping(ctx, gw, internalAddr, prevPort); ok {
 				return nil, mapping, nil
 			}
@@ -911,7 +912,7 @@ func (c *Client) Probe(ctx context.Context) (res portmappertype.ProbeResult, err
 
 	uc, err := c.listenPacket(context.Background(), "udp4", ":0")
 	if err != nil {
-		c.logf("ProbePCP: %v", err)
+		c.logf("Probe: %v", err)
 		return res, err
 	}
 	defer uc.Close()
@@ -1071,7 +1072,7 @@ func (c *Client) Probe(ctx context.Context) (res portmappertype.ProbeResult, err
 		ip := src.Addr().Unmap()
 
 		handleUPnPResponse := func() {
-			metricUPnPResponse.Add(1)
+			metricUPnPResponse.Add(1) // count includes responses on alternate port
 
 			if ip != gw {
 				// https://github.com/tailscale/tailscale/issues/5502
@@ -1295,15 +1296,15 @@ var (
 	metricPMPUnhandledResponseCode = clientmetric.NewCounter("portmap_pmp_unhandled_response_code")
 
 	// metricPMPOutOfResources counts the number of times
-	// we received a PCP out of resources result code.
+	// we received a PMP out of resources result code.
 	metricPMPOutOfResources = clientmetric.NewCounter("portmap_pmp_out_of_resources")
 
 	// metricPMPNetworkFailure counts the number of times
-	// we received a PCP network failure result code.
+	// we received a PMP network failure result code.
 	metricPMPNetworkFailure = clientmetric.NewCounter("portmap_pmp_network_failure")
 
 	// metricPMPNotAuthorized counts the number of times
-	// we received a PCP not authorized result code.
+	// we received a PMP not authorized result code.
 	metricPMPNotAuthorized = clientmetric.NewCounter("portmap_pmp_not_authorized")
 )
 

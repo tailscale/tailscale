@@ -89,3 +89,23 @@ func TestNoPendingIfNotRequested(t *testing.T) {
 		}
 	})
 }
+
+func TestWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var n atomic.Int32
+		op := coalescedop.New(func() {
+			time.Sleep(time.Second)
+			n.Add(1)
+		})
+
+		op.Wait() // returns immediately when idle
+
+		op.Do()
+		time.Sleep(time.Millisecond) // wait for the first execution to start
+		op.Do()
+		op.Wait()
+		if got := n.Load(); got != 2 {
+			t.Errorf("n=%d; want 2 (Wait should cover the pending execution)", got)
+		}
+	})
+}

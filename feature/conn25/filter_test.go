@@ -289,11 +289,11 @@ func TestConnectorIngressAllow(t *testing.T) {
 					peercap.Conn25Prefix.ToAttribute(appName): tt.grant,
 				}
 				resp := c.handleConnectorTransitIPRequest(peerNode, peerCap, ConnectorTransitIPRequest{
-					TransitIPs: []TransitIPRequest{{
+					TransitIPs: []TransitIPRequest{withValidDstToken(t, c.connector, TransitIPRequest{
 						TransitIP:     transitIP,
 						DestinationIP: netip.MustParseAddr("203.0.113.1"),
 						App:           appName,
-					}},
+					})},
 				})
 				if len(resp.TransitIPs) != 1 || resp.TransitIPs[0].Code != OK {
 					t.Fatalf("registration failed: %+v", resp.TransitIPs)
@@ -392,11 +392,11 @@ func TestConnectorGrantRegistration(t *testing.T) {
 				peerCap[peercap.Conn25Prefix.ToAttribute(appName)] = tt.grant
 			}
 			resp := c.handleConnectorTransitIPRequest(peerNode, peerCap, ConnectorTransitIPRequest{
-				TransitIPs: []TransitIPRequest{{
+				TransitIPs: []TransitIPRequest{withValidDstToken(t, c.connector, TransitIPRequest{
 					TransitIP:     transitIP,
 					DestinationIP: netip.MustParseAddr("203.0.113.1"),
 					App:           appName,
-				}},
+				})},
 			})
 			if len(resp.TransitIPs) != 1 {
 				t.Fatalf("got %d responses, want 1", len(resp.TransitIPs))
