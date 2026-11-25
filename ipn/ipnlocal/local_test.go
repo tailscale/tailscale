@@ -11202,3 +11202,52 @@ func TestExtensionStateHooksWhileBlocked(t *testing.T) {
 		t.Errorf("network configuration events = %v, want [false]", configured)
 	}
 }
+
+func mapViaPrefix(v4str string, siteID uint32) netip.Prefix {
+	v4 := netip.MustParsePrefix(v4str)
+	return must.Get(tsaddr.MapVia(siteID, v4))
+}
+func mapViaAddr(v4str string, siteID uint32) netip.Addr {
+	v4 := netip.MustParseAddr(v4str)
+	return must.Get(tsaddr.MapVia(siteID, netip.PrefixFrom(v4, v4.BitLen()))).Addr()
+}
+
+func TestShouldForwardToVia(t *testing.T) {
+	tests := []struct {
+		name           string
+		advertisements []netip.Prefix
+		want           map[netip.Addr]bool
+	}{
+		{
+			name: "normal",
+			advertisements: []netip.Prefix{
+				mapViaPrefix("8.0.0.0/8", 1),
+			},
+			want: map[netip.Addr]bool{
+				mapViaAddr("1.1.1.1", 1):         false,
+				mapViaAddr("8.8.8.8", 1):         true,
+				mapViaAddr("8.8.8.8", 2):         false,
+				mapViaAddr("127.0.0.1", 1):       false,
+				mapViaAddr("169.254.1.1", 1):     false,
+				mapViaAddr("169.254.169.254", 1): false,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newTestLocalBackend(t)
+			if _, err := b.EditPrefs(&ipn.MaskedPrefs{
+				AdvertiseRoutes:    tt.advertisements,
+				AdvertiseRoutesSet: true,
+			}); err != nil {
+				t.Errorf("broken test while setting advertised routes: %v", err)
+				return
+			}
+			for addr, want := range tt.want {
+				if got := b.ShouldForwardToVia(addr); got != want {
+					t.Errorf("ShouldForwardToVia(%v) = %v, want %v", addr, got, want)
+				}
+			}
+		})
+	}
+}

@@ -132,13 +132,16 @@ const viaPerSiteIDPrefixLength = 96
 const minViaExceptionPrefixLength = viaPerSiteIDPrefixLength + 8
 
 // viaHostLocalAdvertisablePrefixes is the list of host-scoped prefixes that can
-// be advertised via a subnet router but only when the advertisement is specific
-// enough to ensure that advertising within host-scoped address space is
-// intentional.
-var viaHostLocalAdvertisablePrefixes = []netip.Prefix{
-	netip.PrefixFrom(netip.AddrFrom4([4]byte{127, 0, 0, 0}), 8),    // loopback
-	netip.PrefixFrom(netip.AddrFrom4([4]byte{169, 254, 0, 0}), 16), // link-local
-}
+// be advertised by a 4via6 subnet router but only when the advertisement is
+// specific enough to ensure that advertising within host-scoped address space
+// is intentional.
+var viaHostLocalAdvertisablePrefixes = sync.OnceValue(func() []netip.Prefix {
+	return []netip.Prefix{
+		netip.MustParsePrefix("127.0.0.0/8"),    // loopback
+		netip.MustParsePrefix("169.254.0.0/16"), // link-local
+		tsaddr.CGNATRange(),
+	}
+})
 
 // generateViaAdvertisedAllowlist creates a func that returns true when a
 // destination IP is a 4via6 address (still in 4via6 form) that should be
@@ -146,16 +149,35 @@ var viaHostLocalAdvertisablePrefixes = []netip.Prefix{
 // a deliberate choice to share potentially-sensitive destinations. The mapped
 // address is used for this check so that only the site ID of the matching
 // advertisement is permitted, rather than any site ID.
-func generateViaAdvertisedAllowlist(advertisedRoutes views.Slice[netip.Prefix]) func(netip.Addr) bool {
-	var restrictedBuilder netipx.IPSetBuilder
-	for _, prefix := range viaHostLocalAdvertisablePrefixes {
-		restrictedBuilder.AddPrefix(prefix)
+//
+// The list is generated in 3 phases. The changes applied in each phase override
+// any previous phases.
+//  1. Add 4via6 destinations to host-scoped addresses when the advertisement
+//     is sufficiently specific. Only the site ID(s) with qualifying
+//     advertisements allow those destinations.
+//  2. Remove cloud metadata prefixes from every site ID in use, even if allowed
+//     by phase 1.
+//  3. Add 4via6 destinations that are advertised as a single IP and fall into
+//     the cloud metadata ranges. Like phase 1, the only site IDs allowed for
+//     those destinations are those with qualifying advertisements. As of
+//     2026-11-25, the only IPv4 cloud metadata prefixes are 3 single IPs, so
+//     nobody should need to add an undue number of additional advertisements to
+//     work around this restriction when desired.
+func generateViaAdvertisedAllowlist(advertisedRoutes views.Slice[netip.Prefix]) *netipx.IPSet {
+	if advertisedRoutes.Len() == 0 {
+		return nil
 	}
-	for _, prefix := range routelimits.CloudMetadataPrefixes().All() {
-		restrictedBuilder.AddPrefix(prefix)
-	}
-
-	singleIPs := make(set.Set[netip.Addr])
+	// cloudMetadataIPs records the single IP advertisements that have been
+	// observed so far.
+	//
+	// Cloud metadata endpoints are extra sensitive, so we require those to be
+	// advertised explicitly (using a 4via6 /128) even when an advertisement is
+	// less specific but still specific enough to normally grant an exception
+	// For example, the 4via6 mapped equivalent to 169.254.169.0/24 will still
+	// exclude 169.254.169.254.
+	var cloudMetadataIPs []netip.Addr
+	// siteIDs is the list of site IDs in use so that we can efficiently remove
+	// cloud metadata prefixes from them.
 	siteIDs := make(set.Set[uint32])
 	var sb netipx.IPSetBuilder
 
@@ -179,11 +201,11 @@ func generateViaAdvertisedAllowlist(advertisedRoutes views.Slice[netip.Prefix]) 
 
 		siteID, unmappedAddr := tsaddr.UnmapViaWithSiteID(mappedPrefix.Addr())
 		if mappedPrefix.IsSingleIP() && routelimits.IsCloudMetadata()(unmappedAddr) {
-			singleIPs.Add(mappedPrefix.Addr())
+			cloudMetadataIPs = append(cloudMetadataIPs, mappedPrefix.Addr())
 			continue
 		}
 
-		for _, advertisable := range viaHostLocalAdvertisablePrefixes {
+		for _, advertisable := range viaHostLocalAdvertisablePrefixes() {
 			if mappedPrefix.Bits() < viaPerSiteIDPrefixLength+advertisable.Bits() {
 				continue
 			}
@@ -199,28 +221,34 @@ func generateViaAdvertisedAllowlist(advertisedRoutes views.Slice[netip.Prefix]) 
 		}
 	}
 
-	for _, cloudMetaPrefix := range routelimits.CloudMetadataPrefixes().All() {
-		if !cloudMetaPrefix.Addr().Is4() {
-			continue
-		}
-		for siteID := range siteIDs {
-			via, err := tsaddr.MapVia(siteID, cloudMetaPrefix)
-			if err != nil {
+	if len(siteIDs) > 0 {
+		for _, cloudMetaPrefix := range routelimits.CloudMetadataPrefixes().All() {
+			if !cloudMetaPrefix.Addr().Is4() {
 				continue
 			}
-			sb.RemovePrefix(via)
+			for siteID := range siteIDs {
+				via, err := tsaddr.MapVia(siteID, cloudMetaPrefix)
+				if err != nil {
+					continue
+				}
+				sb.RemovePrefix(via)
+			}
 		}
 	}
 
-	for addr := range singleIPs {
+	for _, addr := range cloudMetadataIPs {
 		sb.Add(addr)
 	}
 
 	s, err := sb.IPSet()
 	if err != nil {
 		log.Printf("[unexpected] building viaTargetAllowed: %v", err)
-		return ipset.FalseContainsIPFunc()
+		return nil
 	}
 
-	return ipset.NewContainsIPFunc(views.SliceOf(s.Prefixes()))
+	if s.Equal(&netipx.IPSet{}) {
+		return nil
+	}
+
+	return s
 }

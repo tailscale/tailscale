@@ -4,14 +4,18 @@
 package ipnlocal
 
 import (
+	"fmt"
 	"net/netip"
 	"slices"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"go4.org/netipx"
+	"tailscale.com/types/views"
 )
 
-func TestViaTargetAllowed(t *testing.T) {
+func TestViaUnmappedTargetAllowed(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -64,7 +68,7 @@ func TestViaTargetAllowed(t *testing.T) {
 	}
 	for _, tc := range cases {
 		ip := netip.MustParseAddr(tc.ip)
-		if got := viaTargetAllowed(ip); got != tc.want {
+		if got := viaUnmappedTargetAllowed(ip); got != tc.want {
 			t.Errorf("viaTargetAllowed(%v) = %v, want %v", ip, got, tc.want)
 		}
 	}
@@ -211,6 +215,79 @@ func TestGenerateViaTargetAdditions(t *testing.T) {
 			}
 			if tt.want != nil {
 				t.Errorf("nil ipset, want ranges to be %v", tt.want)
+			}
+		})
+	}
+}
+
+func TestGenerateViaAdvertisedAllowlist(t *testing.T) {
+	tests := []struct {
+		name             string
+		advertisedRoutes []netip.Prefix
+		want             []netipx.IPRange
+	}{
+		{
+			name: "empty",
+		},
+		{
+			name: "cloudmeta-exact",
+			advertisedRoutes: []netip.Prefix{
+				mapViaPrefix("169.254.169.254/32", 1),
+			},
+			want: []netipx.IPRange{
+				netipx.IPRangeFrom(mapViaAddr("169.254.169.254", 1), mapViaAddr("169.254.169.254", 1)),
+			},
+		},
+		{
+			name: "cloudmeta-inexact",
+			advertisedRoutes: []netip.Prefix{
+				mapViaPrefix("169.254.169.0/24", 2),
+			},
+			want: []netipx.IPRange{
+				netipx.IPRangeFrom(mapViaAddr("169.254.169.0", 2), mapViaAddr("169.254.169.253", 2)),
+				netipx.IPRangeFrom(mapViaAddr("169.254.169.255", 2), mapViaAddr("169.254.169.255", 2)),
+			},
+		},
+		{
+			name: "loopback",
+			advertisedRoutes: []netip.Prefix{
+				mapViaPrefix("127.0.0.0/8", 3),
+			},
+			want: []netipx.IPRange{
+				netipx.IPRangeFrom(mapViaAddr("127.0.0.0", 3), mapViaAddr("127.255.255.255", 3)),
+			},
+		},
+		{
+			name: "link-local",
+			advertisedRoutes: []netip.Prefix{
+				mapViaPrefix("169.254.0.0/16", 4),
+			},
+			want: []netipx.IPRange{
+				netipx.IPRangeFrom(mapViaAddr("169.254.0.0", 4), mapViaAddr("169.254.0.0", 4)),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := generateViaAdvertisedAllowlist(views.SliceOf(tt.advertisedRoutes))
+			if got == nil {
+				if tt.want != nil {
+					t.Errorf("nil, want %s", tt.want)
+				}
+				return
+			}
+			if tt.want == nil {
+				t.Errorf("%s, want nil", got)
+				return
+			}
+			if diff := cmp.Diff(
+				got.Ranges(),
+				tt.want,
+				cmpopts.EquateComparable(netipx.IPRange{}),
+				cmp.Transformer("addr-with-siteid", func(a netip.Addr) string {
+					return fmt.Sprintf("%s+siteID%d", a.String(), 5)
+				})); diff != "" {
+				t.Errorf("ranges don't match (-got +want)\n\n%s", diff)
 			}
 		})
 	}

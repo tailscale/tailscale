@@ -4936,7 +4936,12 @@ func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 	} else {
 		filtered := views.SliceOf(tsaddr.FilterPrefixesCopy(p.AdvertiseRoutes(), tsaddr.IsViaPrefix))
 		b.containsViaIPFuncAtomic.Store(ipset.NewContainsIPFunc(filtered))
-		b.allowViaLocalIPFuncAtomic.Store(generateViaAdvertisedAllowlist(filtered))
+		viaLocalIPSet := generateViaAdvertisedAllowlist(filtered)
+		if viaLocalIPSet != nil {
+			b.allowViaLocalIPFuncAtomic.Store(ipset.NewContainsIPFunc(views.SliceOf(viaLocalIPSet.Prefixes())))
+		} else {
+			b.allowViaLocalIPFuncAtomic.Store(nil)
+		}
 		b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(p)
 	}
 }
@@ -7487,12 +7492,17 @@ func (b *LocalBackend) ShouldHandleViaIP(ip netip.Addr) bool {
 // is the sole policy check on the embedded target.
 func (b *LocalBackend) ShouldForwardToVia(via netip.Addr) bool {
 	// Configured exceptions take place before unmapping
-	if f, ok := b.allowViaLocalIPFuncAtomic.LoadOk(); ok {
+	if f := b.allowViaLocalIPFuncAtomic.Load(); f != nil {
 		if f(via) {
 			return true
 		}
 	}
-	return
+	unmapped := tsaddr.UnmapVia(via)
+	if unmapped == via {
+		//
+		return false
+	}
+	return viaUnmappedTargetAllowed(unmapped)
 }
 
 // Logout logs out the current profile, if any, and waits for the logout to
