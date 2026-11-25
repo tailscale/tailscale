@@ -54,6 +54,10 @@ import (
 // endpoint, or the empty string to makes RemoteAddr() return a place
 // holder value.
 func NetConn(ctx context.Context, c *websocket.Conn, msgType websocket.MessageType, remoteAddr string) net.Conn {
+	// No message size limit, matching websocket.NetConn. The protocols tunneled
+	// over this stream (DERP, Noise) enforce their own frame size limits.
+	c.SetReadLimit(-1)
+
 	nc := &netConn{
 		c:          c,
 		msgType:    msgType,
