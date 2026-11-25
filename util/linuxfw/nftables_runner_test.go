@@ -1358,6 +1358,35 @@ func TestNFTAddAndDelConnmarkRules(t *testing.T) {
 	}
 }
 
+func TestCleanupConnmarkRules(t *testing.T) {
+	conn := newSysConn(t)
+	runner := newFakeNftablesRunnerWithConn(t, conn, true)
+	if err := runner.AddConnmarkSaveRule(); err != nil {
+		t.Fatalf("AddConnmarkSaveRule() failed: %v", err)
+	}
+
+	for _, fam := range []nftables.TableFamily{nftables.TableFamilyIPv4, nftables.TableFamilyIPv6} {
+		cleanupConnmarkRules(t.Logf, conn, &nftables.Table{Family: fam, Name: "mangle"})
+
+		chains, err := conn.ListChainsOfTableFamily(fam)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ch := range chains {
+			if ch.Table.Name != "mangle" {
+				continue
+			}
+			rules, err := conn.GetRules(ch.Table, ch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rules) != 0 {
+				t.Errorf("family %v chain %s: got %d rules after cleanup, want 0", fam, ch.Name, len(rules))
+			}
+		}
+	}
+}
+
 // TestMakeConnmarkRestoreExprs tests the nftables expressions for restoring
 // marks from conntrack. This is a regression test that ensures the byte encoding
 // doesn't change unexpectedly.
