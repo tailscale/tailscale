@@ -11,6 +11,7 @@ import (
 	"maps"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -402,6 +403,44 @@ func newTestMapSession(t testing.TB, nu NetmapUpdater) *mapSession {
 func (ms *mapSession) netmapForResponse(res *tailcfg.MapResponse) *netmap.NetworkMap {
 	ms.updateStateFromResponse(res)
 	return ms.netmap()
+}
+
+// TestNetmapDropsDupKeyPeers tests that when control sends several peers with
+// the same node key, the netmap keeps only one of them, chosen
+// deterministically. See https://github.com/tailscale/corp/issues/52092.
+func TestNetmapDropsDupKeyPeers(t *testing.T) {
+	k := key.NewNode().Public()
+	other := key.NewNode().Public()
+	ms := newTestMapSession(t, nil)
+	peerIDs := func(nm *netmap.NetworkMap) (ids []tailcfg.NodeID) {
+		for _, p := range nm.Peers {
+			ids = append(ids, p.ID())
+		}
+		return ids
+	}
+
+	nm := ms.netmapForResponse(&tailcfg.MapResponse{
+		Node: new(tailcfg.Node),
+		Peers: []*tailcfg.Node{
+			{ID: 4, Key: k},
+			{ID: 1, Key: k},
+			{ID: 2, Key: other},
+			{ID: 3, Key: k},
+		},
+	})
+	if got, want := peerIDs(nm), []tailcfg.NodeID{2, 4}; !slices.Equal(got, want) {
+		t.Errorf("peers = %v; want %v", got, want)
+	}
+
+	// Once control removes the winner, another node with that key takes
+	// its place.
+	nm = ms.netmapForResponse(&tailcfg.MapResponse{
+		Node:         new(tailcfg.Node),
+		PeersRemoved: []tailcfg.NodeID{4},
+	})
+	if got, want := peerIDs(nm), []tailcfg.NodeID{2, 3}; !slices.Equal(got, want) {
+		t.Errorf("after removal, peers = %v; want %v", got, want)
+	}
 }
 
 func TestNetmapForResponse(t *testing.T) {

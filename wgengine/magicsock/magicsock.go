@@ -3265,23 +3265,30 @@ func (c *Conn) updateNodes(self tailcfg.NodeView, peers []tailcfg.NodeView) (pee
 
 	entriesPerBuffer := debugRingBufferSize(len(peers))
 
-	// Build the new peer map while upserting each peer.
 	newPeers := make(map[tailcfg.NodeID]tailcfg.NodeView, len(peers))
 	for _, n := range peers {
 		newPeers[n.ID()] = n
-		c.upsertPeerLocked(n, flags, entriesPerBuffer)
 	}
 	if len(newPeers) != len(peers) {
 		// Duplicate NodeIDs in the input shouldn't happen, but log if so.
 		c.logf("[unexpected] magicsock.updateNodes: %d peers input but %d unique IDs", len(peers), len(newPeers))
 	}
-	// Clean up node-key-keyed state for peers that are gone or have
-	// rotated their node key.
+	// Clean up state for peers that are gone or have rotated their node
+	// key before upserting, so a node key handed from a removed node to a
+	// new node (control deleted a node and the machine re-registered with
+	// its old node key) isn't seen as a conflict by upsertPeerLocked.
+	// See https://github.com/tailscale/corp/issues/52092.
 	for id, prev := range c.peersByID {
 		if n, ok := newPeers[id]; !ok || n.Key() != prev.Key() {
 			delete(c.derpRoute, prev.Key())
 			delete(c.peerLastDerp, prev.Key())
+			if ep, ok := c.peerMap.endpointForNodeID(id); ok {
+				c.peerMap.deleteEndpoint(ep)
+			}
 		}
+	}
+	for _, n := range peers {
+		c.upsertPeerLocked(n, flags, entriesPerBuffer)
 	}
 	hadPeers := len(c.peersByID) > 0
 	c.peersByID = newPeers
@@ -3370,18 +3377,14 @@ func (c *Conn) upsertPeerLocked(n tailcfg.NodeView, flags debugFlags, entriesPer
 		// we don't get this far. If ok was false above, that means it's a key
 		// that differs from the one the NodeID had. But double check.
 		if ep.nodeID != n.ID() {
-			// Server error. This is known to be a particular issue for Mullvad
-			// nodes (http://go/corp/27300), so log a distinct error for the
-			// Mullvad and non-Mullvad cases. The error will be logged either way,
-			// so an approximate heuristic is fine.
-			//
-			// When #27300 is fixed, we can delete this branch and log the same
-			// panic for any public key moving.
-			if strings.HasSuffix(n.Name(), ".mullvad.ts.net.") {
-				devPanicf("public key moved between Mullvad nodeIDs (old=%v new=%v, key=%s); see http://go/corp/27300", ep.nodeID, n.ID(), n.Key().String())
-			} else {
-				devPanicf("public key moved between nodeIDs (old=%v new=%v, key=%s)", ep.nodeID, n.ID(), n.Key().String())
-			}
+			// Both callers remove the endpoints of peers that are gone
+			// before upserting, so ep's node is still a current peer: two
+			// live nodeIDs in one peer list share a node key. controlclient
+			// drops such duplicates, but other SetNetworkMap callers (such
+			// as ingressd) may not, so log it rather than panicking. The
+			// existing endpoint keeps the key. See
+			// https://github.com/tailscale/corp/issues/52092.
+			c.logf("[unexpected] magicsock: node key %s used by both nodeID %v and %v (%q); ignoring %v", n.Key().ShortString(), ep.nodeID, n.ID(), n.Name(), n.ID())
 		} else {
 			// Internal data structures out of sync.
 			devPanicf("public key found in peerMap but not by nodeID")
@@ -3450,6 +3453,19 @@ func (c *Conn) UpsertPeer(n tailcfg.NodeView) {
 		return
 	}
 	flags := c.debugFlagsLocked()
+	if ep, ok := c.peerMap.endpointForNodeKey(n.Key()); ok && ep.nodeID != n.ID() {
+		// The node key moved to a new nodeID, typically because control
+		// deleted the old node and the machine re-registered with its
+		// persisted node key, and this add arrived before the old node's
+		// removal. Treat it as an implicit removal of the old node, which
+		// makes its later RemovePeer a no-op. The relay-server update
+		// below is keyed by node key and so covers the old node too.
+		// See https://github.com/tailscale/corp/issues/52092.
+		c.logf("magicsock: node key %s moved from nodeID %v to %v (%q)", n.Key().ShortString(), ep.nodeID, n.ID(), n.Name())
+		if _, ok := c.removePeerLocked(ep.nodeID); !ok {
+			c.peerMap.deleteEndpoint(ep) // peersByID lacked ep.nodeID
+		}
+	}
 	if prev, ok := c.peersByID[n.ID()]; ok && prev.Key() != n.Key() {
 		delete(c.derpRoute, prev.Key())
 		delete(c.peerLastDerp, prev.Key())
@@ -3491,10 +3507,26 @@ func (c *Conn) RemovePeer(nid tailcfg.NodeID) {
 		c.mu.Unlock()
 		return
 	}
-	prev, ok := c.peersByID[nid]
+	prev, ok := c.removePeerLocked(nid)
+	relayClientEnabled := c.relayClientEnabled
+	c.mu.Unlock()
+
+	if ok && buildfeatures.HasNATTraversal && relayClientEnabled {
+		// Tell the relay manager to drop the peer. The run loop no-ops
+		// this if the peer wasn't a relay server.
+		c.relayManager.handleRelayServerRemove(prev.Key())
+	}
+}
+
+// removePeerLocked removes the peer with nodeID nid from c.peersByID,
+// c.peerMap and the node-key-keyed state, returning the removed node. It
+// reports false if nid wasn't a peer. It doesn't update the relay manager.
+//
+// c.mu must be held.
+func (c *Conn) removePeerLocked(nid tailcfg.NodeID) (prev tailcfg.NodeView, ok bool) {
+	prev, ok = c.peersByID[nid]
 	if !ok {
-		c.mu.Unlock()
-		return
+		return prev, false
 	}
 	delete(c.peersByID, nid)
 	delete(c.derpRoute, prev.Key())
@@ -3510,15 +3542,7 @@ func (c *Conn) RemovePeer(nid tailcfg.NodeID) {
 	if dk := prev.DiscoKey(); !dk.IsZero() && !c.peerMap.knownPeerDiscoKey(dk) {
 		delete(c.discoInfo, dk)
 	}
-
-	relayClientEnabled := c.relayClientEnabled
-	c.mu.Unlock()
-
-	if buildfeatures.HasNATTraversal && relayClientEnabled {
-		// Tell the relay manager to drop the peer. The run loop no-ops
-		// this if the peer wasn't a relay server.
-		c.relayManager.handleRelayServerRemove(prev.Key())
-	}
+	return prev, true
 }
 
 // relayCandidateLocked reports whether peer p is eligible to be a relay

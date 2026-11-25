@@ -32,7 +32,15 @@ BINARY="$HOOK_DIR/ts-git-hook-bin$EXE"
 GO="$REPO_ROOT/tool/go$EXE"
 if [ ! -x "$GO" ]; then GO=go; fi
 
-OSS_DIR="$(cd "$REPO_ROOT" && GOWORK=off "$GO" list -m -f '{{.Dir}}' tailscale.com 2>/dev/null || true)"
+oss_dir() {
+  (cd "$REPO_ROOT" && GOWORK=off "$GO" list -m -f '{{.Dir}}' tailscale.com 2>/dev/null) || true
+}
+OSS_DIR="$(oss_dir)"
+if [ -z "$OSS_DIR" ]; then
+  # go list -m doesn't download; a fresh go.mod bump may not be cached yet.
+  (cd "$REPO_ROOT" && GOWORK=off "$GO" mod download tailscale.com >/dev/null 2>&1) || true
+  OSS_DIR="$(oss_dir)"
+fi
 SHARED_VER="$(cat "$OSS_DIR/misc/git_hook/githook/HOOK_VERSION" 2>/dev/null || echo 0)"
 LOCAL_VER="$(cat "$REPO_ROOT/misc/git_hook/HOOK_VERSION" 2>/dev/null || echo 0)"
 WANT="$SHARED_VER:$LOCAL_VER"

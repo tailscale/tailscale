@@ -28,7 +28,7 @@ import (
 
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/nettype"
+	"tailscale.com/util/pipetcp"
 )
 
 // Authentication METHODs described in RFC 1928, section 3.
@@ -261,86 +261,14 @@ func (c *Conn) handleTCP() error {
 	}
 	c.clientConn.Write(buf)
 
-	errc := make(chan error, 2)
-	go func() { errc <- pump(c.clientConn, srv, "from backend to client") }()
-	go func() { errc <- pump(srv, c.clientConn, "from client to backend") }()
-	err = <-errc
-	if err == nil {
-		return <-errc
-	}
-	// One direction failed, which means one of the two sockets is dead.
-	//
-	// If it failed writing to (or half-closing) its destination, the other
-	// direction is reading from that dead socket. Its reads return whatever
-	// arrived before the failure and then an error, so leave it alone to
-	// deliver that data rather than truncating it.
-	//
-	// If it failed reading from its source, the other direction is writing
-	// into that dead socket and may be blocked reading from the live peer,
-	// which has no reason to send anything. Close both connections to
-	// unblock it. Nothing deliverable is lost: the dead socket has already
-	// returned everything it received, and anything from the live peer
-	// could not be delivered to it anyway.
-	if _, isDstErr := errors.AsType[dstError](err); !isDstErr {
-		srv.Close()
-		c.clientConn.Close()
-	}
-	<-errc
-	return err
-}
-
-// pump copies from src to dst until src returns EOF or either side fails.
-//
-// On EOF it half-closes dst, if dst supports it, so dst's peer sees EOF while
-// the other direction of the proxied connection keeps flowing. It does not
-// half-close src's read side: that has no effect on the wire, and after src
-// has returned EOF, both macOS and Linux may reject the shutdown with
-// ENOTCONN.
-//
-// Errors from writing to or half-closing dst are returned wrapped in a
-// [dstError]. Errors from reading src are not.
-//
-// As of 2026-09-16, both ends of a proxied connection support half-closing:
-// [Server.dial] returns a [*net.TCPConn], possibly wrapped by a
-// tsdial.sysConn, and the client connection comes from a TCP listener,
-// possibly wrapped by proxymux.SplitSOCKSAndHTTP. Both wrappers pass
-// half-closes through to the underlying connection.
-func pump(dst, src net.Conn, dir string) error {
-	if _, err := io.Copy(dstWriter{dst}, src); err != nil {
-		return fmt.Errorf("%s: %w", dir, err)
-	}
-	if hc, ok := dst.(nettype.HalfCloser); ok {
-		if err := hc.CloseWrite(); err != nil {
-			return fmt.Errorf("%s: close write: %w", dir, dstError{err})
-		}
-	}
-	return nil
-}
-
-// dstError wraps an error from a [pump]'s destination, as opposed to one
-// from reading its source.
-type dstError struct{ error }
-
-func (e dstError) Unwrap() error { return e.error }
-
-// dstWriter wraps a [pump]'s destination so that its write errors are
-// reported as a [dstError].
-//
-// Wrapping the destination hides its ReadFrom method from [io.Copy] and hides
-// its type from the source's WriteTo, so when both ends are bare TCP
-// connections the kernel splice fast path is not used. That costs about a
-// third of the relay throughput on Linux loopback, but knowing which side
-// failed is what lets handleTCP avoid truncating a reply after the backend
-// resets, and in the common userspace-networking and proxymux configurations
-// the connections are wrapped types with no fast path anyway.
-type dstWriter struct{ io.Writer }
-
-func (w dstWriter) Write(p []byte) (int, error) {
-	n, err := w.Writer.Write(p)
-	if err != nil {
-		err = dstError{err}
-	}
-	return n, err
+	// [pipetcp.Pipe] requires that the destination in both of these calls
+	// supports closing the write half of its connection. As of 2026-09-16,
+	// both ends of a proxied connection support half-closing:
+	// [Server.dial] returns a [*net.TCPConn], possibly wrapped by a
+	// tsdial.sysConn, and the client connection comes from a TCP listener,
+	// possibly wrapped by proxymux.SplitSOCKSAndHTTP. Both wrappers pass
+	// half-closes through to the underlying connection.
+	return pipetcp.Pipe(srv, c.clientConn)
 }
 
 func (c *Conn) handleUDP() error {

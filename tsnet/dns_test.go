@@ -4,6 +4,7 @@
 package tsnet
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -28,39 +29,54 @@ import (
 	"tailscale.com/types/logger"
 )
 
-// fakeUpstreamDNS serves UDP queries for split DNS and global resolver tests.
+// fakeDNS serves UDP queries for split DNS and global resolver tests.
 // It answers A and AAAA queries from addrs. Other queries return NXDOMAIN.
-type fakeUpstreamDNS struct {
+type fakeDNS struct {
 	t     *testing.T
 	pc    net.PacketConn
 	mu    sync.Mutex
 	addrs map[string][]netip.Addr // lowercase names with trailing dots
 }
 
-func startFakeUpstreamDNS(t *testing.T, addrs map[string][]netip.Addr) *fakeUpstreamDNS {
+func startFakeDNS(t *testing.T, addrs map[string][]netip.Addr) *fakeDNS {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listening for fake upstream DNS: %v", err)
 	}
-	f := &fakeUpstreamDNS{t: t, pc: pc, addrs: addrs}
+	f := &fakeDNS{t: t, pc: pc, addrs: addrs}
 	t.Cleanup(func() { pc.Close() })
 	go f.serve()
 	return f
 }
 
+func useFakeHostDNS(t *testing.T, s *Server, addrs map[string][]netip.Addr) *fakeDNS {
+	t.Helper()
+	// Fake DNS server responds with NXDOMAIN for unknown addresses,
+	// unlike some OS resolvers which return temporary errors.
+	f := startFakeDNS(t, addrs)
+	s.dnsResolver().hostResolver = &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, network, f.addr())
+		},
+	}
+	return f
+}
+
 // setAnswers replaces DNS answers while the server is running.
-func (f *fakeUpstreamDNS) setAnswers(addrs map[string][]netip.Addr) {
+func (f *fakeDNS) setAnswers(addrs map[string][]netip.Addr) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.addrs = addrs
 }
 
-func (f *fakeUpstreamDNS) addr() string {
+func (f *fakeDNS) addr() string {
 	return f.pc.LocalAddr().String()
 }
 
-func (f *fakeUpstreamDNS) serve() {
+func (f *fakeDNS) serve() {
 	for {
 		buf := make([]byte, 1500)
 		n, src, err := f.pc.ReadFrom(buf)
@@ -71,7 +87,7 @@ func (f *fakeUpstreamDNS) serve() {
 	}
 }
 
-func (f *fakeUpstreamDNS) respond(query []byte, src net.Addr) {
+func (f *fakeDNS) respond(query []byte, src net.Addr) {
 	var p dnsmessage.Parser
 	hdr, err := p.Start(query)
 	if err != nil {
@@ -183,7 +199,7 @@ func startDNSResTestServer(t *testing.T, dnsCfg *tailcfg.DNSConfig) *Server {
 // split DNS routing, local MagicDNS answers, and host fallback without
 // global resolvers.
 func TestLookupIPSearchSplitMagicDNS(t *testing.T) {
-	upstream := startFakeUpstreamDNS(t, map[string][]netip.Addr{
+	upstream := startFakeDNS(t, map[string][]netip.Addr{
 		"db.corp.example.com.": {
 			netip.MustParseAddr("192.0.2.10"),
 			netip.MustParseAddr("2001:db8::10"),
@@ -195,6 +211,9 @@ func TestLookupIPSearchSplitMagicDNS(t *testing.T) {
 		Routes: map[string][]*dnstype.Resolver{
 			"corp.example.com.": {{Addr: upstream.addr()}},
 		},
+	})
+	_ = useFakeHostDNS(t, s, map[string][]netip.Addr{
+		"localhost.": {netip.MustParseAddr("127.0.0.1")},
 	})
 	selfIP, _ := s.TailscaleIPs()
 
@@ -277,7 +296,7 @@ func TestLookupIPSearchSplitMagicDNS(t *testing.T) {
 // TestLookupIPMagicDNSDisabled verifies search expansion without a MagicDNS
 // suffix and local peer-name resolution through the dialer.
 func TestLookupIPMagicDNSDisabled(t *testing.T) {
-	upstream := startFakeUpstreamDNS(t, nil)
+	upstream := startFakeDNS(t, nil)
 	s := startDNSResTestServer(t, &tailcfg.DNSConfig{
 		Proxied: false, // MagicDNS off
 		Domains: []string{"corp.example.com"},
@@ -323,7 +342,7 @@ func TestLookupIPMagicDNSDisabled(t *testing.T) {
 // TestLookupIPDialSplitDNS tests dialing a short name over the tailnet.
 // A custom search domain and split DNS upstream resolve it to a peer address.
 func TestLookupIPDialSplitDNS(t *testing.T) {
-	upstream := startFakeUpstreamDNS(t, nil)
+	upstream := startFakeDNS(t, nil)
 	_, controlURL := startDNSResControl(t, &tailcfg.DNSConfig{
 		Proxied: true,
 		Domains: []string{"corp.example.com"},
@@ -380,7 +399,7 @@ func TestLookupIPDialSplitDNS(t *testing.T) {
 // TestLookupIPConfigChange tests DNS policy updates with a cached DNS client.
 // Each lookup uses the current search domains, split routes, and MagicDNS state.
 func TestLookupIPConfigChange(t *testing.T) {
-	upstream := startFakeUpstreamDNS(t, map[string][]netip.Addr{
+	upstream := startFakeDNS(t, map[string][]netip.Addr{
 		"db.corp1.example.com.": {netip.MustParseAddr("192.0.2.10")},
 		"db.corp2.example.com.": {netip.MustParseAddr("192.0.2.20")},
 	})
@@ -427,7 +446,7 @@ func TestLookupIPConfigChange(t *testing.T) {
 // TestLookupIPOverrideGlobal tests that "override local DNS" sends names
 // without local answers to the global upstream.
 func TestLookupIPOverrideGlobal(t *testing.T) {
-	upstream := startFakeUpstreamDNS(t, map[string][]netip.Addr{
+	upstream := startFakeDNS(t, map[string][]netip.Addr{
 		"example.com.": {netip.MustParseAddr("192.0.2.20")},
 		"localhost.":   {netip.MustParseAddr("192.0.2.21")},
 	})

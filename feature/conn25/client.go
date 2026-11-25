@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
@@ -474,7 +475,10 @@ func (c *client) lookupTransitIPsByConnID(id tailcfg.NodeID) ([]netip.Prefix, bo
 	if !ok {
 		return nil, false
 	}
-	return s.Slice(), true
+	tips := s.Slice()
+	// Sort the result, so an unchanged set of transit IPs yields an identical slice on every call.
+	tsaddr.SortPrefixes(tips)
+	return tips, true
 }
 
 // resendTransitIPMapping enqueues a request to re-establish an existing

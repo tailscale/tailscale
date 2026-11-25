@@ -4,6 +4,7 @@
 package tsnet
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -22,6 +23,10 @@ import (
 // dnsResolver resolves addresses under the server's current tailnet DNS policy.
 // Its callbacks require a running backend and must be safe for concurrent use.
 type dnsResolver struct {
+	// hostResolver optionally specifies an alternate resolver, for use by tests.
+	// Defaults to [net.DefaultResolver].
+	hostResolver *net.Resolver
+
 	// queryDNS uses the internal resolver's TCP query path. routed reports
 	// whether tailnet policy routes the name to an upstream. Routed queries
 	// never fall back to the host resolver, even on error.
@@ -228,9 +233,10 @@ func (c *dnsResolver) lookupCandidate(ctx context.Context, network string, name 
 	}
 }
 
-// hostLookup resolves name using net.DefaultResolver.
+// hostLookup resolves name using c.hostResolver.
 func (c *dnsResolver) hostLookup(ctx context.Context, network string, name string) candidateResult {
-	stdIPs, err := net.DefaultResolver.LookupIP(ctx, network, name)
+	resolv := cmp.Or(c.hostResolver, net.DefaultResolver)
+	stdIPs, err := resolv.LookupIP(ctx, network, name)
 	if err != nil {
 		var dnsErr *net.DNSError
 		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {

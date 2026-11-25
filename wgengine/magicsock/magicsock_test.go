@@ -2635,6 +2635,94 @@ func TestPeerDERPStateCleanup(t *testing.T) {
 	}
 }
 
+// TestNodeKeyMovedBetweenNodeIDs tests that a node key handed from a
+// removed node to a new node (as happens when control deletes a node and the
+// same machine re-registers with its persisted node key) results in an
+// endpoint for the new node and none for the old one, via both the full
+// SetNetworkMap path and the incremental UpsertPeer/RemovePeer path.
+// See https://github.com/tailscale/corp/issues/52092.
+func TestNodeKeyMovedBetweenNodeIDs(t *testing.T) {
+	k := randNodeKey()
+	dk := randDiscoKey()
+	oldNode := &tailcfg.Node{ID: 100, Key: k, DiscoKey: dk, Endpoints: eps("192.168.1.2:1")}
+	newNode := &tailcfg.Node{ID: 200, Key: k, DiscoKey: dk, Endpoints: eps("192.168.1.2:1")}
+
+	// checkOwner verifies that the endpoint for k belongs to want, and that
+	// the peer set is exactly {want}.
+	checkOwner := func(t *testing.T, c *Conn, want tailcfg.NodeID) {
+		t.Helper()
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		ep, ok := c.peerMap.endpointForNodeKey(k)
+		if !ok {
+			t.Fatalf("no endpoint for key")
+		}
+		if ep.nodeID != want {
+			t.Errorf("endpoint nodeID = %v; want %v", ep.nodeID, want)
+		}
+		if _, ok := c.peerMap.endpointForNodeID(want); !ok {
+			t.Errorf("no endpoint for nodeID %v", want)
+		}
+		if n := c.peerMap.nodeCount(); n != 1 {
+			t.Errorf("peerMap nodeCount = %d; want 1", n)
+		}
+		if _, ok := c.peersByID[want]; len(c.peersByID) != 1 || !ok {
+			t.Errorf("peersByID has %d entries; want only %v", len(c.peersByID), want)
+		}
+	}
+
+	t.Run("SetNetworkMap", func(t *testing.T) {
+		c := newTestConn(t)
+		defer c.Close()
+		c.SetNetworkMap(tailcfg.NodeView{}, nodeViews([]*tailcfg.Node{oldNode}))
+		checkOwner(t, c, 100)
+		c.SetNetworkMap(tailcfg.NodeView{}, nodeViews([]*tailcfg.Node{newNode}))
+		checkOwner(t, c, 200)
+		// An unchanged netmap takes the fast path; the endpoint must remain.
+		c.SetNetworkMap(tailcfg.NodeView{}, nodeViews([]*tailcfg.Node{newNode}))
+		checkOwner(t, c, 200)
+	})
+
+	t.Run("UpsertThenRemove", func(t *testing.T) {
+		c := newTestConn(t)
+		defer c.Close()
+		c.UpsertPeer(oldNode.View())
+		checkOwner(t, c, 100)
+		// Control's delta adds the new node before removing the old one.
+		c.UpsertPeer(newNode.View())
+		checkOwner(t, c, 200)
+		c.RemovePeer(100)
+		checkOwner(t, c, 200)
+	})
+
+	t.Run("RemoveThenUpsert", func(t *testing.T) {
+		c := newTestConn(t)
+		defer c.Close()
+		c.UpsertPeer(oldNode.View())
+		c.RemovePeer(100)
+		c.UpsertPeer(newNode.View())
+		checkOwner(t, c, 200)
+	})
+
+	t.Run("SameListDuplicate", func(t *testing.T) {
+		// Two live nodeIDs with the same key in one peer list is a control
+		// data error. It must not panic, and the first node in the list
+		// keeps the endpoint.
+		c := newTestConn(t)
+		defer c.Close()
+		c.SetNetworkMap(tailcfg.NodeView{}, nodeViews([]*tailcfg.Node{oldNode, newNode}))
+		c.mu.Lock()
+		ep, ok := c.peerMap.endpointForNodeKey(k)
+		c.mu.Unlock()
+		if !ok || ep.nodeID != 100 {
+			t.Fatalf("endpoint = %v, %v; want nodeID 100", ep, ok)
+		}
+		// Dropping the first node hands the key to the second.
+		c.SetNetworkMap(tailcfg.NodeView{}, nodeViews([]*tailcfg.Node{newNode}))
+		checkOwner(t, c, 200)
+	})
+}
+
 // newWireguard starts up a new wireguard-go device attached to a test tun, and
 // returns the device, tun and endpoint port. To add peers call device.IpcSet
 // with UAPI instructions.

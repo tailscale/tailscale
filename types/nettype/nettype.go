@@ -64,13 +64,15 @@ type ConnPacketConn interface {
 	net.PacketConn
 }
 
-// HalfCloser is an interface to abstract around various Conn types that
-// allow closing of the read and write streams independently of each other.
+// TCPWriteCloser is an interface to abstract around various TCP conn types that
+// allow closing of the write stream independently of the overall connection.
 // It is normally used as a typecast for a `net.Conn` to get access to these
 // functions. If you use it for this purpose, you should either be absolutely
 // certain that the `net.Conn` you have represents a half-closable connection
-// (eg. TCP or unix socket), or check for and handle a failure to cast.
-type HalfCloser interface {
-	CloseRead() error
+// (eg. TCP), or check for and handle a failure to cast.
+// This interface intentionally does not implement CloseRead(), since that is
+// usually a no-op, and CloseRead()ing a dead connection may cause errors.
+// See #21522 for context.
+type TCPWriteCloser interface {
 	CloseWrite() error
 }

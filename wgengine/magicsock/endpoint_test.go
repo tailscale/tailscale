@@ -741,10 +741,9 @@ func Test_endpoint_handlePongConnLocked(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				now := mono.Now() // synctest to match this to the internal 'now'
-				pm := newPeerMap()
 				c := &Conn{
 					logf:    func(msg string, args ...any) {},
-					peerMap: pm,
+					peerMap: newPeerMap(),
 				}
 				c.discoAtomic.Set(key.NewDisco())
 				de := &endpoint{

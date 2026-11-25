@@ -160,12 +160,6 @@ func (c *connector) destinationInPools(dst netip.Addr) bool {
 	return (magic != nil && magic.Contains(dst)) || (transit != nil && transit.Contains(dst))
 }
 
-// linkLocalAllow reports whether p, whose destination is a link-local unicast
-// address, should be exempt from the filter's blanket drop of such packets.
-// conn25 allocates transit IPs out of link-local space, so a packet addressed
-// to one has to get past that check; whether the peer may actually reach it is
-// decided by [connector.ingressAllow].
-
 // linkLocalAllow returns true if the provided packet has a Dst that is in
 // the configured transit IP range for this connector, false otherwise.
 func (c *connector) linkLocalAllow(p packet.Parsed) (bool, string) {

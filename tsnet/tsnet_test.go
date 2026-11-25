@@ -121,8 +121,7 @@ func TestListenerPort(t *testing.T) {
 		{"tcp6", "[12::34]:80", false},
 	}
 	for _, tt := range tests {
-		s := &Server{}
-		s.initOnce.Do(func() { s.initErr = errNone })
+		s := &Server{startErr: errNone}
 		_, err := s.Listen(tt.network, tt.addr)
 		gotErr := err != nil && err != errNone
 		if gotErr != tt.wantErr {
@@ -975,8 +974,7 @@ func TestServeUnavailable(t *testing.T) {
 	}
 
 	// Neither call should try to start the server when Serve is omitted.
-	s := &Server{}
-	s.initOnce.Do(func() { s.initErr = errors.New("unexpected server startup") })
+	s := &Server{startErr: errors.New("unexpected server startup")}
 	if ln, err := s.ListenFunnel("tcp", ":443"); ln != nil || !errors.Is(err, feature.ErrUnavailable) {
 		t.Errorf("ListenFunnel = %v, %v; want nil, %v", ln, err, feature.ErrUnavailable)
 	}
@@ -4182,13 +4180,90 @@ func TestListenMultipleEphemeralPorts(t *testing.T) {
 }
 
 // TestCloseBeforeStart verifies that Close on a Server whose Start never ran
-// (or failed early) does not panic. s.sys is assigned partway through doInit,
-// so it is still nil in that state, and close previously dereferenced
+// (or failed early) does not panic. s.sys is assigned partway through Start,
+// so it is still nil in that state, and Close previously dereferenced
 // s.sys.Bus unconditionally.
 func TestCloseBeforeStart(t *testing.T) {
 	s := &Server{}
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+	if err := s.Start(); !errors.Is(err, errServerClosed) {
+		t.Errorf("Start after Close: %v; want %v", err, errServerClosed)
+	}
+	if _, err := s.Up(context.Background()); !errors.Is(err, errServerClosed) {
+		t.Errorf("Up after Close: %v; want %v", err, errServerClosed)
+	}
+	if err := s.Close(); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("second Close: %v; want %v", err, net.ErrClosed)
+	}
+}
+
+func TestCloseDuringStart(t *testing.T) {
+	tstest.ResourceCheck(t)
+
+	controlURL, _ := startControl(t)
+	st := &blockingStore{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	s := &Server{
+		Dir:        t.TempDir(),
+		Hostname:   "close-during-start",
+		ControlURL: controlURL,
+		Ephemeral:  true,
+		Store:      st,
+	}
+	defer s.Close()
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- s.Start() }()
+	<-st.entered // Start is blocked in NewLocalBackend by ReadState
+
+	closeErr := make(chan error, 1)
+	go func() { closeErr <- s.Close() }()
+	<-s.shutdownCtx.Done() // wait for Close to cancel Start
+
+	select {
+	case err := <-closeErr:
+		t.Fatalf("Close returned %v before Start returned", err)
+	case <-time.After(100 * time.Millisecond): // wait for broken Close
+	}
+
+	close(st.release)
+	if err := <-startErr; !errors.Is(err, errServerClosed) {
+		t.Errorf("Start: %v; want %v", err, errServerClosed)
+	}
+	if err := <-closeErr; err != nil {
+		t.Errorf("Close: %v; want nil", err)
+	}
+	if err := s.Start(); !errors.Is(err, errServerClosed) {
+		t.Errorf("Start after Close: %v; want %v", err, errServerClosed)
+	}
+}
+
+type blockingStore struct {
+	mem.Store
+	once    sync.Once
+	entered chan struct{} // closed when ReadState starts to block
+	release chan struct{}
+}
+
+func (s *blockingStore) ReadState(id ipn.StateKey) ([]byte, error) {
+	s.once.Do(func() {
+		close(s.entered)
+		<-s.release
+	})
+	return s.Store.ReadState(id)
+}
+
+func TestUpWithCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	s := &Server{}
+	if _, err := s.Up(ctx); !errors.Is(err, context.Canceled) {
+		t.Errorf("Up after cancel: %v; want %v", err, ctx.Err())
 	}
 }
 
@@ -4244,4 +4319,59 @@ func TestHTTPClientDefaultTransport(t *testing.T) {
 			t.Errorf("unexpected http.Transport field %q; decide how HTTPClient should handle it and update this test", f.Name)
 		}
 	}
+}
+
+func TestTailnet(t *testing.T) {
+	controlURL, control := startControl(t)
+	control.TailnetID = "T1"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	newServer := func(hostname, dir string, tailnet tailcfg.StableTailnetID) *Server {
+		s := &Server{
+			Dir:        dir,
+			ControlURL: controlURL,
+			Hostname:   hostname,
+			Tailnet:    tailnet,
+			Logf:       tstest.WhileTestRunningLogger(t),
+		}
+		t.Cleanup(func() { s.Close() })
+		return s
+	}
+
+	t.Run("match", func(t *testing.T) {
+		st, err := newServer("s1", t.TempDir(), "T1").Up(ctx)
+		if err != nil {
+			t.Fatalf("Up: %v", err)
+		}
+		if got := st.CurrentTailnet.StableID; got != "T1" {
+			t.Errorf("tailnet = %q; want T1", got)
+		}
+	})
+
+	t.Run("register_refused", func(t *testing.T) {
+		_, err := newServer("s2", t.TempDir(), "T2").Up(ctx)
+		if err == nil || !strings.Contains(err.Error(), "T2") {
+			t.Fatalf("Up = %v; want a registration error naming T2", err)
+		}
+	})
+
+	t.Run("saved_state_other_tailnet", func(t *testing.T) {
+		// Log in with no Tailnet set, then restart from the same state
+		// asking for a different tailnet. A node that is already logged
+		// in does not register again, so only the check in Up catches
+		// this.
+		dir := t.TempDir()
+		s := newServer("s3", dir, "")
+		if _, err := s.Up(ctx); err != nil {
+			t.Fatalf("first Up: %v", err)
+		}
+		s.Close()
+
+		_, err := newServer("s3", dir, "T2").Up(ctx)
+		if err == nil || !strings.Contains(err.Error(), `node is in tailnet "T1"`) {
+			t.Fatalf("second Up = %v; want a tailnet mismatch error from Up", err)
+		}
+	})
 }

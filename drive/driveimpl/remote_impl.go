@@ -332,7 +332,13 @@ func (s *userServer) run() error {
 	}
 	var cmd *exec.Cmd
 
-	if s.canSudo() {
+	if isCurrentUser(s.username) {
+		// We're already running as the share's user, so there's nothing to
+		// switch to. Don't require sudo or su, which minimal systems like
+		// OpenWrt don't ship by default.
+		s.logf("starting taildrive file server as ourselves (%q)", s.username)
+		cmd = exec.Command(s.executable, args...)
+	} else if s.canSudo() {
 		s.logf("starting taildrive file server with sudo as user %q", s.username)
 		allArgs := []string{"-n", "-u", s.username, s.executable}
 		allArgs = append(allArgs, args...)
@@ -411,6 +417,13 @@ var writeMethods = map[string]bool{
 	"MOVE":      true,
 	"PROPPATCH": true,
 	"DELETE":    true,
+}
+
+// isCurrentUser reports whether username is the user that this process is
+// running as.
+func isCurrentUser(username string) bool {
+	u, err := user.Current()
+	return err == nil && u.Username == username
 }
 
 // canSudo checks whether we can sudo -u the configured executable as the
