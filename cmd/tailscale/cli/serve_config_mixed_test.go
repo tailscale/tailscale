@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -23,8 +24,87 @@ func TestServeConfigMixed(t *testing.T) {
 		steps []string
 		want  []string // tailscale serve commands that build the same state
 	}{
+		// The CLI, then a file replaces one service or all of them.
+		{
+			name: "cli_then_file_replaces_one_service",
+			steps: []string{
+				"--service=svc:foo --https=443 http://localhost:3000",
+				"--service=svc:bar --tcp=5432 tcp://localhost:5432",
+				`set-config --service=svc:foo {"version": "0.0.1", "endpoints": {"tcp:80": "http://localhost:4000"}}`,
+			},
+			want: []string{
+				"--service=svc:bar --tcp=5432 tcp://localhost:5432",
+				"--service=svc:foo --http=80 http://localhost:4000",
+			},
+		},
+		{
+			name: "cli_then_file_replaces_all",
+			steps: []string{
+				"--service=svc:foo --https=443 http://localhost:3000",
+				"--service=svc:bar --tcp=5432 tcp://localhost:5432",
+				`set-config --all {"version": "0.0.1", "services": {"svc:baz": {"endpoints": {"*": "TUN"}}}}`,
+			},
+			want: []string{"--service=svc:baz --tun"},
+		},
+		{
+			name: "cli_then_file_drains",
+			steps: []string{
+				"--service=svc:foo --tcp=5432 tcp://localhost:5432",
+				`set-config --service=svc:foo {"version": "0.0.1", "endpoints": {"tcp:5432": "tcp://localhost:5432"}, "advertised": false}`,
+			},
+			want: []string{
+				"--service=svc:foo --tcp=5432 tcp://localhost:5432",
+				"drain svc:foo",
+			},
+		},
+		{
+			name: "cli_drained_then_file_advertises",
+			steps: []string{
+				"--service=svc:foo --tcp=5432 tcp://localhost:5432",
+				"drain svc:foo",
+				`set-config --service=svc:foo {"version": "0.0.1", "endpoints": {"tcp:5432": "tcp://localhost:5432"}}`,
+			},
+			want: []string{"--service=svc:foo --tcp=5432 tcp://localhost:5432"},
+		},
+		{
+			name: "cli_then_file_removes_service",
+			steps: []string{
+				"--service=svc:foo --tcp=5432 tcp://localhost:5432",
+				"--service=svc:bar --tcp=22 tcp://localhost:22",
+				`set-config --service=svc:foo {"version": "0.0.1", "endpoints": {}, "advertised": false}`,
+			},
+			want: []string{"--service=svc:bar --tcp=22 tcp://localhost:22"},
+		},
+		{
+			// set-config manages Services only.
+			name: "node_serve_survives_file",
+			steps: []string{
+				"--bg --https=443 http://localhost:3000",
+				`set-config --all {"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:5432": "tcp://localhost:5432"}}}}`,
+			},
+			want: []string{
+				"--bg --https=443 http://localhost:3000",
+				"--service=svc:foo --tcp=5432 tcp://localhost:5432",
+			},
+		},
+
 		// One node's export applied over another's state. See
 		// TestServeConfigRoundTrip for --all.
+		{
+			name: "export_of_drained_service_over_advertised",
+			from: []string{
+				"--service=svc:foo --tcp=5432 tcp://localhost:5432",
+				"drain svc:foo",
+			},
+			steps: []string{
+				"--service=svc:foo --tcp=5432 tcp://localhost:5432",
+				"set-config --service=svc:foo $FROM",
+			},
+			want: []string{
+				"--service=svc:foo --tcp=5432 tcp://localhost:5432",
+				"drain svc:foo",
+			},
+		},
 		{
 			name: "export_of_advertised_service_without_config",
 			from: []string{"advertise svc:foo"},
@@ -33,6 +113,15 @@ func TestServeConfigMixed(t *testing.T) {
 				"set-config --service=svc:foo $FROM",
 			},
 			want: []string{"advertise svc:foo"},
+		},
+		{
+			name: "export_of_absent_service",
+			steps: []string{
+				"--service=svc:foo --tcp=5432 tcp://localhost:5432",
+				"--service=svc:bar --tcp=22 tcp://localhost:22",
+				"set-config --service=svc:foo $FROM",
+			},
+			want: []string{"--service=svc:bar --tcp=22 tcp://localhost:22"},
 		},
 
 		// set-config reads serve status --json as the legacy format. It
@@ -86,4 +175,18 @@ func TestServeConfigMixed(t *testing.T) {
 			assertSameState(t, buildState(t, dir, tt.want), got)
 		})
 	}
+}
+
+// TestServeConfigRefusedApply checks that a file tailscaled refuses leaves the
+// node as it was, advertised Services included.
+func TestServeConfigRefusedApply(t *testing.T) {
+	dir := t.TempDir()
+	cli := []string{"--service=svc:foo --tcp=5432 tcp://localhost:5432"}
+	node := buildState(t, dir, cli)
+	node.setErr = errors.New("refused")
+	file := `{"version": "0.0.1", "endpoints": {"tcp:5432": "tcp://localhost:5432"}, "advertised": false}`
+	if _, _, err := serveRun(node, "set-config", "--service=svc:foo", writeTmpServeConfig(t, file)); err == nil {
+		t.Fatal("set-config succeeded; want tailscaled's error")
+	}
+	assertSameState(t, buildState(t, dir, cli), node)
 }

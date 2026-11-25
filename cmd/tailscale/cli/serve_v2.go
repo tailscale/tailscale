@@ -1013,7 +1013,15 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 		}
 	}
 
-	return e.lc.SetServeConfig(ctx, sc)
+	if err := e.lc.SetServeConfig(ctx, sc); err != nil {
+		return err
+	}
+	if !e.allServices && !advertisedServices.Contains(e.service.String()) {
+		// The file replaces the Service's state, so "advertised": false
+		// drains it, once applied: a refused file leaves it serving.
+		return e.removeServiceFromPrefs(ctx, e.service)
+	}
+	return nil
 }
 
 func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool, mds string, caps []peercap.Cap, proxyProtocol int) error {
