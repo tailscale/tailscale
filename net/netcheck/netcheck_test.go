@@ -581,6 +581,15 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			wantDERP:    2,
 		},
 		{
+			name: "home_missing_after_long_gap_moves",
+			steps: []step{
+				{0, report("d1", 18*time.Millisecond, "d2", 20*time.Millisecond)},
+				{PreferredDERPKeepAliveTimeout + time.Second, report("d2", 20*time.Millisecond)},
+			},
+			wantPrevLen: 2,
+			wantDERP:    2, // the d1 measurement is too old to carry
+		},
+		{
 			name: "home_missing_one_round_but_much_slower_than_best",
 			steps: []step{
 				{0, report("d1", 90*time.Millisecond, "d2", 100*time.Millisecond)},

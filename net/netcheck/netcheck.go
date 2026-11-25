@@ -1438,8 +1438,13 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(rs *reportState, r *Report,
 		// forward what the previous report measured. The carried value is
 		// not written back to r, so a second consecutive miss finds nothing
 		// to carry and the home can move.
+		//
+		// The previous report must be recent enough to still count as proof
+		// of life. PreferredDERPKeepAliveTimeout is the same bound used by
+		// the fallback at the end of this function, so a stale measurement
+		// from before a long gap between netchecks is not carried.
 		_, measured := r.RegionLatency[prevDERP]
-		if d := c.last.RegionLatency[prevDERP]; !measured && d != 0 && now.Sub(c.last.Now) <= fullReportInterval {
+		if d := c.last.RegionLatency[prevDERP]; !measured && d != 0 && now.Sub(c.last.Now) <= PreferredDERPKeepAliveTimeout {
 			candidates = maps.Clone(r.RegionLatency)
 			candidates[prevDERP] = d
 		}
