@@ -15,6 +15,7 @@ import (
 // This includes the first time a policy needs to be read from any source.
 var implicitDefinitions = []*setting.Definition{
 	// Device policy settings (can only be configured on a per-device basis):
+	setting.NewDefinition(pkey.AllowTailnetSysPolicy, setting.DeviceSetting, setting.BooleanValue),
 	setting.NewDefinition(pkey.AllowTailscaledRestart, setting.DeviceSetting, setting.BooleanValue),
 	setting.NewDefinition(pkey.AlwaysOn, setting.DeviceSetting, setting.BooleanValue),
 	setting.NewDefinition(pkey.AlwaysOnOverrideWithReason, setting.DeviceSetting, setting.BooleanValue),
