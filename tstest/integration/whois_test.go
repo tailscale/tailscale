@@ -117,16 +117,10 @@ func TestUserspaceWhoIsProxyMap(t *testing.T) {
 	// the listener port. This goes through n1's tailscaled, over
 	// wireguard to n2's netstack, which dials localhost:<port>.
 	//
-	// We need to keep stdin open so nc doesn't exit before reading
-	// the server's response (nc returns on the first goroutine to
-	// complete: stdin→conn or conn→stdout).
+	// nc's stdin is empty: nc half-closes the connection right away
+	// and still prints the server's response.
 	cmd := n1.TailscaleForOutput("nc", n2IP.String(), fmt.Sprint(port))
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
 	out, err := cmd.Output()
-	stdin.Close()
 	if err != nil {
 		t.Fatalf("tailscale nc: %v", err)
 	}

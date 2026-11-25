@@ -7,6 +7,8 @@ package netutil
 import (
 	"bufio"
 	"crypto/tls"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -132,6 +134,12 @@ func (b *drainBufConn) Read(bs []byte) (int, error) {
 	return n, err
 }
 
+// CloseWrite half-closes the underlying Conn, if it supports that.
+// Otherwise it returns an error wrapping [errors.ErrUnsupported].
+func (b *drainBufConn) CloseWrite() error {
+	return closeWrite(b.Conn)
+}
+
 // NewAltReadWriteCloserConn returns a net.Conn that wraps rwc (for
 // Read, Write, and Close) and c (for all other methods).
 func NewAltReadWriteCloserConn(rwc io.ReadWriteCloser, c net.Conn) net.Conn {
@@ -153,4 +161,20 @@ func (w wrappedConn) Write(bs []byte) (int, error) {
 
 func (w wrappedConn) Close() error {
 	return w.rwc.Close()
+}
+
+// CloseWrite half-closes rwc, if it supports that. Otherwise it returns
+// an error wrapping [errors.ErrUnsupported].
+func (w wrappedConn) CloseWrite() error {
+	return closeWrite(w.rwc)
+}
+
+// closeWrite calls CloseWrite on v if v has that method. Otherwise it returns
+// an error wrapping [errors.ErrUnsupported], so that callers can fall back to
+// closing the whole connection.
+func closeWrite(v any) error {
+	if cw, ok := v.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return fmt.Errorf("CloseWrite on %T: %w", v, errors.ErrUnsupported)
 }

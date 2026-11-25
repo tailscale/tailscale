@@ -14,6 +14,7 @@ import (
 	"go/token"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -23,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/health"
@@ -929,5 +931,84 @@ func TestServeDialSelf(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// tcpPair returns the two ends of a loopback TCP connection.
+func tcpPair(t *testing.T) (a, b *net.TCPConn) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := ln.Accept()
+	if err != nil {
+		c.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		c.Close()
+		s.Close()
+	})
+	return c.(*net.TCPConn), s.(*net.TCPConn)
+}
+
+// TestProxyDialConnHalfClose checks that a half-close on either side of a
+// LocalAPI dial is passed through while the other direction keeps flowing
+// (tailscale/tailscale#22637).
+func TestProxyDialConnHalfClose(t *testing.T) {
+	client, reqConn := tcpPair(t)
+	outConn, server := tcpPair(t)
+
+	done := make(chan struct{})
+	go func() {
+		proxyDialConn(reqConn, outConn, true)
+		close(done)
+	}()
+
+	// The server says goodbye and half-closes; the client must see EOF.
+	server.Write([]byte("bye"))
+	server.CloseWrite()
+	got, err := io.ReadAll(client)
+	if err != nil || string(got) != "bye" {
+		t.Fatalf("client read %q, %v; want %q", got, err, "bye")
+	}
+
+	// The client can still send to the server, then half-closes too.
+	client.Write([]byte("more"))
+	client.CloseWrite()
+	got, err = io.ReadAll(server)
+	if err != nil || string(got) != "more" {
+		t.Fatalf("server read %q, %v; want %q", got, err, "more")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("proxyDialConn did not return after both sides half-closed")
+	}
+}
+
+// TestProxyDialConnNoHalfClose checks that, when the client's connection
+// can't be half-closed, proxyDialConn returns as soon as either side ends.
+func TestProxyDialConnNoHalfClose(t *testing.T) {
+	_, reqConn := tcpPair(t)
+	outConn, server := tcpPair(t)
+
+	done := make(chan struct{})
+	go func() {
+		proxyDialConn(reqConn, outConn, false)
+		close(done)
+	}()
+	server.CloseWrite()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("proxyDialConn did not return after the server's EOF")
 	}
 }

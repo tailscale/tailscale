@@ -4,6 +4,7 @@
 package netutil
 
 import (
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -168,5 +169,61 @@ func TestIPForwardingEnabledLinux(t *testing.T) {
 			}
 			t.Logf("%s (proto %v) = %v", iface.Name, p, on)
 		}
+	}
+}
+
+func TestCloseWrite(t *testing.T) {
+	type closeWriter interface{ CloseWrite() error }
+	wrappers := map[string]func(net.Conn) net.Conn{
+		"DrainBufConn": func(c net.Conn) net.Conn {
+			return NewDrainBufConn(c, nil)
+		},
+		"AltReadWriteCloserConn": func(c net.Conn) net.Conn {
+			return NewAltReadWriteCloserConn(c, c)
+		},
+	}
+	for name, wrap := range wrappers {
+		t.Run(name, func(t *testing.T) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ln.Close()
+			c, err := net.Dial("tcp", ln.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			s, err := ln.Accept()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+
+			// Half-closing a TCP conn sends EOF to the peer and leaves
+			// the other direction open.
+			wc := wrap(c)
+			if err := wc.(closeWriter).CloseWrite(); err != nil {
+				t.Fatalf("CloseWrite: %v", err)
+			}
+			if b, err := io.ReadAll(s); err != nil || len(b) != 0 {
+				t.Fatalf("peer read %q, %v; want EOF", b, err)
+			}
+			if _, err := s.Write([]byte("x")); err != nil {
+				t.Fatal(err)
+			}
+			b := make([]byte, 1)
+			if _, err := io.ReadFull(wc, b); err != nil || string(b) != "x" {
+				t.Fatalf("read after CloseWrite = %q, %v; want %q", b, err, "x")
+			}
+
+			// A net.Pipe can't be half-closed.
+			p1, p2 := net.Pipe()
+			defer p1.Close()
+			defer p2.Close()
+			if err := wrap(p1).(closeWriter).CloseWrite(); !errors.Is(err, errors.ErrUnsupported) {
+				t.Errorf("CloseWrite on net.Pipe = %v, want ErrUnsupported", err)
+			}
+		})
 	}
 }
