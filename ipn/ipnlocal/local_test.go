@@ -11203,33 +11203,46 @@ func TestExtensionStateHooksWhileBlocked(t *testing.T) {
 	}
 }
 
-func mapViaPrefix(v4str string, siteID uint32) netip.Prefix {
-	v4 := netip.MustParsePrefix(v4str)
-	return must.Get(tsaddr.MapVia(siteID, v4))
-}
-func mapViaAddr(v4str string, siteID uint32) netip.Addr {
-	v4 := netip.MustParseAddr(v4str)
-	return must.Get(tsaddr.MapVia(siteID, netip.PrefixFrom(v4, v4.BitLen()))).Addr()
+type forwardTestOutcome int
+
+const (
+	notAllowed forwardTestOutcome = iota
+	shouldHandle
+	shouldForward
+)
+
+func (f forwardTestOutcome) String() string {
+	switch f {
+	case notAllowed:
+		return "notAllowed"
+	case shouldHandle:
+		return "shouldHandle"
+	case shouldForward:
+		return "shouldForward"
+	default:
+		panic("unknown outcome")
+	}
 }
 
 func TestShouldForwardToVia(t *testing.T) {
+
 	tests := []struct {
 		name           string
 		advertisements []netip.Prefix
-		want           map[netip.Addr]bool
+		want           map[netip.Addr]forwardTestOutcome
 	}{
 		{
 			name: "normal",
 			advertisements: []netip.Prefix{
 				mapViaPrefix("8.0.0.0/8", 1),
 			},
-			want: map[netip.Addr]bool{
-				mapViaAddr("1.1.1.1", 1):         false,
-				mapViaAddr("8.8.8.8", 1):         true,
-				mapViaAddr("8.8.8.8", 2):         false,
-				mapViaAddr("127.0.0.1", 1):       false,
-				mapViaAddr("169.254.1.1", 1):     false,
-				mapViaAddr("169.254.169.254", 1): false,
+			want: map[netip.Addr]forwardTestOutcome{
+				mapViaAddr("1.1.1.1", 1):         notAllowed,
+				mapViaAddr("8.8.8.8", 1):         shouldForward,
+				mapViaAddr("8.8.8.8", 2):         notAllowed,
+				mapViaAddr("127.0.0.1", 1):       notAllowed,
+				mapViaAddr("169.254.1.1", 1):     notAllowed,
+				mapViaAddr("169.254.169.254", 1): notAllowed,
 			},
 		},
 	}
@@ -11244,8 +11257,16 @@ func TestShouldForwardToVia(t *testing.T) {
 				return
 			}
 			for addr, want := range tt.want {
-				if got := b.ShouldForwardToVia(addr); got != want {
-					t.Errorf("ShouldForwardToVia(%v) = %v, want %v", addr, got, want)
+				if got := b.ShouldHandleViaIP(addr); got != (want >= shouldHandle) {
+					t.Errorf("ShouldHandleViaIP(%v) = %v, want %v", printMaybeViaAddr(addr), got, (want >= shouldHandle))
+				}
+
+				if want <= shouldHandle {
+					continue
+				}
+
+				if got := b.ShouldForwardToVia(addr); got != (want >= shouldForward) {
+					t.Errorf("ShouldForwardToVia(%v) = %v, want %v", printMaybeViaAddr(addr), got, (want >= shouldForward))
 				}
 			}
 		})

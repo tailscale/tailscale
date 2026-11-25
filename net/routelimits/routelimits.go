@@ -26,6 +26,9 @@ var v4BroadcastAddr = netip.AddrFrom4([4]byte{255, 255, 255, 255})
 // all ULA IPv6 addresses are recorded as their entire ULA prefix (/48).
 var CloudMetadataPrefixes = sync.OnceValue(func() views.Slice[netip.Prefix] {
 	return views.SliceOf([]netip.Prefix{
+		netip.PrefixFrom(tsaddr.TailscaleServiceIP(), 32),
+		netip.PrefixFrom(tsaddr.TailscaleServiceIPv6(), 128),
+
 		netip.MustParsePrefix("169.254.169.254/32"),  // standard IPv4 address
 		netip.MustParsePrefix("fe80::a9fe:a9fe/128"), // commonly used link local IPv6 address
 

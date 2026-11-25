@@ -7499,7 +7499,7 @@ func (b *LocalBackend) ShouldForwardToVia(via netip.Addr) bool {
 	}
 	unmapped := tsaddr.UnmapVia(via)
 	if unmapped == via {
-		//
+		// Not a 4via6 address
 		return false
 	}
 	return viaUnmappedTargetAllowed(unmapped)

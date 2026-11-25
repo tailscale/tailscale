@@ -12,7 +12,9 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"go4.org/netipx"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/views"
+	"tailscale.com/util/must"
 )
 
 func TestViaUnmappedTargetAllowed(t *testing.T) {
@@ -220,6 +222,30 @@ func TestGenerateViaTargetAdditions(t *testing.T) {
 	}
 }
 
+func mapViaPrefix(v4str string, siteID uint32) netip.Prefix {
+	v4 := netip.MustParsePrefix(v4str)
+	return must.Get(tsaddr.MapVia(siteID, v4))
+}
+func mapViaAddr(v4str string, siteID uint32) netip.Addr {
+	v4 := netip.MustParseAddr(v4str)
+	return must.Get(tsaddr.MapVia(siteID, netip.PrefixFrom(v4, v4.BitLen()))).Addr()
+}
+
+func printMaybeViaAddr(a netip.Addr) string {
+	siteID, v4 := tsaddr.UnmapViaWithSiteID(a)
+	if v4.IsUnspecified() {
+		return v4.String()
+	}
+	return fmt.Sprintf("%s,%d", v4, siteID)
+}
+
+type viaIPRange netipx.IPRange
+
+func (r viaIPRange) String() string {
+	ipr := netipx.IPRange(r)
+	return fmt.Sprintf("%s-%s", printMaybeViaAddr(ipr.From()), printMaybeViaAddr(ipr.To()))
+}
+
 func TestGenerateViaAdvertisedAllowlist(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -263,7 +289,26 @@ func TestGenerateViaAdvertisedAllowlist(t *testing.T) {
 				mapViaPrefix("169.254.0.0/16", 4),
 			},
 			want: []netipx.IPRange{
-				netipx.IPRangeFrom(mapViaAddr("169.254.0.0", 4), mapViaAddr("169.254.0.0", 4)),
+				netipx.IPRangeFrom(mapViaAddr("169.254.0.0", 4), mapViaAddr("169.254.42.41", 4)),
+				netipx.IPRangeFrom(mapViaAddr("169.254.42.43", 4), mapViaAddr("169.254.169.253", 4)),
+				netipx.IPRangeFrom(mapViaAddr("169.254.169.255", 4), mapViaAddr("169.254.255.255", 4)),
+			},
+		},
+		{
+			name: "cgnat",
+			advertisedRoutes: []netip.Prefix{
+				mapViaPrefix("100.64.0.0/10", 5),
+			},
+			want: []netipx.IPRange{
+				netipx.IPRangeFrom(mapViaAddr("100.64.0.0", 5), mapViaAddr("100.100.100.99", 5)),
+				netipx.IPRangeFrom(mapViaAddr("100.100.100.101", 5), mapViaAddr("100.100.100.199", 5)),
+				netipx.IPRangeFrom(mapViaAddr("100.100.100.201", 5), mapViaAddr("100.127.255.255", 5)),
+			},
+		},
+		{
+			name: "non-via",
+			advertisedRoutes: []netip.Prefix{
+				netip.MustParsePrefix("8.0.0.0/8"),
 			},
 		},
 	}
@@ -280,13 +325,21 @@ func TestGenerateViaAdvertisedAllowlist(t *testing.T) {
 				t.Errorf("%s, want nil", got)
 				return
 			}
+			wantFormatted := make([]viaIPRange, 0, len(tt.want))
+			for _, r := range tt.want {
+				wantFormatted = append(wantFormatted, viaIPRange(r))
+			}
+			gotRanges := got.Ranges()
+			gotFormatted := make([]viaIPRange, 0, len(gotRanges))
+			for _, r := range gotRanges {
+				gotFormatted = append(gotFormatted, viaIPRange(r))
+			}
+
 			if diff := cmp.Diff(
-				got.Ranges(),
-				tt.want,
-				cmpopts.EquateComparable(netipx.IPRange{}),
-				cmp.Transformer("addr-with-siteid", func(a netip.Addr) string {
-					return fmt.Sprintf("%s+siteID%d", a.String(), 5)
-				})); diff != "" {
+				gotFormatted,
+				wantFormatted,
+				cmpopts.EquateComparable(viaIPRange{}),
+			); diff != "" {
 				t.Errorf("ranges don't match (-got +want)\n\n%s", diff)
 			}
 		})
