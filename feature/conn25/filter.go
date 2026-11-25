@@ -12,21 +12,21 @@ import (
 )
 
 // Reasons accompanying an allow verdict from the conn25 packet filter hooks.
-// The filter logs them next to the packet, so each one names the rule that
-// admitted it, both to tell conn25's verdicts apart from the rest of the
-// filter's and to tell them apart from each other.
 const (
 	// clientEgressReason is returned for a packet the client is sending to a
 	// transit IP that has been assigned to it.
 	clientEgressReason = "app connector egress to transit IP"
+
 	// connectorTransitIPReason is returned for a packet addressed to a transit
 	// IP in one of this connector's pools, exempting it from the filter's
 	// blanket drop of link-local destinations.
 	connectorTransitIPReason = "app connector transit IP"
+
 	// connectorUnmappedReason is returned for a packet addressed to a transit
 	// IP the peer has no mapping registered for. See [connector.ingressAllow]
 	// for why those are admitted.
 	connectorUnmappedReason = "app connector unregistered transit IP"
+
 	// The remaining reasons are returned by [protoPortRangesAllow], and are
 	// named after the [tailscale.com/wgengine/filter.Filter.RunIn] verdicts
 	// they correspond to.
