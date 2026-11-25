@@ -9,6 +9,10 @@ import (
 	"tailscale.com/tstest/deptest"
 )
 
+func TestFatal(t *testing.T) {
+	t.Fatal("on purpose")
+}
+
 func TestDeps(t *testing.T) {
 	deptest.DepChecker{
 		BadDeps: map[string]string{
