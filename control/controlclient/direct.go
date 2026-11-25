@@ -509,12 +509,15 @@ func (c *Direct) TryLogout(ctx context.Context) error {
 
 	mustRegen, newURL, _, err := c.doLogin(ctx, loginOpt{Logout: true})
 	c.logf("[v1] TryLogout control response: mustRegen=%v, newURL=%v, err=%v", mustRegen, newURL, err)
+	if err != nil {
+		return err
+	}
 
 	c.mu.Lock()
 	c.persist = new(persist.Persist).View()
 	c.mu.Unlock()
 
-	return err
+	return nil
 }
 
 func (c *Direct) TryLogin(ctx context.Context, flags LoginFlags) (url string, err error) {
