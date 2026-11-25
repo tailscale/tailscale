@@ -12,12 +12,14 @@ import React from "react"
 import { createRoot } from "react-dom/client"
 import { swrConfig } from "src/api"
 import App from "src/components/app"
+import { locale } from "src/i18n"
 import ToastProvider from "src/ui/toaster"
 import { SWRConfig } from "swr"
 
 declare var window: any
 // This is used to determine if the react client is built.
 window.Tailscale = true
+document.documentElement.lang = locale
 
 const rootEl = document.createElement("div")
 rootEl.id = "app-root"

@@ -12,6 +12,7 @@ import SSHView from "src/components/views/ssh-view"
 import SubnetRouterView from "src/components/views/subnet-router-view"
 import { UpdatingView } from "src/components/views/updating-view"
 import useAuth, { AuthResponse, canEdit } from "src/hooks/auth"
+import { t } from "src/i18n"
 import { Feature, NodeData, featureDescription } from "src/types"
 import Card from "src/ui/card"
 import EmptyState from "src/ui/empty-state"
@@ -82,7 +83,7 @@ function WebClient({
           </Route>
           <Route>
             <Card className="mt-8">
-              <EmptyState description="Page not found" />
+              <EmptyState description={t("pageNotFound")} />
             </Card>
           </Route>
         </Switch>
@@ -154,7 +155,7 @@ function Header({
       </div>
       {loc !== "/" && loc !== "/update" && (
         <Link to="/" className="link font-medium block mb-2">
-          &larr; Back to {node.DeviceName}
+          {t("backToDevice", { device: node.DeviceName })}
         </Link>
       )}
     </>

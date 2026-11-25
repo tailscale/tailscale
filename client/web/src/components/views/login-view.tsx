@@ -4,6 +4,7 @@
 import React from "react"
 import { useAPI } from "src/api"
 import TailscaleIcon from "src/assets/icons/tailscale-icon.svg?react"
+import { t } from "src/i18n"
 import { NodeData } from "src/types"
 import Button from "src/ui/button"
 
@@ -20,32 +21,29 @@ export default function LoginView({ data }: { data: NodeData }) {
       {data.Status === "Stopped" ? (
         <>
           <div className="mb-6">
-            <h3 className="text-3xl font-semibold mb-3">Connect</h3>
-            <p className="text-gray-700">
-              Your device is disconnected from Tailscale.
-            </p>
+            <h3 className="text-3xl font-semibold mb-3">{t("connect")}</h3>
+            <p className="text-gray-700">{t("deviceDisconnected")}</p>
           </div>
           <Button
             onClick={() => api({ action: "up", data: {} })}
             className="w-full mb-4"
             intent="primary"
           >
-            Connect to Tailscale
+            {t("connectToTailscale")}
           </Button>
         </>
       ) : data.IPv4 ? (
         <>
           <div className="mb-6">
             <p className="text-gray-700">
-              Your device’s key has expired. Reauthenticate this device by
-              logging in again, or{" "}
+              {t("deviceKeyExpired")}{" "}
               <a
                 href="https://tailscale.com/kb/1028/key-expiry"
                 className="link"
                 target="_blank"
                 rel="noreferrer"
               >
-                learn more
+                {t("learnMore")}
               </a>
               .
             </p>
@@ -57,16 +55,17 @@ export default function LoginView({ data }: { data: NodeData }) {
             className="w-full mb-4"
             intent="primary"
           >
-            Reauthenticate
+            {t("reauthenticate")}
           </Button>
         </>
       ) : (
         <>
           <div className="mb-6">
-            <h3 className="text-3xl font-semibold mb-3">Log in</h3>
+            <h3 className="text-3xl font-semibold mb-3">
+              {t("logInHeading")}
+            </h3>
             <p className="text-gray-700">
-              Get started by logging in to your Tailscale network.
-              Or,&nbsp;learn&nbsp;more at{" "}
+              {t("getStartedLoggingIn")}{" "}
               <a
                 href="https://tailscale.com/"
                 className="link"
@@ -90,7 +89,7 @@ export default function LoginView({ data }: { data: NodeData }) {
             className="w-full mb-4"
             intent="primary"
           >
-            Log In
+            {t("logInButton")}
           </Button>
         </>
       )}

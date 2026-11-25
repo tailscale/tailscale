@@ -8,6 +8,7 @@ import Eye from "src/assets/icons/eye.svg?react"
 import User from "src/assets/icons/user.svg?react"
 import { AuthResponse, hasAnyEditCapabilities } from "src/hooks/auth"
 import { useTSWebConnected } from "src/hooks/ts-web-connected"
+import { t } from "src/i18n"
 import { NodeData } from "src/types"
 import Button from "src/ui/button"
 import Popover from "src/ui/popover"
@@ -118,7 +119,7 @@ function TriggerWhenReading({
       onClick={() => setOpen(!open)}
     >
       <Eye />
-      <div className="text-white leading-snug ml-2 mr-1">Viewing</div>
+      <div className="text-white leading-snug ml-2 mr-1">{t("viewing")}</div>
       <ChevronDown className="stroke-white w-[15px] h-[15px]" />
       {auth.viewerIdentity && (
         <ProfilePic
@@ -137,8 +138,11 @@ function TriggerWhenReading({
 function PopoverContentHeader({ auth }: { auth: AuthResponse }) {
   return (
     <div className="text-black text-sm font-medium leading-tight mb-1">
-      {auth.authorized ? "Managing" : "Viewing"}
-      {auth.viewerIdentity && ` as ${auth.viewerIdentity.loginName}`}
+      {auth.viewerIdentity
+        ? t(auth.authorized ? "managingAs" : "viewingAs", {
+            name: auth.viewerIdentity.loginName,
+          })
+        : t(auth.authorized ? "managing" : "viewing")}
     </div>
   )
 }
@@ -153,7 +157,7 @@ function PopoverContentFooter({ auth }: { auth: AuthResponse }) {
       <div className="flex items-center">
         <User className="flex-shrink-0" />
         <p className="text-gray-500 text-xs ml-2">
-          We recognize you because you are accessing this page from{" "}
+          {t("recognizedBecause")}{" "}
           <span className="font-medium">
             {auth.viewerIdentity.nodeName || auth.viewerIdentity.nodeIP}
           </span>
@@ -172,14 +176,14 @@ function ReadonlyModeContent({ auth }: { auth: AuthResponse }) {
     <>
       <PopoverContentHeader auth={auth} />
       <p className="text-gray-500 text-xs">
-        This web interface is running in read-only mode.{" "}
+        {t("readOnlyDescription")}{" "}
         <a
           href="https://tailscale.com/s/web-client-read-only"
           className="text-blue-700"
           target="_blank"
           rel="noreferrer"
         >
-          Learn more &rarr;
+          {t("learnMoreArrow")}
         </a>
       </p>
       <PopoverContentFooter auth={auth} />
@@ -245,23 +249,13 @@ function LoginModeContent({
               // ACLs allow access, but user isn't allowed to edit any features,
               // restricted to readonly. No point in sending them over to the
               // tailscaleIP:5252 address.
-              <>
-                You don’t have permission to make changes to this device, but
-                you can view most of its details.
-              </>
+              <>{t("noPermissionToChange")}</>
             ) : !node.ACLAllowsAnyIncomingTraffic ? (
               // Tailnet ACLs don't allow access to anyone.
-              <>
-                The current tailnet policy file does not allow connecting to
-                this device.
-              </>
+              <>{t("tailnetPolicyBlocksDevice")}</>
             ) : (
               // ACLs don't allow access to this user specifically.
-              <>
-                Cannot access this device’s Tailscale IP. Make sure you are
-                connected to your tailnet, and that your policy file allows
-                access.
-              </>
+              <>{t("cannotAccessDeviceIP")}</>
             )}{" "}
             <a
               href="https://tailscale.com/s/web-client-access"
@@ -269,23 +263,19 @@ function LoginModeContent({
               target="_blank"
               rel="noreferrer"
             >
-              Learn more &rarr;
+              {t("learnMoreArrow")}
             </a>
           </p>
         </>
       ) : (
         // User can connect to Tailcale IP; sign in when ready.
         <>
-          <p className="text-gray-500 text-xs">
-            You can see most of this device’s details. To make changes, you need
-            to sign in.
-          </p>
+          <p className="text-gray-500 text-xs">{t("canViewDetailsSignIn")}</p>
           {https && (
             // we don't know if the user can connect over TS, so
             // provide extra tips in case they have trouble.
             <p className="text-gray-500 text-xs font-semibold pt-2">
-              Make sure you are connected to your tailnet, and that your policy
-              file allows access.
+              {t("checkTailnetPolicy")}
             </p>
           )}
           <SignInButton auth={auth} onClick={handleLogin} />
@@ -328,24 +318,20 @@ function ManageModeContent({
         (hasAnyPermissions ? (
           // User is connected over Tailscale, but needs to complete check mode.
           <>
-            <p className="text-gray-500 text-xs">
-              To make changes, sign in to confirm your identity. This extra step
-              helps us keep your device secure.
-            </p>
+            <p className="text-gray-500 text-xs">{t("signInToConfirm")}</p>
             <SignInButton auth={auth} onClick={handleLogin} />
           </>
         ) : (
           // User is connected over tailscale, but doesn't have permission to manage.
           <p className="text-gray-500 text-xs">
-            You don’t have permission to make changes to this device, but you
-            can view most of its details.{" "}
+            {t("noPermissionToChange")}{" "}
             <a
               href="https://tailscale.com/s/web-client-access"
               className="text-blue-700"
               target="_blank"
               rel="noreferrer"
             >
-              Learn more &rarr;
+              {t("learnMoreArrow")}
             </a>
           </p>
         ))}
@@ -370,7 +356,9 @@ function SignInButton({
       sizeVariant="small"
       onClick={onClick}
     >
-      {auth.viewerIdentity ? "Sign in to confirm identity" : "Sign in"}
+      {auth.viewerIdentity
+        ? t("signInToConfirmIdentity")
+        : t("signIn")}
     </Button>
   )
 }

@@ -11,6 +11,7 @@ import useExitNodes, {
   runAsExitNode,
   trimDNSSuffix,
 } from "src/hooks/exit-nodes"
+import { t } from "src/i18n"
 import { ExitNode, NodeData } from "src/types"
 import Popover from "src/ui/popover"
 import SearchInput from "src/ui/search-input"
@@ -127,7 +128,7 @@ export default function ExitNodeSelector({
                 { "opacity-70 text-white": advertising || using }
               )}
             >
-              Exit node{offline && " offline"}
+              {offline ? t("exitNodeOffline") : t("exitNode")}
             </p>
             <div className="flex items-center">
               <p
@@ -141,7 +142,7 @@ export default function ExitNodeSelector({
                   </>
                 )}
                 {selected === runAsExitNode
-                  ? "Running as exit node"
+                  ? t("runningAsExitNode")
                   : selected.Name}
               </p>
               {!disabled && (
@@ -168,20 +169,18 @@ export default function ExitNodeSelector({
               handleSelect(noExitNode)
             }}
           >
-            Disable
+            {t("disable")}
           </button>
         )}
       </div>
       {offline && (
         <p className="text-white p-3">
-          The selected exit node is currently offline. Your internet traffic is
-          blocked until you disable the exit node or select a different one.
+          {t("selectedExitNodeOffline")}
         </p>
       )}
       {pending && (
         <p className="text-white p-3">
-          Pending approval to run as exit node. This device won’t be usable as
-          an exit node until then.
+          {t("pendingExitNodeApproval")}
         </p>
       )}
     </div>
@@ -235,7 +234,7 @@ function ExitNodeSelectorInner({
         autoCorrect="off"
         autoComplete="off"
         autoCapitalize="off"
-        placeholder="Search exit nodes…"
+        placeholder={t("searchExitNodes")}
         value={filter}
         onChange={(e) => {
           // Jump list to top when search value changes.
@@ -275,8 +274,8 @@ function ExitNodeSelectorInner({
         ) : (
           <div className="text-center truncate text-gray-500 p-5">
             {filter
-              ? `No exit nodes matching “${filter}”`
-              : "No exit nodes available"}
+              ? t("noExitNodesMatching", { filter })
+              : t("noExitNodesAvailable")}
           </div>
         )}
       </div>
@@ -313,7 +312,9 @@ function ExitNodeSelectorItem({
         )}
         <span className="leading-snug">{node.Name}</span>
       </div>
-      {node.Online || <span className="leading-snug">Offline</span>}
+      {node.Online || (
+        <span className="leading-snug">{t("offline")}</span>
+      )}
       {isSelected && <Check className="ml-1" />}
     </button>
   )
