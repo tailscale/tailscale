@@ -34,11 +34,11 @@ type PolicyScope struct {
 
 // DefaultScope returns the default [PolicyScope] to be used by a program
 // when querying policy settings.
-// It returns [DeviceScope], unless explicitly changed with [SetDefaultScope].
+// It returns [CurrentProfileScope], unless explicitly changed with [SetDefaultScope].
 func DefaultScope() PolicyScope {
 	// Allow deferred package init functions to override the default scope.
 	internal.Init.Do()
-	return lazyDefaultScope.Get(func() PolicyScope { return DeviceScope })
+	return lazyDefaultScope.Get(func() PolicyScope { return CurrentProfileScope })
 }
 
 // SetDefaultScope attempts to set the specified scope as the default scope
