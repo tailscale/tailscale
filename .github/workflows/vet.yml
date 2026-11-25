@@ -36,6 +36,11 @@ jobs:
         working-directory: src
         run: ./tool/go build -o /tmp/vettool tailscale.com/cmd/vet
 
+      - name: Run default 'go vet'
+        working-directory: src
+        # Run the standard vet checks that -vettool replaces when it is set.
+        run: ./tool/go vet $(./tool/go run ./tool/listpkgs --ignore-3p ./...)
+
       - name: Run 'go vet'
         working-directory: src
         # Use listpkgs --ignore-3p to skip tempfork/ packages, which
