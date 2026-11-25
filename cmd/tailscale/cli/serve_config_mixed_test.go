@@ -26,6 +26,36 @@ func TestServeConfigMixed(t *testing.T) {
 	}{
 		// A file, then the CLI changes it.
 		{
+			name: "file_then_cli_adds_port",
+			steps: []string{
+				`set-config --all {"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:443": {"front": "https", "backend": "http://localhost:3000"}}}}}`,
+				"--service=svc:foo --tcp=5432 tcp://localhost:5432",
+			},
+			want: []string{
+				"--service=svc:foo --https=443 http://localhost:3000",
+				"--service=svc:foo --tcp=5432 tcp://localhost:5432",
+			},
+		},
+		{
+			name: "file_then_cli_replaces_backend",
+			steps: []string{
+				`set-config --all {"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:443": "https://localhost:8443"}}}}`,
+				"--service=svc:foo --https=443 http://localhost:3000",
+			},
+			want: []string{"--service=svc:foo --https=443 http://localhost:3000"},
+		},
+		{
+			// The file from #18381, then the CLI turns the listener into HTTPS.
+			// tailscaled refuses to change a port's serve type in place.
+			name: "file_then_cli_replaces_listener",
+			steps: []string{
+				`set-config --all {"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:443": "http://127.0.0.1:30123"}}}}`,
+				"--service=svc:foo --http=443 off",
+				"--service=svc:foo --https=443 http://127.0.0.1:30123",
+			},
+			want: []string{"--service=svc:foo --https=443 http://127.0.0.1:30123"},
+		},
+		{
 			// The CLI can take a file-built service past what the format can
 			// say; get-config then refuses it on both nodes alike.
 			name: "file_then_cli_adds_mount_point",
@@ -37,6 +67,49 @@ func TestServeConfigMixed(t *testing.T) {
 				"--service=svc:foo --http=80 http://localhost:3000",
 				"--service=svc:foo --http=80 --set-path=/api http://localhost:4000",
 			},
+		},
+		{
+			name: "file_then_cli_turns_port_off",
+			steps: []string{
+				`set-config --all {"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:80": "http://localhost:3000", "tcp:5432": "tcp://localhost:5432"}}}}`,
+				"--service=svc:foo --tcp=5432 off",
+			},
+			want: []string{"--service=svc:foo --http=80 http://localhost:3000"},
+		},
+		{
+			name: "file_then_drain",
+			steps: []string{
+				`set-config --all {"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:5432": "tcp://localhost:5432"}}}}`,
+				"drain svc:foo",
+			},
+			want: []string{
+				"--service=svc:foo --tcp=5432 tcp://localhost:5432",
+				"drain svc:foo",
+			},
+		},
+		{
+			name: "file_drained_then_advertise",
+			steps: []string{
+				`set-config --all {"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:5432": "tcp://localhost:5432"}, "advertised": false}}}`,
+				"advertise svc:foo",
+			},
+			want: []string{"--service=svc:foo --tcp=5432 tcp://localhost:5432"},
+		},
+		{
+			name: "file_then_clear",
+			steps: []string{
+				`set-config --all {"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"*": "TUN"}}, "svc:bar": {"endpoints": {"tcp:5432": "tcp://localhost:5432"}}}}`,
+				"clear svc:foo",
+			},
+			want: []string{"--service=svc:bar --tcp=5432 tcp://localhost:5432"},
+		},
+		{
+			name: "file_applied_twice",
+			steps: []string{
+				`set-config --all {"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:443": {"front": "https", "backend": "http://localhost:3000"}}}}}`,
+				`set-config --all {"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:443": {"front": "https", "backend": "http://localhost:3000"}}}}}`,
+			},
+			want: []string{"--service=svc:foo --https=443 http://localhost:3000"},
 		},
 
 		// The CLI, then a file replaces one service or all of them.
@@ -114,6 +187,25 @@ func TestServeConfigMixed(t *testing.T) {
 
 		// One node's export applied over another's state. See
 		// TestServeConfigRoundTrip for --all.
+		{
+			name: "export_of_one_service_over_another_state",
+			from: []string{
+				"--service=svc:foo --https=443 http://localhost:3000",
+				"--service=svc:foo --tcp=5432 tcp://localhost:5432",
+			},
+			steps: []string{
+				"--service=svc:foo --http=80 text:hello",
+				"--service=svc:bar --tcp=22 tcp://localhost:22",
+				"drain svc:bar",
+				"set-config --service=svc:foo $FROM",
+			},
+			want: []string{
+				"--service=svc:foo --https=443 http://localhost:3000",
+				"--service=svc:foo --tcp=5432 tcp://localhost:5432",
+				"--service=svc:bar --tcp=22 tcp://localhost:22",
+				"drain svc:bar",
+			},
+		},
 		{
 			name: "export_of_drained_service_over_advertised",
 			from: []string{

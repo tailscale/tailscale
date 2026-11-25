@@ -6,8 +6,12 @@
 package conffile
 
 import (
+	"cmp"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"tailscale.com/tailcfg"
@@ -106,6 +110,305 @@ func TestTargetUnixSocketRoundtrip(t *testing.T) {
 				t.Errorf("MarshalText() = %q, want %q", marshaled, tt.serialized)
 			}
 		})
+	}
+}
+
+func port(p uint16) tailcfg.PortRange { return tailcfg.PortRange{First: p, Last: p} }
+
+// TestTargetJSON pins how an endpoint reads into a Target and is written back.
+// A string names the listener by its scheme; an object names it as front, with
+// the back-end in the string form. A Target is written as the string unless
+// Front names a listener the string does not imply.
+func TestTargetJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want Target
+		out  string // what MarshalJSON writes for want; in if empty
+	}{
+		// Strings.
+		{
+			name: "http",
+			in:   `"http://127.0.0.1:3000"`,
+			want: Target{Protocol: ProtoHTTP, Destination: "127.0.0.1", DestinationPorts: port(3000)},
+		},
+		{
+			name: "https",
+			in:   `"https://127.0.0.1:8443"`,
+			want: Target{Protocol: ProtoHTTPS, Destination: "127.0.0.1", DestinationPorts: port(8443)},
+		},
+		{
+			name: "https_insecure",
+			in:   `"https+insecure://127.0.0.1:8443"`,
+			want: Target{Protocol: ProtoHTTPSInsecure, Destination: "127.0.0.1", DestinationPorts: port(8443)},
+		},
+		{
+			name: "file",
+			in:   `"file:///var/www"`,
+			want: Target{Protocol: ProtoFile, Destination: "/var/www"},
+		},
+		{
+			name: "tcp",
+			in:   `"tcp://127.0.0.1:22"`,
+			want: Target{Protocol: ProtoTCP, Destination: "127.0.0.1", DestinationPorts: port(22)},
+		},
+		{
+			name: "tls_terminated_tcp",
+			in:   `"tls-terminated-tcp://127.0.0.1:22"`,
+			want: Target{Protocol: ProtoTLSTerminatedTCP, Destination: "127.0.0.1", DestinationPorts: port(22)},
+		},
+		{
+			name: "tun",
+			in:   `"TUN"`,
+			want: Target{Protocol: ProtoTUN, DestinationPorts: tailcfg.PortRangeAny},
+		},
+		{
+			name: "port_range",
+			in:   `"http://localhost:9000-9002"`,
+			want: Target{Protocol: ProtoHTTP, Destination: "localhost", DestinationPorts: tailcfg.PortRange{First: 9000, Last: 9002}},
+		},
+
+		// Hosts are kept as written, and IPv6 hosts are unbracketed in memory
+		// as net.JoinHostPort expects.
+		{
+			name: "ipv6",
+			in:   `"tcp://[::1]:5432"`,
+			want: Target{Protocol: ProtoTCP, Destination: "::1", DestinationPorts: port(5432)},
+		},
+		{
+			name: "ipv6_unbracketed",
+			in:   `"tcp://::1:5432"`,
+			want: Target{Protocol: ProtoTCP, Destination: "::1", DestinationPorts: port(5432)},
+			out:  `"tcp://[::1]:5432"`,
+		},
+		{
+			name: "ipv6_zone",
+			in:   `"tcp://[fe80::1%eth0]:5432"`,
+			want: Target{Protocol: ProtoTCP, Destination: "fe80::1%eth0", DestinationPorts: port(5432)},
+		},
+		{
+			name: "host_case",
+			in:   `"http://App.Example.com:3000"`,
+			want: Target{Protocol: ProtoHTTP, Destination: "App.Example.com", DestinationPorts: port(3000)},
+		},
+
+		// Objects.
+		{
+			name: "object_https_to_http",
+			in:   `{"front":"https","backend":"http://127.0.0.1:3000"}`,
+			want: Target{Front: ProtoHTTPS, Protocol: ProtoHTTP, Destination: "127.0.0.1", DestinationPorts: port(3000)},
+		},
+		{
+			name: "object_http_to_https",
+			in:   `{"front":"http","backend":"https://127.0.0.1:8443"}`,
+			want: Target{Front: ProtoHTTP, Protocol: ProtoHTTPS, Destination: "127.0.0.1", DestinationPorts: port(8443)},
+		},
+		{
+			name: "object_http_to_https_insecure",
+			in:   `{"front":"http","backend":"https+insecure://127.0.0.1:8443"}`,
+			want: Target{Front: ProtoHTTP, Protocol: ProtoHTTPSInsecure, Destination: "127.0.0.1", DestinationPorts: port(8443)},
+		},
+		{
+			name: "object_http_to_file",
+			in:   `{"front":"http","backend":"file:///var/www"}`,
+			want: Target{Front: ProtoHTTP, Protocol: ProtoFile, Destination: "/var/www"},
+		},
+		{
+			name: "object_ipv6",
+			in:   `{"front":"https","backend":"http://[::1]:3000"}`,
+			want: Target{Front: ProtoHTTPS, Protocol: ProtoHTTP, Destination: "::1", DestinationPorts: port(3000)},
+		},
+		{
+			name: "object_https_to_unix",
+			in:   `{"front":"https","backend":"http://unix:/run/app.sock"}`,
+			want: Target{Front: ProtoHTTPS, Protocol: ProtoHTTP, Destination: "unix:/run/app.sock"},
+		},
+		{
+			name: "object_tls_terminated_tcp",
+			in:   `{"front":"tls-terminated-tcp","backend":"tcp://127.0.0.1:22"}`,
+			want: Target{Front: ProtoTLSTerminatedTCP, Protocol: ProtoTCP, Destination: "127.0.0.1", DestinationPorts: port(22)},
+		},
+		{
+			// The same Target as its string, so written as the string.
+			name: "object_https_to_https",
+			in:   `{"front":"https","backend":"https://127.0.0.1:8443"}`,
+			want: Target{Front: ProtoHTTPS, Protocol: ProtoHTTPS, Destination: "127.0.0.1", DestinationPorts: port(8443)},
+			out:  `"https://127.0.0.1:8443"`,
+		},
+		{
+			name: "object_tcp",
+			in:   `{"front":"tcp","backend":"tcp://127.0.0.1:22"}`,
+			want: Target{Front: ProtoTCP, Protocol: ProtoTCP, Destination: "127.0.0.1", DestinationPorts: port(22)},
+			out:  `"tcp://127.0.0.1:22"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got Target
+			if err := got.UnmarshalJSON([]byte(tt.in)); err != nil {
+				t.Fatalf("Unmarshal(%s): %v", tt.in, err)
+			}
+			if got != tt.want {
+				t.Errorf("Unmarshal(%s) = %+v; want %+v", tt.in, got, tt.want)
+			}
+			skipObjectFileOnWindows(t, tt.want)
+			// get-config writes with the standard library.
+			b, err := json.Marshal(&tt.want)
+			if err != nil {
+				t.Fatalf("Marshal(%+v): %v", tt.want, err)
+			}
+			if want := cmp.Or(tt.out, tt.in); string(b) != want {
+				t.Errorf("Marshal(%+v) = %s; want %s", tt.want, b, want)
+			}
+		})
+	}
+}
+
+// TestTargetJSONErrors pins endpoints the loader refuses, by the end of the
+// error.
+func TestTargetJSONErrors(t *testing.T) {
+	tests := []struct {
+		in  string
+		err string
+	}{
+		{`"bogus"`, `handler not of form <proto>://<destination>`},
+		{`"gopher://127.0.0.1:70"`, `unsupported protocol`},
+		{`"tcp://unix:"`, `unix socket path cannot be empty`},
+		{`"http://127.0.0.1:3000/api"`, `port range "3000/api": invalid first integer`},
+
+		// front must be a listener.
+		{`{"backend":"http://127.0.0.1:3000"}`, `invalid front protocol ""`},
+		{`{"front":"https+insecure","backend":"https://127.0.0.1:8443"}`, `invalid front protocol "https+insecure"`},
+		{`{"front":"file","backend":"file:///var/www"}`, `invalid front protocol "file"`},
+		{`{"front":"TUN","backend":"TUN"}`, `invalid front protocol "TUN"`},
+
+		// backend must be one the listener can reach.
+		{`{"front":"https"}`, `handler not of form <proto>://<destination>`},
+		{`{"front":"https","backend":"tcp://127.0.0.1:22"}`, `front protocol "https" cannot proxy to a "tcp" back-end`},
+		{`{"front":"http","backend":"tls-terminated-tcp://127.0.0.1:22"}`, `front protocol "http" cannot proxy to a "tls-terminated-tcp" back-end`},
+		{`{"front":"https","backend":"TUN"}`, `front protocol "https" cannot proxy to a "TUN" back-end`},
+		{`{"front":"tcp","backend":"http://127.0.0.1:80"}`, `front protocol "tcp" cannot proxy to a "http" back-end`},
+		{`{"front":"tcp","backend":"file:///var/www"}`, `front protocol "tcp" cannot proxy to a "file" back-end`},
+		{`{"front":"tls-terminated-tcp","backend":"tls-terminated-tcp://127.0.0.1:22"}`, `front protocol "tls-terminated-tcp" cannot proxy to a "tls-terminated-tcp" back-end`},
+		{`{"front":"https","backend":"https://unix:/run/app.sock"}`, `unix socket "unix:/run/app.sock" must use the "http" back-end protocol`},
+		{`{"front":"https","backend":"https+insecure://unix:/run/app.sock"}`, `unix socket "unix:/run/app.sock" must use the "http" back-end protocol`},
+		{`{"front":"http","backend":"file://3000"}`, `file path "3000" is not absolute`},
+		{`{"front":"https","backend":"file://text:hello"}`, `file path "text:hello" is not absolute`},
+		{`{"front":"tcp","backend":"tcp://127.0.0.1:22","proxyProtocol":1}`, `unknown object member name "proxyProtocol"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			var got Target
+			err := got.UnmarshalJSON([]byte(tt.in))
+			if err == nil || !strings.HasSuffix(err.Error(), tt.err) {
+				t.Errorf("Unmarshal(%s) err = %v; want ...%s", tt.in, err, tt.err)
+			}
+		})
+	}
+}
+
+// TestTargetMarshalErrors pins Targets that neither form can say, which
+// MarshalJSON refuses rather than write a file the loader reads differently.
+func TestTargetMarshalErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		target Target
+		err    string
+	}{
+		{
+			name:   "web_front_tcp_backend",
+			target: Target{Front: ProtoHTTPS, Protocol: ProtoTCP, Destination: "127.0.0.1", DestinationPorts: port(22)},
+			err:    `front protocol "https" cannot proxy to a "tcp" back-end`,
+		},
+		{
+			name:   "unix_over_https",
+			target: Target{Front: ProtoHTTP, Protocol: ProtoHTTPS, Destination: "unix:/run/app.sock"},
+			err:    `unix socket "unix:/run/app.sock" must use the "http" back-end protocol`,
+		},
+		{
+			name:   "relative_path",
+			target: Target{Front: ProtoHTTP, Protocol: ProtoFile, Destination: "index.html"},
+			err:    `file path "index.html" is not absolute`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b, err := json.Marshal(&tt.target)
+			if err == nil || !strings.HasSuffix(err.Error(), tt.err) {
+				t.Errorf("Marshal(%+v) = %s, %v; want error ...%s", tt.target, b, err, tt.err)
+			}
+		})
+	}
+}
+
+// TestTargetMarshal pins how MarshalJSON writes Targets the loader does not
+// build.
+func TestTargetMarshal(t *testing.T) {
+	tests := []struct {
+		name   string
+		target Target
+		want   string
+	}{
+		{
+			// DestinationPorts is unused in TUN mode.
+			name:   "tun_without_ports",
+			target: Target{Protocol: ProtoTUN},
+			want:   `"TUN"`,
+		},
+		// A path is written as it is, even where the loader would clean it.
+		{
+			name:   "unclean_path",
+			target: Target{Front: ProtoHTTPS, Protocol: ProtoFile, Destination: "/srv/www/"},
+			want:   `"file:///srv/www/"`,
+		},
+		{
+			name:   "unclean_path_object",
+			target: Target{Front: ProtoHTTP, Protocol: ProtoFile, Destination: "/srv/./index.html"},
+			want:   `{"front":"http","backend":"file:///srv/./index.html"}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			skipObjectFileOnWindows(t, tt.target)
+			b, err := json.Marshal(&tt.target)
+			if err != nil || string(b) != tt.want {
+				t.Errorf("Marshal(%+v) = %s, %v; want %s", tt.target, b, err, tt.want)
+			}
+		})
+	}
+}
+
+// TestTargetListener pins the listener each Target is served on.
+func TestTargetListener(t *testing.T) {
+	tests := []struct {
+		target Target
+		want   ServiceProtocol
+	}{
+		{Target{Protocol: ProtoHTTP}, ProtoHTTP},
+		{Target{Protocol: ProtoHTTPS}, ProtoHTTPS},
+		{Target{Protocol: ProtoHTTPSInsecure}, ProtoHTTPS},
+		{Target{Protocol: ProtoFile}, ProtoHTTPS},
+		{Target{Protocol: ProtoTCP}, ProtoTCP},
+		{Target{Protocol: ProtoTLSTerminatedTCP}, ProtoTLSTerminatedTCP},
+		{Target{Protocol: ProtoTUN}, ProtoTUN},
+		{Target{Front: ProtoHTTPS, Protocol: ProtoHTTP}, ProtoHTTPS},
+		{Target{Front: ProtoHTTP, Protocol: ProtoFile}, ProtoHTTP},
+		{Target{Front: ProtoTLSTerminatedTCP, Protocol: ProtoTCP}, ProtoTLSTerminatedTCP},
+	}
+	for _, tt := range tests {
+		if got := tt.target.Listener(); got != tt.want {
+			t.Errorf("%+v.Listener() = %q; want %q", tt.target, got, tt.want)
+		}
+	}
+}
+
+// skipObjectFileOnWindows skips a Target serving a file behind a front, whose
+// path, written with forward slashes, is not absolute on Windows.
+func skipObjectFileOnWindows(t *testing.T, target Target) {
+	t.Helper()
+	if runtime.GOOS == "windows" && target.Front != "" && target.Protocol == ProtoFile {
+		t.Skip("path is not absolute on Windows")
 	}
 }
 
