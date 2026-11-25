@@ -778,11 +778,11 @@ jobs:
         grep -q TestLicenseHeaders *.go || (echo "Expected a test named TestLicenseHeaders"; exit 1)
         ./tool/go test -v -run=TestLicenseHeaders
 
-  staticcheck:
+  lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: gomod-cache
-    name: staticcheck (${{ matrix.name }})
+    name: lint (${{ matrix.name }})
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
       matrix:
@@ -827,14 +827,51 @@ jobs:
         path: gomodcache
         key: ${{ needs.gomod-cache.outputs.cache-key }}
         enableCrossOsArchive: true
-    - name: run staticcheck (${{ matrix.name }})
+    - name: Download ./tool/go
       working-directory: src
-      run: |
-        export GOROOT=$(./tool/go env GOROOT)
-        ./tool/go run -exec \
-          "env GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }}" \
-           honnef.co/go/tools/cmd/staticcheck -- \
-           $(./tool/go run ./tool/listpkgs --ignore-3p --goos=${{ matrix.goos }} --goarch=${{ matrix.goarch }} ${{ matrix.flags }} ./...)
+      run: ./tool/go version
+    - parallel:
+      - name: run go vet (${{ matrix.name }})
+        working-directory: src
+        run: |
+          env GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+          ./tool/go vet \
+            -asmdecl \
+            -assign \
+            -atomic \
+            -bools \
+            -buildtag \
+            -cgocall \
+            -copylocks \
+            -errorsas \
+            -framepointer \
+            -httpresponse \
+            -ifaceassert \
+            -loopclosure \
+            -lostcancel \
+            -nilfunc \
+            -printf \
+            -printf.funcs=tailscale.com/types/logger.Discard \
+            -shift \
+            -sigchanyzer \
+            -stdmethods \
+            -stringintconv \
+            -structtag \
+            -testinggoroutine \
+            -tests \
+            -unmarshal \
+            -unreachable \
+            -unsafeptr \
+            -unusedresult \
+          $(./tool/go run ./tool/listpkgs --ignore-3p --goos=${{ matrix.goos }} --goarch=${{ matrix.goarch }} ${{ matrix.flags }} ./...)
+      - name: run staticcheck (${{ matrix.name }})
+        working-directory: src
+        run: |
+          export GOROOT=$(./tool/go env GOROOT)
+          ./tool/go run -exec \
+            "env GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }}" \
+             honnef.co/go/tools/cmd/staticcheck -- \
+             $(./tool/go run ./tool/listpkgs --ignore-3p --goos=${{ matrix.goos }} --goarch=${{ matrix.goarch }} ${{ matrix.flags }} ./...)
 
   notify_slack:
     if: always()
@@ -852,7 +889,7 @@ jobs:
       - go_generate
       - make_tidy
       - licenses
-      - staticcheck
+      - lint
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -937,7 +974,7 @@ jobs:
       - go_generate
       - make_tidy
       - licenses
-      - staticcheck
+      - lint
     steps:
     - name: Decide if change is okay to merge
       if: github.event_name != 'push'
@@ -962,7 +999,7 @@ jobs:
       - go_generate
       - make_tidy
       - licenses
-      - staticcheck
+      - lint
     steps:
     - name: Decide if change is okay to merge
       if: github.event_name != 'push'
