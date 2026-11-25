@@ -24,6 +24,21 @@ func TestServeConfigMixed(t *testing.T) {
 		steps []string
 		want  []string // tailscale serve commands that build the same state
 	}{
+		// A file, then the CLI changes it.
+		{
+			// The CLI can take a file-built service past what the format can
+			// say; get-config then refuses it on both nodes alike.
+			name: "file_then_cli_adds_mount_point",
+			steps: []string{
+				`set-config --all {"version": "0.0.1", "services": {"svc:foo": {"endpoints": {"tcp:80": "http://localhost:3000"}}}}`,
+				"--service=svc:foo --http=80 --set-path=/api http://localhost:4000",
+			},
+			want: []string{
+				"--service=svc:foo --http=80 http://localhost:3000",
+				"--service=svc:foo --http=80 --set-path=/api http://localhost:4000",
+			},
+		},
+
 		// The CLI, then a file replaces one service or all of them.
 		{
 			name: "cli_then_file_replaces_one_service",
@@ -45,6 +60,15 @@ func TestServeConfigMixed(t *testing.T) {
 				`set-config --all {"version": "0.0.1", "services": {"svc:baz": {"endpoints": {"*": "TUN"}}}}`,
 			},
 			want: []string{"--service=svc:baz --tun"},
+		},
+		{
+			name: "cli_then_file_replaces_unrepresentable",
+			steps: []string{
+				"--service=svc:foo --http=80 text:hello",
+				"--service=svc:foo --http=80 --set-path=/api http://localhost:4000",
+				`set-config --service=svc:foo {"version": "0.0.1", "endpoints": {"tcp:80": "http://localhost:3000"}}`,
+			},
+			want: []string{"--service=svc:foo --http=80 http://localhost:3000"},
 		},
 		{
 			name: "cli_then_file_drains",
@@ -127,6 +151,20 @@ func TestServeConfigMixed(t *testing.T) {
 		// set-config reads serve status --json as the legacy format. It
 		// carries what the config file format cannot, but has no advertised
 		// state: every service it names comes back advertised.
+		{
+			name: "status_json_carries_unrepresentable",
+			from: []string{
+				"--service=svc:foo --http=80 text:hello",
+				"--service=svc:foo --http=8080 --set-path=/api --accept-app-caps=example.com/cap/foo http://localhost:4000",
+				"--service=svc:foo --tcp=5432 --proxy-protocol=1 tcp://localhost:5432",
+			},
+			steps: []string{"set-config --all $FROM_STATUS"},
+			want: []string{
+				"--service=svc:foo --http=80 text:hello",
+				"--service=svc:foo --http=8080 --set-path=/api --accept-app-caps=example.com/cap/foo http://localhost:4000",
+				"--service=svc:foo --tcp=5432 --proxy-protocol=1 tcp://localhost:5432",
+			},
+		},
 		{
 			name: "status_json_loses_drain",
 			from: []string{
