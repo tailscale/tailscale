@@ -73,7 +73,7 @@ func TestPolicyUsesDefaultScopeForEmptyUserID(t *testing.T) {
 	store.SetStrings(
 		source.TestSettingOf(pkey.ManagedByOrganizationName, "DeviceCorp"),
 	)
-	rsop.RegisterStoreForTest(t, "DeviceStore", setting.DefaultScope(), store)
+	rsop.RegisterStoreForTest(t, "DeviceStore", setting.DeviceScope, store)
 
 	h := &Handler{
 		PermitRead: true,
