@@ -47,7 +47,11 @@ const (
 // comes back as an empty slice with hasCap true: the app stays resolvable and
 // registrable, which keeps the misconfiguration diagnosable, but
 // [connector.ingressAllow] lets nothing through.
-func appProtoPortRanges(peerCaps tailcfg.PeerCapMap, app string) (ranges views.Slice[tailcfg.ProtoPortRange], hasCap bool, err error) {
+func appProtoPortRanges(peerCaps tailcfg.PeerCapMap, app string) (
+	ranges views.Slice[tailcfg.ProtoPortRange],
+	hasCap bool,
+	err error,
+) {
 	cap := peercap.Conn25Prefix.ToAttribute(app)
 	if !peerCaps.HasCapability(cap) {
 		return ranges, false, nil

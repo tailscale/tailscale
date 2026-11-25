@@ -22,14 +22,18 @@ type appAddr struct {
 	app  string
 	addr netip.Addr
 	// ports are the protocol and port combinations the peer was permitted to
-	// reach through app at the moment it registered this mapping. See
-	// [appProtoPortRanges] for where they come from, and
-	// [connector.ingressAllow] for how they are enforced.
+	// reach through app at the moment it registered this mapping.
 	ports       views.Slice[tailcfg.ProtoPortRange]
 	expiryEntry *list.Element
 }
 
-func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr, peerV6 netip.Addr, tipr TransitIPRequest, ports views.Slice[tailcfg.ProtoPortRange]) TransitIPResponse {
+func (c *connector) handleTransitIPRequest(
+	n tailcfg.NodeView,
+	peerV4 netip.Addr,
+	peerV6 netip.Addr,
+	tipr TransitIPRequest,
+	ports views.Slice[tailcfg.ProtoPortRange],
+) TransitIPResponse {
 	if tipr.TransitIP.Is4() != tipr.DestinationIP.Is4() {
 		c.logf("[Unexpected] peer attempt to map a transit IP to dest IP did not have matching families: node: %s, tIPv4: %v dIPv4: %v",
 			n.StableID(), tipr.TransitIP.Is4(), tipr.DestinationIP.Is4())
@@ -161,6 +165,9 @@ func (c *connector) destinationInPools(dst netip.Addr) bool {
 // conn25 allocates transit IPs out of link-local space, so a packet addressed
 // to one has to get past that check; whether the peer may actually reach it is
 // decided by [connector.ingressAllow].
+
+// linkLocalAllow returns true if the provided packet has a Dst that is in
+// the configured transit IP range for this connector, false otherwise.
 func (c *connector) linkLocalAllow(p packet.Parsed) (bool, string) {
 	if c.transitIPInPool(p.Dst.Addr()) {
 		return true, connectorTransitIPReason
