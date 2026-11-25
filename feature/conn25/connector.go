@@ -149,14 +149,10 @@ func (c *connector) destinationInPools(dst netip.Addr) bool {
 	return (magic != nil && magic.Contains(dst)) || (transit != nil && transit.Contains(dst))
 }
 
-// packetFilterAllow returns true if the provided packet has a Src that is in
+// packetFilterAllow returns true if the provided packet has a Dst that is in
 // the configured transit IP range for this connector, false otherwise.
 func (c *connector) packetFilterAllow(p packet.Parsed) (bool, string) {
-	ipSets := c.getIPSets()
-	if ipSets.v4Transit != nil && ipSets.v4Transit.Contains(p.Dst.Addr()) {
-		return true, packetFilterAllowReason
-	}
-	if ipSets.v6Transit != nil && ipSets.v6Transit.Contains(p.Dst.Addr()) {
+	if c.transitIPInPool(p.Dst.Addr()) {
 		return true, packetFilterAllowReason
 	}
 	return false, ""
