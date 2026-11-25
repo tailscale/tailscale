@@ -5,13 +5,16 @@ package config
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -249,5 +252,56 @@ func mustCreateOrUpdate(t *testing.T, cl *fake.Clientset, s *corev1.Secret) {
 		if _, updateErr := cl.CoreV1().Secrets("default").Update(t.Context(), s, metav1.UpdateOptions{}); updateErr != nil {
 			t.Fatalf("error writing config Secret %q: %v", s.Name, updateErr)
 		}
+	}
+}
+
+func TestWatchConfigSecret_RewatchesAfterWatchError(t *testing.T) {
+	cl := fake.NewClientset()
+	var watchersMu sync.Mutex
+	var watchers []*watch.RaceFreeFakeWatcher
+	cl.PrependWatchReactor("secrets", func(action ktesting.Action) (bool, watch.Interface, error) {
+		w := watch.NewRaceFreeFake()
+		watchersMu.Lock()
+		watchers = append(watchers, w)
+		watchersMu.Unlock()
+		w.Add(secretFrom(`{"version": "v1alpha1", "authKey": "abc123"}`))
+		return true, w, nil
+	})
+
+	configChan := make(chan *conf.Config, 2)
+	loader := NewConfigLoader(zap.Must(zap.NewDevelopment()).Sugar(), cl.CoreV1(), configChan)
+	mustCreateOrUpdate(t, cl, secretFrom(`{"version": "v1alpha1", "authKey": "abc123"}`))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() { errs <- loader.watchConfigSecretChanges(ctx, "default", "config-secret") }()
+
+	select {
+	case <-configChan:
+	case err := <-errs:
+		t.Fatalf("unexpected error before watch failure: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for initial config")
+	}
+
+	watchersMu.Lock()
+	firstWatcher := watchers[0]
+	watchersMu.Unlock()
+	firstWatcher.Error(&metav1.Status{Message: "connection lost"})
+	require.Eventually(t, func() bool {
+		watchersMu.Lock()
+		defer watchersMu.Unlock()
+		return len(watchers) == 2
+	}, 5*time.Second, 10*time.Millisecond)
+
+	cancel()
+	select {
+	case err := <-errs:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context cancellation, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for watcher shutdown")
 	}
 }
