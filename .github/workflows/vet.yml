@@ -25,6 +25,27 @@ jobs:
   vet:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    name: vet (${{ matrix.name }})
+    strategy:
+      fail-fast: false # don't abort the entire matrix if one element fails
+      matrix:
+        include:
+          - name: "macOS"
+            goos: "darwin"
+            goarch: "arm64"
+            flags: "--with-tags-all=darwin"
+          - name: "Windows"
+            goos: "windows"
+            goarch: "amd64"
+            flags: "--with-tags-all=windows"
+          - name: "Linux"
+            goos: "linux"
+            goarch: "amd64"
+            flags: "--with-tags-all=linux"
+          - name: "Portable"
+            goos: "linux"
+            goarch: "amd64"
+            flags: "--without-tags-any=windows,darwin,linux"
 
     steps:
       - name: Check out code
@@ -34,7 +55,7 @@ jobs:
 
       - name: Build 'go vet' tool
         working-directory: src
-        run: ./tool/go build -o /tmp/vettool tailscale.com/cmd/vet
+        run: ./tool/go build -o $RUNNER_TEMP/vettool ./cmd/vet
 
       - name: Run 'go vet'
         working-directory: src
@@ -44,4 +65,7 @@ jobs:
         # include the v2 go client (tailscale.com/client/tailscale/v2) if it's
         # a dependency in our go.mod file. Possibly a go vet bug, but avoid
         # cross-repo vetting for now so we can safely add the dependency.
-        run: ./tool/go vet -vettool=/tmp/vettool $(./tool/go run ./tool/listpkgs --ignore-3p ./...)
+        run: |
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            ./tool/go vet -vettool=$RUNNER_TEMP/vettool \
+            $(./tool/go run ./tool/listpkgs --ignore-3p --goos=${{ matrix.goos }} --goarch=${{ matrix.goarch }} ${{ matrix.flags }} ./...)
