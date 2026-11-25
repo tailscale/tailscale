@@ -28,6 +28,7 @@ import (
 
 	"tailscale.com/derp/derpconst"
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
@@ -53,6 +54,26 @@ var mitmBlockWarnable = health.Register(&health.Warnable{
 	Severity:            health.SeverityMedium,
 	ImpactsConnectivity: true,
 })
+
+// HookCheckRevocation, if set, is called after a server's certificate chain
+// has passed x509 verification in [Config] or [SetConfigExpectedCert].
+// chain is the verified chain, leaf first, and dnsName is the name the leaf
+// was verified for. A non-nil error rejects the connection.
+//
+// It is set by the "upki" feature.
+var HookCheckRevocation feature.Hook[func(dnsName string, chain []*x509.Certificate) error]
+
+// checkRevocation runs [HookCheckRevocation], if set, against the first of
+// the verified chains returned by [x509.Certificate.Verify].
+func checkRevocation(dnsName string, chains [][]*x509.Certificate) error {
+	if !buildfeatures.HasUPKI || len(chains) == 0 {
+		return nil
+	}
+	if f, ok := HookCheckRevocation.GetOk(); ok {
+		return f(dnsName, chains[0])
+	}
+	return nil
+}
 
 // Config returns a tls.Config for connecting to a server that
 // uses system roots for validation but, if those fail, also tries
@@ -172,25 +193,25 @@ func Config(ht *health.Tracker, base *tls.Config) *tls.Config {
 		for _, cert := range cs.PeerCertificates[1:] {
 			opts.Intermediates.AddCert(cert)
 		}
-		_, errSys := cs.PeerCertificates[0].Verify(opts)
+		chainsSys, errSys := cs.PeerCertificates[0].Verify(opts)
 		if debug() {
 			log.Printf("tlsdial(sys %q): %v", dialedHost, errSys)
 		}
 		if errSys == nil && !debug() {
-			return nil
+			return checkRevocation(dialedHost, chainsSys)
 		}
 
 		// If extra roots were provided (e.g. user-installed CAs on
 		// Android), try those next.
 		if extraRoots != nil {
 			opts.Roots = extraRoots
-			_, errExtra := cs.PeerCertificates[0].Verify(opts)
+			chainsExtra, errExtra := cs.PeerCertificates[0].Verify(opts)
 			if debug() {
 				log.Printf("tlsdial(extra %q): %v", dialedHost, errExtra)
 			}
 			if errExtra == nil {
 				atomic.AddInt32(&counterFallbackOK, 1)
-				return nil
+				return checkRevocation(dialedHost, chainsExtra)
 			}
 			opts.Roots = nil // reset for baked roots check
 		}
@@ -202,7 +223,7 @@ func Config(ht *health.Tracker, base *tls.Config) *tls.Config {
 		// If we have baked-in LetsEncrypt roots and we either failed above, or
 		// debug logging is enabled, also verify with LetsEncrypt.
 		opts.Roots = bakedroots.Get()
-		_, bakedErr := cs.PeerCertificates[0].Verify(opts)
+		chainsBaked, bakedErr := cs.PeerCertificates[0].Verify(opts)
 		if debug() {
 			log.Printf("tlsdial(bake %q): %v", dialedHost, bakedErr)
 		} else if bakedErr != nil {
@@ -218,10 +239,10 @@ func Config(ht *health.Tracker, base *tls.Config) *tls.Config {
 		}
 
 		if errSys == nil {
-			return nil
+			return checkRevocation(dialedHost, chainsSys)
 		} else if bakedErr == nil {
 			atomic.AddInt32(&counterFallbackOK, 1)
-			return nil
+			return checkRevocation(dialedHost, chainsBaked)
 		}
 		return errSys
 	}
@@ -276,21 +297,21 @@ func SetConfigExpectedCert(c *tls.Config, certDNSName string) {
 		for _, cert := range certs[1:] {
 			opts.Intermediates.AddCert(cert)
 		}
-		_, errSys := certs[0].Verify(opts)
+		chainsSys, errSys := certs[0].Verify(opts)
 		if debug() {
 			log.Printf("tlsdial(sys %q/%q): %v", c.ServerName, certDNSName, errSys)
 		}
 		if errSys == nil {
-			return nil
+			return checkRevocation(certDNSName, chainsSys)
 		}
 		if extraRoots != nil {
 			opts.Roots = extraRoots
-			_, errExtra := certs[0].Verify(opts)
+			chainsExtra, errExtra := certs[0].Verify(opts)
 			if debug() {
 				log.Printf("tlsdial(extra %q/%q): %v", c.ServerName, certDNSName, errExtra)
 			}
 			if errExtra == nil {
-				return nil
+				return checkRevocation(certDNSName, chainsExtra)
 			}
 			opts.Roots = nil
 		}
@@ -298,12 +319,12 @@ func SetConfigExpectedCert(c *tls.Config, certDNSName string) {
 			return errSys
 		}
 		opts.Roots = bakedroots.Get()
-		_, err := certs[0].Verify(opts)
+		chainsBaked, err := certs[0].Verify(opts)
 		if debug() {
 			log.Printf("tlsdial(bake %q/%q): %v", c.ServerName, certDNSName, err)
 		}
 		if err == nil {
-			return nil
+			return checkRevocation(certDNSName, chainsBaked)
 		}
 		return errSys
 	}

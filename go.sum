@@ -282,6 +282,8 @@ github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf/go.mod h1:F5haX7
 github.com/coreos/go-systemd/v22 v22.5.0/go.mod h1:Y58oyj3AT4RCenI/lSvhwexgC+NSVTIJ3seZv2GcEnc=
 github.com/coreos/go-systemd/v22 v22.7.0 h1:LAEzFkke61DFROc7zNLX/WA2i5J8gYqe0rSj9KI28KA=
 github.com/coreos/go-systemd/v22 v22.7.0/go.mod h1:xNUYtjHu2EDXbsxz1i41wouACIwT7Ybq9o0BQhMwD0w=
+github.com/cpu/go-upki v0.0.0-20261112150031-bc582dfec684 h1:FvlMD2jjjJewrxHbN6OLzWi2OA2j6HMRvCf3Onu39ok=
+github.com/cpu/go-upki v0.0.0-20261112150031-bc582dfec684/go.mod h1:uu3MXXGHcOU/jX7TmhuC/k1Z6elot0ECZJAABAodcQU=
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
 github.com/creachadair/mds v0.31.0 h1:h4SXXgallvZfD8CFQnQNAOtBkUGpZjPwNBRQpHpHM/g=
 github.com/creachadair/mds v0.31.0/go.mod h1:IZ3oLffgVNZ4O5WXTPxx7EX5ilSl1ypdv5FekYyynyI=

@@ -355,6 +355,10 @@ var Features = map[FeatureTag]FeatureMeta{
 		Sym:  "UnixSocketIdentity",
 		Desc: "differentiate between users accessing the LocalAPI over unix sockets (if omitted, all users have full access)",
 	},
+	"upki": {
+		Sym:  "UPKI",
+		Desc: "Reject TLS server certs revoked according to a local upki (CRLite) revocation cache, if present",
+	},
 	"useroutes": {
 		Sym:  "UseRoutes",
 		Desc: "Use routes advertised by other nodes",
