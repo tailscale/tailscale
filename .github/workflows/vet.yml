@@ -32,6 +32,9 @@ jobs:
         with:
           path: src
 
+      - name: Register Go problem matcher
+        run: echo '::add-matcher::src/.github/go-matcher.json'
+
       - name: Build 'go vet' tool
         working-directory: src
         run: ./tool/go build -o /tmp/vettool tailscale.com/cmd/vet

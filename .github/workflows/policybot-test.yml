@@ -37,6 +37,9 @@ jobs:
         with:
           path: src
 
+      - name: Register Go problem matcher
+        run: echo '::add-matcher::src/.github/go-matcher.json'
+
       # The version of github.com/tailscale/policybottest used here is
       # pinned by go.mod via internal/tooldeps/tooldeps.go; bump it with
       # "go get github.com/tailscale/policybottest@<sha> && go mod tidy".

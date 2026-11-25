@@ -20,6 +20,9 @@ jobs:
       - name: Check out code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      - name: Register Go problem matcher
+        run: echo '::add-matcher::.github/go-matcher.json'
+
       - name: Build checklocks
         run: ./tool/go build -o /tmp/checklocks gvisor.dev/gvisor/tools/checklocks/cmd/checklocks
 
