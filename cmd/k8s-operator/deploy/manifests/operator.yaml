@@ -3408,6 +3408,7 @@ spec:
                                                             You can reduce the permissions of the Tailscale container to cap NET_ADMIN by
                                                             installing device plugin in your cluster and configuring the proxies tun device to be created
                                                             by the device plugin, see  https://github.com/tailscale/tailscale/issues/10814#issuecomment-2479977752
+                                                            Helm value apiServerProxyConfig.restrictedPodSecurity="true" sets kube-apiserver ProxyGroups' k8s-proxy to Pod Security "restricted".
                                                             https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context
                                                         properties:
                                                             allowPrivilegeEscalation:
@@ -3823,6 +3824,7 @@ spec:
                                                             You can reduce the permissions of the Tailscale container to cap NET_ADMIN by
                                                             installing device plugin in your cluster and configuring the proxies tun device to be created
                                                             by the device plugin, see  https://github.com/tailscale/tailscale/issues/10814#issuecomment-2479977752
+                                                            Helm value apiServerProxyConfig.restrictedPodSecurity="true" sets kube-apiserver ProxyGroups' k8s-proxy to Pod Security "restricted".
                                                             https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context
                                                         properties:
                                                             allowPrivilegeEscalation:
@@ -7101,6 +7103,8 @@ spec:
                       value: tag:k8s
                     - name: APISERVER_PROXY
                       value: "false"
+                    - name: K8S_PROXY_RESTRICTED_POD_SECURITY
+                      value: "false"
                     - name: PROXY_FIREWALL_MODE
                       value: auto
                     - name: POD_NAME
@@ -7113,6 +7117,8 @@ spec:
                             fieldPath: metadata.uid
                     - name: OPERATOR_SHARED_ACME_ACCOUNT_KEY
                       value: "false"
+                    - name: XDG_CONFIG_HOME
+                      value: /tmp
                   image: tailscale/k8s-operator:stable
                   imagePullPolicy: Always
                   name: operator
@@ -7120,6 +7126,8 @@ spec:
                     - mountPath: /oauth
                       name: oauth
                       readOnly: true
+                    - mountPath: /tmp
+                      name: tmp
             nodeSelector:
                 kubernetes.io/os: linux
             serviceAccountName: operator
@@ -7127,6 +7135,8 @@ spec:
                 - name: oauth
                   secret:
                     secretName: operator-oauth
+                - emptyDir: {}
+                  name: tmp
 ---
 apiVersion: networking.k8s.io/v1
 kind: IngressClass
