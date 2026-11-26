@@ -644,6 +644,7 @@ type fakeIPTablesRunner struct {
 	noV6 bool
 
 	addChainsErr          error // if non-nil, AddChains returns it instead of setting up chains
+	addMagicsockPortErr   error // if non-nil, AddMagicsockPortRule returns it
 	addConnmarkSaveCalls  int
 	addExternalCGNATCalls int
 }
@@ -966,6 +967,9 @@ func buildMagicsockPortRule(port uint16) string {
 // rules in fakeIPTablesRunner's internal maps rather than actually calling out
 // to iptables. This is mainly to test the linux router implementation.
 func (n *fakeIPTablesRunner) AddMagicsockPortRule(port uint16, network string) error {
+	if n.addMagicsockPortErr != nil {
+		return n.addMagicsockPortErr
+	}
 	var ipt map[string][]string
 	switch network {
 	case "udp4":

@@ -46,10 +46,11 @@ import (
 //
 // Instead, per address family, we install
 //
+//	<base+52>: from A ipproto udp sport <magicsock port> uidrange 0-0 lookup main suppress_prefixlength 0
 //	<base+55>: not fwmark <bypass> lookup 52 suppress_prefixlength 0
 //	<base+60>: from A uidrange 0-0 lookup main
 //
-// with a base+60 rule for each underlay address A.
+// for each underlay address A (base+52 for IPv4 only, see below).
 //
 // The base+60 rule sends the reverse lookup (which carries saddr=A and uid
 // 0) to the main table, where it finds the physical interface and passes.
@@ -66,14 +67,38 @@ import (
 //
 // The base+55 rule also keeps the LAN block: a reply from a LAN host to one
 // of tailscaled's own sockets fails reverse-path validation just like any
-// other LAN packet, so with ExitNodeAllowLANAccess off and strict rp_filter
-// those replies are still dropped, as they were before src_valid_mark. That
-// includes magicsock's, so direct paths to peers on the LAN fall back to
-// DERP.
+// other LAN packet. The base+52 rules exempt replies to the magicsock UDP
+// port, so direct WireGuard and disco paths to peers on the LAN keep
+// working. A rule with port selectors makes the kernel dissect the flow for
+// reverse-path lookups, which then carry the reply's ports (swapped, so the
+// local magicsock port is the source port). The base+52 rules are narrow on
+// purpose:
 //
-// Mark-aware netfilter reverse-path checks (e.g. nftables "fib saddr . mark
-// . iif oif") are covered by the connmark rules instead, when netfilter is
-// on.
+//   - "from A": forwarded packets (from containers or LAN clients behind
+//     this node) are looked up as uid 0 with their real ports too, but never
+//     with our underlay address as source. Matching on the incoming
+//     interface ("iif lo") can't separate them: for dissected reverse-path
+//     lookups the kernel doesn't use lo as the incoming interface.
+//   - "suppress_prefixlength 0": only main's specific routes (the connected
+//     LANs) count; for tailnet destinations the lookup continues to the
+//     base+55 rule, so packets from peers to our magicsock port through the
+//     tunnel still pass reverse-path validation.
+//
+// While any rule with port selectors exists, the kernel dissects the flow
+// of every IPv4 packet for input and reverse-path lookups; that per-packet
+// cost is limited to the time an exit node is in use.
+//
+// The base+52 rules are IPv4-only. Only the kernel's IPv4 rp_filter does
+// port-aware lookups; netfilter reverse-path checks (nftables "fib saddr .
+// iif oif", iptables rpfilter), the only kind IPv6 has, carry no ports, so
+// the rules would have no effect there. Mark-aware netfilter checks (e.g.
+// nftables "fib saddr . mark . iif oif") are covered by the connmark rules
+// instead, when netfilter is on.
+//
+// Other sockets of tailscaled on the LAN (portmapper requests to the
+// gateway, a LAN DNS resolver) use ephemeral ports, so with
+// ExitNodeAllowLANAccess off and strict rp_filter their replies are still
+// dropped, as they were before src_valid_mark.
 //
 // The uidrange 0-0 selector limits the base+60 rule to lookups made as uid
 // 0. The kernel's reverse-path lookups always are, so the fix works, but
@@ -118,7 +143,9 @@ import (
 // lower-priority "from <src> lookup <table>" rules that match first.
 // Kernels before 4.10 ignore uidrange, so there the base+60 rule applies to
 // all processes. Kernels before 4.17 don't store the rule protocol; there we
-// recognize our rules by their exact shape instead.
+// recognize our rules by their exact shape instead. They also lack port and
+// ipproto selectors and would silently install the base+52 rule as a
+// catch-all, so we don't install it there, and verify it after adding it.
 
 const (
 	// underlaySuppressRuleOffset and underlaySrcRuleOffset are the
@@ -126,9 +153,14 @@ const (
 	// must be below the table 52 catch-all (offset 70), the suppress rule
 	// below the source rules, and both inside the ipPolicyPrefBase..+99
 	// range that onIPRuleDeleted watches.
+	underlayPortRuleOffset     = 52
 	underlaySuppressRuleOffset = 55
 	underlaySrcRuleOffset      = 60
 )
+
+// errUnderlayPortRuleUnsupported is returned by addUnderlayRule when the
+// kernel accepted the magicsock port rule but dropped its selectors.
+var errUnderlayPortRuleUnsupported = errors.New("kernel doesn't support ip rule ipproto/sport selectors")
 
 // kernelVersion returns the running kernel's major and minor version, or
 // 0, 0 if unknown.
@@ -165,36 +197,47 @@ var (
 	metricUnderlaySrcRulesCapped = clientmetric.NewGauge("router_linux_rpfilter_src_rules_capped")
 )
 
-// underlayRule identifies one rule we manage: the source rule for src or,
-// when src isn't set, the family's table 52 suppress rule.
+// underlayRule identifies one rule we manage: the source rule for src; the
+// magicsock port rule for src when port is also set; or, when neither is
+// set, the family's table 52 suppress rule.
 type underlayRule struct {
-	fam addrFamily
-	src netip.Addr
+	fam  addrFamily
+	src  netip.Addr
+	port uint16
 }
 
-func (u underlayRule) isSuppress() bool { return !u.src.IsValid() }
+func (u underlayRule) isSuppress() bool { return !u.src.IsValid() && u.port == 0 }
+func (u underlayRule) isPort() bool     { return u.port != 0 }
 
-// rank orders rule kinds for adding: suppress, then source.
+// rank orders rule kinds for adding: suppress, port, source.
 func (u underlayRule) rank() int {
-	if u.isSuppress() {
+	switch {
+	case u.isSuppress():
 		return 0
+	case u.isPort():
+		return 1
 	}
-	return 1
+	return 2
 }
 
 func (u underlayRule) String() string {
-	if u.isSuppress() {
+	switch {
+	case u.isSuppress():
 		return fmt.Sprintf("v%d table %d suppress rule", u.fam, tailscaleRouteTable.Num)
+	case u.isPort():
+		return fmt.Sprintf("magicsock port %d rule for %v", u.port, u.src)
 	}
 	return "source rule for " + u.src.String()
 }
 
-// compareUnderlayRules orders suppress rules before source rules (the order
-// to add them in), then by family and address.
+// compareUnderlayRules orders suppress rules first, then port rules, then
+// source rules (the order to add them in), then by family, port and
+// address.
 func compareUnderlayRules(a, b underlayRule) int {
 	return cmp.Or(
 		cmp.Compare(a.rank(), b.rank()),
 		cmp.Compare(a.fam, b.fam),
+		cmp.Compare(a.port, b.port),
 		a.src.Compare(b.src))
 }
 
@@ -206,11 +249,23 @@ func (r *linuxRouter) underlaySuppressRulePriority() int {
 	return r.ipPolicyPrefBase + underlaySuppressRuleOffset
 }
 
+func (r *linuxRouter) underlayPortRulePriority() int {
+	return r.ipPolicyPrefBase + underlayPortRuleOffset
+}
+
 // isUnderlayRulePriority reports whether pri is one of the underlay rule
 // priorities.
 func (r *linuxRouter) isUnderlayRulePriority(pri int) bool {
 	return pri == r.underlaySrcRulePriority() ||
-		pri == r.underlaySuppressRulePriority()
+		pri == r.underlaySuppressRulePriority() ||
+		pri == r.underlayPortRulePriority()
+}
+
+// underlayPortRulesOK reports whether we can install magicsock port rules.
+//
+// r.mu must be held.
+func (r *linuxRouter) underlayPortRulesOK() bool {
+	return !r.underlayPortRulesUnsupported && kernelAtLeast(4, 17)
 }
 
 // rpFilterStrictV4FromSysctl reports whether the kernel's strict IPv4
@@ -396,6 +451,7 @@ func (r *linuxRouter) desiredUnderlayRulesLocked() set.Set[underlayRule] {
 
 	var n4, n6 int
 	capped := false
+	portsOK := r.underlayPortRulesOK()
 	for _, a := range r.underlayAddrs() {
 		if tsAddrs.Contains(a) {
 			continue
@@ -417,6 +473,9 @@ func (r *linuxRouter) desiredUnderlayRulesLocked() set.Set[underlayRule] {
 			continue
 		}
 		want.Add(underlayRule{fam: familyOf(a), src: a})
+		if a.Is4() && portsOK && r.underlayMagicsockPortV4 != 0 {
+			want.Add(underlayRule{fam: v4, src: a, port: r.underlayMagicsockPortV4})
+		}
 	}
 	// A family's suppress rule exists whenever it has source rules.
 	if n4 > 0 {
@@ -491,10 +550,15 @@ func (r *linuxRouter) updateUnderlaySrcRulesLocked(addOnly bool) error {
 		}
 		if !u.isSuppress() && !r.underlaySrcRules.Contains(underlayRule{fam: u.fam}) {
 			// Its suppress rule failed to install; don't add a source
-			// rule without it.
+			// or port rule without it.
 			continue
 		}
 		if err := r.addUnderlayRule(u); err != nil {
+			if errors.Is(err, errUnderlayPortRuleUnsupported) {
+				r.underlayPortRulesUnsupported = true
+				r.logf("rp_filter underlay rules: %v; replies from LAN peers may be dropped while using an exit node with LAN access off", err)
+				continue
+			}
 			errs = append(errs, fmt.Errorf("adding rp_filter %v: %w", u, err))
 			continue
 		}
@@ -697,7 +761,8 @@ func isOurUnderlayRule(ru ipRule, base int) bool {
 func isOurUnderlayRuleFor(ru ipRule, base int, uidRangeOK bool) bool {
 	src := int(ru.priority) == base+underlaySrcRuleOffset
 	sup := int(ru.priority) == base+underlaySuppressRuleOffset
-	if !src && !sup {
+	port := int(ru.priority) == base+underlayPortRuleOffset
+	if !src && !sup && !port {
 		return false
 	}
 	if ru.hasProtocol {
@@ -706,17 +771,29 @@ func isOurUnderlayRuleFor(ru ipRule, base int, uidRangeOK bool) bool {
 	if ru.other || ru.invert != sup || src && ru.suppressPrefixlen != -1 {
 		return false
 	}
-	// Our source rules carry uidrange 0-0, which kernels from 4.10 keep and
-	// older ones drop.
+	// Our source and port rules carry uidrange 0-0, which kernels from 4.10
+	// keep and older ones drop.
 	uidOK := ru.uidRange == nil
 	if uidRangeOK {
 		uidOK = ru.uidRange != nil && *ru.uidRange == [2]uint32{0, 0}
 	}
-	if src {
+	switch {
+	case src:
 		return ru.table == uint32(mainRouteTable.Num) &&
 			ru.src.IsValid() &&
 			ru.fwmask == 0 &&
 			ru.ipProto == 0 && ru.sportRange == nil &&
+			uidOK
+	case port:
+		// Before 4.17 the kernel drops the ipproto and sport selectors;
+		// sweep such leftovers too, as they'd match everything.
+		selectors := ru.ipProto == unix.IPPROTO_UDP && ru.sportRange != nil ||
+			ru.ipProto == 0 && ru.sportRange == nil
+		return ru.table == uint32(mainRouteTable.Num) &&
+			ru.src.IsValid() &&
+			ru.fwmask == 0 &&
+			ru.suppressPrefixlen == 0 &&
+			selectors &&
 			uidOK
 	}
 	return ru.table == uint32(tailscaleRouteTable.Num) &&
@@ -751,6 +828,19 @@ func familyOf(a netip.Addr) addrFamily {
 
 // underlayIPRule returns the kernel rule for u.
 func (r *linuxRouter) underlayIPRule(u underlayRule) ipRule {
+	if u.isPort() {
+		return ipRule{
+			family:            u.fam,
+			priority:          uint32(r.underlayPortRulePriority()),
+			table:             uint32(mainRouteTable.Num),
+			src:               u.src,
+			suppressPrefixlen: 0,
+			uidRange:          &[2]uint32{0, 0},
+			ipProto:           unix.IPPROTO_UDP,
+			sportRange:        &[2]uint16{u.port, u.port},
+			protocol:          ruleProtocolTailscale,
+		}
+	}
 	if u.isSuppress() {
 		return ipRule{
 			family:            u.fam,
@@ -778,6 +868,20 @@ func (r *linuxRouter) underlayIPRule(u underlayRule) ipRule {
 // u. It sets the rule protocol, so the netlink sweep recognizes these rules
 // too; that needs iproute2 4.17 or later (busybox lacks it, and uidrange).
 func (r *linuxRouter) underlayIPCommandArgs(verb string, u underlayRule) []string {
+	if u.isPort() {
+		return []string{
+			"ip", u.fam.dashArg(),
+			"rule", verb,
+			"pref", strconv.Itoa(r.underlayPortRulePriority()),
+			"from", u.src.String(),
+			"ipproto", "udp",
+			"sport", strconv.Itoa(int(u.port)),
+			"uidrange", "0-0",
+			"table", mainRouteTable.ipCmdArg(),
+			"suppress_prefixlength", "0",
+			"protocol", strconv.Itoa(ruleProtocolTailscale),
+		}
+	}
 	if u.isSuppress() {
 		mark := fmt.Sprintf("0x%x", tsconst.LinuxBypassMarkNum)
 		if r.fwmaskWorks() {
@@ -812,13 +916,68 @@ func (r *linuxRouter) addUnderlayRule(u underlayRule) error {
 		if err != nil && errCode(err) == 2 && strings.Contains(err.Error(), "File exists") {
 			return nil
 		}
-		return err
+		if err != nil || !u.isPort() || !r.underlayNetlinkUsable() {
+			return err
+		}
+		return r.verifyUnderlayPortRule(u)
 	}
 	err := addIPRule(r.underlayIPRule(u))
 	if errors.Is(err, errEEXIST) {
 		return nil
 	}
-	return err
+	if err != nil || !u.isPort() {
+		return err
+	}
+	return r.verifyUnderlayPortRule(u)
+}
+
+// verifyUnderlayPortRule checks the just-added port rule u. Kernels without
+// ipproto/sport selectors accept the rule and drop them, leaving "from A
+// uidrange 0-0 lookup main suppress_prefixlength 0". If so, it deletes the
+// rule and returns errUnderlayPortRuleUnsupported. If the rule is gone (some
+// other process deleted it in the meantime), it returns a plain error so
+// the next reconcile retries.
+func (r *linuxRouter) verifyUnderlayPortRule(u underlayRule) error {
+	ru := r.underlayIPRule(u)
+	rules, err := listIPRules(u.fam)
+	if err != nil {
+		delIPRule(ru)
+		return fmt.Errorf("verifying %v: %w", u, err)
+	}
+	switch checkPortRule(rules, ru) {
+	case portRuleOK:
+		return nil
+	case portRuleStripped:
+		delIPRule(ru)
+		return errUnderlayPortRuleUnsupported
+	}
+	return fmt.Errorf("%v disappeared while verifying it", u)
+}
+
+type portRuleCheck int
+
+const (
+	portRuleMissing  portRuleCheck = iota // not installed (deleted meanwhile)
+	portRuleOK                            // installed with its selectors
+	portRuleStripped                      // installed, but the kernel dropped the selectors
+)
+
+// checkPortRule reports how the port rule want appears in rules, the
+// kernel's rules for its family.
+func checkPortRule(rules []ipRule, want ipRule) portRuleCheck {
+	for _, got := range rules {
+		if got.priority != want.priority || got.src != want.src ||
+			got.table != want.table || got.protocol != want.protocol {
+			continue
+		}
+		if got.ipProto == want.ipProto && got.sportRange != nil && *got.sportRange == *want.sportRange {
+			return portRuleOK
+		}
+		if got.ipProto == 0 && got.sportRange == nil {
+			return portRuleStripped
+		}
+	}
+	return portRuleMissing
 }
 
 // delUnderlayRule removes u. A missing rule is not an error.
