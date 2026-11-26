@@ -21,6 +21,27 @@ import (
 	"tailscale.com/types/views"
 )
 
+func TestServerStatusPort(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		configured *uint16
+		server     relayServer
+		want       *uint16
+	}{
+		{name: "disabled"},
+		{name: "not-running", configured: new(uint16(1234))},
+		{name: "fixed", configured: new(uint16(1234)), server: &mockRelayServer{port: 1234}, want: new(uint16(1234))},
+		{name: "automatic", configured: new(uint16(0)), server: &mockRelayServer{port: 5678}, want: new(uint16(5678))},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			e := &extension{port: tt.configured, rs: tt.server}
+			if got := e.serverStatus().UDPPort; !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("UDPPort = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func Test_extension_profileStateChanged(t *testing.T) {
 	prefsWithPortOne := ipn.Prefs{RelayServerPort: new(uint16(1))}
 	prefsWithNilPort := ipn.Prefs{RelayServerPort: nil}
@@ -246,6 +267,7 @@ func mockRelayServerNotZeroVal() *mockRelayServer {
 type mockRelayServer struct {
 	set       bool
 	addrPorts views.Slice[netip.AddrPort]
+	port      uint16
 }
 
 func (m *mockRelayServer) Close() error { return nil }
@@ -254,6 +276,7 @@ func (m *mockRelayServer) AllocateEndpoint(_, _ key.DiscoPublic) (endpoint.Serve
 }
 func (m *mockRelayServer) GetSessions() []status.ServerSession { return nil }
 func (m *mockRelayServer) SetDERPMapView(tailcfg.DERPMapView)  { return }
+func (m *mockRelayServer) Port() uint16                        { return m.port }
 func (m *mockRelayServer) SetStaticAddrPorts(aps views.Slice[netip.AddrPort]) {
 	m.addrPorts = aps
 }

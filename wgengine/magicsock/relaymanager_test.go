@@ -4,6 +4,7 @@
 package magicsock
 
 import (
+	"net/netip"
 	"testing"
 
 	"tailscale.com/disco"
@@ -44,6 +45,37 @@ func TestRelayManagerInitAndIdle(t *testing.T) {
 	rm = relayManager{}
 	rm.handleDERPHomeChange(key.NodePublic{}, 1)
 	<-rm.runLoopStoppedCh
+}
+
+func TestRelayManagerStaleHandshakeChallenge(t *testing.T) {
+	rm := &relayManager{}
+	rm.init()
+	<-rm.runLoopStoppedCh // drive runLoop handlers synchronously
+	server := key.NewDisco().Public()
+	work := &relayHandshakeWork{
+		se:           udprelay.ServerEndpoint{ServerDisco: server, VNI: 1},
+		handshakeGen: 2,
+		rxDiscoMsgCh: make(chan relayDiscoMsgEvent, 1),
+		doneCh:       make(chan relayEndpointHandshakeWorkDoneEvent, 1),
+	}
+	rm.handshakeWorkByServerDiscoVNI[serverDiscoVNI{server, 1}] = work
+	event := relayDiscoMsgEvent{
+		disco: server,
+		from:  netip.MustParseAddrPort("127.0.0.1:12345"),
+		vni:   1,
+		msg: &disco.BindUDPRelayEndpointChallenge{
+			BindUDPRelayEndpointCommon: disco.BindUDPRelayEndpointCommon{VNI: 1, Generation: 1},
+		},
+	}
+	rm.handleRxDiscoMsgRunLoop(event)
+	if len(work.rxDiscoMsgCh) != 0 || len(rm.handshakeWorkAwaitingPong) != 0 || len(rm.addrPortVNIToHandshakeWork) != 0 {
+		t.Fatal("stale challenge claimed the new handshake's path")
+	}
+	event.msg.(*disco.BindUDPRelayEndpointChallenge).Generation = 2
+	rm.handleRxDiscoMsgRunLoop(event)
+	if len(work.rxDiscoMsgCh) != 1 || len(rm.handshakeWorkAwaitingPong) != 1 || len(rm.addrPortVNIToHandshakeWork) != 1 {
+		t.Fatal("current challenge was not accepted after a stale challenge")
+	}
 }
 
 // TestRelayManagerZeroServerDisco verifies that a [disco.CallMeMaybeVia] with
