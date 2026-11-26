@@ -51,6 +51,9 @@ jobs:
         path: ${{ github.workspace }}/src
         persist-credentials: false
 
+    - name: Register Go problem matcher
+      run: echo '::add-matcher::.github/go-matcher.json'
+
     # This must run before anything uses ./tool/go, as it also provides the Go toolchain.
     - name: Mount gomodfs
       id: gomodfs
