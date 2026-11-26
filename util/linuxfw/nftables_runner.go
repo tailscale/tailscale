@@ -549,8 +549,10 @@ type NetfilterRunner interface {
 
 	// AddConnmarkSaveRule adds conntrack marking rules to save marks from packets.
 	// These rules run in mangle/PREROUTING and mangle/OUTPUT to mark connections
-	// and restore marks on reply packets before rp_filter checks, enabling proper
-	// routing table lookups for exit nodes and subnet routers.
+	// and restore marks on reply packets, so the routing decision for replies
+	// uses the right table. Reverse path checks only see the restored mark if
+	// they're mark-aware: netfilter checks that include the mark, or the
+	// kernel's rp_filter with net.ipv4.conf.*.src_valid_mark=1.
 	AddConnmarkSaveRule() error
 
 	// DelConnmarkSaveRule removes conntrack marking rules added by AddConnmarkSaveRule.
@@ -2260,8 +2262,9 @@ func makeConnmarkSaveExprs() []expr.Any {
 
 // AddConnmarkSaveRule adds conntrack marking rules to save and restore marks.
 // These rules run in mangle/PREROUTING (to restore marks from conntrack) and
-// mangle/OUTPUT (to save marks to conntrack) before rp_filter checks, enabling
-// proper routing table lookups for exit nodes and subnet routers.
+// mangle/OUTPUT (to save marks to conntrack), so routing decisions for reply
+// packets use the right table. Reverse path checks only see the restored mark
+// if they're mark-aware (see NetfilterRunner.AddConnmarkSaveRule).
 func (n *nftablesRunner) AddConnmarkSaveRule() error {
 	conn := n.conn
 
