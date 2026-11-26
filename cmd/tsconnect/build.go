@@ -51,8 +51,8 @@ func runBuild() {
 		log.Fatalf("Cannot write metadata: %v", err)
 	}
 
-	if er := precompressDist(*fastCompression); err != nil {
-		log.Fatalf("Cannot precompress resources: %v", er)
+	if err := precompressDist(*fastCompression); err != nil {
+		log.Fatalf("Cannot precompress resources: %v", err)
 	}
 }
 
