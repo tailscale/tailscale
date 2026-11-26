@@ -303,6 +303,11 @@ type Pod struct {
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
 	// +optional
 	PriorityClassName string `json:"priorityClassName,omitempty"`
+	// RuntimeClassName for the proxy Pod.
+	// By default Tailscale Kubernetes operator does not apply any runtime class.
+	// https://kubernetes.io/docs/concepts/containers/runtime-class/
+	// +optional
+	RuntimeClassName *string `json:"runtimeClassName,omitempty"`
 	// DNSPolicy defines how DNS will be configured for the proxy Pod.
 	// By default the Tailscale Kubernetes Operator does not set a DNS policy (uses cluster default).
 	// https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-s-dns-policy

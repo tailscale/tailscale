@@ -78,6 +78,7 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 					Affinity:          &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{}}},
 					Tolerations:       []corev1.Toleration{{Key: "", Operator: "Exists"}},
 					PriorityClassName: "high-priority",
+					RuntimeClassName:  new("some-runtime"),
 					TopologySpreadConstraints: []corev1.TopologySpreadConstraint{
 						{
 							WhenUnsatisfiable: "DoNotSchedule",
@@ -210,6 +211,7 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	wantSS.Spec.Template.Spec.InitContainers[0].Image = "ghcr.io/my-repo/tailscale:v0.01testsomething"
 	wantSS.Spec.Template.Spec.InitContainers[0].ImagePullPolicy = "IfNotPresent"
 	wantSS.Spec.Template.Spec.PriorityClassName = proxyClassAllOpts.Spec.StatefulSet.Pod.PriorityClassName
+	wantSS.Spec.Template.Spec.RuntimeClassName = proxyClassAllOpts.Spec.StatefulSet.Pod.RuntimeClassName
 	wantSS.Spec.Template.Spec.DNSPolicy = corev1.DNSClusterFirstWithHostNet
 	wantSS.Spec.Template.Spec.DNSConfig = proxyClassAllOpts.Spec.StatefulSet.Pod.DNSConfig
 
@@ -251,6 +253,7 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	wantSS.Spec.Template.Spec.Containers[0].ImagePullPolicy = "IfNotPresent"
 	wantSS.Spec.Template.Spec.Containers[0].Image = "ghcr.io/my-repo/tailscale:v0.01testsomething"
 	wantSS.Spec.Template.Spec.PriorityClassName = proxyClassAllOpts.Spec.StatefulSet.Pod.PriorityClassName
+	wantSS.Spec.Template.Spec.RuntimeClassName = proxyClassAllOpts.Spec.StatefulSet.Pod.RuntimeClassName
 	wantSS.Spec.Template.Spec.DNSPolicy = corev1.DNSClusterFirstWithHostNet
 	wantSS.Spec.Template.Spec.DNSConfig = proxyClassAllOpts.Spec.StatefulSet.Pod.DNSConfig
 	gotSS = applyProxyClassToStatefulSet(proxyClassAllOpts, userspaceProxySS.DeepCopy(), new(tailscaleSTSConfig), zl.Sugar())

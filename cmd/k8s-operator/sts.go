@@ -1141,6 +1141,7 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 	ss.Spec.Template.Spec.Affinity = wantsPod.Affinity
 	ss.Spec.Template.Spec.Tolerations = wantsPod.Tolerations
 	ss.Spec.Template.Spec.PriorityClassName = wantsPod.PriorityClassName
+	ss.Spec.Template.Spec.RuntimeClassName = wantsPod.RuntimeClassName
 	ss.Spec.Template.Spec.TopologySpreadConstraints = wantsPod.TopologySpreadConstraints
 	if wantsPod.DNSPolicy != nil {
 		ss.Spec.Template.Spec.DNSPolicy = *wantsPod.DNSPolicy

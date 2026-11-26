@@ -846,6 +846,11 @@ func (in *Pod) DeepCopyInto(out *Pod) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.RuntimeClassName != nil {
+		in, out := &in.RuntimeClassName, &out.RuntimeClassName
+		*out = new(string)
+		**out = **in
+	}
 	if in.DNSPolicy != nil {
 		in, out := &in.DNSPolicy, &out.DNSPolicy
 		*out = new(corev1.DNSPolicy)
