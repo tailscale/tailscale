@@ -27,6 +27,7 @@ import (
 	"github.com/tailscale/netlink"
 	"go4.org/netipx"
 	"golang.org/x/sys/unix"
+	"golang.org/x/time/rate"
 	"tailscale.com/envknob"
 	"tailscale.com/net/netmon"
 	"tailscale.com/tstest"
@@ -369,6 +370,32 @@ func TestUnderlaySrcRulesCap(t *testing.T) {
 	}
 }
 
+// TestUnderlaySrcRulesRestore checks that rules deleted by another process
+// (e.g. systemd-networkd flushing foreign rules) are re-installed, and that
+// restoring while they still exist doesn't duplicate them.
+func TestUnderlaySrcRulesRestore(t *testing.T) {
+	lr, fake := newTestLinuxRouter(t)
+	setTestUnderlayAddrs(lr, []netip.Addr{
+		netip.MustParseAddr("192.168.1.5"),
+		netip.MustParseAddr("2001:db8::5"),
+	})
+	if err := lr.Set(exitConfig("0.0.0.0/0", "::/0")); err != nil {
+		t.Fatal(err)
+	}
+	checkUnderlayRules(t, fake, "192.168.1.5", "2001:db8::5")
+
+	// Restore with everything present: no duplicates.
+	lr.restoreUnderlaySrcRules()
+	checkUnderlayRules(t, fake, "192.168.1.5", "2001:db8::5")
+
+	// External flush of one rule.
+	fake.rules = slices.DeleteFunc(fake.rules, func(s string) bool {
+		return strings.Contains(s, "from 192.168.1.5 ")
+	})
+	lr.restoreUnderlaySrcRules()
+	checkUnderlayRules(t, fake, "192.168.1.5", "2001:db8::5")
+}
+
 // TestUnderlaySrcRulesInRestoreRange ensures the rule priority is inside the
 // range onIPRuleDeleted reacts to and below the table 52 catch-all.
 func TestUnderlaySrcRulesInRestoreRange(t *testing.T) {
@@ -606,10 +633,13 @@ func underlayRulesKernelChild(t *testing.T) {
 	mon.Start()
 	defer mon.Close()
 	// Count rule restores so we can detect restore feedback loops.
-	var restores atomic.Int32
+	var restores, repairs atomic.Int32
 	logf := func(format string, args ...any) {
 		if strings.Contains(format, "deleted ip rules; restoring") {
 			restores.Add(1)
+		}
+		if strings.Contains(format, "rp_filter underlay rule(s) deleted by another process") {
+			repairs.Add(1)
 		}
 		t.Logf(format, args...)
 	}
@@ -617,13 +647,17 @@ func underlayRulesKernelChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Capture the router's timers instead of letting them run on the wall
-	// clock, so the assertions below can run them and wait for them rather
-	// than sleep.
+	// Capture the router's restore and repair timers instead of letting
+	// them run on the wall clock, so the assertions below can run them and
+	// wait for them rather than sleep.
 	var timers routerTimers
 	lr := newTestRouter(logf, tunName, mon, osCommandRunner{}, nil, bus, func(r *linuxRouter) {
 		r.nfr = NewFakeOS(t).nfr // netfilter isn't under test
 		r.interfaceV6Usable = func() bool { return true }
+		// A repair budget that never refills, enough for the test's few
+		// genuine external deletions only: if our own rule churn spent
+		// it, the later repairs would never happen.
+		r.underlayRepairLimiter = rate.NewLimiter(rate.Every(time.Hour), 5)
 		r.afterFunc = timers.afterFunc
 	})
 
@@ -983,6 +1017,38 @@ func underlayRulesKernelChild(t *testing.T) {
 	if n := restores.Load(); n != 0 {
 		t.Fatalf("%d rule restores triggered by our own rule churn; want 0", n)
 	}
+	if n := repairs.Load(); n != 0 {
+		t.Fatalf("%d rule repairs re-added rules after our own churn; want 0", n)
+	}
+
+	// Our own rule churn mustn't use up the repair budget (review finding):
+	// toggle the exit node a dozen times (each removes and re-adds our
+	// rules), then check an external deletion is still repaired promptly.
+	for range 12 {
+		if err := lr.Set(noExit); err != nil {
+			t.Fatal(err)
+		}
+		if err := lr.Set(cfg); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "rules back after exit node toggle", func() bool {
+			return slices.Contains(kernelUnderlayRules(t, lr), local4)
+		})
+	}
+	quiesce(t, lr, bus, &timers)
+	restoresBefore, repairsBefore := restores.Load(), repairs.Load()
+	if err := delIPRule(lr.underlayIPRule(underlayRule{fam: v4, src: local4})); err != nil {
+		t.Fatal(err)
+	}
+	waitForTimers(t, &timers, "external deletion after our own churn repaired (churn used up the rate limit?)", func() bool {
+		return slices.Contains(kernelUnderlayRules(t, lr), local4)
+	})
+	quiesce(t, lr, bus, &timers)
+	if r, p := restores.Load()-restoresBefore, repairs.Load()-repairsBefore; r != 0 || p != 1 {
+		t.Fatalf("after churn and one external delete: %d restores, %d repairs; want 0 and 1", r, p)
+	}
+	restores.Store(0)
+	repairs.Store(0)
 
 	// With a loose (or no) kernel rp_filter, the IPv4 rules aren't needed
 	// and aren't installed; IPv6 has no kernel rp_filter, so its stay.
@@ -1009,6 +1075,99 @@ func underlayRulesKernelChild(t *testing.T) {
 	})
 	if err := replyPasses(); err != nil {
 		t.Fatalf("back to strict rp_filter: reply validation failed: %v", err)
+	}
+	quiesce(t, lr, bus, &timers)
+	restores.Store(0)
+	repairs.Store(0)
+
+	// A lone external deletion of just one underlay rule (base rules
+	// untouched, so no full restore) is repaired by the add-only path.
+	if err := delIPRule(lr.underlayIPRule(underlayRule{fam: v6, src: local6})); err != nil {
+		t.Fatal(err)
+	}
+	waitForTimers(t, &timers, "repair after lone external delete", func() bool {
+		return slices.Contains(kernelUnderlayRules(t, lr), local6)
+	})
+	quiesce(t, lr, bus, &timers)
+	if r, p := restores.Load(), repairs.Load(); r != 0 || p != 1 {
+		t.Fatalf("after lone delete: %d restores, %d repairs; want 0 and 1", r, p)
+	}
+
+	// The same for the magicsock port rule, whose deletion event carries
+	// attributes newer kernels added (FRA_SPORT_MASK, from 6.15): netmon
+	// must still parse it, or the rule is never repaired (review finding).
+	lr.mu.Lock()
+	portRule := underlayRule{fam: v4, src: local4, port: lr.underlayMagicsockPortV4}
+	lr.mu.Unlock()
+	// Other addresses (lan0's) have port rules too, so look for this one.
+	hasPortRule := func() bool {
+		t.Helper()
+		rules, err := listIPRules(v4)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.ContainsFunc(rules, func(ru ipRule) bool {
+			u, ok := lr.underlayRuleOf(ru)
+			return ok && u == portRule
+		})
+	}
+	if portRule.port == 0 || !hasPortRule() {
+		t.Fatalf("no port rule %v installed to delete", portRule)
+	}
+	restores.Store(0)
+	repairs.Store(0)
+	if err := delIPRule(lr.underlayIPRule(portRule)); err != nil {
+		t.Fatal(err)
+	}
+	if hasPortRule() {
+		t.Fatalf("port rule %v still there after deleting it", portRule)
+	}
+	waitForTimers(t, &timers, "repair after external port rule delete", hasPortRule)
+	quiesce(t, lr, bus, &timers)
+	if r, p := restores.Load(), repairs.Load(); r != 0 || p != 1 {
+		t.Fatalf("after port rule delete: %d restores, %d repairs; want 0 and 1", r, p)
+	}
+
+	// An external flush (as systemd-networkd's
+	// ManageForeignRoutingPolicyRules does) removes the base rules and the
+	// underlay source rules; both are repaired.
+	catchAll := netlink.NewRule()
+	catchAll.Priority = lr.ipPolicyPrefBase + 70
+	catchAll.Family = netlink.FAMILY_V4
+	catchAll.Table = tailscaleRouteTable.Num
+	if err := netlink.RuleDel(catchAll); err != nil {
+		t.Fatal(err)
+	}
+	catchAll6 := *catchAll
+	catchAll6.Family = netlink.FAMILY_V6
+	if err := netlink.RuleDel(&catchAll6); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range []underlayRule{{fam: v4, src: local4}, {fam: v4}} {
+		if err := delIPRule(lr.underlayIPRule(u)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The add-only repair (underlay rules) and the full restore (base
+	// rules, including the table 52 catch-all) run on separate timers;
+	// wait for both.
+	waitForTimers(t, &timers, "restore after external flush", func() bool {
+		return slices.Contains(kernelUnderlayRules(t, lr), local4) &&
+			slices.Contains(kernelSuppressRules(t, lr), v4) &&
+			routeDev(remote4, netip.Addr{}) == tunName &&
+			routeDev(remote6, netip.Addr{}) == tunName
+	})
+	if err := replyPasses(); err != nil {
+		t.Fatalf("after restore: reply validation failed: %v", err)
+	}
+	for _, dst := range []netip.Addr{remote4, remote6} {
+		if got := routeDev(dst, netip.Addr{}); got != tunName {
+			t.Fatalf("after restore: route to %v via %s, want %s (catch-all not restored?)", dst, got, tunName)
+		}
+	}
+	quiesce(t, lr, bus, &timers)
+	if n := restores.Load(); n != 1 {
+		t.Fatalf("got %d rule restores after one external flush; want exactly 1 (feedback loop?)", n)
 	}
 
 	// Exit node off: rules removed.
@@ -1215,8 +1374,8 @@ func waitForTimers(t *testing.T, timers *routerTimers, what string, cond func() 
 // routerTimers records the timers a router schedules through
 // routerFixed.afterFunc instead of arming them on the wall clock, so a test
 // runs them exactly when it needs their effect. A func that reschedules
-// itself (a recheck) stays queued for the next drain, which is what the
-// router would do in production.
+// itself (a repair the rate limiter deferred) stays queued for the next
+// drain, which is what the router would do in production.
 type routerTimers struct {
 	mu      sync.Mutex
 	pending []func()
@@ -1248,7 +1407,7 @@ func (rt *routerTimers) drain() {
 }
 
 // quiesce settles lr before assertions that count what it did: it runs every
-// timer lr has scheduled, and waits until the bus has delivered
+// restore or repair lr has scheduled, and waits until the bus has delivered
 // every event published so far to lr's callbacks. What remains in flight
 // after that is only a netlink event the kernel hasn't delivered yet, which
 // waitFor's polling bounds; the wall-clock sleeps this replaced bounded
@@ -1562,6 +1721,37 @@ func TestUnderlayRulesRemovedLastOnClose(t *testing.T) {
 	checkUnderlayRules(t, fake)
 }
 
+// TestUnderlayRulesNeedSuppressRule checks that if a family's suppress rule
+// is lost and can't be re-added (as after a failed repair), its source rules
+// are removed rather than left in place, where they'd cut tailnet traffic
+// to the underlay addresses.
+func TestUnderlayRulesNeedSuppressRule(t *testing.T) {
+	lr, fake := newTestLinuxRouter(t)
+	setTestUnderlayAddrs(lr, []netip.Addr{netip.MustParseAddr("192.168.1.5")})
+	if err := lr.Set(exitConfig("0.0.0.0/0")); err != nil {
+		t.Fatal(err)
+	}
+	checkUnderlayRules(t, fake, "192.168.1.5")
+	// As reAddUnderlaySrcRulesLocked does when the re-add fails.
+	lr.mu.Lock()
+	lr.underlaySrcRules.Delete(underlayRule{fam: v4})
+	lr.mu.Unlock()
+	fake.rules = slices.DeleteFunc(fake.rules, func(r string) bool { return strings.Contains(r, " pref 5255 ") })
+	fake.failRun = func(args []string) error {
+		if strings.Contains(strings.Join(args, " "), "rule add pref 5255") {
+			return errors.New("exitcode:1")
+		}
+		return nil
+	}
+	lr.onNetworkChange()
+	if n := underlaySrcRuleCount(fake, "-4"); n != 0 {
+		t.Errorf("%d source rules left without their suppress rule", n)
+	}
+	fake.failRun = nil
+	lr.onNetworkChange()
+	checkUnderlayRules(t, fake, "192.168.1.5")
+}
+
 // TestUnderlayPortRuleWithoutNetfilter checks that the magicsock port rule
 // follows the port even when the netfilter magicsock rule fails (review
 // finding: the port was only recorded after netfilter succeeded, so no
@@ -1620,6 +1810,52 @@ func TestUnderlayAddrsLinkLocalLast(t *testing.T) {
 	}
 	if n := underlaySrcRuleCount(fake, "-6"); n != maxUnderlaySrcRulesPerFamily {
 		t.Errorf("got %d IPv6 source rules, want the cap %d", n, maxUnderlaySrcRulesPerFamily)
+	}
+}
+
+// TestUnderlayRepairRateLimited checks that re-adding underlay rules that
+// another process keeps deleting is rate limited, like the base rule
+// restore, and that repairs which find nothing missing (our own deletions)
+// don't use up the budget (review findings).
+func TestUnderlayRepairRateLimited(t *testing.T) {
+	r := &linuxRouter{routerFixed: routerFixed{underlayRepairLimiter: rate.NewLimiter(rate.Every(5*time.Second), 3)}}
+	// Our own deletions: nothing missing, no tokens used.
+	for range 20 {
+		if d := r.underlayRepairWait(0); d != 0 {
+			t.Fatalf("repair with nothing missing waits %v, want 0", d)
+		}
+	}
+	if tok := r.underlayRepairLimiter.Tokens(); tok < 2.9 {
+		t.Fatalf("repairs with nothing missing used tokens: %.1f left of 3", tok)
+	}
+	// Real external deletions: the burst goes through, then it waits.
+	for i := range 3 {
+		if d := r.underlayRepairWait(1); d != 0 {
+			t.Fatalf("repair %d within the burst waits %v, want 0", i, d)
+		}
+	}
+	d := r.underlayRepairWait(1)
+	if d < 4*time.Second {
+		t.Fatalf("repair beyond the burst waits %v, want about 5s", d)
+	}
+	// Waiting didn't take a token: asking again gives the same wait.
+	if d2 := r.underlayRepairWait(1); d2 < d-time.Second {
+		t.Errorf("second wait %v much shorter than first %v; the first held a reservation", d2, d)
+	}
+
+	// Scheduling isn't limited, but coalesces while a repair is pending.
+	var scheduled int
+	r2 := &linuxRouter{
+		routerFixed: routerFixed{
+			ipRuleAvailable: true,
+			cmd:             osCommandRunner{},
+			afterFunc:       func(time.Duration, func()) { scheduled++ },
+		},
+	}
+	r2.scheduleUnderlaySrcRuleRepair()
+	r2.scheduleUnderlaySrcRuleRepair()
+	if scheduled != 1 {
+		t.Errorf("scheduled %d repairs while one was pending, want 1", scheduled)
 	}
 }
 
@@ -1806,5 +2042,81 @@ func TestUnderlayErrorLoggedOnce(t *testing.T) {
 	mu.Unlock()
 	if got != 2 {
 		t.Errorf("after recovery and a new failure: logged %d times, want 2", got)
+	}
+}
+
+// TestMissingUnderlayRules checks that a family whose rules can't be listed
+// only counts its own tracked rules as missing, and that a family with no
+// tracked rules isn't listed at all (review finding: an IPv6 dump failure,
+// as on ipv6.disable=1 hosts, made every repair re-add every IPv4 rule too).
+func TestMissingUnderlayRules(t *testing.T) {
+	r := &linuxRouter{routerFixed: routerFixed{ipPolicyPrefBase: defaultIPPolicyPrefBase}}
+	src4 := underlayRule{fam: v4, src: netip.MustParseAddr("192.168.1.5")}
+	sup4 := underlayRule{fam: v4}
+	src6 := underlayRule{fam: v6, src: netip.MustParseAddr("2001:db8::5")}
+	sup6 := underlayRule{fam: v6}
+	kernel := func(us ...underlayRule) []ipRule {
+		var out []ipRule
+		for _, u := range us {
+			out = append(out, r.underlayIPRule(u))
+		}
+		return out
+	}
+	errV6 := errors.New("listing IPv6 rules: address family not supported")
+
+	for _, tt := range []struct {
+		name    string
+		tracked []underlayRule
+		list    map[addrFamily]func() ([]ipRule, error)
+		want    []underlayRule
+	}{
+		{
+			name:    "v6-dump-fails-v4-only",
+			tracked: []underlayRule{src4, sup4},
+			list: map[addrFamily]func() ([]ipRule, error){
+				v4: func() ([]ipRule, error) { return kernel(src4, sup4), nil },
+				// Not tracked, so not listed (a call here fails the test).
+			},
+			want: nil,
+		},
+		{
+			name:    "v6-dump-fails-both-tracked",
+			tracked: []underlayRule{src4, sup4, src6, sup6},
+			list: map[addrFamily]func() ([]ipRule, error){
+				v4: func() ([]ipRule, error) { return kernel(src4, sup4), nil },
+				v6: func() ([]ipRule, error) { return nil, errV6 },
+			},
+			want: []underlayRule{src6, sup6},
+		},
+		{
+			name:    "one-v4-missing",
+			tracked: []underlayRule{src4, sup4, src6, sup6},
+			list: map[addrFamily]func() ([]ipRule, error){
+				v4: func() ([]ipRule, error) { return kernel(sup4), nil },
+				v6: func() ([]ipRule, error) { return kernel(src6, sup6), nil },
+			},
+			want: []underlayRule{src4},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r.underlaySrcRules = set.Of(tt.tracked...)
+			got := r.missingUnderlayRules(func(fam addrFamily) ([]ipRule, error) {
+				f, ok := tt.list[fam]
+				if !ok {
+					t.Fatalf("listed family %v, which has no tracked rules", fam)
+				}
+				return f()
+			})
+			sortRules := func(us []underlayRule) {
+				slices.SortFunc(us, func(a, b underlayRule) int {
+					return strings.Compare(fmt.Sprint(a), fmt.Sprint(b))
+				})
+			}
+			sortRules(got)
+			sortRules(tt.want)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("missing = %v; want %v", got, tt.want)
+			}
+		})
 	}
 }

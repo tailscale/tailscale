@@ -565,6 +565,21 @@ func (r *linuxRouter) updateUnderlaySrcRulesLocked(addOnly bool) error {
 		r.underlaySrcRules.Add(u)
 		added++
 	}
+	// Never leave source or port rules installed without their family's
+	// suppress rule (for example after its re-add failed in a repair):
+	// they'd send tailnet traffic to the underlay addresses out the
+	// physical interface. Even in addOnly mode.
+	for _, u := range slices.Backward(slices.SortedFunc(r.underlaySrcRules.All(), compareUnderlayRules)) {
+		if u.isSuppress() || r.underlaySrcRules.Contains(underlayRule{fam: u.fam}) {
+			continue
+		}
+		if err := r.delUnderlayRule(u); err != nil {
+			errs = append(errs, fmt.Errorf("deleting rp_filter %v without its suppress rule: %w", u, err))
+			continue
+		}
+		r.underlaySrcRules.Delete(u)
+		removed++
+	}
 	if added > 0 || removed > 0 {
 		r.logf("rp_filter underlay rules: +%d -%d, now %d", added, removed, len(r.underlaySrcRules))
 	}
@@ -633,6 +648,34 @@ func (r *linuxRouter) removeUnderlaySrcRulesLocked() error {
 	return errors.Join(errs...)
 }
 
+// restoreUnderlaySrcRules re-installs underlay rules after some other
+// process (typically systemd-networkd) deleted ip rules in our priority range.
+// We can't tell which of ours were deleted, so re-add everything we track.
+//
+// With netlink the re-add is idempotent (EEXIST is ignored), so this never
+// deletes anything: deleting would emit RTM_DELRULE and feed back into
+// onIPRuleDeleted. The ip command can't distinguish "exists" reliably
+// enough, so there we delete and re-add; deletions at our priorities only
+// schedule an add-only repair (which needs netlink, so not with the tests'
+// fake runner), so that doesn't loop either.
+func (r *linuxRouter) restoreUnderlaySrcRules() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed.Load() || !r.ipRuleAvailable {
+		return
+	}
+	if r.underlayNetlinkUsable() {
+		r.reAddUnderlaySrcRulesLocked(slices.Collect(r.underlaySrcRules.All()))
+	} else {
+		if err := r.removeUnderlaySrcRulesLocked(); err != nil {
+			r.logf("restoring rp_filter underlay rules: %v", err)
+		}
+	}
+	if err := r.updateUnderlaySrcRulesLocked(false); err != nil {
+		r.logf("restoring rp_filter underlay rules: %v", err)
+	}
+}
+
 // underlayNetlinkUsable reports whether we can manage underlay rules via
 // netlink directly: always on a real system, even when the ip command is
 // forced (TS_DEBUG_USE_IP_COMMAND), as the ip command adds identical rules.
@@ -640,6 +683,171 @@ func (r *linuxRouter) removeUnderlaySrcRulesLocked() error {
 func (r *linuxRouter) underlayNetlinkUsable() bool {
 	_, ok := r.cmd.(osCommandRunner)
 	return ok
+}
+
+// reAddUnderlaySrcRulesLocked re-adds, via netlink, the given tracked
+// underlay rules, suppress rules first. It never deletes, so it emits no
+// RTM_DELRULE and can't feed back into onIPRuleDeleted. Rules that already
+// exist are left alone (EEXIST). It returns how many rules were actually
+// missing, and whether any re-add failed (the failed rules are no longer
+// tracked).
+//
+// r.mu must be held.
+func (r *linuxRouter) reAddUnderlaySrcRulesLocked(rules []underlayRule) (n int, failed bool) {
+	slices.SortFunc(rules, compareUnderlayRules)
+	for _, u := range rules {
+		err := addIPRule(r.underlayIPRule(u))
+		switch {
+		case err == nil:
+			n++
+		case errors.Is(err, errEEXIST):
+		default:
+			r.logf("restoring rp_filter %v: %v", u, err)
+			// Forget it so the next reconcile retries the add.
+			r.underlaySrcRules.Delete(u)
+			failed = true
+		}
+	}
+	return n, failed
+}
+
+// missingUnderlayRulesLocked returns the tracked underlay rules that aren't
+// in the kernel.
+//
+// r.mu must be held.
+func (r *linuxRouter) missingUnderlayRulesLocked() []underlayRule {
+	return r.missingUnderlayRules(listIPRules)
+}
+
+// missingUnderlayRules is missingUnderlayRulesLocked with the kernel's rule
+// listing passed in. It lists only the families it tracks rules for. If it
+// can't list a family's rules, it reports that family's tracked rules as
+// missing (re-adding is idempotent), but not the other family's: a host
+// whose IPv6 rule dump fails (ipv6.disable=1) mustn't have every IPv4 repair
+// re-add every rule and spend a rate limit token doing it.
+func (r *linuxRouter) missingUnderlayRules(list func(addrFamily) ([]ipRule, error)) []underlayRule {
+	var missing []underlayRule
+	for _, fam := range []addrFamily{v4, v6} {
+		var tracked []underlayRule
+		for u := range r.underlaySrcRules {
+			if u.fam == fam {
+				tracked = append(tracked, u)
+			}
+		}
+		if len(tracked) == 0 {
+			continue
+		}
+		rules, err := list(fam)
+		if err != nil {
+			missing = append(missing, tracked...)
+			continue
+		}
+		installed := set.Set[underlayRule]{}
+		for _, ru := range rules {
+			if u, ok := r.underlayRuleOf(ru); ok {
+				installed.Add(u)
+			}
+		}
+		for _, u := range tracked {
+			if !installed.Contains(u) {
+				missing = append(missing, u)
+			}
+		}
+	}
+	return missing
+}
+
+// underlayRuleOf returns which of our underlay rules the kernel rule ru is,
+// if any.
+func (r *linuxRouter) underlayRuleOf(ru ipRule) (underlayRule, bool) {
+	if !isOurUnderlayRule(ru, r.ipPolicyPrefBase) {
+		return underlayRule{}, false
+	}
+	u := underlayRule{fam: ru.family, src: ru.src}
+	switch int(ru.priority) {
+	case r.underlaySuppressRulePriority():
+		u.src = netip.Addr{}
+	case r.underlayPortRulePriority():
+		if ru.sportRange == nil {
+			return underlayRule{}, false
+		}
+		u.port = ru.sportRange[0]
+	}
+	return u, true
+}
+
+// underlaySrcRepairDelay is how long after a deletion at our priorities we
+// check for missing underlay rules, batching bursts of deletions.
+const underlaySrcRepairDelay = 250 * time.Millisecond
+
+// scheduleUnderlaySrcRuleRepair is called when a rule at an underlay rule
+// priority is deleted. Most such deletions are our own (address removed,
+// exit node turned off), but another process may have deleted one of ours
+// without touching the base rules, in which case nothing else would notice.
+// After a short delay we re-add any tracked rule that is missing. Since that
+// only ever adds, it can't cause further deletion events.
+//
+// It needs netlink; see underlayNetlinkUsable.
+func (r *linuxRouter) scheduleUnderlaySrcRuleRepair() {
+	if !r.ipRuleAvailable || !r.underlayNetlinkUsable() || r.closed.Load() {
+		return
+	}
+	if r.underlaySrcRepairPending.Swap(true) {
+		return
+	}
+	r.after(underlaySrcRepairDelay, r.repairUnderlaySrcRules)
+}
+
+// underlayRepairWait reports how long to wait before re-adding missing
+// underlay rules, or 0 to re-add them now. Like the base rule restore,
+// repairs are rate limited so we don't get into a high-speed fight with
+// another process deleting our rules. Only repairs that actually find
+// rules missing count: most deletions at our priorities are our own, and
+// they mustn't use up the budget for real ones.
+func (r *linuxRouter) underlayRepairWait(missing int) time.Duration {
+	lim := r.underlayRepairLimiter
+	if missing == 0 || lim == nil {
+		return 0
+	}
+	rr := lim.Reserve()
+	if d := rr.Delay(); d > 0 {
+		// Don't hold the reservation: we come back after d and take a
+		// token then.
+		rr.Cancel()
+		return d
+	}
+	return 0
+}
+
+func (r *linuxRouter) repairUnderlaySrcRules() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed.Load() {
+		r.underlaySrcRepairPending.Store(false)
+		return
+	}
+	missing := r.missingUnderlayRulesLocked()
+	if d := r.underlayRepairWait(len(missing)); d > 0 {
+		// Keep the repair pending, so deletions meanwhile don't schedule
+		// more, and come back when the rate limit allows.
+		r.after(d, r.repairUnderlaySrcRules)
+		return
+	}
+	r.underlaySrcRepairPending.Store(false)
+	if len(missing) == 0 {
+		return
+	}
+	n, failed := r.reAddUnderlaySrcRulesLocked(missing)
+	if n > 0 {
+		r.logf("re-added %d rp_filter underlay rule(s) deleted by another process", n)
+	}
+	if failed {
+		// Retry, and remove any source rules left without their
+		// suppress rule.
+		if err := r.updateUnderlaySrcRulesLocked(false); err != nil {
+			r.logf("repairing rp_filter underlay rules: %v", err)
+		}
+	}
 }
 
 // queueNetworkChange is the netmon.ChangeDelta eventbus callback. It must
