@@ -525,14 +525,15 @@ func runReconcilers(opts reconcilerOpts) {
 		Watches(&tsapi.ProxyGroup{}, servicesProxyGroupFilter).
 		Watches(&discoveryv1.EndpointSlice{}, ingressSvcFromEpsFilter).
 		Complete(&HAServiceReconciler{
-			recorder:    eventRecorder,
-			clients:     clients,
-			defaultTags: strings.Split(opts.proxyTags, ","),
-			Client:      mgr.GetClient(),
-			logger:      opts.log.Named("service-pg-reconciler"),
-			clock:       tstime.DefaultClock{},
-			operatorID:  id,
-			tsNamespace: opts.tailscaleNamespace,
+			recorder:         eventRecorder,
+			clients:          clients,
+			defaultTags:      strings.Split(opts.proxyTags, ","),
+			Client:           mgr.GetClient(),
+			logger:           opts.log.Named("service-pg-reconciler"),
+			clock:            tstime.DefaultClock{},
+			operatorID:       id,
+			tsNamespace:      opts.tailscaleNamespace,
+			ingressClassName: opts.ingressClassName,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create service-pg-reconciler: %v", err)
