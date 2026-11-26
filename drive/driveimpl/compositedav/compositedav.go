@@ -224,10 +224,10 @@ func (h *Handler) GetChild(name string) *Child {
 
 // Close closes this Handler, including closing all idle connections on children.
 func (h *Handler) Close() {
-	h.childrenMu.RLock()
+	h.childrenMu.Lock()
 	oldChildren := h.children
 	h.children = nil
-	h.childrenMu.RUnlock()
+	h.childrenMu.Unlock()
 
 	for _, child := range oldChildren {
 		child.CloseIdleConnections()
