@@ -41,6 +41,9 @@ func TestRange(t *testing.T) {
 		{"bytes=0-5,2-3", []Range{{0, 6}, {2, 2}}, true, true},
 		{"bytes=2-3,0-5", []Range{{2, 2}, {0, 6}}, true, true},
 		{"bytes=0-5,2-,-5", []Range{{0, 6}, {2, 0}, {0, -5}}, true, true},
+		{"bytes=1-3,", []Range{{1, 3}}, true, false},
+		{"bytes=1-3, ,\t,5-", []Range{{1, 3}, {5, 0}}, true, false},
+		{"bytes=,", nil, false, false},
 	}
 
 	for _, tt := range tests {
