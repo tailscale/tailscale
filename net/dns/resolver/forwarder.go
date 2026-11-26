@@ -325,6 +325,7 @@ type forwarder struct {
 	mu syncs.Mutex // guards following
 
 	dohClient map[string]*http.Client // urlBase -> client
+	nextDNS   nextDNSSteering
 
 	// routes are per-suffix resolvers to use, with
 	// the most specific routes first.
@@ -603,7 +604,7 @@ func dohClientCacheKey(urlBase string, bootstrap []netip.Addr) string {
 // the given IPs, caching the client under cacheKey (which differs from
 // urlBase when bootstrap results vary). f.mu must be held.
 func (f *forwarder) newDoHClientLocked(cacheKey, urlBase string, allIPs []netip.Addr) (c *http.Client, ok bool) {
-	c, ok = f.newDoHClient(urlBase, allIPs)
+	c, ok = f.newDoHClient(urlBase, allIPs, 0)
 	if !ok {
 		return nil, false
 	}
@@ -612,8 +613,8 @@ func (f *forwarder) newDoHClientLocked(cacheKey, urlBase string, allIPs []netip.
 }
 
 // newDoHClient builds a DoH HTTP client that dials urlBase's host only at
-// allIPs.
-func (f *forwarder) newDoHClient(urlBase string, allIPs []netip.Addr) (c *http.Client, ok bool) {
+// allIPs. If dialTimeout is non-zero, it limits each dial and TLS handshake.
+func (f *forwarder) newDoHClient(urlBase string, allIPs []netip.Addr, dialTimeout time.Duration) (c *http.Client, ok bool) {
 	dohURL, err := url.Parse(urlBase)
 	if err != nil {
 		return nil, false
@@ -641,9 +642,15 @@ func (f *forwarder) newDoHClient(urlBase string, allIPs []netip.Addr) (c *http.C
 				if !strings.HasPrefix(netw, "tcp") {
 					return nil, fmt.Errorf("unexpected network %q", netw)
 				}
+				if dialTimeout > 0 {
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithTimeout(ctx, dialTimeout)
+					defer cancel()
+				}
 				return dialer(ctx, netw, addr)
 			},
-			TLSClientConfig: tlsConfig,
+			TLSHandshakeTimeout: dialTimeout,
+			TLSClientConfig:     tlsConfig,
 		},
 	}
 	return c, true
@@ -744,7 +751,7 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		// URL's host is an IP literal, since we cannot resolve the DoH
 		// server's own name through DNS without recursing through ourselves.
 		if hc, ok := f.getDoHClientForResolver(rr.name); ok {
-			res, err := f.sendDoH(ctx, rr.name.Addr, hc, fq.packet)
+			res, err := f.sendDoHSteered(ctx, rr.name.Addr, hc, fq.packet)
 			if err != nil {
 				return nil, err
 			}

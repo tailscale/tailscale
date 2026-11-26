@@ -89,6 +89,11 @@ func isSlashOrQuestionMark(r rune) bool {
 	return r == '/' || r == '?'
 }
 
+// IsNextDNS reports whether dohBase is a NextDNS DoH base URL.
+func IsNextDNS(dohBase string) bool {
+	return strings.HasPrefix(dohBase, nextDNSBase)
+}
+
 // DoHIPsOfBase returns the IP addresses to use to dial the provided DoH base
 // URL.
 //
@@ -107,15 +112,12 @@ func DoHIPsOfBase(dohBase string) []netip.Addr {
 			hexStr = hexStr[:i]
 		}
 
-		// TODO(bradfitz): using the NextDNS anycast addresses works but is not
-		// ideal. Some of their regions have better latency via a non-anycast IP
-		// which we could get by first resolving A/AAAA "dns.nextdns.io" over
-		// DoH using their anycast address. For now we only use the anycast
-		// addresses. The IPv4 IPs we use are just the first one in their ranges.
-		// For IPv6 we put the profile ID in the lower bytes, but that seems just
-		// conventional for them and not required (it'll already be in the DoH path).
-		// (Really we shouldn't use either IPv4 or IPv6 anycast for DoH once we
-		// resolve "dns.nextdns.io".)
+		// These are the NextDNS anycast addresses. The DNS forwarder uses them
+		// to resolve "dns.nextdns.io" over DoH and then prefers the unicast IPs
+		// in the answer. The IPv4 IPs we use are just the first one in their
+		// ranges. For IPv6 we put the profile ID in the lower bytes, but that
+		// seems just conventional for them and not required (it'll already be
+		// in the DoH path).
 		if b, err := hex.DecodeString(hexStr); err == nil && len(b) <= 12 && len(b) > 0 {
 			return []netip.Addr{
 				nextDNSv4One,
