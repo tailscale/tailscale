@@ -603,6 +603,17 @@ func dohClientCacheKey(urlBase string, bootstrap []netip.Addr) string {
 // the given IPs, caching the client under cacheKey (which differs from
 // urlBase when bootstrap results vary). f.mu must be held.
 func (f *forwarder) newDoHClientLocked(cacheKey, urlBase string, allIPs []netip.Addr) (c *http.Client, ok bool) {
+	c, ok = f.newDoHClient(urlBase, allIPs)
+	if !ok {
+		return nil, false
+	}
+	mak.Set(&f.dohClient, cacheKey, c)
+	return c, true
+}
+
+// newDoHClient builds a DoH HTTP client that dials urlBase's host only at
+// allIPs.
+func (f *forwarder) newDoHClient(urlBase string, allIPs []netip.Addr) (c *http.Client, ok bool) {
 	dohURL, err := url.Parse(urlBase)
 	if err != nil {
 		return nil, false
@@ -635,10 +646,6 @@ func (f *forwarder) newDoHClientLocked(cacheKey, urlBase string, allIPs []netip.
 			TLSClientConfig: tlsConfig,
 		},
 	}
-	if f.dohClient == nil {
-		f.dohClient = map[string]*http.Client{}
-	}
-	f.dohClient[cacheKey] = c
 	return c, true
 }
 
