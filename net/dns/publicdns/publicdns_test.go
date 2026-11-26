@@ -95,6 +95,7 @@ func TestDoHIPsOfBase(t *testing.T) {
 		}
 		return
 	}
+	nextDNSIPs := ips("45.90.28.0", "45.90.30.0", "2a07:a8c0::", "2a07:a8c1::")
 	tests := []struct {
 		base string
 		want []netip.Addr
@@ -103,59 +104,12 @@ func TestDoHIPsOfBase(t *testing.T) {
 			base: "https://cloudflare-dns.com/dns-query",
 			want: ips("1.1.1.1", "1.0.0.1", "2606:4700:4700::1111", "2606:4700:4700::1001"),
 		},
-		{
-			base: "https://dns.nextdns.io/",
-			want: ips(),
-		},
-		{
-			base: "https://dns.nextdns.io/ff",
-			want: ips(
-				"45.90.28.0",
-				"45.90.30.0",
-				"2a07:a8c0::ff",
-				"2a07:a8c1::ff",
-			),
-		},
-		{
-			base: "https://dns.nextdns.io/c3a884",
-			want: ips(
-				"45.90.28.0",
-				"45.90.30.0",
-				"2a07:a8c0::c3:a884",
-				"2a07:a8c1::c3:a884",
-			),
-		},
-		{
-			base: "https://dns.nextdns.io/112233445566778899aabbcc",
-			want: ips(
-				"45.90.28.0",
-				"45.90.30.0",
-				"2a07:a8c0:1122:3344:5566:7788:99aa:bbcc",
-				"2a07:a8c1:1122:3344:5566:7788:99aa:bbcc",
-			),
-		},
-		{
-			base: "https://dns.nextdns.io/112233445566778899aabbccdd",
-			want: ips(), // nothing; profile length is over 12 bytes
-		},
-		{
-			base: "https://dns.nextdns.io/c3a884/with/more/stuff",
-			want: ips(
-				"45.90.28.0",
-				"45.90.30.0",
-				"2a07:a8c0::c3:a884",
-				"2a07:a8c1::c3:a884",
-			),
-		},
-		{
-			base: "https://dns.nextdns.io/c3a884?with=query&params",
-			want: ips(
-				"45.90.28.0",
-				"45.90.30.0",
-				"2a07:a8c0::c3:a884",
-				"2a07:a8c1::c3:a884",
-			),
-		},
+		{base: "https://dns.nextdns.io/", want: nextDNSIPs},
+		{base: "https://dns.nextdns.io/c3a884", want: nextDNSIPs},
+		{base: "https://dns.nextdns.io/c2ke6y", want: nextDNSIPs},
+		{base: "https://dns.nextdns.io/c2ke6y/with/more/stuff", want: nextDNSIPs},
+		{base: "https://dns.nextdns.io/c2ke6y?device_name=laptop", want: nextDNSIPs},
+		{base: "https://dns.nextdns.io.example/c2ke6y", want: nil},
 		{
 			base: "https://dns.controld.com/hyq3ipr2ct",
 			want: ips(

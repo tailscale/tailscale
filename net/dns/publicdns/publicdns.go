@@ -7,7 +7,6 @@ package publicdns
 
 import (
 	"bytes"
-	"encoding/hex"
 	"fmt"
 	"net/netip"
 	"slices"
@@ -42,9 +41,7 @@ func DoHEndpointFromIP(ip netip.Addr) (dohBase string, dohOnly bool, ok bool) {
 		return b, false, true
 	}
 
-	// NextDNS DoH URLs are of the form "https://dns.nextdns.io/c3a884"
-	// where the path component is the lower 12 bytes of the IPv6 address
-	// in lowercase hex without any zero padding.
+	// Legacy NextDNS IPv6 resolver addresses carry the hex profile ID in their low bytes.
 	if nextDNSv6RangeA.Contains(ip) || nextDNSv6RangeB.Contains(ip) {
 		a := ip.As16()
 		var sb strings.Builder
@@ -85,44 +82,26 @@ func KnownDoHPrefixes() []string {
 	return ret
 }
 
-func isSlashOrQuestionMark(r rune) bool {
-	return r == '/' || r == '?'
-}
-
 // DoHIPsOfBase returns the IP addresses to use to dial the provided DoH base
-// URL.
-//
-// It is basically the inverse of DoHEndpointFromIP with the exception that for
-// NextDNS it returns IPv4 addresses that DoHEndpointFromIP doesn't map back.
+// URL. NextDNS and Control D profile URLs use shared addresses.
 func DoHIPsOfBase(dohBase string) []netip.Addr {
 	populateOnce.Do(populate)
 	if s := dohIPsOfBase[dohBase]; len(s) > 0 {
 		return s
 	}
-	if hexStr, ok := strings.CutPrefix(dohBase, nextDNSBase); ok {
-		// The path is of the form /<profile-hex>[/<hostname>/<model>/<device id>...]
-		// or /<profile-hex>?<query params>
-		// but only the <profile-hex> is required. Ignore the rest:
-		if i := strings.IndexFunc(hexStr, isSlashOrQuestionMark); i != -1 {
-			hexStr = hexStr[:i]
-		}
-
+	if strings.HasPrefix(dohBase, nextDNSBase) {
 		// TODO(bradfitz): using the NextDNS anycast addresses works but is not
 		// ideal. Some of their regions have better latency via a non-anycast IP
 		// which we could get by first resolving A/AAAA "dns.nextdns.io" over
 		// DoH using their anycast address. For now we only use the anycast
-		// addresses. The IPv4 IPs we use are just the first one in their ranges.
-		// For IPv6 we put the profile ID in the lower bytes, but that seems just
-		// conventional for them and not required (it'll already be in the DoH path).
+		// addresses.
 		// (Really we shouldn't use either IPv4 or IPv6 anycast for DoH once we
 		// resolve "dns.nextdns.io".)
-		if b, err := hex.DecodeString(hexStr); err == nil && len(b) <= 12 && len(b) > 0 {
-			return []netip.Addr{
-				nextDNSv4One,
-				nextDNSv4Two,
-				nextDNSv6Gen(nextDNSv6RangeA.Addr(), b),
-				nextDNSv6Gen(nextDNSv6RangeB.Addr(), b),
-			}
+		return []netip.Addr{
+			nextDNSv4One,
+			nextDNSv4Two,
+			nextDNSv6One,
+			nextDNSv6Two,
 		}
 	}
 	if strings.HasPrefix(dohBase, controlDBase) {
@@ -296,25 +275,16 @@ func populate() {
 }
 
 var (
-	// The NextDNS IPv6 ranges (primary and secondary). The customer ID is
-	// encoded in the lower bytes and is used (in hex form) as the DoH query
-	// path.
-	nextDNSv6RangeA = netip.MustParsePrefix("2a07:a8c0::/33")
-	nextDNSv6RangeB = netip.MustParsePrefix("2a07:a8c1::/33")
-
-	// The first two IPs in the /24 v4 ranges can be used for DoH to NextDNS.
-	//
-	// They're Anycast and usually okay, but NextDNS has some locations that
-	// don't do BGP and can get results for querying them over DoH to find the
-	// IPv4 address of "dns.mynextdns.io" and find an even better result.
-	//
-	// Note that the Tailscale DNS client does not do any of the "IP address
-	// linking" that NextDNS can do with its IPv4 addresses. These addresses
-	// are only used for DoH.
+	// The first address in each NextDNS range serves DoH for every profile.
+	// DoH works independently of NextDNS IPv4 address linking.
 	nextDNSv4RangeA = netip.MustParsePrefix("45.90.28.0/24")
 	nextDNSv4RangeB = netip.MustParsePrefix("45.90.30.0/24")
+	nextDNSv6RangeA = netip.MustParsePrefix("2a07:a8c0::/33")
+	nextDNSv6RangeB = netip.MustParsePrefix("2a07:a8c1::/33")
 	nextDNSv4One    = nextDNSv4RangeA.Addr()
 	nextDNSv4Two    = nextDNSv4RangeB.Addr()
+	nextDNSv6One    = nextDNSv6RangeA.Addr()
+	nextDNSv6Two    = nextDNSv6RangeB.Addr()
 
 	// Wikimedia DNS server IPs (anycast)
 	wikimediaDNSv4Addr = netip.MustParseAddr(wikimediaDNSv4)
@@ -329,17 +299,6 @@ var (
 	controlDv6One    = netip.MustParseAddr("2606:1a40::22")
 	controlDv6Two    = netip.MustParseAddr("2606:1a40:1::22")
 )
-
-// nextDNSv6Gen generates a NextDNS IPv6 address from the upper 8 bytes in the
-// provided ip and using id as the lowest 0-8 bytes.
-func nextDNSv6Gen(ip netip.Addr, id []byte) netip.Addr {
-	if len(id) > 12 {
-		return netip.Addr{}
-	}
-	a := ip.As16()
-	copy(a[16-len(id):], id)
-	return netip.AddrFrom16(a)
-}
 
 // IPIsDoHOnlyServer reports whether ip is a DNS server that should only use
 // DNS-over-HTTPS (not regular port 53 DNS).
