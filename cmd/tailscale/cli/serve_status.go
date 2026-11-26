@@ -11,6 +11,7 @@ import (
 	"net"
 	"slices"
 	"strconv"
+	"strings"
 
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -41,6 +42,7 @@ func printServeStatusTrees(sc *ipn.ServeConfig, st *ipnstate.Status) error {
 		}
 		printf("\n")
 	}
+	printRedirectsToHTTPS(sc.TCP, strings.TrimSuffix(st.Self.DNSName, "."), noService)
 	for _, hp := range slices.Sorted(maps.Keys(sc.Web)) {
 		_, portStr, _ := net.SplitHostPort(string(hp))
 		port, err := parseServePort(portStr)
@@ -60,6 +62,31 @@ func printServeStatusTrees(sc *ipn.ServeConfig, st *ipnstate.Status) error {
 		}
 	}
 	return nil
+}
+
+// printRedirectsToHTTPS prints one line for each port in tcp that answers
+// plaintext HTTP with a redirect to HTTPS, naming where it sends people.
+func printRedirectsToHTTPS(tcp map[uint16]*ipn.TCPPortHandler, host string, svcName tailcfg.ServiceName) {
+	for _, p := range slices.Sorted(maps.Keys(tcp)) {
+		h := tcp[p]
+		if h == nil || h.RedirectToHTTPSPort == 0 {
+			continue
+		}
+		from := "http://" + host
+		if p != 80 {
+			from += ":" + strconv.Itoa(int(p))
+		}
+		to := "https://" + host
+		if h.RedirectToHTTPSPort != 443 {
+			to += ":" + strconv.Itoa(int(h.RedirectToHTTPSPort))
+		}
+		if svcName != noService {
+			printf("%s (tailnet only) (%s)\n", from, svcName)
+		} else {
+			printf("%s (tailnet only)\n", from)
+		}
+		printf("|--> %s (redirect)\n\n", to)
+	}
 }
 
 // printServiceStatusTree prints the tree-style status for a single
@@ -101,6 +128,8 @@ func printServiceStatusTree(sc *ipn.ServeConfig, st *ipnstate.Status, name tailc
 		}
 		printf("|--> tcp://%s\n\n", h.TCPForward)
 	}
+
+	printRedirectsToHTTPS(svc.TCP, host, name)
 
 	// Web entries (HTTP/HTTPS). Services have no Funnel concept.
 	for _, hp := range slices.Sorted(maps.Keys(svc.Web)) {
