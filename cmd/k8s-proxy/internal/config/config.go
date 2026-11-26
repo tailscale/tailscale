@@ -202,6 +202,7 @@ func (ld *configLoader) watchConfigSecretChanges(ctx context.Context, secretName
 	}
 
 	ld.logger.Infof("Watching config Secret %q for changes", secretName)
+	backoff := time.Second
 	for {
 		var secret *corev1.Secret
 		select {
@@ -239,8 +240,34 @@ func (ld *configLoader) watchConfigSecretChanges(ctx context.Context, secretName
 				if err := ld.configFromSecret(ctx, secret); err != nil {
 					return fmt.Errorf("error reloading config Secret %q: %v", secret.Name, err)
 				}
+				backoff = time.Second
 			case watch.Error:
-				return fmt.Errorf("error watching config Secret %q: %v", secretName, ev.Object)
+				ld.logger.Warnf("Error watching config Secret %q; retrying in %s: %v", secretName, backoff, ev.Object)
+				w.Stop()
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(backoff):
+				}
+				if backoff < time.Minute {
+					backoff *= 2
+					if backoff > time.Minute {
+						backoff = time.Minute
+					}
+				}
+				w, err = secrets.Watch(ctx, metav1.ListOptions{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "Secret",
+						APIVersion: "v1",
+					},
+					TimeoutSeconds: new(int64(600)),
+					FieldSelector:  fmt.Sprintf("metadata.name=%s", secretName),
+					Watch:          true,
+				})
+				if err != nil {
+					return fmt.Errorf("failed to re-watch config Secret %q: %w", secretName, err)
+				}
+				continue
 			default:
 				// Ignore, no action required.
 				continue
