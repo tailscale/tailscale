@@ -332,7 +332,7 @@ func (m *resolvedManager) setConfigOverDBus(ctx context.Context, rManager dbus.B
 		ctx, dbusResolvedInterface+".SetLinkDomains", 0,
 		m.ifidx, linkDomains,
 	).Store()
-	if err != nil && err.Error() == "Argument list too long" { // TODO: better error match
+	if err != nil && (err.Error() == "Argument list too long" || err.Error() == "Too many search domains per link") { // TODO: better error match
 		// Issue 3188: older systemd-resolved had argument length limits.
 		// Trim out the *.arpa. entries and try again.
 		err = rManager.CallWithContext(
