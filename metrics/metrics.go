@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"sort"
 	"strings"
 
 	"tailscale.com/syncs"
@@ -137,19 +138,23 @@ type Histogram struct {
 	buckets []float64
 
 	// bucketStrings is a list of the same buckets, but as strings.
-	// This are allocated once at creation time by NewHistogram.
+	// These are allocated once at creation time by NewHistogram.
 	bucketStrings []string
 
+	// bucketVars holds per-bucket (non-cumulative) counts.
+	// Cumulative counts are computed at read time in String
+	// and PromExport.
 	bucketVars []expvar.Int
 	sum        expvar.Float
 	count      expvar.Int
 }
 
-// NewHistogram returns a new histogram that reports to the given
-// expvar map under the given name.
-//
-// The buckets are the boundaries of the histogram buckets, in
-// increasing order. The last bucket is +Inf.
+// NewHistogram returns a new histogram with the given bucket
+// boundaries, in increasing order. It panics if buckets is not
+// sorted. The histogram is not published; the caller is
+// responsible for registering it (e.g. in an expvar map).
+// A synthetic +Inf bucket, equal to the total count, is
+// reported in addition to the given buckets.
 func NewHistogram(buckets []float64) *Histogram {
 	if !slices.IsSorted(buckets) {
 		panic("buckets must be sorted")
@@ -170,10 +175,14 @@ func NewHistogram(buckets []float64) *Histogram {
 func (h *Histogram) Observe(v float64) {
 	h.sum.Add(v)
 	h.count.Add(1)
-	for i, b := range h.buckets {
-		if v <= b {
-			h.bucketVars[i].Add(1)
-		}
+	// First bucket >= v, matching the old v <= b test. For NaN
+	// every >= comparison is false, so i == len and no bucket is
+	// incremented (only sum and count move), as before.
+	// sort.Search is used instead of slices.BinarySearch, which
+	// orders NaN below every value and would return 0 for NaN.
+	i := sort.Search(len(h.buckets), func(i int) bool { return h.buckets[i] >= v })
+	if i < len(h.bucketVars) {
+		h.bucketVars[i].Add(1)
 	}
 }
 
@@ -181,40 +190,39 @@ func (h *Histogram) Observe(v float64) {
 // This is used to satisfy the expvar.Var interface.
 func (h *Histogram) String() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "{")
-	first := true
-	h.Do(func(kv expvar.KeyValue) {
-		if !first {
-			fmt.Fprintf(&b, ",")
-		}
-		fmt.Fprintf(&b, "%q: ", kv.Key)
-		if kv.Value != nil {
-			fmt.Fprintf(&b, "%v", kv.Value)
-		} else {
-			fmt.Fprint(&b, "null")
-		}
-		first = false
-	})
-	fmt.Fprintf(&b, ",\"sum\": %v", &h.sum)
-	fmt.Fprintf(&b, ",\"count\": %v", &h.count)
-	fmt.Fprintf(&b, "}")
-	return b.String()
-}
-
-// Do calls f for each bucket in the histogram.
-func (h *Histogram) Do(f func(expvar.KeyValue)) {
+	b.WriteString("{")
+	var cum int64
 	for i := range h.bucketVars {
-		f(expvar.KeyValue{Key: h.bucketStrings[i], Value: &h.bucketVars[i]})
+		cum += h.bucketVars[i].Value()
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, "%q: %d", h.bucketStrings[i], cum)
 	}
-	f(expvar.KeyValue{Key: "+Inf", Value: &h.count})
+	if len(h.bucketVars) > 0 {
+		b.WriteString(",")
+	}
+	// Sample count once, after the buckets: Observe updates
+	// count before the bucket, so the cumulative counts above
+	// can never exceed this value.
+	count := h.count.Value()
+	fmt.Fprintf(&b, "%q: %d", "+Inf", count)
+	fmt.Fprintf(&b, ",\"sum\": %v", &h.sum)
+	fmt.Fprintf(&b, ",\"count\": %d", count)
+	b.WriteString("}")
+	return b.String()
 }
 
 // PromExport writes the histogram to w in Prometheus exposition format.
 func (h *Histogram) PromExport(w io.Writer, name string) {
 	fmt.Fprintf(w, "# TYPE %s histogram\n", name)
-	h.Do(func(kv expvar.KeyValue) {
-		fmt.Fprintf(w, "%s_bucket{le=%q} %v\n", name, kv.Key, kv.Value)
-	})
+	var cum int64
+	for i := range h.bucketVars {
+		cum += h.bucketVars[i].Value()
+		fmt.Fprintf(w, "%s_bucket{le=%q} %d\n", name, h.bucketStrings[i], cum)
+	}
+	count := h.count.Value()
+	fmt.Fprintf(w, "%s_bucket{le=%q} %d\n", name, "+Inf", count)
 	fmt.Fprintf(w, "%s_sum %v\n", name, &h.sum)
-	fmt.Fprintf(w, "%s_count %v\n", name, &h.count)
+	fmt.Fprintf(w, "%s_count %d\n", name, count)
 }
