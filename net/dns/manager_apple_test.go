@@ -203,7 +203,7 @@ func TestManagerAppleDNSModes(t *testing.T) {
 						health: health.NewTracker(eventbustest.NewBus(t)),
 						logf:   t.Logf,
 					}
-					rcfg, ocfg, err := m.compileConfig(c)
+					rcfg, ocfg, err := m.compileConfig(c, false)
 					if tt.noBase && tt.primary {
 						// A catch-all without a forwarding resolver would break public
 						// DNS. Fail rather than bypassing Mode B or control opt-outs.

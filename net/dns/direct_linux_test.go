@@ -14,6 +14,10 @@ import (
 	"testing/synctest"
 	"time"
 
+	"tailscale.com/health"
+	"tailscale.com/net/dns/resolver"
+	"tailscale.com/net/netmon"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus/eventbustest"
 )
@@ -91,4 +95,136 @@ func watchFile(ctx context.Context, dir, filename string, cb func()) error {
 	}
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+// TestDirectTrampleIncompleteRewrite uses the real file parser, backup/restore
+// logic and event bus. Notifications are explicit so retries can be checked
+// without another filesystem event, under synctest's clock.
+func TestDirectTrampleIncompleteRewrite(t *testing.T) {
+	t.Cleanup(HookWatchFile.SetForTest(func(context.Context, string, string, func()) error { return nil }))
+	for _, mode := range []string{"separate_closes", "malformed", "missing", "second_rewrite"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				tmp := t.TempDir()
+				if err := os.MkdirAll(filepath.Join(tmp, "etc"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				fs := &trampleRewriteFS{directFS: directFS{prefix: tmp}}
+				const complete = "search example.test\nnameserver 192.0.2.2\n"
+				const old = "nameserver 192.0.2.1\n"
+				write := func(s string) {
+					t.Helper()
+					if err := fs.WriteFile(resolvConf, []byte(s), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				read := func(path string) string {
+					t.Helper()
+					b, err := fs.ReadFile(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return string(b)
+				}
+				write(old)
+				bus := eventbustest.NewBus(t)
+				h := health.NewTracker(bus)
+				dm := newDirectManagerOnFS(t.Logf, h, bus, fs)
+				dialer := tsdial.NewDialer(netmon.NewStatic())
+				dialer.SetBus(bus)
+				defer dialer.Close()
+				m := NewManager(t.Logf, dm, h, dialer, nil, nil, "linux", bus)
+				defer m.Down()
+				var applied resolver.Config
+				applications := 0
+				m.resolver.TestOnlySetHook(func(c resolver.Config) { applied = c; applications++ })
+				if err := m.Set(Config{Routes: upstreams("tail.test", "192.0.2.53")}); err != nil {
+					t.Fatal(err)
+				}
+				// A close after a search line is still an incomplete config. It must
+				// not be applied or moved into the backup, even with the old watcher.
+				write("search example.test\n")
+				dm.checkForFileTrample()
+				synctest.Wait()
+				func() {
+					m.mu.Lock()
+					defer m.mu.Unlock()
+					if applications != 1 || read(resolvConf) != "search example.test\n" || read(backupConf) != old {
+						t.Fatal("partial read changed resolver, file or backup")
+					}
+					switch mode {
+					case "separate_closes":
+						write("")
+					case "malformed":
+						write("nameserver 192.0.\n")
+					case "missing":
+						if err := fs.Remove(resolvConf); err != nil {
+							t.Fatal(err)
+						}
+					case "second_rewrite":
+						write("nameserver 192.0.2.2\n")
+						// The notification sees a complete file. The subsequent config read
+						// sees a second writer's truncation, which must also be rejected.
+						fs.beforeRead = func() error { return fs.WriteFile(resolvConf, nil, 0600) }
+						fs.readsUntilRewrite = 2
+					}
+				}()
+				dm.checkForFileTrample()
+				synctest.Wait()
+				time.Sleep(time.Second)
+				synctest.Wait()
+				func() {
+					m.mu.Lock()
+					defer m.mu.Unlock()
+					if applications != 1 {
+						t.Fatalf("incomplete config applied: %v", applied)
+					}
+					if read(backupConf) != old {
+						t.Fatal("incomplete rewrite replaced the backup")
+					}
+					write(complete)
+				}()
+				// Deliberately omit checkForFileTrample: recovery must be autonomous.
+				time.Sleep(5 * time.Second)
+				synctest.Wait()
+				if applications != 2 {
+					t.Fatalf("applications=%d, want 2", applications)
+				}
+				if got := applied.Routes["."]; len(got) != 1 || got[0].Addr != "192.0.2.2" {
+					t.Fatalf("default route=%v", got)
+				}
+				if read(backupConf) != complete {
+					t.Fatal("complete config was not backed up")
+				}
+				if err := m.Set(Config{}); err != nil {
+					t.Fatal(err)
+				}
+				if read(resolvConf) != complete {
+					t.Fatal("complete config not restored on disable")
+				}
+			})
+		})
+	}
+}
+
+// trampleRewriteFS can start another writer between notification and config
+// reads. All operations occur in a temporary directory; no host files change.
+type trampleRewriteFS struct {
+	directFS
+	beforeRead        func() error
+	readsUntilRewrite int
+}
+
+func (fs *trampleRewriteFS) ReadFile(path string) ([]byte, error) {
+	if path == resolvConf && fs.beforeRead != nil {
+		fs.readsUntilRewrite--
+		if fs.readsUntilRewrite == 0 {
+			f := fs.beforeRead
+			fs.beforeRead = nil
+			if err := f(); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return fs.directFS.ReadFile(path)
 }
