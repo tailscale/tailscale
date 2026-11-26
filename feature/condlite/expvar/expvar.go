@@ -10,3 +10,5 @@ package expvar
 import "expvar"
 
 type Int = expvar.Int
+
+type Func = expvar.Func
