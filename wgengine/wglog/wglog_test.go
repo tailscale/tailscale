@@ -89,6 +89,55 @@ func TestSuppressLogs(t *testing.T) {
 	}
 }
 
+func TestLoggerSelfKey(t *testing.T) {
+	var logs []string
+	logf := func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+
+	k, err := key.ParseNodePublicUntyped(mem.S("20c4c1ae54e1fd37cab6e9a532ca20646aff496796cc41d4519560e5e82bee53"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantWG := k.WireGuardGoString()
+	lookup := func(s string) (string, bool) {
+		if s == wantWG {
+			return k.ShortString(), true
+		}
+		return "", false
+	}
+	x := wglog.NewLogger(logf, lookup)
+	self := key.NewNode().Public()
+	peer := stringer(wantWG)
+
+	x.DeviceLogger.Verbosef("%v - Sending handshake initiation", peer)
+	x.SetSelfKey(self)
+	x.DeviceLogger.Verbosef("%v - Sending handshake initiation", peer)
+	x.DeviceLogger.Verbosef("%s - Handshake did not complete after %d seconds, retrying (try %d)", peer, 5, 2)
+	x.DeviceLogger.Verbosef("no peer here")
+	x.DeviceLogger.Verbosef("%v - Sending handshake initiation", stringer("peer(unkn…own)"))
+	x.SetSelfKey(key.NodePublic{})
+	x.DeviceLogger.Verbosef("%v - Sending handshake initiation", peer)
+
+	selfTag := ", self: " + self.ShortString()
+	want := []string{
+		"wg: [v2] [IMTBr] - Sending handshake initiation",
+		"wg: [v2] [IMTBr] - Sending handshake initiation" + selfTag,
+		"wg: [v2] [IMTBr] - Handshake did not complete after 5 seconds, retrying (try 2)" + selfTag,
+		"wg: [v2] no peer here",
+		"wg: [v2] peer(unkn…own) - Sending handshake initiation",
+		"wg: [v2] [IMTBr] - Sending handshake initiation",
+	}
+	if len(logs) != len(want) {
+		t.Fatalf("got %d logs %q, want %d", len(logs), logs, len(want))
+	}
+	for i := range want {
+		if logs[i] != want[i] {
+			t.Errorf("log %d = %q, want %q", i, logs[i], want[i])
+		}
+	}
+}
+
 // TestWireGuardGoStringMatchesWireGuardGo guards against a wireguard-go bump
 // silently changing the wireguard-go peer-string format from under us. The
 // LocalBackend's nodeByWGString index is built using
