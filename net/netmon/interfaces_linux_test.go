@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"tailscale.com/tstest"
@@ -113,4 +114,20 @@ func TestRouteLinuxNetlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("Got: %+v", d)
+}
+
+func TestPrefetchAddrsMatchesStdlib(t *testing.T) {
+	ifs, err := netInterfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ni := range ifs {
+		want, err := ni.Interface.Addrs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(want) > 0 && !reflect.DeepEqual(ni.AltAddrs, want) || len(want) == 0 && len(ni.AltAddrs) > 0 {
+			t.Errorf("%s: got %v, want %v", ni.Name, ni.AltAddrs, want)
+		}
+	}
 }
