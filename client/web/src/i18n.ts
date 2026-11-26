@@ -168,6 +168,10 @@ export const locale = detectLocale(
     : [...(navigator.languages ?? []), navigator.language]
 )
 
+if (typeof document !== "undefined") {
+  document.documentElement.lang = locale
+}
+
 export function t(
   key: MessageKey,
   values: Record<string, string | number> = {}
