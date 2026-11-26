@@ -28,7 +28,7 @@ type blockChecksum struct {
 // checksum is an opaque checksum that is comparable.
 type checksum struct{ cs [sha256.Size]byte }
 
-func hash(b []byte) checksum {
+func hashBlock(b []byte) checksum {
 	return checksum{sha256.Sum256(b)}
 }
 func (cs checksum) String() string {
@@ -95,7 +95,7 @@ func (m *manager) HashPartialFile(id clientID, baseName string) (next func() (bl
 		case n == 0:
 			return blockChecksum{}, io.EOF
 		default:
-			return blockChecksum{hash(b[:n]), hashAlgorithm, int64(n)}, nil
+			return blockChecksum{hashBlock(b[:n]), hashAlgorithm, int64(n)}, nil
 		}
 	}
 	close = f.Close
@@ -140,7 +140,7 @@ func resumeReader(r io.Reader, hashNext func() (blockChecksum, error)) (int64, i
 
 		// Compare the local and remote block checksums.
 		// If it mismatches, then resume from this point.
-		if cs.Checksum != hash(b) {
+		if cs.Checksum != hashBlock(b) {
 			return offset, io.MultiReader(bytes.NewReader(b), r), nil
 		}
 		offset += int64(len(b))
