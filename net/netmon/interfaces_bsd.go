@@ -50,21 +50,41 @@ func DefaultRouteInterfaceIndex() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("route.ParseRIB: %w", err)
 	}
-	for _, m := range msgs {
-		rm, ok := m.(*route.RouteMessage)
-		if !ok {
-			continue
+	if rm := findDefaultGatewayRoute(msgs); rm != nil {
+		if delegatedIndex, err := getDelegatedInterface(rm.Index); err == nil && delegatedIndex != 0 {
+			return delegatedIndex, nil
+		} else if err != nil {
+			log.Printf("interfaces_bsd: could not get delegated interface: %v", err)
 		}
-		if isDefaultGateway(rm) {
-			if delegatedIndex, err := getDelegatedInterface(rm.Index); err == nil && delegatedIndex != 0 {
-				return delegatedIndex, nil
-			} else if err != nil {
-				log.Printf("interfaces_bsd: could not get delegated interface: %v", err)
-			}
-			return rm.Index, nil
-		}
+		return rm.Index, nil
 	}
 	return 0, ErrNoGatewayIndexFound
+}
+
+// findDefaultGatewayRoute returns the default route in msgs that has a
+// gateway, or nil if there is none.
+//
+// Unscoped routes are preferred. If there are none, it falls back to the first
+// interface-scoped (RTF_IFSCOPE) one. That happens when a full-tunnel VPN or
+// TUN-mode proxy (OpenVPN, Clash, ...) installs an interface-route default
+// (no gateway) as the global default: the OS then demotes the physical
+// interface's default route (e.g. en0 via the home router) to a scoped one,
+// which is still the right interface to bind our own sockets to.
+func findDefaultGatewayRoute(msgs []route.Message) *route.RouteMessage {
+	var scoped *route.RouteMessage
+	for _, m := range msgs {
+		rm, ok := m.(*route.RouteMessage)
+		if !ok || !isDefaultRouteWithGateway(rm) {
+			continue
+		}
+		if rm.Flags&rtfIfScope == 0 {
+			return rm
+		}
+		if scoped == nil {
+			scoped = rm
+		}
+	}
+	return scoped
 }
 
 func init() {
@@ -112,13 +132,20 @@ func likelyHomeRouterIPBSDFetchRIB() (ret, myIP netip.Addr, ok bool) {
 var v4default = [4]byte{0, 0, 0, 0}
 var v6default = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 
+// rtfIfScope is RTF_IFSCOPE, defined locally because FreeBSD does not have
+// unix.RTF_IFSCOPE.
+const rtfIfScope = 0x1000000
+
+// isDefaultGateway reports whether rm is an unscoped default route with a
+// gateway.
 func isDefaultGateway(rm *route.RouteMessage) bool {
+	return rm.Flags&rtfIfScope == 0 && isDefaultRouteWithGateway(rm)
+}
+
+// isDefaultRouteWithGateway reports whether rm is a default route (0.0.0.0/0
+// or ::/0) with a gateway, scoped to an interface or not.
+func isDefaultRouteWithGateway(rm *route.RouteMessage) bool {
 	if rm.Flags&unix.RTF_GATEWAY == 0 {
-		return false
-	}
-	// Defined locally because FreeBSD does not have unix.RTF_IFSCOPE.
-	const RTF_IFSCOPE = 0x1000000
-	if rm.Flags&RTF_IFSCOPE != 0 {
 		return false
 	}
 
