@@ -156,21 +156,19 @@ func checksumCombine(a, b uint16) uint16 {
 func checksumBytes(buf []byte, initial uint16) uint16 {
 	v := uint32(initial)
 
-	odd := len(buf)%2 == 1
-	if odd {
-		v += uint32(buf[0])
-		buf = buf[1:]
-	}
-
 	n := len(buf)
-	odd = n&1 != 0
+	odd := n&1 != 0
 	if odd {
 		n--
-		v += uint32(buf[n]) << 8
 	}
 
 	for i := 0; i < n; i += 2 {
 		v += (uint32(buf[i]) << 8) + uint32(buf[i+1])
+	}
+	if odd {
+		// Pad the final odd byte with a zero low-order byte,
+		// as described by RFC 1071.
+		v += uint32(buf[n]) << 8
 	}
 
 	return checksumCombine(uint16(v), uint16(v>>16))
