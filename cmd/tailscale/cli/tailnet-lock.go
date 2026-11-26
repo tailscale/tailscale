@@ -671,7 +671,7 @@ func nlDescribeUpdate(update ipnstate.TailnetLockUpdate, color bool) (string, er
 	case tka.AUMUpdateKey.String():
 		fmt.Fprintf(&stanza, "KeyID: tlpub:%x\n", aum.KeyID)
 		if aum.Votes != nil {
-			fmt.Fprintf(&stanza, "Votes: %d\n", aum.Votes)
+			fmt.Fprintf(&stanza, "Votes: %d\n", *aum.Votes)
 		}
 		if aum.Meta != nil {
 			fmt.Fprintf(&stanza, "Metadata: %+v\n", aum.Meta)
