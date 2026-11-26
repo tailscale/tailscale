@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -230,6 +231,18 @@ func TestPrefValue(t *testing.T) {
 			flag:  "auto-update",
 			prefs: &ipn.Prefs{AutoUpdate: ipn.AutoUpdatePrefs{Apply: opt.NewBool(false)}},
 			want:  false,
+		},
+		{
+			name:  "auto-update-force-after/unset",
+			flag:  "auto-update-force-after",
+			prefs: &ipn.Prefs{},
+			want:  "0s",
+		},
+		{
+			name:  "auto-update-force-after/set",
+			flag:  "auto-update-force-after",
+			prefs: &ipn.Prefs{AutoUpdate: ipn.AutoUpdatePrefs{ForceAfter: 48 * time.Hour}},
+			want:  "48h0m0s",
 		},
 		{
 			name:  "sync/unset-is-false",
