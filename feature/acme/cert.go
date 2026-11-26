@@ -365,6 +365,41 @@ var getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBacken
 		return nil, err
 	}
 
+	// If the last issuance for this domain failed, back off instead of
+	// starting a new ACME order (which, for dns-01, also means a new
+	// SetDNS call) on every request. Callers that fetch the cert per
+	// TLS handshake via local.Client.GetCertificate (tailscale serve,
+	// tsnet apps, the Kubernetes operator's API server proxy) retry as
+	// fast as connections arrive; without a backoff, five handshakes
+	// made five orders and five SetDNS calls in about 150ms during a
+	// control-side SetDNS failure. See tailscale/tailscale#22021 and
+	// #20823.
+	if err := e.issuanceBackoffErr(domain, now); err != nil {
+		logf("acme: %v", err)
+		return nil, err
+	}
+
+	pair, err := e.issueCertPEMLocked(ctx, b, cs, logf, traceACME, domain, minValidity, previous)
+	if err != nil {
+		// Arm the backoff from the clock as of now, after the attempt
+		// fails: an issuance can outlive the first backoff window (a
+		// slow or hung CA, DNS timeouts), and a window computed from the
+		// pre-issuance timestamp would already have expired, letting the
+		// next request immediately open another order (and SetDNS call)
+		// and shortening a CA's requested Retry-After by the duration of
+		// the attempt. See tailscale/tailscale#22021.
+		e.recordIssuanceFailure(domain, b.Clock().Now(), err)
+		return nil, err
+	}
+	e.clearIssuanceFailure(domain)
+	return pair, nil
+}
+
+// issueCertPEMLocked issues or renews the cert for domain via ACME,
+// using the dns-01 challenge (or tls-alpn-01 for Funnel-eligible
+// domains). It must be called with the domain's lock held, after the
+// cached-cert re-check and issuance backoff check in [getCertPEM].
+func (e *extension) issueCertPEMLocked(ctx context.Context, b *ipnlocal.LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, minValidity time.Duration, previous *ipnlocal.TLSCertKeyPair) (*ipnlocal.TLSCertKeyPair, error) {
 	// If we have no usable cached cert (either nothing on disk, or what is
 	// on disk has expired or otherwise failed verification), surface a
 	// health warning to the user for the duration of the ACME flow. We
@@ -446,6 +481,81 @@ var getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBacken
 	}
 	issueArgs.challengeType = acmeChallengeDNS01
 	return e.issueACMECert(ctx, b, ac, issueArgs)
+}
+
+const (
+	// issuanceBackoffBase is the backoff window after the first failed
+	// certificate issuance for a domain. The window doubles on each
+	// consecutive failure, up to issuanceBackoffMax, and resets to the
+	// base after a successful issuance.
+	issuanceBackoffBase = time.Minute
+
+	// issuanceBackoffMax caps the backoff window for a domain whose
+	// issuance keeps failing.
+	issuanceBackoffMax = time.Hour
+)
+
+// issuanceBackoff is the remembered state of failed certificate
+// issuances for one domain, guarding entry to [issueCertPEMLocked].
+type issuanceBackoff struct {
+	count     int       // consecutive failed issuance attempts
+	notBefore time.Time // earliest time a new issuance may be attempted
+	err       error     // error from the most recent failed attempt
+}
+
+// issuanceBackoffErr returns a [certRateLimitedError] (surfaced to
+// callers as an HTTP 429 with a Retry-After header) for domain if a
+// recent failed issuance is still within its backoff window at time
+// now. It returns nil when a new issuance attempt may proceed.
+func (e *extension) issuanceBackoffErr(domain string, now time.Time) error {
+	e.issuanceMu.Lock()
+	defer e.issuanceMu.Unlock()
+	bf, ok := e.failedIssuances[domain]
+	if !ok || !now.Before(bf.notBefore) {
+		// No remembered failure, or its backoff window has expired.
+		return nil
+	}
+	return certRateLimitedError{
+		retryAfter: bf.notBefore.Sub(now),
+		underlying: fmt.Errorf("certificate issuance for %q failed %d time(s), not retrying until %s: %w",
+			domain, bf.count, bf.notBefore.UTC().Format(time.RFC3339), bf.err),
+	}
+}
+
+// recordIssuanceFailure remembers err as the latest failed issuance
+// for domain and grows the backoff window. now must be read from the
+// backend clock after the attempt failed, so that the window always
+// runs from the end of the attempt and cannot expire while it is in
+// flight. A CA rate-limit error's Retry-After (#20315) is honoured by
+// never backing off for less time than the CA asked for.
+func (e *extension) recordIssuanceFailure(domain string, now time.Time, err error) {
+	e.issuanceMu.Lock()
+	defer e.issuanceMu.Unlock()
+	bf := e.failedIssuances[domain]
+	if bf == nil {
+		bf = new(issuanceBackoff)
+		mak.Set(&e.failedIssuances, domain, bf)
+	}
+	bf.count++
+	bf.err = err
+	// The window doubles per consecutive failure. A shift of 6 already
+	// exceeds issuanceBackoffMax, so it is (and must remain) the cap.
+	backoff := min(issuanceBackoffBase<<min(bf.count-1, 6), issuanceBackoffMax)
+	var ae *xacme.Error
+	if errors.As(err, &ae) {
+		if d, ok := xacme.RateLimit(ae); ok && d > backoff {
+			backoff = d
+		}
+	}
+	bf.notBefore = now.Add(backoff)
+}
+
+// clearIssuanceFailure resets the failed-issuance backoff for domain
+// after a successful issuance.
+func (e *extension) clearIssuanceFailure(domain string) {
+	e.issuanceMu.Lock()
+	defer e.issuanceMu.Unlock()
+	delete(e.failedIssuances, domain)
 }
 
 // ensureAccount returns a valid ACME account, registering one if
