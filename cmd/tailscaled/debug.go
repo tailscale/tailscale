@@ -63,7 +63,14 @@ func newDebugMux() *http.ServeMux {
 func servePrometheusMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	varz.Handler(w, r)
-	clientmetric.WritePrometheusExpositionFormat(w)
+
+	// varz's "match" and "interval" parameters cover only its own
+	// metrics, so leave out clientmetrics when there's a query string.
+	// TODO(bradfitz): cover clientmetrics too, perhaps as an expvar
+	// implementing [varz.PrometheusWriter].
+	if r.URL.RawQuery == "" {
+		clientmetric.WritePrometheusExpositionFormat(w)
+	}
 }
 
 func debugMode(args []string) error {
