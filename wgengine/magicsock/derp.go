@@ -911,7 +911,7 @@ func (c *Conn) DebugBreakDERPConns() error {
 
 // maybeCloseDERPsOnRebind, in response to a rebind, closes all
 // DERP connections that don't have a local address in okayLocalIPs
-// and pings all those that do.
+// and pings all those that do or can't report one.
 func (c *Conn) maybeCloseDERPsOnRebind(okayLocalIPs []netip.Prefix) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -921,7 +921,10 @@ func (c *Conn) maybeCloseDERPsOnRebind(okayLocalIPs []netip.Prefix) {
 			c.closeOrReconnectDERPLocked(regionID, "rebind-no-localaddr")
 			continue
 		}
-		if !tsaddr.PrefixesContainsIP(okayLocalIPs, la.Addr()) {
+		// A DERP connection over WebSocket (feature/derpwebsocket) can't
+		// report its local address. Ping it below instead of closing it
+		// on every rebind. See issue 22589.
+		if la.IsValid() && !tsaddr.PrefixesContainsIP(okayLocalIPs, la.Addr()) {
 			c.closeOrReconnectDERPLocked(regionID, "rebind-default-route-change")
 			continue
 		}
