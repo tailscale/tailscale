@@ -64,6 +64,11 @@ walk:
 
 		// Manually split the args so we know when we're completing flags/args.
 		flagArgs, argArgs, flagNeedingValue := splitFlagArgs(cmd.FlagSet, args)
+		if len(flagArgs) < len(args) && args[len(flagArgs)] == "--" {
+			// Everything after a "--" terminator is a positional argument,
+			// so don't offer any more flags.
+			emitFlag = false
+		}
 		if flagNeedingValue != "" {
 			completeArg = flagNeedingValue + "=" + completeArg
 			emitFlag = true
