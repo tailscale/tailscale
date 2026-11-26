@@ -571,6 +571,84 @@ func brokenMITMHandler(clock tstime.Clock) http.HandlerFunc {
 	}
 }
 
+// TestRecentDialFallsBackToHTTP verifies that when a recent noise dial makes
+// the dialer force port 443, but the control server only listens on HTTP, the
+// dialer still falls back to port 80 rather than failing.
+//
+// This is the self-hosted http:// login server case from
+// https://github.com/tailscale/tailscale/issues/15008.
+func TestRecentDialFallsBackToHTTP(t *testing.T) {
+	client, server := key.NewMachine(), key.NewMachine()
+
+	const testProtocolVersion = 1
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := controlhttpserver.AcceptHTTP(context.Background(), w, r, server, nil)
+		if err != nil {
+			t.Logf("AcceptHTTP: %v", err)
+			return
+		}
+		conn.Close()
+	})
+
+	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("HTTP listen: %v", err)
+	}
+	httpServer := &http.Server{Handler: handler}
+	go httpServer.Serve(httpLn)
+	defer httpServer.Close()
+
+	// Reserve a port and close it, so HTTPS dials are refused.
+	closedLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	closedPort := strconv.Itoa(closedLn.Addr().(*net.TCPAddr).Port)
+	closedLn.Close()
+
+	ht := health.NewTracker(eventbustest.NewBus(t))
+	// Simulate a recent noise dial, such as the one before a re-register
+	// triggered by a link change.
+	ht.LastNoiseDialWasRecent()
+
+	netMon := netmon.NewStatic()
+	dialer := tsdial.NewDialer(netMon)
+	dialer.SetBus(eventbustest.NewBus(t))
+	a := &Dialer{
+		// Use an IP literal: a refused dial to a hostname makes the
+		// resolver fall back to bootstrap DNS over the network.
+		Hostname:             "127.0.0.1",
+		HTTPPort:             strconv.Itoa(httpLn.Addr().(*net.TCPAddr).Port),
+		HTTPSPort:            closedPort,
+		MachineKey:           client,
+		ControlKey:           server.Public(),
+		NetMon:               netMon,
+		ProtocolVersion:      testProtocolVersion,
+		Dialer:               dialer.SystemDial,
+		Logf:                 t.Logf,
+		omitCertErrorLogging: true,
+		testFallbackDelay:    50 * time.Millisecond,
+		HealthTracker:        ht,
+		proxyFunc:            func(*http.Request) (*url.URL, error) { return nil, nil },
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Dial repeatedly, as the register retry loop does. Each attempt is
+	// within the recent-dial window, so each one forces port 443 first.
+	for i := range 3 {
+		conn, err := a.dial(ctx)
+		if err != nil {
+			t.Fatalf("dial %d: %v", i, err)
+		}
+		if got, want := conn.RemoteAddr().String(), httpLn.Addr().String(); got != want {
+			t.Errorf("dial %d: connected to %s; want HTTP listener %s", i, got, want)
+		}
+		conn.Close()
+	}
+}
+
 func TestDialPlan(t *testing.T) {
 	testCases := []struct {
 		name          string
