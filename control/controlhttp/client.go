@@ -348,7 +348,20 @@ func (a *Dialer) dialURL(ctx context.Context, u *url.URL, optAddr netip.Addr, op
 	if err != nil {
 		return nil, err
 	}
-	netConn, err := a.tryURLUpgrade(ctx, u, optAddr, optACEHost, init)
+	netConn, err := a.tryURLUpgrade(ctx, u, optAddr, optACEHost, init, nil)
+	if upgradeWebsocket, ok := HookUpgradeWebsocket.GetOk(); ok && errors.As(err, new(upgradeError)) {
+		a.logf("controlhttp: HTTP upgrade to %v failed, retrying with WebSocket: %v", u, err)
+		// Start over with a new handshake rather than reuse the one the
+		// failed request carried.
+		init, cont, err = controlbase.ClientDeferred(a.MachineKey, a.ControlKey, a.ProtocolVersion)
+		if err != nil {
+			return nil, err
+		}
+		netConn, err = a.tryURLUpgrade(ctx, u, optAddr, optACEHost, init, upgradeWebsocket)
+		if err != nil {
+			return nil, fmt.Errorf("WebSocket upgrade: %w", err)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -396,13 +409,44 @@ var macOSScreenTime = health.Register(&health.Warnable{
 
 var HookMakeACEDialer feature.Hook[func(dialer netx.DialFunc, aceHost string, optIP netip.Addr) netx.DialFunc]
 
+// HookUpgradeWebsocket, if set, is how control clients get past HTTP proxies
+// that refuse the "Upgrade: tailscale-control-protocol" request but allow
+// WebSocket upgrades, like browsers use. Cloudflare's proxy is one. It's set
+// by the opt-in feature/controlwebsocket package.
+//
+// If the HTTP upgrade to the control protocol gets an HTTP response other
+// than the switch to that protocol, the dialer starts a new Noise handshake
+// and calls the hook to send it to the same URL in a WebSocket handshake,
+// using the same DNS, proxy and TLS settings.
+var HookUpgradeWebsocket feature.Hook[WebsocketUpgrader]
+
+// WebsocketUpgrader is the type of [HookUpgradeWebsocket].
+//
+// It does a WebSocket handshake with the "tailscale-control-protocol"
+// subprotocol for urlStr, such as
+// "https://ctrl.example.com/ts2021?X-Tailscale-Handshake=...", sending its
+// request with hc. The ctx bounds the handshake. It returns a net.Conn that
+// carries the control protocol in binary WebSocket messages.
+type WebsocketUpgrader func(ctx context.Context, hc *http.Client, urlStr string) (net.Conn, error)
+
+// upgradeError is an error from an HTTP upgrade exchange in which the server
+// or a proxy answered but didn't switch to the control protocol.
+// See HookUpgradeWebsocket.
+type upgradeError struct{ err error }
+
+func (e upgradeError) Error() string { return e.err.Error() }
+func (e upgradeError) Unwrap() error { return e.err }
+
 // tryURLUpgrade connects to u, and tries to upgrade it to a net.Conn.
 //
 // If optAddr is valid, then no DNS is used and the connection will be made to
 // the provided address.
 //
+// If upgradeWebsocket is non-nil, it's used in place of the HTTP upgrade to
+// the control protocol. See HookUpgradeWebsocket.
+//
 // Only the provided ctx is used, not a.ctx.
-func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Addr, optACEHost string, init []byte) (_ net.Conn, retErr error) {
+func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Addr, optACEHost string, init []byte, upgradeWebsocket WebsocketUpgrader) (_ net.Conn, retErr error) {
 	var dns *dnscache.Resolver
 
 	// If we were provided an address to dial, then create a resolver that just
@@ -504,6 +548,24 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Ad
 	tr.DialTLSContext = dnscache.TLSDialer(dialer, dns, tr.TLSClientConfig)
 	tr.DisableCompression = true
 
+	if upgradeWebsocket != nil {
+		wsURL := *u
+		// For WebSockets, the server takes the Noise handshake from the
+		// query, since browsers (and so the js/wasm client) can't set
+		// headers on them.
+		wsURL.RawQuery = url.Values{
+			controlhttpcommon.HandshakeHeaderName: []string{base64.StdEncoding.EncodeToString(init)},
+		}.Encode()
+		hc := &http.Client{
+			Transport: tr,
+			// Like the HTTP upgrade, stick to the URL we were given.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+		return upgradeWebsocket(ctx, hc, wsURL.String())
+	}
+
 	// (mis)use httptrace to extract the underlying net.Conn from the
 	// transport. The transport handles 101 Switching Protocols correctly,
 	// such that the Conn will not be reused or kept alive by the transport
@@ -553,7 +615,8 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Ad
 	}
 
 	if resp.StatusCode != http.StatusSwitchingProtocols {
-		return nil, fmt.Errorf("unexpected HTTP response: %s", resp.Status)
+		resp.Body.Close()
+		return nil, upgradeError{fmt.Errorf("unexpected HTTP response: %s", resp.Status)}
 	}
 
 	// From here on, the underlying net.Conn is ours to use, but there
@@ -568,7 +631,7 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Ad
 
 	if next := resp.Header.Get("Upgrade"); next != controlhttpcommon.UpgradeHeaderValue {
 		resp.Body.Close()
-		return nil, fmt.Errorf("server switched to unexpected protocol %q", next)
+		return nil, upgradeError{fmt.Errorf("server switched to unexpected protocol %q", next)}
 	}
 
 	rwc, ok := resp.Body.(io.ReadWriteCloser)
