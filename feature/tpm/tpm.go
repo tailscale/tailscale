@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"iter"
 	"log"
 	"os"
@@ -84,6 +85,31 @@ func tpmSupported() bool {
 
 var verboseTPM = envknob.RegisterBool("TS_DEBUG_TPM")
 
+// isNoTPM reports whether err, as returned by open, means only that the
+// host has no TPM: every device path open tried does not exist.
+//
+// open joins one error per path it tried, and os.IsNotExist does not
+// unwrap a joined error, so each one is checked with errors.Is.
+func isNoTPM(err error) bool {
+	if err == nil {
+		return false
+	}
+	j, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		return errors.Is(err, fs.ErrNotExist)
+	}
+	errs := j.Unwrap()
+	if len(errs) == 0 {
+		return false
+	}
+	for _, e := range errs {
+		if !errors.Is(e, fs.ErrNotExist) {
+			return false
+		}
+	}
+	return true
+}
+
 func info() *tailcfg.TPMInfo {
 	logf := logger.Discard
 	if !testenv.InTest() || verboseTPM() {
@@ -92,7 +118,7 @@ func info() *tailcfg.TPMInfo {
 
 	tpm, err := open()
 	if err != nil {
-		if !os.IsNotExist(err) || verboseTPM() {
+		if !isNoTPM(err) || verboseTPM() {
 			// Only log if it's an interesting error, not just "no TPM",
 			// as is very common, especially in VMs.
 			logf("error opening: %v", err)
