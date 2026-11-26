@@ -25,7 +25,19 @@ func registerVarz(debug *tsweb.DebugHandler) {
 
 // handler returns Prometheus metrics exported by our expvar converter
 // and the official Prometheus client.
+//
+// Requests with a query string, such as varz's "match" and "interval"
+// parameters, get only the expvar metrics, so that varz can reject bad
+// parameters before writing anything and can stream.
+//
+// TODO(bradfitz): make match and interval cover the native metrics too,
+// perhaps by publishing them as an expvar implementing
+// [varz.PrometheusWriter] so varz handles them like any other var.
 func handler(w http.ResponseWriter, r *http.Request) {
+	if r.URL != nil && r.URL.RawQuery != "" {
+		varz.Handler(w, r)
+		return
+	}
 	if err := gatherNativePrometheusMetrics(w); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))

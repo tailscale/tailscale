@@ -37,3 +37,22 @@ func TestHandler(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// TestHandlerQuery checks that requests with varz query parameters
+// skip the native metrics, so bad parameters get a clean error and
+// filtered output has only what matched.
+func TestHandlerQuery(t *testing.T) {
+	testVar1.Set(42)
+
+	rec := httptest.NewRecorder()
+	handler(rec, httptest.NewRequest("GET", "/debug/varz?match=(", nil))
+	if rec.Code != http.StatusBadRequest || strings.Contains(rec.Body.String(), "promvarz_test_native") {
+		t.Errorf("bad match: code %d, body:\n%s", rec.Code, rec.Body.Bytes())
+	}
+
+	rec = httptest.NewRecorder()
+	handler(rec, httptest.NewRequest("GET", "/debug/varz?match=^promvarz_", nil))
+	if got, want := rec.Body.String(), "# TYPE promvarz_test_expvar gauge\npromvarz_test_expvar 42\n"; got != want {
+		t.Errorf("match: got %q; want %q", got, want)
+	}
+}
