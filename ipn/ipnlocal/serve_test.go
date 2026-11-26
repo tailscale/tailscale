@@ -2955,3 +2955,168 @@ func TestForwardTCPHalfClose(t *testing.T) {
 		})
 	}
 }
+
+func TestForwardTCPWithProxyProtocolVersions(t *testing.T) {
+	b := newTestBackend(t)
+
+	srcAddr := netip.MustParseAddrPort("100.64.0.1:12345")
+	dstPort := uint16(443)
+	payload := []byte("hello serve")
+
+	tests := []struct {
+		name    string
+		version int
+		wantErr string // substring of the expected error; empty means success
+	}{
+		{name: "version 0 pipes without header", version: 0},
+		{name: "version 1", version: 1},
+		{name: "version 2", version: 2},
+		{name: "version 3 unsupported", version: 3, wantErr: "unsupported PROXY protocol version 3"},
+		{name: "version -1 unsupported", version: -1, wantErr: "unsupported PROXY protocol version -1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backendLn, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer backendLn.Close()
+
+			clientLn, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer clientLn.Close()
+			// The accepted client-side socket is the near end of
+			// conn: writing the payload there sends it through the
+			// forwarder to the backend.
+			go func() {
+				c, err := clientLn.Accept()
+				if err != nil {
+					return
+				}
+				defer c.Close()
+				if tt.wantErr == "" {
+					if _, err := c.Write(payload); err != nil {
+						return
+					}
+					if cw, ok := c.(interface{ CloseWrite() error }); ok {
+						cw.CloseWrite()
+					}
+				}
+				io.Copy(io.Discard, c)
+			}()
+
+			conn, err := net.Dial("tcp", clientLn.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+
+			backConn, err := b.dialer.SystemDial(t.Context(), "tcp", backendLn.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer backConn.Close()
+
+			// want is the exact byte stream the backend should receive
+			// on success: the PROXY header (if any) followed by the
+			// payload. It is unused for the error cases.
+			var want []byte
+			if tt.wantErr == "" {
+				want = append(want, payload...)
+				if tt.version > 0 {
+					header := &proxyproto.Header{
+						Version:    byte(tt.version),
+						Command:    proxyproto.PROXY,
+						SourceAddr: net.TCPAddrFromAddrPort(srcAddr),
+						DestinationAddr: &net.TCPAddr{
+							IP:   net.ParseIP("100.150.151.151"), // self-node IP in newTestBackend
+							Port: backConn.RemoteAddr().(*net.TCPAddr).Port,
+						},
+						TransportProtocol: proxyproto.TCPv4,
+					}
+					headerBytes, err := header.Format()
+					if err != nil {
+						t.Fatal(err)
+					}
+					want = append(headerBytes, want...)
+				}
+			}
+
+			// Backend side: accept one connection and report what
+			// arrives on it. Error cases read until EOF (nothing may
+			// be written); success cases read exactly len(want) bytes.
+			backendGot := make(chan []byte, 1)
+			go func() {
+				c, err := backendLn.Accept()
+				if err != nil {
+					backendGot <- nil
+					return
+				}
+				defer c.Close()
+				if tt.wantErr != "" {
+					got, _ := io.ReadAll(c)
+					backendGot <- got
+					return
+				}
+				got := make([]byte, len(want))
+				if _, err := io.ReadFull(c, got); err != nil {
+					backendGot <- nil
+					return
+				}
+				backendGot <- got
+			}()
+
+			forwardErr := make(chan error, 1)
+			go func() {
+				forwardErr <- b.forwardTCPWithProxyProtocol(conn, backConn, tt.version, srcAddr, dstPort, backendLn.Addr().String())
+			}()
+
+			if tt.wantErr != "" {
+				select {
+				case err := <-forwardErr:
+					if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+						t.Fatalf("forwardTCPWithProxyProtocol error = %v, want error containing %q", err, tt.wantErr)
+					}
+				case <-time.After(10 * time.Second):
+					t.Fatalf("forwardTCPWithProxyProtocol did not return; want error containing %q", tt.wantErr)
+				}
+				// The failed forward must not have written anything
+				// to the backend.
+				backConn.Close()
+				select {
+				case got := <-backendGot:
+					if len(got) != 0 {
+						t.Errorf("backend received %d bytes for unsupported version %d, want none", len(got), tt.version)
+					}
+				case <-time.After(10 * time.Second):
+					t.Error("backend did not finish")
+				}
+				return
+			}
+
+			select {
+			case got := <-backendGot:
+				if !bytes.Equal(got, want) {
+					t.Errorf("backend received %q, want %q", got, want)
+				}
+			case <-time.After(10 * time.Second):
+				t.Error("backend did not receive expected bytes")
+			}
+
+			// The client half-closed after writing and the backend
+			// closes its side after reading, so the pipe should
+			// finish cleanly on its own.
+			select {
+			case err := <-forwardErr:
+				if err != nil {
+					t.Errorf("forwardTCPWithProxyProtocol: %v", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Error("forwarder did not finish")
+			}
+		})
+	}
+}
