@@ -22,6 +22,7 @@ var implicitDefinitions = []*setting.Definition{
 	setting.NewDefinition(pkey.AlwaysOnOverrideWithReason, setting.DeviceSetting, setting.BooleanValue),
 	setting.NewDefinition(pkey.ApplyUpdates, setting.DeviceSetting, setting.PreferenceOptionValue),
 	setting.NewDefinition(pkey.AuthKey, setting.DeviceSetting, setting.StringValue),
+	setting.NewDefinition(pkey.AuthKeyConnectAutomatically, setting.DeviceSetting, setting.BooleanValue),
 	setting.NewDefinition(pkey.CheckUpdates, setting.DeviceSetting, setting.PreferenceOptionValue),
 	setting.NewDefinition(pkey.ControlURL, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(pkey.DeviceSerialNumber, setting.DeviceSetting, setting.StringValue),
