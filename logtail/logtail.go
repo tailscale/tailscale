@@ -704,6 +704,10 @@ func (lg *Logger) appendEntry(dst, src []byte) (out []byte, authID string, valid
 func (lg *Logger) uploading(ctx context.Context) {
 	defer close(lg.shutdownDone)
 
+	// Set once the shutdown has been signalled, so that we make exactly one
+	// final drain-and-upload pass before stopping.
+	didFinalFlush := false
+
 	for {
 		body, authID := lg.drainPending()
 		origlen := -1 // sentinel value: uncompressed
@@ -764,7 +768,13 @@ func (lg *Logger) uploading(ctx context.Context) {
 
 		select {
 		case <-lg.shutdownStart:
-			return
+			if didFinalFlush {
+				return
+			}
+			// We're shutting down, but a log may have been written since
+			// the last drain. Make one more pass to flush it, then stop.
+			didFinalFlush = true
+			continue
 		default:
 		}
 	}
