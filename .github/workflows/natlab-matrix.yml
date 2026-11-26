@@ -1,25 +1,68 @@
 # Run TestMatrix from tstest/natlab/vmtest/matrix_generated_test.go on weekends
-# for flake detection. All subtests run sequentially on a single runner to keep
-# resource usage low.
+# for flake detection.
 #
 # This is intentionally separate from natlab-test.yml, which runs the full
 # vmtest suite. That workflow excludes TestMatrix from its discovery; this one
 # runs nothing else.
 #
-# All cache handling and pre test preperation comes from natlab-test.yml.
+# A lightweight prepare job counts the entries in matrix_generated_test.go and
+# fans out into N parallel test jobs of up to 'shard_size' subtests each. The
+# shard count is computed automatically, so new tests added to the matrix
+# require no changes to this file.
+#
+# All cache handling and pre-test preparation follows natlab-test.yml.
+
 name: "natlab-matrix"
 
 on:
   workflow_dispatch:
   schedule:
     - cron: "3 1-23/2 * * 6" # Saturday from 01:03 UTC (Friday evening Pacific), every 2h
-    - cron: "3 */2   * * 0"  # all day Sunday, every 2h
+    - cron: "3 */2 * * 0"    # all day Sunday, every 2h
     - cron: "3 1-5/2 * * 1"  # Monday until 05:03 UTC (early morning London), every 2h
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      matrix-shards: ${{ steps.shards.outputs.matrix-shards }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Restore tsgo toolchain
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.cache/tsgo
+          key: natlab-tsgo-${{ runner.os }}-${{ hashFiles('go.toolchain.rev') }}
+
+      - name: Restore Go modules
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/go/pkg/mod
+          key: natlab-gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+
+      - name: Compute TestMatrix shards
+        id: shards
+        run: |
+          set -euo pipefail
+          shard_size=25
+          total=$(./tool/go test -run '^TestMatrix$' -count=1 ./tstest/natlab/vmtest/ -args -matrix-total | head -1)
+          shards=$(( (total + shard_size - 1) / shard_size ))
+          matrix_shards=$(seq 1 "$shards" | jq -R . | jq -sc --arg m "$shards" '[ .[] | . + "/" + $m ]')
+          echo "matrix-shards=${matrix_shards}" >> "$GITHUB_OUTPUT"
+          echo "TestMatrix: ${total} tests -> ${shards} shard(s) of up to ${shard_size}"
+
   test:
+    needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 100
+    name: "TestMatrix ${{ matrix.shard }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.prepare.outputs.matrix-shards) }}
     steps:
       - name: Check out code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -102,9 +145,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Run TestMatrix
-        # Runs all subtests sequentially via t.Run. The timeout covers the full
-        # suite. Individual subtests have their own bounded waits inside vmtest.
+      - name: Run TestMatrix shard ${{ matrix.shard }}
         run: |
           ./tool/go test -v -timeout=90m -count=1 ./tstest/natlab/vmtest/ \
-            -run '^TestMatrix$' --run-vm-tests
+            -run '^TestMatrix$' --run-vm-tests -args -matrix-shard=${{ matrix.shard }}

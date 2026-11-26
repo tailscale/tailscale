@@ -33,9 +33,3 @@ var testMatrix = []struct {
 	{name: "testSiteToSite_Debian13_Fedora43", fn: func(t *testing.T) { testSiteToSite(t, vmtest.Debian13, vmtest.Fedora43) }},
 	{name: "testSiteToSite_Debian13_Debian13", fn: func(t *testing.T) { testSiteToSite(t, vmtest.Debian13, vmtest.Debian13) }},
 }
-
-func TestMatrix(t *testing.T) {
-	for _, tt := range testMatrix {
-		t.Run(tt.name, tt.fn)
-	}
-}
