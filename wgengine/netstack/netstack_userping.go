@@ -56,6 +56,9 @@ func (ns *Impl) sendOutboundUserPing(dstIP netip.Addr, timeout time.Duration) er
 			ping = "/system/bin/ping6"
 		}
 		err = exec.Command(ping, "-c", "1", "-w", "3", dstIP.String()).Run()
+	case "illumos", "solaris":
+		// /usr/sbin/ping host [timeout]
+		err = exec.Command("/usr/sbin/ping", dstIP.String(), "3").Run()
 	default:
 		ping := "ping"
 		if isSynology {
