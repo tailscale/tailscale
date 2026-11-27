@@ -61,9 +61,7 @@ export default function LoginView({ data }: { data: NodeData }) {
       ) : (
         <>
           <div className="mb-6">
-            <h3 className="text-3xl font-semibold mb-3">
-              {t("logInHeading")}
-            </h3>
+            <h3 className="text-3xl font-semibold mb-3">{t("logInHeading")}</h3>
             <p className="text-gray-700">
               {t("getStartedLoggingIn")}{" "}
               <a

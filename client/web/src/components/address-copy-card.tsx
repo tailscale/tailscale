@@ -37,9 +37,7 @@ export default function AddressCard({
       {shortDomain && (
         <AddressRow label={t("shortDomain")} value={shortDomain} />
       )}
-      {fullDomain && (
-        <AddressRow label={t("fullDomain")} value={fullDomain} />
-      )}
+      {fullDomain && <AddressRow label={t("fullDomain")} value={fullDomain} />}
       {v4Address && (
         <AddressRow
           key={v4Address}
@@ -96,9 +94,7 @@ function AddressRow({
   const toaster = useToaster()
   const onCopyClick = useCallback(() => {
     copyText(value)
-      .then(() =>
-        toaster.show({ message: t("copiedAddress", { label }) })
-      )
+      .then(() => toaster.show({ message: t("copiedAddress", { label }) }))
       .catch(() =>
         toaster.show({
           message: t("failedToCopyAddress", { label }),

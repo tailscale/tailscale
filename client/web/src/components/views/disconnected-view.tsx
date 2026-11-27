@@ -12,9 +12,7 @@ export default function DisconnectedView() {
   return (
     <>
       <TailscaleIcon className="mx-auto" />
-      <p className="mt-12 text-center text-text-muted">
-        {t("loggedOut")}
-      </p>
+      <p className="mt-12 text-center text-text-muted">{t("loggedOut")}</p>
     </>
   )
 }

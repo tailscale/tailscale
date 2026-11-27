@@ -356,9 +356,7 @@ function SignInButton({
       sizeVariant="small"
       onClick={onClick}
     >
-      {auth.viewerIdentity
-        ? t("signInToConfirmIdentity")
-        : t("signIn")}
+      {auth.viewerIdentity ? t("signInToConfirmIdentity") : t("signIn")}
     </Button>
   )
 }

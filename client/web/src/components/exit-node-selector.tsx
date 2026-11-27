@@ -174,14 +174,10 @@ export default function ExitNodeSelector({
         )}
       </div>
       {offline && (
-        <p className="text-white p-3">
-          {t("selectedExitNodeOffline")}
-        </p>
+        <p className="text-white p-3">{t("selectedExitNodeOffline")}</p>
       )}
       {pending && (
-        <p className="text-white p-3">
-          {t("pendingExitNodeApproval")}
-        </p>
+        <p className="text-white p-3">{t("pendingExitNodeApproval")}</p>
       )}
     </div>
   )
@@ -312,9 +308,7 @@ function ExitNodeSelectorItem({
         )}
         <span className="leading-snug">{node.Name}</span>
       </div>
-      {node.Online || (
-        <span className="leading-snug">{t("offline")}</span>
-      )}
+      {node.Online || <span className="leading-snug">{t("offline")}</span>}
       {isSelected && <Check className="ml-1" />}
     </button>
   )
