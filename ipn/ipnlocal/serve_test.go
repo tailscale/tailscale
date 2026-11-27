@@ -2955,3 +2955,148 @@ func TestForwardTCPHalfClose(t *testing.T) {
 		})
 	}
 }
+
+func TestServeHTTPProxyHostHeader(t *testing.T) {
+	b := newTestBackend(t)
+
+	testServ := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Got-Host", r.Host)
+			w.Header().Set("Got-X-Forwarded-Host", r.Header.Get("X-Forwarded-Host"))
+		},
+	))
+	defer testServ.Close()
+	testServAddr := testServ.Listener.Addr().String()
+	_, testServPort, err := net.SplitHostPort(testServAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b.dialer.SetSystemDialerForTest(func(ctx context.Context, network, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, network, testServAddr)
+	})
+
+	const incomingHost = "example.ts.net"
+	loopback := "http://127.0.0.1:" + testServPort
+	loopbackHost := "127.0.0.1:" + testServPort
+
+	proxy := func(target string, rewriteHost bool) map[string]*ipn.HTTPHandler {
+		return map[string]*ipn.HTTPHandler{
+			"/": {Proxy: target, RewriteHost: rewriteHost},
+		}
+	}
+	// Both mounts share one cached reverseProxy.
+	sharedBackend := map[string]*ipn.HTTPHandler{
+		"/":         {Proxy: loopback},
+		"/rewrite/": {Proxy: loopback, RewriteHost: true},
+	}
+
+	tests := []struct {
+		name     string
+		handlers map[string]*ipn.HTTPHandler
+		path     string
+		wantHost string
+	}{
+		{
+			name:     "loopback",
+			handlers: proxy(loopback, false),
+			wantHost: incomingHost,
+		},
+		{
+			name:     "port-only",
+			handlers: proxy(testServPort, false),
+			wantHost: incomingHost,
+		},
+		{
+			name:     "remote-hostname",
+			handlers: proxy("http://backend.example.com:8080", false),
+			wantHost: incomingHost,
+		},
+		{
+			name:     "remote-ipv4",
+			handlers: proxy("http://192.0.2.10:8080", false),
+			wantHost: incomingHost,
+		},
+		{
+			name:     "rewrite-loopback",
+			handlers: proxy(loopback, true),
+			wantHost: loopbackHost,
+		},
+		{
+			name:     "rewrite-port-only",
+			handlers: proxy(testServPort, true),
+			wantHost: loopbackHost,
+		},
+		{
+			name:     "rewrite-remote-hostname",
+			handlers: proxy("http://backend.example.com", true),
+			wantHost: "backend.example.com",
+		},
+		{
+			name:     "rewrite-remote-hostname-with-port",
+			handlers: proxy("http://backend.example.com:8080", true),
+			wantHost: "backend.example.com:8080",
+		},
+		{
+			name:     "rewrite-remote-hostname-with-path",
+			handlers: proxy("http://backend.example.com:8080/base", true),
+			wantHost: "backend.example.com:8080",
+		},
+		{
+			name:     "rewrite-remote-ipv6",
+			handlers: proxy("http://[2001:db8::1]:8080", true),
+			wantHost: "[2001:db8::1]:8080",
+		},
+		{
+			name:     "shared-backend-default-mount",
+			handlers: sharedBackend,
+			path:     "/other",
+			wantHost: incomingHost,
+		},
+		{
+			name:     "shared-backend-rewrite-mount",
+			handlers: sharedBackend,
+			path:     "/rewrite/page",
+			wantHost: loopbackHost,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conf := &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					incomingHost + ":443": {Handlers: tt.handlers},
+				},
+			}
+			if err := b.SetServeConfig(conf, ""); err != nil {
+				t.Fatal(err)
+			}
+
+			req := &http.Request{
+				Host:   incomingHost,
+				URL:    &url.URL{Path: cmp.Or(tt.path, "/")},
+				TLS:    &tls.ConnectionState{ServerName: incomingHost},
+				Header: make(http.Header),
+			}
+			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(), &serveHTTPContext{
+				DestPort: 443,
+				SrcAddr:  netip.MustParseAddrPort("100.150.151.152:1234"),
+			}))
+
+			w := httptest.NewRecorder()
+			b.serveWebHandler(w, req)
+
+			res := w.Result()
+			if res.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want %d", res.StatusCode, http.StatusOK)
+			}
+			if got := res.Header.Get("Got-Host"); got != tt.wantHost {
+				t.Errorf("backend Host = %q, want %q", got, tt.wantHost)
+			}
+			if got := res.Header.Get("Got-X-Forwarded-Host"); got != incomingHost {
+				t.Errorf("backend X-Forwarded-Host = %q, want %q", got, incomingHost)
+			}
+		})
+	}
+}

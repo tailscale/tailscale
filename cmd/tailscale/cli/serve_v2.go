@@ -250,6 +250,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			fs.UintVar(&e.tcp, "tcp", 0, "Expose a TCP forwarder to forward raw TCP packets at the specified port")
 			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
 			fs.UintVar(&e.proxyProtocol, "proxy-protocol", 0, "PROXY protocol version (1 or 2) for TCP forwarding")
+			fs.BoolVar(&e.rewriteHost, "rewrite-host", false, "Send the proxy target's host in the Host header instead of the incoming request's (default false)")
 			fs.BoolVar(&e.yes, "yes", false, "Update without interactive prompts (default false)")
 		}),
 		UsageFunc: usageFuncNoDefaultValues,
@@ -425,6 +426,9 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		if (srvType == serveTypeHTTP || srvType == serveTypeHTTPS) && e.proxyProtocol != 0 {
 			return fmt.Errorf("PROXY protocol is only supported for TCP forwarding, not HTTP/HTTPS")
 		}
+		if e.rewriteHost && srvType != serveTypeHTTP && srvType != serveTypeHTTPS {
+			return fmt.Errorf("--rewrite-host is only supported for HTTP/HTTPS, not TCP forwarding")
+		}
 		// Validate PROXY protocol version
 		if e.proxyProtocol != 0 && e.proxyProtocol != 1 && e.proxyProtocol != 2 {
 			return fmt.Errorf("invalid PROXY protocol version %d; must be 1 or 2", e.proxyProtocol)
@@ -525,7 +529,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			if err := e.shouldWarnRemoteDestCompatibility(ctx, target); err != nil {
 				return err
 			}
-			err = e.setServe(sc, dnsName, srvType, srvPort, mount, target, funnel, magicDNSSuffix, e.acceptAppCaps, int(e.proxyProtocol))
+			err = e.setServe(sc, dnsName, srvType, srvPort, mount, target, funnel, magicDNSSuffix, e.acceptAppCaps, int(e.proxyProtocol), e.rewriteHost)
 			msg = e.messageForPort(sc, st, dnsName, srvType, srvPort)
 		}
 		if err != nil {
@@ -929,7 +933,7 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 	for name, details := range scf.Services {
 		for ppr, ep := range details.Endpoints {
 			if ep.Protocol == conffile.ProtoTUN {
-				err := e.setServe(sc, name.String(), serveTypeTUN, 0, "", "", false, magicDNSSuffix, nil, 0 /* proxy protocol */)
+				err := e.setServe(sc, name.String(), serveTypeTUN, 0, "", "", false, magicDNSSuffix, nil, 0 /* proxy protocol */, false /* rewrite host */)
 				if err != nil {
 					return err
 				}
@@ -962,7 +966,7 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 					}
 					target = fmt.Sprintf("%s://%s", scheme, net.JoinHostPort(ep.Destination, portStr))
 				}
-				err := e.setServe(sc, name.String(), serveType, port, "/", target, false, magicDNSSuffix, nil, 0 /* proxy protocol */)
+				err := e.setServe(sc, name.String(), serveType, port, "/", target, false, magicDNSSuffix, nil, 0 /* proxy protocol */, false /* rewrite host */)
 				if err != nil {
 					return fmt.Errorf("service %q: %w", name, err)
 				}
@@ -1009,12 +1013,12 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 	return e.lc.SetServeConfig(ctx, sc)
 }
 
-func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool, mds string, caps []peercap.Cap, proxyProtocol int) error {
+func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool, mds string, caps []peercap.Cap, proxyProtocol int, rewriteHost bool) error {
 	// update serve config based on the type
 	switch srvType {
 	case serveTypeHTTPS, serveTypeHTTP:
 		useTLS := srvType == serveTypeHTTPS
-		err := e.applyWebServe(sc, dnsName, srvPort, useTLS, mount, target, mds, caps)
+		err := e.applyWebServe(sc, dnsName, srvPort, useTLS, mount, target, mds, caps, rewriteHost)
 		if err != nil {
 			return fmt.Errorf("failed apply web serve: %w", err)
 		}
@@ -1260,7 +1264,7 @@ func (e *serveEnv) shouldWarnRemoteDestCompatibility(ctx context.Context, target
 	return nil
 }
 
-func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target, mds string, caps []peercap.Cap) error {
+func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target, mds string, caps []peercap.Cap, rewriteHost bool) error {
 	h := new(ipn.HTTPHandler)
 	switch {
 	case strings.HasPrefix(target, "text:"):
@@ -1296,6 +1300,10 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 		}
 		h.Proxy = t
 		h.AcceptAppCaps = caps
+		h.RewriteHost = rewriteHost
+	}
+	if rewriteHost && h.Proxy == "" {
+		return errors.New("--rewrite-host is only supported for proxy targets")
 	}
 
 	// TODO: validation needs to check nested foreground configs

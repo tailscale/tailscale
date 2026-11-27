@@ -178,6 +178,7 @@ type serveEnv struct {
 	tun              bool                // redirect traffic to OS for service
 	allServices      bool                // apply config file to all services
 	acceptAppCaps    []peercap.Cap       // app capabilities to forward
+	rewriteHost      bool                // send the proxy target's host as the Host header
 
 	lc localServeClient // localClient interface, specific to serve
 	// optional stuff for tests:
