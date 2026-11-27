@@ -37,6 +37,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -106,6 +107,24 @@ type monitor struct {
 	// replyFD and the monitor_rpc.go header for the darwin kernel
 	// behavior this coverage exists for.
 	pendingFds map[int64][]int
+
+	// fwdDone delivers completed forwarding child results back to loop().
+	// fwdStop is closed by teardown to unblock senders; fwdWG tracks
+	// in-flight forwarding reader goroutines.
+	fwdDone chan fwdOpResult
+	fwdStop chan struct{}
+	fwdWG   sync.WaitGroup
+}
+
+type fwdOpResult struct {
+	id      int64
+	op      string
+	child   *monChild
+	reply   func(payload string) rpcFrame
+	ok      bool
+	payload string
+	fds     []int
+	err     error
 }
 
 // monitorArgs are the monitor's spawn arguments, in the style of
@@ -208,6 +227,8 @@ func beMonitor(args []string) error {
 		children:   make(map[int]*monChild),
 		pendingFds: make(map[int64][]int),
 		hup:        hup,
+		fwdDone:    make(chan fwdOpResult),
+		fwdStop:    make(chan struct{}),
 	}
 	return m.loop()
 }
@@ -319,6 +340,12 @@ func (m *monitor) loop() error {
 			return nil
 		case <-sigchld:
 			m.sweep(m.children, true)
+		case res := <-m.fwdDone:
+			m.finishFwdOp(res)
+			if m.broken {
+				m.teardown()
+				return nil
+			}
 		case ev := <-events:
 			if ev.err != nil {
 				// EOF, an I/O error, or a protocol error means the
@@ -669,12 +696,12 @@ func checkAgentSocketPath(p string) error {
 	return nil
 }
 
-// fwdOp runs one forwarding op. It spawns the child with the
-// bound identity, waits for its result under monFwdOpDeadline, and
-// relays the child's socket descriptor in the ok reply. The wait blocks
-// the loop for at most the deadline.
+// fwdOp starts one forwarding op. It spawns the child synchronously on the
+// loop goroutine so descriptor scrubbing and child tracking remain
+// single-goroutine, then waits for the child's result on a worker goroutine so
+// parallel forwards do not block each other or the RPC loop.
 func (m *monitor) fwdOp(id int64, op string, spec fwdChildSpec, reply func(payload string) rpcFrame) {
-	start := time.Now()
+	deadline := time.Now().Add(monFwdOpDeadline)
 	cmd, result, err := fwdSpawnChild(m, spec)
 	if err != nil {
 		m.reply(rpcErrReply(id, op, err))
@@ -686,23 +713,46 @@ func (m *monitor) fwdOp(id int64, op string, spec fwdChildSpec, reply func(paylo
 	if op == opDial && spec.net == "unix" {
 		wantFDs = 2 // data socket and lifetime pipe writer
 	}
-	ok, payload, fds, rerr := fwdReadResult(result, start.Add(monFwdOpDeadline), wantFDs)
-	result.Close()
-	if rerr != nil {
-		m.killChild(child)
-		m.reply(rpcErrReply(id, op, fmt.Errorf("%s: %w", op, rerr)))
+	m.fwdWG.Add(1)
+	go func() {
+		defer m.fwdWG.Done()
+		defer result.Close()
+		ok, payload, fds, rerr := fwdReadResult(result, deadline, wantFDs)
+		res := fwdOpResult{
+			id:      id,
+			op:      op,
+			child:   child,
+			reply:   reply,
+			ok:      ok,
+			payload: payload,
+			fds:     fds,
+			err:     rerr,
+		}
+		select {
+		case m.fwdDone <- res:
+		case <-m.fwdStop:
+			closeFds(fds)
+		}
+	}()
+}
+
+// finishFwdOp runs on the loop goroutine when a forwarding reader completes.
+func (m *monitor) finishFwdOp(res fwdOpResult) {
+	if res.err != nil {
+		m.killChild(res.child)
+		m.reply(rpcErrReply(res.id, res.op, fmt.Errorf("%s: %w", res.op, res.err)))
 		return
 	}
-	if !ok {
+	if !res.ok {
 		// The child's failure reason is preserved verbatim. It is the
 		// child's own error, e.g. the kernel's EACCES for the bound user.
-		m.reply(rpcErrReply(id, op, errors.New(payload)))
+		m.reply(rpcErrReply(res.id, res.op, errors.New(res.payload)))
 		return
 	}
 	// Listener and TCP dial children exit after the handoff; Unix dial
 	// children relay until the connection closes. The sweep silently reaps
 	// each child after its SIGCHLD.
-	m.replyFD(reply(payload), fds...)
+	m.replyFD(res.reply(res.payload), res.fds...)
 }
 
 // killChild SIGKILLs a forwarding child's group and reaps it with
@@ -810,6 +860,9 @@ func (m *monitor) handleKillAll(f rpcFrame) {
 // RPC loss, external SIGHUP, and revocation target all children.
 // Leaders remain unreaped until SIGKILL to prevent PID and process-group reuse.
 func (m *monitor) teardown() {
+	if m.fwdStop != nil {
+		close(m.fwdStop)
+	}
 	// Close descriptors whose receipt has not been acknowledged.
 	for id, fds := range m.pendingFds {
 		closeFds(fds)
@@ -844,6 +897,7 @@ func (m *monitor) teardown() {
 			}
 		}
 	}
+	m.fwdWG.Wait()
 	m.conn.c.Close()
 }
 
