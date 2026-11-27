@@ -11,9 +11,13 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"os/exec"
 	"os/user"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	gliderssh "github.com/tailscale/gliderssh"
@@ -463,5 +467,282 @@ func TestDirectExecRootFallbackRefused(t *testing.T) {
 		if _, _, err := ss.newIncubatorCommand(logger.Discard); err == nil {
 			t.Error("newIncubatorCommand (direct exec, root euid, non-root local user) = nil error; want refusal")
 		}
+	}
+}
+
+func TestLoginNeedsExitStatusRelay(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		goos string
+		ia   incubatorArgs
+		want bool
+	}{
+		{name: "darwin-cmd", goos: darwin, ia: incubatorArgs{cmd: "exit 7"}, want: true},
+		{name: "darwin-cmd-tty", goos: darwin, ia: incubatorArgs{cmd: "exit 7", hasTTY: true}, want: true},
+		{name: "darwin-shell", goos: darwin, ia: incubatorArgs{isShell: true}, want: true},
+		{name: "darwin-shell-tty", goos: darwin, ia: incubatorArgs{isShell: true, hasTTY: true}, want: false},
+		{name: "darwin-sftp", goos: darwin, ia: incubatorArgs{isSFTP: true, cmd: "tailscaled be-child sftp"}, want: false},
+		{name: "linux-cmd", goos: linux, ia: incubatorArgs{cmd: "exit 7"}, want: false},
+		{name: "linux-shell", goos: linux, ia: incubatorArgs{isShell: true}, want: false},
+		{name: "freebsd-cmd", goos: freebsd, ia: incubatorArgs{cmd: "exit 7"}, want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.ia.loginNeedsExitStatusRelay(tt.goos); got != tt.want {
+				t.Errorf("loginNeedsExitStatusRelay(%q) = %v; want %v", tt.goos, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDarwinLoginArgs(t *testing.T) {
+	ia := incubatorArgs{localUser: "alice", remoteIP: "100.64.0.1"}
+	if got, want := ia.darwinLoginArgs("/usr/bin/login"), []string{"/usr/bin/login", "-f", "-pq", "-h", "100.64.0.1", "alice"}; !slices.Equal(got, want) {
+		t.Errorf("no tty, no prog: got %q; want %q", got, want)
+	}
+	ia.hasTTY = true
+	got := ia.darwinLoginArgs("/usr/bin/login", "/bin/zsh", "-c", "exit 7")
+	want := []string{"/usr/bin/login", "-f", "-p", "-h", "100.64.0.1", "alice", "/bin/zsh", "-c", "exit 7"}
+	if !slices.Equal(got, want) {
+		t.Errorf("tty, prog: got %q; want %q", got, want)
+	}
+}
+
+func TestReadExitStatus(t *testing.T) {
+	for _, tt := range []struct {
+		content string
+		code    int
+		ok      bool
+	}{
+		{"7\n", 7, true},
+		{"0\n", 0, true},
+		{"255", 255, true},
+		{"137\n", 137, true},
+		{"", 0, false},
+		{"256\n", 0, false},
+		{"-1\n", 0, false},
+		{"x\n", 0, false},
+	} {
+		f, err := os.CreateTemp(t.TempDir(), "status")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.WriteString(tt.content); err != nil {
+			t.Fatal(err)
+		}
+		code, ok := readExitStatus(f)
+		f.Close()
+		if code != tt.code || ok != tt.ok {
+			t.Errorf("readExitStatus(%q) = %d, %v; want %d, %v", tt.content, code, ok, tt.code, tt.ok)
+		}
+	}
+}
+
+func TestRunLoginCmd(t *testing.T) {
+	dir := t.TempDir()
+
+	// run runs runLoginCmd with a fresh status file, opened beforehand as
+	// runLoginRelayingExitStatus does, and returns the exit status and the
+	// status read back through that descriptor.
+	run := func(t *testing.T, args ...string) (code int, recorded string) {
+		t.Helper()
+		f, err := os.CreateTemp(dir, "status")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		code, err = runLoginCmd(append([]string{"--status-file=" + f.Name()}, args...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(f.Name()); !os.IsNotExist(err) {
+			t.Errorf("status file still present after runLoginCmd: %v", err)
+		}
+		var buf [32]byte
+		n, _ := f.ReadAt(buf[:], 0)
+		return code, string(buf[:n])
+	}
+
+	for _, tt := range []struct {
+		cmd  string
+		want int
+	}{
+		{"true", 0},
+		{"exit 7", 7},
+		{"kill -9 $$", 128 + 9},
+	} {
+		t.Run(tt.cmd, func(t *testing.T) {
+			code, recorded := run(t, "--login-shell=/bin/sh", "--cmd="+tt.cmd)
+			if code != tt.want {
+				t.Errorf("exit status = %d; want %d", code, tt.want)
+			}
+			if want := fmt.Sprintf("%d\n", tt.want); recorded != want {
+				t.Errorf("recorded status = %q; want %q", recorded, want)
+			}
+		})
+	}
+
+	// The shell runs as a login shell, like login runs it: argv[0] is "-sh".
+	out := filepath.Join(dir, "argv0")
+	run(t, "--login-shell=/bin/sh", `--cmd=echo "$0" > `+out)
+	if b, _ := os.ReadFile(out); strings.TrimSpace(string(b)) != "-sh" {
+		t.Errorf("shell argv[0] = %q; want %q", b, "-sh")
+	}
+
+	// With --shell, the shell is run with no arguments.
+	shell := filepath.Join(dir, "shell")
+	shellOut := filepath.Join(dir, "shell-args")
+	if err := os.WriteFile(shell, []byte("#!/bin/sh\necho \"$#\" > "+shellOut+"\nexit 6\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if code, recorded := run(t, "--login-shell="+shell, "--shell"); code != 6 || recorded != "6\n" {
+		t.Errorf("--shell: exit status %d, recorded %q; want 6, %q", code, recorded, "6\n")
+	}
+	if b, _ := os.ReadFile(shellOut); strings.TrimSpace(string(b)) != "0" {
+		t.Errorf("--shell: shell got %q arguments; want 0", b)
+	}
+
+	// A missing status file does not prevent the command from running.
+	if code, err := runLoginCmd([]string{"--status-file=" + filepath.Join(dir, "missing"), "--login-shell=/bin/sh", "--cmd=exit 3"}); err != nil || code != 3 {
+		t.Errorf("runLoginCmd with missing status file = %d, %v; want 3, nil", code, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "missing")); !os.IsNotExist(err) {
+		t.Errorf("runLoginCmd created the missing status file: %v", err)
+	}
+}
+
+// testLoginCmdPrefix re-execs the test binary as beLoginCmd, selecting only
+// TestSSHLoginCmdHelperProcess; in tailscaled the prefix is
+// "be-child ssh-login-cmd".
+var testLoginCmdPrefix = []string{"-test.run=^TestSSHLoginCmdHelperProcess$", "-test.timeout=0", "--", loginCmdChildMode}
+
+// TestSSHLoginCmdHelperProcess is not a test; it is the entry point of the
+// re-exec'd beLoginCmd child that the fake login in
+// TestRunLoginRelayingExitStatus runs. It returns immediately otherwise.
+func TestSSHLoginCmdHelperProcess(t *testing.T) {
+	for i, a := range os.Args {
+		if a == "--" && i+1 < len(os.Args) && os.Args[i+1] == loginCmdChildMode {
+			if err := beLoginCmd(os.Args[i+2:]); err != nil {
+				fmt.Fprintln(os.Stderr, "ssh-login-cmd child:", err)
+				os.Exit(1)
+			}
+		}
+	}
+}
+
+// fakeDarwinLogin mimics how macOS login handles "login -f [-pq] [-h host]
+// user prog [args...]": it runs prog as a child with descriptors above 2
+// closed and then exits 0 no matter how prog exited.
+const fakeDarwinLogin = `#!/bin/sh
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-f|-p|-q|-pq) shift ;;
+	-h) shift 2 ;;
+	*) break ;;
+	esac
+done
+shift # user
+"$@" 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&-
+exit 0
+`
+
+func TestRunLoginRelayingExitStatus(t *testing.T) {
+	oldPrefix := loginCmdSpawnPrefix
+	loginCmdSpawnPrefix = testLoginCmdPrefix
+	t.Cleanup(func() { loginCmdSpawnPrefix = oldPrefix })
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	writeLogin := func(name, script string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	darwinLogin := writeLogin("login", fakeDarwinLogin)
+	shell6 := writeLogin("shell6", "#!/bin/sh\nexit 6\n")
+
+	ia := incubatorArgs{
+		uid:        os.Getuid(),
+		gid:        os.Getgid(),
+		localUser:  "alice",
+		remoteIP:   "100.64.0.1",
+		loginShell: "/bin/sh",
+	}
+	for _, tt := range []struct {
+		name  string
+		login string
+		cmd   string
+		shell string // if set, a shell session with this login shell
+		want  int
+	}{
+		{name: "success", login: darwinLogin, cmd: "true", want: 0},
+		{name: "failure", login: darwinLogin, cmd: "exit 7", want: 7},
+		{name: "signal", login: darwinLogin, cmd: "kill -9 $$", want: 128 + 9},
+		{name: "shell", login: darwinLogin, shell: shell6, want: 6},
+		// Without a recorded status, a failing login's status is used, and
+		// a "successful" one is never reported as the command's success.
+		{name: "login-fails", login: writeLogin("login-fails", "#!/bin/sh\nexit 3\n"), cmd: "true", want: 3},
+		{name: "login-skips-prog", login: writeLogin("login-skips", "#!/bin/sh\nexit 0\n"), cmd: "true", want: 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ia := ia
+			ia.cmd = tt.cmd
+			if tt.shell != "" {
+				ia.isShell = true
+				ia.loginShell = tt.shell
+			}
+			code, err := runLoginRelayingExitStatus(t.Logf, ia, tt.login, self)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if code != tt.want {
+				t.Errorf("exit status = %d; want %d", code, tt.want)
+			}
+		})
+	}
+}
+
+// TestLoginRelayStaysInProcessGroup verifies that login, run by
+// runLoginRelayingExitStatus, stays in the incubator's process group, which
+// is the group the ssh-monitor signals (SIGHUP, then SIGKILL) to terminate a
+// session. A TTY must not move it to a group of its own.
+func TestLoginRelayStaysInProcessGroup(t *testing.T) {
+	// newCommand, used before, puts the command in a new foreground process
+	// group when there is a TTY; the relay must not, TTY or not.
+	cmd := loginRelayCommand("/usr/bin/login", nil, []string{"-f", "alice"})
+	if a := cmd.SysProcAttr; a != nil && (a.Setpgid || a.Setsid || a.Foreground) {
+		t.Errorf("login SysProcAttr = %+v; want it to stay in the incubator's process group", a)
+	}
+
+	if _, err := exec.LookPath("ps"); err != nil {
+		t.Skip("no ps")
+	}
+	oldPrefix := loginCmdSpawnPrefix
+	loginCmdSpawnPrefix = testLoginCmdPrefix
+	t.Cleanup(func() { loginCmdSpawnPrefix = oldPrefix })
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	pgidFile := filepath.Join(dir, "pgid")
+	login := filepath.Join(dir, "login")
+	if err := os.WriteFile(login, []byte("#!/bin/sh\nps -o pgid= -p $$ > "+pgidFile+"\n"+strings.TrimPrefix(fakeDarwinLogin, "#!/bin/sh\n")), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ia := incubatorArgs{uid: os.Getuid(), gid: os.Getgid(), localUser: "alice", remoteIP: "100.64.0.1", loginShell: "/bin/sh", cmd: "true"}
+	if _, err := runLoginRelayingExitStatus(t.Logf, ia, login, self); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(pgidFile)
+	if err != nil || strings.TrimSpace(string(b)) == "" {
+		t.Skipf("ps could not report login's process group: %q, %v", b, err)
+	}
+	if got, want := strings.TrimSpace(string(b)), strconv.Itoa(syscall.Getpgrp()); got != want {
+		t.Errorf("login ran in process group %s; want the incubator's, %s", got, want)
 	}
 }
