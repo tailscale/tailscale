@@ -854,6 +854,197 @@ func TestIngressPGReconciler_HTTPEndpointAndRedirectConflict(t *testing.T) {
 	}
 }
 
+func TestIngressPGReconciler_HostnameChangeIgnoresOtherIngressClasses(t *testing.T) {
+	ingPGR, fc, ft := setupIngressTest(t)
+
+	ing := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingress",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/proxy-group": "test-pg",
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: new("tailscale"),
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "test",
+					Port: networkingv1.ServiceBackendPort{
+						Number: 8080,
+					},
+				},
+			},
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"my-svc"}},
+			},
+		},
+	}
+	mustCreate(t, fc, ing)
+
+	// An Ingress for a different IngressClass that uses the same hostname
+	// must not keep the old Tailscale Service alive.
+	nginxIng := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nginx-ingress",
+			Namespace: "default",
+			UID:       types.UID("5678-UID"),
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: new("nginx"),
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"my-svc.example.com"}},
+			},
+		},
+	}
+	mustCreate(t, fc, nginxIng)
+
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+	populateTLSSecret(t, fc, "test-pg", "my-svc.ts.net")
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+	verifyServeConfig(t, fc, "svc:my-svc", false)
+	verifyTailscaleService(t, ft, "svc:my-svc", []string{"tcp:443"})
+
+	// Change the hostname and make sure the original Tailscale Service is deleted.
+	mustUpdate(t, fc, "default", "test-ingress", func(ing *networkingv1.Ingress) {
+		ing.Spec.TLS[0].Hosts[0] = "updated-svc"
+	})
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+	populateTLSSecret(t, fc, "test-pg", "updated-svc.ts.net")
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+
+	_, err := ft.VIPServices().Get(context.Background(), "svc:my-svc")
+	if err == nil {
+		t.Fatalf("svc:my-svc not cleaned up")
+	}
+	if !tailscale.IsNotFound(err) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestIngressPGReconciler_MoveKeepsServiceForNewProxyGroup(t *testing.T) {
+	ingPGR, fc, ft := setupIngressTest(t)
+	createPGResources(t, fc, "other-pg")
+
+	ing := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingress",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/proxy-group": "test-pg",
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: new("tailscale"),
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "test",
+					Port: networkingv1.ServiceBackendPort{
+						Number: 8080,
+					},
+				},
+			},
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"my-svc"}},
+			},
+		},
+	}
+	mustCreate(t, fc, ing)
+
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+	populateTLSSecret(t, fc, "test-pg", "my-svc.ts.net")
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+	verifyTailscaleService(t, ft, "svc:my-svc", []string{"tcp:443"})
+
+	// Move the Ingress to another ProxyGroup in the same tailnet. The old
+	// ProxyGroup's cleanup must not delete the Tailscale Service that the new
+	// ProxyGroup now serves.
+	mustUpdate(t, fc, "default", "test-ingress", func(ing *networkingv1.Ingress) {
+		ing.Annotations["tailscale.com/proxy-group"] = "other-pg"
+	})
+	oldPG := &tsapi.ProxyGroup{}
+	if err := fc.Get(context.Background(), client.ObjectKey{Name: "test-pg"}, oldPG); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ingPGR.maybeCleanupProxyGroup(context.Background(), ingPGR.logger, ft, oldPG); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ft.VIPServices().Get(context.Background(), "svc:my-svc"); err != nil {
+		t.Fatalf("svc:my-svc deleted while still served by another ProxyGroup: %v", err)
+	}
+}
+
+func TestIngressPGReconciler_DuplicateHostnameAllowedAcrossTailnets(t *testing.T) {
+	ingPGR, fc, _ := setupIngressTest(t)
+	createPGResources(t, fc, "other-pg")
+	otherPG := &tsapi.ProxyGroup{}
+	if err := fc.Get(context.Background(), client.ObjectKey{Name: "other-pg"}, otherPG); err != nil {
+		t.Fatal(err)
+	}
+	otherPG.Spec.Tailnet = "other.example.com"
+	if err := fc.Update(context.Background(), otherPG); err != nil {
+		t.Fatal(err)
+	}
+
+	// An exposed Ingress on a ProxyGroup in a different tailnet uses the same hostname.
+	otherIng := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "other-ingress",
+			Namespace: "default",
+			UID:       types.UID("5678-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/proxy-group": "other-pg",
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: new("tailscale"),
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"my-svc"}},
+			},
+		},
+	}
+	mustCreate(t, fc, otherIng)
+
+	ing := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingress",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/proxy-group": "test-pg",
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: new("tailscale"),
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "test",
+					Port: networkingv1.ServiceBackendPort{
+						Number: 8080,
+					},
+				},
+			},
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"my-svc"}},
+			},
+		},
+	}
+	mustCreate(t, fc, ing)
+
+	// Validation must not reject the Ingress as a duplicate across tailnets.
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+	populateTLSSecret(t, fc, "test-pg", "my-svc.ts.net")
+	expectReconciled(t, ingPGR, "default", "test-ingress")
+}
+
 func TestIngressPGReconciler_MultiCluster(t *testing.T) {
 	ingPGR, fc, ft := setupIngressTest(t)
 	ingPGR.operatorID = "operator-1"
