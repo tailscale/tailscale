@@ -327,3 +327,23 @@ func mustPrecreatePortMapRule(t *testing.T, rules []string, table iptablesInterf
 		t.Fatalf("error precreating portmap rule: %v", err)
 	}
 }
+
+func Test_argsForPortMapRule_toDestination(t *testing.T) {
+	pm := PortMap{Protocol: "tcp", MatchPort: 4003, TargetPort: 80}
+	tests := []struct {
+		target netip.Addr
+		want   string
+	}{
+		{netip.MustParseAddr("10.0.0.4"), "10.0.0.4:80"},
+		// Without brackets, ip6tables parses "fd7a:115c:a1e0::701:b62a:80" as
+		// a different IPv6 address and drops the port.
+		{netip.MustParseAddr("fd7a:115c:a1e0::701:b62a"), "[fd7a:115c:a1e0::701:b62a]:80"},
+	}
+	for _, tt := range tests {
+		args := argsForPortMapRule("svc", "tailscale0", tt.target, pm)
+		got := args[len(args)-1]
+		if args[len(args)-2] != "--to-destination" || got != tt.want {
+			t.Errorf("argsForPortMapRule(%v): --to-destination = %q, want %q", tt.target, got, tt.want)
+		}
+	}
+}
