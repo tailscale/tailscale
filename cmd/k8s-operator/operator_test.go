@@ -2328,6 +2328,56 @@ func TestNodeHandlerForConnector(t *testing.T) {
 	})
 }
 
+func TestNodeHandlerForProxyGroup(t *testing.T) {
+	pc := &tsapi.ProxyClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "static-endpoints"},
+		Spec: tsapi.ProxyClassSpec{
+			StaticEndpoints: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports:    []tsapi.PortRange{{Port: 30001, EndPort: 30003}},
+					Selector: map[string]string{"zone": "eu"},
+				},
+			},
+		},
+	}
+	pgs := []*tsapi.ProxyGroup{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "b-matching"},
+			Spec:       tsapi.ProxyGroupSpec{ProxyClass: pc.Name},
+		},
+		// References a ProxyClass that does not exist. This must not
+		// prevent other ProxyGroups from being reconciled.
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "a-missing-proxyclass"},
+			Spec:       tsapi.ProxyGroupSpec{ProxyClass: "does-not-exist"},
+		},
+		// Also matches the node, listed after the ProxyGroup with the
+		// missing ProxyClass.
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "c-matching-after-missing"},
+			Spec:       tsapi.ProxyGroupSpec{ProxyClass: pc.Name},
+		},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(pc).
+		Build()
+	for _, pg := range pgs {
+		mustCreate(t, fc, pg)
+	}
+	handler := nodeHandlerForProxyGroup(fc, "", zap.Must(zap.NewDevelopment()).Sugar())
+
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", Labels: map[string]string{"zone": "eu"}}}
+	got := handler(t.Context(), node)
+	want := []reconcile.Request{
+		{NamespacedName: types.NamespacedName{Name: "b-matching"}},
+		{NamespacedName: types.NamespacedName{Name: "c-matching-after-missing"}},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("unexpected reconcile requests (-want +got):\n%s", diff)
+	}
+}
+
 func TestStateSecretHandlerForProxyGroup(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

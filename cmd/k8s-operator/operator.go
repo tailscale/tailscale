@@ -1042,7 +1042,7 @@ func nodeHandlerForProxyGroup(cl client.Client, defaultProxyClass string, logger
 				if !apierrors.IsNotFound(err) {
 					logger.Debugf("error getting ProxyClass %q: %v", pg.Spec.ProxyClass, err)
 				}
-				return nil
+				continue
 			}
 
 			stat := proxyClass.Spec.StaticEndpoints
@@ -1062,7 +1062,7 @@ func nodeHandlerForProxyGroup(cl client.Client, defaultProxyClass string, logger
 			})
 			if err != nil {
 				logger.Debugf("error converting `spec.staticEndpoints.nodePort.selector` to Selector: %v", err)
-				return nil
+				continue
 			}
 
 			if selector.Matches(klabels.Set(o.GetLabels())) {
