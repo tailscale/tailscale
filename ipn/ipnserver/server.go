@@ -348,6 +348,10 @@ func (a *actor) Permissions(operatorUID string) (read, write bool) {
 	case "js", "plan9":
 		return true, true
 	}
+	// Without unix socket identity support, all local users are treated as fully trusted.
+	if runtime.GOOS != "windows" && !buildfeatures.HasUnixSocketIdentity {
+		return true, true
+	}
 	if a.ci.IsUnixSock() {
 		return true, !a.ci.IsReadonlyConn(operatorUID, logger.Discard)
 	}
