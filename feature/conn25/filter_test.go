@@ -87,12 +87,18 @@ func TestProtoPortRangesAllow(t *testing.T) {
 		{"tcp-syn-union-first", ppr("tcp:443", "udp:53"), tcpSyn(443), true, connectorTCPReason},
 		{"tcp-syn-union-neither", ppr("tcp:443", "udp:53"), tcpSyn(53), false, ""},
 
-		// Inherited from RunIn: anything that is not a lone SYN is admitted,
-		// including to a port the grant does not name, and with no grant at
-		// all. On a connector that packet then gets DNATed on to the app.
-		{"tcp-ack-ungranted-port", ppr("tcp:443"), tcp(22, packet.TCPAck), true, connectorTCPNonSynReason},
-		{"tcp-ack-empty-grant", ppr(), tcp(22, packet.TCPAck), true, connectorTCPNonSynReason},
-		{"tcp-syn-ack-is-not-a-syn", ppr(), tcp(22, packet.TCPSynAck), true, connectorTCPNonSynReason},
+		// Unlike RunIn, a packet that is not a lone SYN is held to the grant
+		// too. Every packet of a session carries the app's port, so the ones
+		// continuing a permitted session still pass...
+		{"tcp-ack-granted-port", ppr("tcp:443"), tcp(443, packet.TCPAck), true, connectorTCPReason},
+		{"tcp-fin-granted-port", ppr("tcp:443"), tcp(443, packet.TCPFin), true, connectorTCPReason},
+		{"tcp-rst-granted-port", ppr("tcp:443"), tcp(443, packet.TCPRst), true, connectorTCPReason},
+		// ...while one aimed at a port the grant does not name does not, so a
+		// peer cannot ACK-scan the app around the grant.
+		{"tcp-ack-ungranted-port", ppr("tcp:443"), tcp(22, packet.TCPAck), false, ""},
+		{"tcp-ack-empty-grant", ppr(), tcp(22, packet.TCPAck), false, ""},
+		{"tcp-syn-ack-ungranted-port", ppr("tcp:443"), tcp(22, packet.TCPSynAck), false, ""},
+		{"tcp-rst-ungranted-port", ppr("tcp:443"), tcp(22, packet.TCPRst), false, ""},
 
 		{"udp-match", ppr("udp:53"), udp(53), true, connectorPortReason},
 		{"udp-wrong-port", ppr("udp:53"), udp(54), false, ""},
@@ -113,6 +119,14 @@ func TestProtoPortRangesAllow(t *testing.T) {
 		// refused rather than falling through to the default case.
 		{"icmp6-on-ipv4", ppr("*"), pkt(4, ipproto.ICMPv6, 0, 0), false, ""},
 		{"icmp4-on-ipv6", ppr("*"), pkt(6, ipproto.ICMPv4, 0, 0), false, ""},
+
+		// TSMP is node-to-node signalling, and a transit IP is not a node,
+		// so it is refused however the grant is written. Unlike RunIn, which
+		// only sees TSMP addressed to this node and always allows it.
+		{"tsmp-empty-grant", ppr(), pkt(4, ipproto.TSMP, 0, 0), false, ""},
+		{"tsmp-wildcard-grant", ppr("*"), pkt(4, ipproto.TSMP, 0, 0), false, ""},
+		{"tsmp-granted-by-number", ppr("99:*"), pkt(4, ipproto.TSMP, 0, 0), false, ""},
+		{"tsmp-ipv6", ppr("*"), pkt(6, ipproto.TSMP, 0, 0), false, ""},
 
 		// A protocol that carries no port has to be granted by name, in full.
 		{"gre-all-ports", ppr("47:*"), pkt(4, gre, 0, 0), true, connectorPortlessReason},
@@ -153,7 +167,7 @@ func TestConnectorIngressAllow(t *testing.T) {
 		proto ipproto.Proto
 		port  uint16
 		// flags are the packet's TCP flags. A TCP probe that names none is
-		// sent as a lone SYN, the case the grant is actually consulted for.
+		// sent as a lone SYN.
 		flags packet.TCPFlag
 		dst   netip.Addr // defaults to transitIP
 		src   netip.Addr // defaults to peerIP
@@ -203,15 +217,16 @@ func TestConnectorIngressAllow(t *testing.T) {
 			},
 		},
 		{
-			// Following the packet filter, only a lone SYN is held to the
-			// grant's ports; continuations of an existing session are let
-			// through so that return traffic arrives. See
+			// Diverging from the packet filter, every TCP packet is held to
+			// the grant's ports, not just a lone SYN; a connector has no
+			// return traffic arriving on this path to make room for. See
 			// [protoPortRangesAllow].
-			name:  "tcp-non-syn-not-held-to-ports",
+			name:  "tcp-non-syn-held-to-ports",
 			grant: []tailcfg.RawMessage{`"tcp:443"`},
 			probes: []probe{
-				{proto: ipproto.TCP, port: 22, flags: packet.TCPAck, want: true},
-				{proto: ipproto.TCP, port: 22, flags: packet.TCPSynAck, want: true},
+				{proto: ipproto.TCP, port: 443, flags: packet.TCPAck, want: true},
+				{proto: ipproto.TCP, port: 22, flags: packet.TCPAck, want: false},
+				{proto: ipproto.TCP, port: 22, flags: packet.TCPSynAck, want: false},
 				{proto: ipproto.TCP, port: 22, flags: packet.TCPSyn, want: false},
 			},
 		},
@@ -243,6 +258,7 @@ func TestConnectorIngressAllow(t *testing.T) {
 				{proto: ipproto.TCP, port: 443, want: false},
 				{proto: ipproto.UDP, port: 53, want: false},
 				{proto: ipproto.ICMPv4, want: false},
+				{proto: ipproto.TSMP, want: false},
 			},
 		},
 		{
@@ -367,7 +383,7 @@ func TestConnectorGrantRegistration(t *testing.T) {
 		{
 			name:     "unparseable",
 			grant:    []tailcfg.RawMessage{`"not-a-port"`},
-			wantCode: MissingAppPermission,
+			wantCode: UnparseableAppPermission,
 			wantMsg:  unparseableAppPermissionMessage,
 		},
 		{

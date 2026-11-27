@@ -162,6 +162,11 @@ func (c *connector) destinationInPools(dst netip.Addr) bool {
 
 // linkLocalAllow returns true if the provided packet has a Dst that is in
 // the configured transit IP range for this connector, false otherwise.
+//
+// It only exempts the packet from the filter's blanket drop of link-local
+// destinations; it does not accept it. Whether the connector accepts the
+// packet is decided separately by [connector.ingressAllow], which both hooks
+// a packet to a transit IP has to get through.
 func (c *connector) linkLocalAllow(p packet.Parsed) (bool, string) {
 	if c.transitIPInPool(p.Dst.Addr()) {
 		return true, connectorTransitIPReason

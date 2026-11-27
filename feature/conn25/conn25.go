@@ -661,7 +661,7 @@ func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, peerCaps ta
 			// Fail closed on the whole grant rather than registering a
 			// mapping under the values we did manage to understand.
 			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
-				Code:    MissingAppPermission,
+				Code:    UnparseableAppPermission,
 				Message: unparseableAppPermissionMessage,
 			})
 			c.logf("[Unexpected] peer holds an unparseable conn25 grant: node: %s, app: %q, err: %v",
@@ -760,6 +760,14 @@ const (
 	// InvalidDestinationIPToken indicates that the request's token did not
 	// authenticate, or there was no token provided.
 	InvalidDestinationIPToken = 9
+
+	// UnparseableAppPermission indicates that the client holds a permission for
+	// the App name in the request, but the connector could not parse the
+	// protocols and ports it grants and so refused the request rather than
+	// registering a mapping it would enforce incorrectly. Unlike
+	// [MissingAppPermission] this is a misconfiguration of the grant itself,
+	// which the client cannot resolve by asking for a different App.
+	UnparseableAppPermission = 10
 )
 
 // TransitIPResponse is the response to a TransitIPRequest

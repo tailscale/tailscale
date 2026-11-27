@@ -32,7 +32,6 @@ const (
 	// they correspond to.
 	connectorICMPResponseReason = "app connector icmp response ok"
 	connectorICMPReason         = "app connector icmp ok"
-	connectorTCPNonSynReason    = "app connector tcp non-syn"
 	connectorTCPReason          = "app connector tcp ok"
 	connectorPortReason         = "app connector ok"
 	connectorPortlessReason     = "app connector other-portless ok"
@@ -67,14 +66,17 @@ func protoPortRangesAllow(ranges views.Slice[tailcfg.ProtoPortRange], p packet.P
 			return true, connectorICMPReason
 		}
 	case ipproto.TCP:
-		// As in RunIn, non-SYN packets are allowed so that return traffic for
-		// outgoing connections arrives; a new incoming session still cannot be
-		// initiated without a SYN. Unlike RunIn, what is admitted here is then
-		// DNATed on to the app, so this also lets a peer reach a port of the
-		// app its grant does not name with anything that is not a SYN.
-		if !p.IsTCPSyn() {
-			return true, connectorTCPNonSynReason
-		}
+		// A diversion from RunIn, which admits any packet that is not a lone
+		// SYN so that return traffic for connections this node opened still
+		// arrives. A connector never opens a connection towards its own
+		// transit pool, so there is no return traffic to make room for here:
+		// every TCP packet this hook sees travels peer -> transit IP, and the
+		// datapath rewrites only addresses, never ports, so its destination
+		// port is the app's port for the whole session rather than just at
+		// the SYN. Holding every packet to the grant therefore costs nothing.
+		// Exempting non-SYNs, on the other hand, would let a peer reach a
+		// port the grant does not name, since what is admitted here is then
+		// DNATed on to the app: an ACK scan of it, with a flow installed.
 		for _, ppr := range ranges.All() {
 			if (ppr.Proto == 0 || ppr.Proto == int(ipproto.TCP)) &&
 				ppr.Ports.Contains(p.Dst.Port()) {
@@ -91,6 +93,21 @@ func protoPortRangesAllow(ranges views.Slice[tailcfg.ProtoPortRange], p packet.P
 				return true, connectorPortReason
 			}
 		}
+	case ipproto.TSMP:
+		// A diversion from RunIn, which allows TSMP unconditionally. It can,
+		// because by then the packet has passed its local4/local6 check and
+		// so is addressed to this node: tailnet signalling to us. Nothing
+		// reaching here is. A transit IP stands in for an address out on the
+		// app's network rather than for a node, so TSMP sent to one is not
+		// signalling to anybody, and no grant should be able to make it so.
+		//
+		// Refusing it also suppresses no signalling, because tstun consumes
+		// TSMP before the filter runs: pings and disco advertisements are
+		// answered there and dropped silently without ever reaching here,
+		// and pongs and rejection headers have already run their handlers by
+		// the time we see them. Accepting would only hand the host stack a
+		// packet addressed to something it has no route for.
+		return false, ""
 	default:
 		// Protocols that carry no port have to be granted in full.
 		for _, ppr := range ranges.All() {
@@ -116,11 +133,11 @@ func appProtoPortRanges(peerCaps tailcfg.PeerCapMap, app string) (
 	hasCap bool,
 	err error,
 ) {
-	cap := peercap.Conn25Prefix.ToAttribute(app)
-	if !peerCaps.HasCapability(cap) {
+	appCap := peercap.Conn25Prefix.ToAttribute(app)
+	if !peerCaps.HasCapability(appCap) {
 		return ranges, false, nil
 	}
-	rs, err := tailcfg.UnmarshalCapJSON[tailcfg.ProtoPortRange](peerCaps, cap)
+	rs, err := tailcfg.UnmarshalCapJSON[tailcfg.ProtoPortRange](peerCaps, appCap)
 	if err != nil {
 		return ranges, true, err
 	}
