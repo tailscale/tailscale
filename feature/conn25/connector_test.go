@@ -15,6 +15,7 @@ import (
 	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tstest"
 	"tailscale.com/types/appctype"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/must"
 )
@@ -283,7 +284,7 @@ func TestConnectorDisallowedDestinations(t *testing.T) {
 	}
 }
 
-func TestConnectorPacketFilterAllow(t *testing.T) {
+func TestConnectorLinkLocalAllow(t *testing.T) {
 	src := netip.MustParseAddr("100.64.0.1")
 	knownTip := netip.MustParseAddr("192.0.2.1")
 	unknownTip := netip.MustParseAddr("100.64.0.42")
@@ -300,17 +301,78 @@ func TestConnectorPacketFilterAllow(t *testing.T) {
 		},
 	})
 
-	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
+	if allow, _ := c.connector.linkLocalAllow(packet.Parsed{
 		Src: netip.AddrPortFrom(src, 1234),
 		Dst: netip.AddrPortFrom(knownTip, 1234),
 	}); !allow {
 		t.Fatal("knownTip: should have been allowed")
 	}
 
-	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
+	if allow, _ := c.connector.linkLocalAllow(packet.Parsed{
 		Src: netip.AddrPortFrom(src, 1234),
 		Dst: netip.AddrPortFrom(unknownTip, 1234),
 	}); allow {
 		t.Fatal("unknownTip: should not have been allowed")
+	}
+}
+
+// TestConnectorIngressAllow checks that the connector's ingress filter hook
+// admits a packet to a transit IP only when the datapath can map its
+// protocol, and refuses addresses outside the transit pools outright.
+func TestConnectorIngressAllow(t *testing.T) {
+	src := netip.MustParseAddr("100.64.0.1")
+	knownTip := netip.MustParseAddr("192.0.2.1")
+	unknownTip := netip.MustParseAddr("100.64.0.42")
+
+	v4TransitIPsBuilder := netipx.IPSetBuilder{}
+	v4TransitIPsBuilder.AddPrefix(netip.MustParsePrefix("192.0.2.0/24"))
+	v4TransitIPs := must.Get(v4TransitIPsBuilder.IPSet())
+
+	c := newConn25(t.Logf)
+	c.reconfig(&config{
+		isConfigured: true,
+		ipSets: ipSets{
+			v4Transit: v4TransitIPs,
+		},
+	})
+
+	tests := []struct {
+		name  string
+		proto ipproto.Proto
+		dst   netip.Addr
+		want  bool
+	}{
+		// The protocols the datapath maps between a transit IP and a
+		// destination, which is the whole point of admitting these.
+		{"tcp", ipproto.TCP, knownTip, true},
+		{"udp", ipproto.UDP, knownTip, true},
+		{"icmpv4", ipproto.ICMPv4, knownTip, true},
+		{"icmpv6", ipproto.ICMPv6, knownTip, true},
+
+		// The rest the datapath passes through untouched, so admitting them
+		// would only hand the host stack a packet addressed to a transit IP,
+		// which is not an address this node holds.
+		{"sctp", ipproto.SCTP, knownTip, false},
+		{"gre", ipproto.Proto(47), knownTip, false},
+		{"esp", ipproto.Proto(50), knownTip, false},
+		{"tsmp", ipproto.TSMP, knownTip, false},
+
+		// Outside the pool nothing is admitted whatever the protocol.
+		{"tcp-outside-pool", ipproto.TCP, unknownTip, false},
+		{"gre-outside-pool", ipproto.Proto(47), unknownTip, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, why := c.connector.ingressAllow(packet.Parsed{
+				IPVersion: 4,
+				IPProto:   tt.proto,
+				Src:       netip.AddrPortFrom(src, 1234),
+				Dst:       netip.AddrPortFrom(tt.dst, 1234),
+			})
+			if got != tt.want {
+				t.Errorf("ingressAllow(%v -> %v) = (%v, %q), want %v", tt.proto, tt.dst, got, why, tt.want)
+			}
+		})
 	}
 }

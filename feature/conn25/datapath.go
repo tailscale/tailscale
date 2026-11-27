@@ -132,6 +132,10 @@ func (dh *datapathHandler) StartFlowExpirySweepers(ctx context.Context) {
 	go dh.connectorFlowTable.StartExpiredSweeper(ctx)
 }
 
+// isSupportedProtocol reports whether the datapath can map proto between a
+// transit IP and a destination. Anything else it passes through untouched, so
+// [connector.ingressAllow] refuses it rather than admitting a packet nothing
+// downstream will act on.
 func isSupportedProtocol(proto ipproto.Proto) bool {
 	return proto == ipproto.TCP || proto == ipproto.UDP || proto == ipproto.ICMPv4 || proto == ipproto.ICMPv6
 }

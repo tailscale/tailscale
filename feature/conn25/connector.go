@@ -149,13 +149,34 @@ func (c *connector) destinationInPools(dst netip.Addr) bool {
 	return (magic != nil && magic.Contains(dst)) || (transit != nil && transit.Contains(dst))
 }
 
-// packetFilterAllow returns true if the provided packet has a Dst that is in
+// linkLocalAllow returns true if the provided packet has a Dst that is in
 // the configured transit IP range for this connector, false otherwise.
-func (c *connector) packetFilterAllow(p packet.Parsed) (bool, string) {
+//
+// It only exempts the packet from the filter's blanket drop of link-local
+// destinations; it does not accept it. Acceptance is
+// [connector.ingressAllow]'s decision, which a packet to a transit IP has to
+// get through either way.
+func (c *connector) linkLocalAllow(p packet.Parsed) (bool, string) {
 	if c.transitIPInPool(p.Dst.Addr()) {
-		return true, packetFilterAllowReason
+		return true, transitIPAllowReason
 	}
 	return false, ""
+}
+
+// ingressAllow reports whether p, a packet arriving from a peer, may be
+// accepted by this connector. It may if it is addressed to an address in a
+// configured transit IP pool and carries a protocol the datapath can map.
+//
+// The protocol check matters because a transit IP is not an address this node
+// holds. Admitting a protocol [isSupportedProtocol] excludes would have
+// [datapathHandler.HandlePacketFromWireGuard] pass it through untouched, which
+// hands the host stack a packet addressed to something it has no route for.
+// Only the protocols the datapath can map have anywhere to go.
+func (c *connector) ingressAllow(p packet.Parsed) (bool, string) {
+	if !c.transitIPInPool(p.Dst.Addr()) || !isSupportedProtocol(p.IPProto) {
+		return false, ""
+	}
+	return true, transitIPAllowReason
 }
 
 // lookupAddrBySrcIPAndTransitIPLocked returns the real destination IP that the
