@@ -199,4 +199,8 @@ type Conn25ConnectorAppState struct {
 type Conn25ConnectorAddressState struct {
 	DestinationIP string `json:"destinationIP,omitempty"`
 	TransitIP     string `json:"transitIP,omitempty"`
+	// Ports are the protocol and port combinations the peer's grant for the
+	// app permits through this mapping, in [tailcfg.ProtoPortRange] form
+	// (e.g. "tcp:443", "*"). An empty list means no traffic is permitted.
+	Ports []string `json:"ports,omitempty"`
 }

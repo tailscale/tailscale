@@ -15,15 +15,25 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/views"
 )
 
 type appAddr struct {
-	app         string
-	addr        netip.Addr
+	app  string
+	addr netip.Addr
+	// ports are the protocol and port combinations the peer was permitted to
+	// reach through app at the moment it registered this mapping.
+	ports       views.Slice[tailcfg.ProtoPortRange]
 	expiryEntry *list.Element
 }
 
-func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr, peerV6 netip.Addr, tipr TransitIPRequest) TransitIPResponse {
+func (c *connector) handleTransitIPRequest(
+	n tailcfg.NodeView,
+	peerV4 netip.Addr,
+	peerV6 netip.Addr,
+	tipr TransitIPRequest,
+	ports views.Slice[tailcfg.ProtoPortRange],
+) TransitIPResponse {
 	if tipr.TransitIP.Is4() != tipr.DestinationIP.Is4() {
 		c.logf("[Unexpected] peer attempt to map a transit IP to dest IP did not have matching families: node: %s, tIPv4: %v dIPv4: %v",
 			n.StableID(), tipr.TransitIP.Is4(), tipr.DestinationIP.Is4())
@@ -77,7 +87,7 @@ func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr
 		transitIP: tipr.TransitIP,
 		createdAt: c.clock.Now(),
 	})
-	peerMap[tipr.TransitIP] = appAddr{addr: tipr.DestinationIP, app: tipr.App, expiryEntry: elem}
+	peerMap[tipr.TransitIP] = appAddr{addr: tipr.DestinationIP, app: tipr.App, ports: ports, expiryEntry: elem}
 	return TransitIPResponse{}
 }
 
@@ -116,7 +126,8 @@ type transitIPExpiryEntry struct {
 func (c *connector) realIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.lookupAddrBySrcIPAndTransitIPLocked(srcIP, transitIP)
+	aa, ok := c.lookupAppAddrBySrcIPAndTransitIPLocked(srcIP, transitIP)
+	return aa.addr, ok
 }
 
 // transitIPInPool reports whether tip is within the transit IP pool of its
@@ -149,25 +160,58 @@ func (c *connector) destinationInPools(dst netip.Addr) bool {
 	return (magic != nil && magic.Contains(dst)) || (transit != nil && transit.Contains(dst))
 }
 
-// packetFilterAllow returns true if the provided packet has a Dst that is in
+// linkLocalAllow returns true if the provided packet has a Dst that is in
 // the configured transit IP range for this connector, false otherwise.
-func (c *connector) packetFilterAllow(p packet.Parsed) (bool, string) {
+//
+// It only exempts the packet from the filter's blanket drop of link-local
+// destinations; it does not accept it. Whether the connector accepts the
+// packet is decided separately by [connector.ingressAllow], which both hooks
+// a packet to a transit IP has to get through.
+func (c *connector) linkLocalAllow(p packet.Parsed) (bool, string) {
 	if c.transitIPInPool(p.Dst.Addr()) {
-		return true, packetFilterAllowReason
+		return true, connectorTransitIPReason
 	}
 	return false, ""
 }
 
-// lookupAddrBySrcIPAndTransitIPLocked returns the real destination IP that the
-// peer at srcIP registered for transitIP, or (zero, false) if it registered
-// none. c.mu must be held.
-func (c *connector) lookupAddrBySrcIPAndTransitIPLocked(srcIP, transitIP netip.Addr) (netip.Addr, bool) {
+// ingressAllow reports whether p, a packet arriving from a peer, may be
+// accepted by this connector. It may if p is addressed to an address in a
+// configured transit IP pool and either the peer has no mapping registered for
+// that address, or the grant it registered the mapping under permits p's
+// protocol and destination port.
+//
+// Packets for an unregistered mapping are accepted here so that the datapath
+// can drop them itself and answer with the TSMP message that prompts the
+// client to re-register (see [datapathHandler.HandlePacketFromWireGuard]).
+// Nothing is forwarded on their behalf.
+//
+// The permitted protocols and ports are the ones the peer held when it
+// registered the mapping. A grant that is tightened afterwards takes effect
+// when the mapping is re-registered, at the latest [connectorTransitIPExpiry]
+// after it was last registered.
+func (c *connector) ingressAllow(p packet.Parsed) (bool, string) {
+	if !c.transitIPInPool(p.Dst.Addr()) {
+		return false, ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	aa, ok := c.lookupAppAddrBySrcIPAndTransitIPLocked(p.Src.Addr(), p.Dst.Addr())
+	if !ok {
+		return true, connectorUnmappedReason
+	}
+	return protoPortRangesAllow(aa.ports, p)
+}
+
+// lookupAppAddrBySrcIPAndTransitIPLocked returns the mapping the peer at srcIP
+// registered for transitIP, or (zero, false) if it registered none.
+// c.mu must be held.
+func (c *connector) lookupAppAddrBySrcIPAndTransitIPLocked(srcIP, transitIP netip.Addr) (appAddr, bool) {
 	m, ok := c.transitIPs[srcIP]
 	if !ok || m == nil {
-		return netip.Addr{}, false
+		return appAddr{}, false
 	}
 	v, ok := m[transitIP]
-	return v.addr, ok
+	return v, ok
 }
 
 // expireTransitIPs expires entries in the connector's transitIPs map that are

@@ -74,6 +74,12 @@ const (
 	// an app named "example".
 	// Each value under such a key is a [tailscale.com/tailcfg.ProtoPortRange].
 	// If multiple values are present, the union of all protocol/port
-	// combinations described shall be permitted.
+	// combinations described shall be permitted. The connector enforces them
+	// in its packet filter, on every packet addressed to a transit IP the
+	// peer registered for the app.
+	//
+	// A key present with no values identifies the app as granted — the peer
+	// may still resolve its domains and register transit IPs for it, so that
+	// the configuration is diagnosable — but permits no traffic.
 	Conn25Prefix Prefix = "tailscale.com/cap/conn25/"
 )
