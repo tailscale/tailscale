@@ -933,6 +933,12 @@ func proxyClassHandlerForSvc(cl client.Client, logger *zap.SugaredLogger, defaul
 					if hasProxyClassAnnotation(&svc) {
 						continue
 					}
+					if isManagedResource(&svc) {
+						// Services created by the operator for its own
+						// resources (e.g. PeerRelay) must not get a proxy;
+						// this mirrors serviceHandler.
+						continue
+					}
 					if !shouldExpose(&svc, isDefaultLoadBalancer) {
 						continue
 					}
