@@ -237,6 +237,9 @@ func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, geneve packet.Ge
 type msgsBatch struct {
 	msgs                []ipv6.Message
 	writeBatchToUDPAddr *net.UDPAddr
+	// segments holds the datagrams of a coalesced message the kernel refused,
+	// and is allocated on first use.
+	segments []ipv6.Message
 }
 
 func (c *linuxBatchingConn) getMsgsBatch() *msgsBatch {
@@ -255,6 +258,9 @@ func (c *linuxBatchingConn) putMsgsBatch(batch *msgsBatch, usedMsgs int) {
 		// but we append more during [linuxBatchingConn.coalesceMessages].
 		// Leave index zero accessible:
 		batch.msgs[i] = ipv6.Message{Buffers: batch.msgs[i].Buffers[:1], OOB: batch.msgs[i].OOB[:0]}
+	}
+	for i := range batch.segments {
+		batch.segments[i].Buffers[0] = nil
 	}
 	c.msgsPool.Put(batch)
 }
@@ -326,7 +332,7 @@ retry:
 		n = len(buffs)
 	}
 
-	err := c.writeBatch(batch.msgs[:n])
+	err := c.writeBatch(batch, batch.msgs[:n])
 	if err != nil && c.txOffload.Load() && neterror.ShouldDisableUDPGSO(err) {
 		c.txOffload.Store(false)
 		retried = true
@@ -342,19 +348,69 @@ func (c *linuxBatchingConn) SyscallConn() (syscall.RawConn, error) {
 	return c.pc.SyscallConn()
 }
 
-func (c *linuxBatchingConn) writeBatch(msgs []ipv6.Message) error {
-	var head int
-	for {
+// writeBatch writes msgs in order. A message refused for its size affects only
+// itself: a coalesced one is written again a datagram at a time, since the kernel
+// refuses to segment a datagram over the route's MTU but may fragment it, and
+// the messages after it are written as usual. It returns the first EMSGSIZE of a
+// datagram refused on its own, once all are attempted, or any other error at once.
+//
+// Returning the number of packets written would require unraveling individual
+// msg len and gso size during a coalesced write. The top of the call stack
+// disregards partial success, so keep this simple for now.
+func (c *linuxBatchingConn) writeBatch(batch *msgsBatch, msgs []ipv6.Message) error {
+	var refused error
+	for head := 0; head < len(msgs); {
 		n, err := c.xpc.WriteBatch(msgs[head:], 0)
-		if err != nil || n == len(msgs[head:]) {
-			// Returning the number of packets written would require
-			// unraveling individual msg len and gso size during a coalesced
-			// write. The top of the call stack disregards partial success,
-			// so keep this simple for now.
+		if err == nil {
+			head += n
+			continue
+		}
+		// The error is about msgs[head]: sendmmsg reports one for a later
+		// message as a short count, and the error on the next call.
+		if msg := &msgs[head]; len(msg.Buffers) > 1 && isCoalescedSizeRefusal(err) {
+			err = c.writeBatch(batch, batch.segmentsOf(msg))
+		}
+		if err != nil && !errors.Is(err, unix.EMSGSIZE) {
 			return err
 		}
-		head += n
+		if refused == nil {
+			refused = err
+		}
+		head++
 	}
+	return refused
+}
+
+// isCoalescedSizeRefusal reports whether err, from writing a coalesced message,
+// may mean that its segments don't fit the route's MTU: EMSGSIZE, or EINVAL
+// before Linux 6.14 (see
+// https://github.com/torvalds/linux/commit/235174b2bed88501fda689c113c55737f99332d8).
+// The kernel's other EINVALs for such a message don't apply to its datagrams
+// written singly, each of which then succeeds or returns its own error.
+func isCoalescedSizeRefusal(err error) bool {
+	return errors.Is(err, unix.EMSGSIZE) || errors.Is(err, unix.EINVAL)
+}
+
+// segmentsOf returns one uncoalesced message per datagram of msg, leaving out
+// the sentinel tail, which exists only to change how msg is segmented. They are
+// valid until the next call, or until b returns to its pool.
+func (b *msgsBatch) segmentsOf(msg *ipv6.Message) []ipv6.Message {
+	if b.segments == nil {
+		b.segments = make([]ipv6.Message, udpSegmentMaxDatagrams)
+		for i := range b.segments {
+			b.segments[i].Buffers = make([][]byte, 1)
+		}
+	}
+	n := 0
+	for _, buff := range msg.Buffers {
+		if len(buff) == len(neverGSOEqualTailSentinelPayload) && &buff[0] == &neverGSOEqualTailSentinelPayload[0] {
+			continue
+		}
+		b.segments[n].Buffers[0] = buff
+		b.segments[n].Addr = msg.Addr
+		n++
+	}
+	return b.segments[:n]
 }
 
 // getDataFromControl returns the data portion of the first control msg with
