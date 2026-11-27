@@ -7,8 +7,10 @@ import (
 	"io/fs"
 	"sync"
 	"syscall"
+	"unsafe"
 
 	"go4.org/mem"
+	"golang.org/x/sys/unix"
 	"tailscale.com/util/dirwalk"
 )
 
@@ -35,10 +37,14 @@ func (c *counter) count(name mem.RO, de fs.DirEntry) error {
 
 // procSelfFDFd returns a file descriptor for the /proc/self/fd
 // directory, kept open for the process lifetime so that
-// currentFDsFast can fstat it without allocating.
+// currentFDsFast can stat it without allocating.
 var procSelfFDFd = sync.OnceValues(func() (int, error) {
 	return syscall.Open("/proc/self/fd", syscall.O_RDONLY|syscall.O_CLOEXEC, 0)
 })
+
+// emptyPath is a NUL-terminated empty string, used as the path
+// argument to statx with AT_EMPTY_PATH.
+var emptyPath byte
 
 // currentFDsFast returns the number of open file descriptors and
 // whether it was able to determine it. It uses the fact that as of
@@ -50,8 +56,21 @@ func currentFDsFast() (n int, ok bool) {
 	if err != nil {
 		return 0, false
 	}
-	var st syscall.Stat_t
-	if err := syscall.Fstat(fd, &st); err != nil {
+	// Make the statx system call directly rather than using
+	// syscall.Fstat. On loong64, which has no fstat system call,
+	// syscall.Fstat is implemented as statx with an empty path, and
+	// converting that path string to a NUL-terminated buffer allocates
+	// on every call. unix.Statx has the same problem on all
+	// architectures.
+	var st unix.Statx_t
+	_, _, errno := unix.Syscall6(unix.SYS_STATX,
+		uintptr(fd),
+		uintptr(unsafe.Pointer(&emptyPath)),
+		unix.AT_EMPTY_PATH,
+		unix.STATX_SIZE,
+		uintptr(unsafe.Pointer(&st)),
+		0)
+	if errno != 0 || st.Mask&unix.STATX_SIZE == 0 {
 		return 0, false
 	}
 	return int(st.Size), st.Size > 0
