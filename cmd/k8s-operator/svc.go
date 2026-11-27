@@ -353,11 +353,22 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		{Hostname: dev.hostname},
 	}
 
-	clusterIPAddr, err := netip.ParseAddr(svc.Spec.ClusterIP)
-	if err != nil {
-		msg := fmt.Sprintf("failed to parse cluster IP: %v", err)
-		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, msg, a.clock, logger)
-		return errors.New(msg)
+	// Determine which IP families the Service exposes. In a dual-stack cluster
+	// Spec.ClusterIPs holds one address per family, so every one of them must be
+	// considered; Spec.ClusterIP only carries a single (legacy) address.
+	clusterIPs := svc.Spec.ClusterIPs
+	if len(clusterIPs) == 0 {
+		clusterIPs = []string{svc.Spec.ClusterIP}
+	}
+	exposedFamilies := make(map[bool]bool, len(clusterIPs)) // keyed by netip.Addr.Is4
+	for _, clusterIP := range clusterIPs {
+		clusterIPAddr, err := netip.ParseAddr(clusterIP)
+		if err != nil {
+			msg := fmt.Sprintf("failed to parse cluster IP: %v", err)
+			tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, msg, a.clock, logger)
+			return errors.New(msg)
+		}
+		exposedFamilies[clusterIPAddr.Is4()] = true
 	}
 
 	for _, ip := range dev.ips {
@@ -365,7 +376,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		if err != nil {
 			continue
 		}
-		if addr.Is4() == clusterIPAddr.Is4() { // only add addresses of the same family
+		if exposedFamilies[addr.Is4()] { // only add addresses of a family the Service exposes
 			ingress = append(ingress, corev1.LoadBalancerIngress{IP: ip})
 		}
 	}
