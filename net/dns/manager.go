@@ -473,7 +473,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 			}
 			return resolver.Config{}, OSConfig{}, err
 		}
-		canScopeWithoutBase := !isSandboxedApple && (isNoopManager(m.os) || supportsSplitDNS) ||
+		canScopeWithoutBase := isNoopManager(m.os) || !isSandboxedApple && supportsSplitDNS ||
 			isIOS && supportsSplitDNS && scopeApple
 		if canScopeWithoutBase && err == ErrGetBaseConfigNotSupported {
 			// Some managers have no base config by construction. Apple Mode B
@@ -482,6 +482,10 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 			// catch-all without forwarding upstreams; report the read error.
 			// Sandboxed macOS has /etc/resolv.conf, so an unsupported read
 			// remains an error there, even for an otherwise simple config.
+			// The noop manager (used by tsnet) never has a base config and
+			// configures no OS DNS, so it scopes on every platform; otherwise
+			// an embedded node on iOS or sandboxed macOS would drop its split
+			// routes and resolve those names through the host resolver.
 			m.health.SetHealthy(OSConfigurationReadWarnable)
 			ocfg.MatchDomains = cfg.matchDomains()
 			return rcfg, ocfg, nil
