@@ -44,12 +44,14 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
+	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/def"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/osdiag"
+	"tailscale.com/util/pipetcp"
 	"tailscale.com/util/rands"
 	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/version"
@@ -1383,8 +1385,26 @@ func (h *Handler) serveDial(w http.ResponseWriter, r *http.Request) {
 	if err := brw.Flush(); err != nil {
 		return
 	}
+	_, halfClosable := reqConn.(nettype.TCPWriteCloser)
 	reqConn = netutil.NewDrainBufConn(reqConn, brw.Reader)
+	proxyDialConn(reqConn, outConn, halfClosable)
+}
 
+// proxyDialConn copies data in both directions between reqConn, the LocalAPI
+// client's hijacked connection, and outConn, the connection dialed on its
+// behalf.
+//
+// If halfClosable reports that reqConn's write side can be closed on its own
+// (as on a Unix socket or TCP), an EOF in either direction is passed on as a
+// half-close while the other direction keeps flowing, until both are done
+// (tailscale/tailscale#22637). Otherwise (as on a Windows named pipe) the
+// client could not be told that the peer has stopped sending, so both
+// connections are torn down as soon as either direction ends.
+func proxyDialConn(reqConn, outConn net.Conn, halfClosable bool) {
+	if _, ok := outConn.(nettype.TCPWriteCloser); ok && halfClosable {
+		pipetcp.Pipe(reqConn, outConn)
+		return
+	}
 	errc := make(chan error, 1)
 	go func() {
 		_, err := io.Copy(reqConn, outConn)
