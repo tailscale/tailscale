@@ -111,6 +111,7 @@ const sv: Record<MessageKey, string> = {
   managing: "Administrerar",
   viewingAs: "Visar som {name}",
   managingAs: "Administrerar som {name}",
+  pageNotFound: "Sidan hittades inte",
   recognizedBecause: "Vi känner igen dig eftersom du öppnar sidan från",
   readOnlyDescription: "Webbgränssnittet körs i skrivskyddat läge.",
   noPermissionToChange:
