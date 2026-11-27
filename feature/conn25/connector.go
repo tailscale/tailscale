@@ -103,7 +103,13 @@ type connector struct {
 	clock     tstime.Clock
 
 	// Remember to add new fields to [connector.reset] if needed.
-	mu sync.Mutex // protects the fields below
+	//
+	// mu is an RWMutex because [connector.ingressAllow] reads transitIPs for
+	// every packet a peer sends to a transit IP, which on a busy connector is
+	// all of its forwarded traffic. Writers are comparatively rare: transit IP
+	// registrations, and the five-minutely expiry sweep. A plain Mutex would
+	// serialize the whole datapath behind one another's map lookups.
+	mu sync.RWMutex // protects the fields below
 	// tokenSecret is the random secret used to mint and verify tokens in TransitIPRequests.
 	// It is generated in memory at creation, rotated on [connector.reset] (ie on profile change), and not persisted.
 	tokenSecret [tokenSecretLen]byte
@@ -124,8 +130,8 @@ type transitIPExpiryEntry struct {
 // realIPForTransitIPConnection is part of the implementation of the [Conn25Datapath] interface for dataflow lookups.
 // See also [Conn25Datapath.ConnectorRealIPForTransitIPConnection].
 func (c *connector) realIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	aa, ok := c.lookupAppAddrBySrcIPAndTransitIPLocked(srcIP, transitIP)
 	return aa.addr, ok
 }
@@ -193,18 +199,21 @@ func (c *connector) ingressAllow(p packet.Parsed) (bool, string) {
 	if !c.transitIPInPool(p.Dst.Addr()) {
 		return false, ""
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
 	aa, ok := c.lookupAppAddrBySrcIPAndTransitIPLocked(p.Src.Addr(), p.Dst.Addr())
+	c.mu.RUnlock()
 	if !ok {
 		return true, connectorUnmappedReason
 	}
+	// aa.ports is matched outside the lock. Its backing array is built once
+	// by [appProtoPortRanges] and never written again; re-registering a
+	// mapping replaces the whole [appAddr] rather than editing this one.
 	return protoPortRangesAllow(aa.ports, p)
 }
 
 // lookupAppAddrBySrcIPAndTransitIPLocked returns the mapping the peer at srcIP
 // registered for transitIP, or (zero, false) if it registered none.
-// c.mu must be held.
+// c.mu must be held, for reading or writing.
 func (c *connector) lookupAppAddrBySrcIPAndTransitIPLocked(srcIP, transitIP netip.Addr) (appAddr, bool) {
 	m, ok := c.transitIPs[srcIP]
 	if !ok || m == nil {

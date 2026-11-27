@@ -424,8 +424,8 @@ func TestConnectorGrantRegistration(t *testing.T) {
 				t.Errorf("message = %q, want %q", got, tt.wantMsg)
 			}
 
-			c.connector.mu.Lock()
-			defer c.connector.mu.Unlock()
+			c.connector.mu.RLock()
+			defer c.connector.mu.RUnlock()
 			aa, ok := c.connector.lookupAppAddrBySrcIPAndTransitIPLocked(peerIP, transitIP)
 			if tt.wantCode != OK {
 				// A refused request must not leave a mapping behind.

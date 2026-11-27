@@ -6,6 +6,7 @@ package conn25
 import (
 	"encoding/binary"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,7 +16,9 @@ import (
 	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tstest"
 	"tailscale.com/types/appctype"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/views"
 	"tailscale.com/util/must"
 )
 
@@ -73,7 +76,7 @@ func TestConnectorExpireTransitIPs(t *testing.T) {
 		t.Fatalf("expireTransitIPs removed %d mappings, want 2", got)
 	}
 
-	c.connector.mu.Lock()
+	c.connector.mu.RLock()
 	if _, ok := c.connector.transitIPs[peerA][tipOne]; ok {
 		t.Fatalf("expected tipOne %v to be removed from the map", tipOne)
 	}
@@ -83,21 +86,21 @@ func TestConnectorExpireTransitIPs(t *testing.T) {
 	if _, ok := c.connector.transitIPs[peerB]; ok {
 		t.Fatalf("expected peerB sub-map to be pruned after its only mapping expired")
 	}
-	c.connector.mu.Unlock()
+	c.connector.mu.RUnlock()
 
 	// advance another 30 mins, expire the other two mappings
 	clock.Advance(30 * time.Minute)
 	if got := c.connector.expireTransitIPs(clock.Now()); got != 2 {
 		t.Fatalf("expireTransitIPs removed %d mappings, want 2", got)
 	}
-	c.connector.mu.Lock()
+	c.connector.mu.RLock()
 	if c.connector.expiryQueue.Len() != 0 {
 		t.Fatalf("queue should be all done now")
 	}
 	if _, ok := c.connector.transitIPs[peerA]; ok {
 		t.Fatalf("expected peerA sub-map to be pruned after all mappings expired")
 	}
-	c.connector.mu.Unlock()
+	c.connector.mu.RUnlock()
 
 	uint32ToIPv4 := func(n uint32) netip.Addr {
 		var buf [4]byte
@@ -119,14 +122,14 @@ func TestConnectorExpireTransitIPs(t *testing.T) {
 	if got := c.connector.expireTransitIPs(clock.Now()); got != 100000 {
 		t.Fatalf("expireTransitIPs removed %d mappings, want 100000, the limit for one run", got)
 	}
-	c.connector.mu.Lock()
+	c.connector.mu.RLock()
 	if c.connector.expiryQueue.Len() != 3 {
 		t.Fatalf("expected 3 items remaining in queue")
 	}
 	if len(c.connector.transitIPs[peerA]) != 3 {
 		t.Fatalf("expected 3 items remaining in peerA transitIPs")
 	}
-	c.connector.mu.Unlock()
+	c.connector.mu.RUnlock()
 }
 
 // TestConnectorDisallowedDestinations checks which destinations
@@ -313,4 +316,136 @@ func TestConnectorLinkLocalAllow(t *testing.T) {
 	}); allow {
 		t.Fatal("unknownTip: should not have been allowed")
 	}
+}
+
+// connectorForIngress returns a connector configured with appName and a
+// /15 transit pool, holding a mapping for each of the first n transit IPs
+// handed out by transitIPAt, registered by the peer at peerIP under grant.
+func connectorForIngress(logf logger.Logf, peerIP netip.Addr, grant string, n int) *Conn25 {
+	const appName = "app"
+
+	c := newConn25(logf)
+	c.reconfig(&config{
+		isConfigured: true,
+		appsByName:   map[string]appctype.AppConnectorAttr{appName: {}},
+		ipSets:       ipSets{v4Transit: mustIPSetFromPrefix("192.0.0.0/15")},
+	})
+
+	node := (&tailcfg.Node{ID: 1, Addresses: []netip.Prefix{netip.PrefixFrom(peerIP, 32)}}).View()
+	ports := views.SliceOf(must.Get(tailcfg.ParseProtoPortRanges([]string{grant})))
+	for i := range n {
+		c.connector.handleTransitIPRequest(node, peerIP, netip.Addr{}, TransitIPRequest{
+			TransitIP:     transitIPAt(i),
+			DestinationIP: netip.MustParseAddr("203.0.113.1"),
+			App:           appName,
+		}, ports)
+	}
+	return c
+}
+
+// transitIPAt returns the i'th address of the transit pool
+// [connectorForIngress] configures.
+func transitIPAt(i int) netip.Addr {
+	var buf [4]byte
+	binary.BigEndian.PutUint32(buf[:], 0xc0000000|uint32(i))
+	return netip.AddrFrom4(buf)
+}
+
+// TestConnectorIngressAllowConcurrent runs [connector.ingressAllow] against
+// the writers it shares c.mu with. It is here for the race detector; the
+// verdicts themselves are covered by [TestConnectorIngressAllow].
+func TestConnectorIngressAllowConcurrent(t *testing.T) {
+	const appName = "app"
+	const mappings = 64
+
+	peerIP := netip.MustParseAddr("100.64.0.1")
+	node := (&tailcfg.Node{ID: 1, Addresses: []netip.Prefix{netip.PrefixFrom(peerIP, 32)}}).View()
+	c := connectorForIngress(t.Logf, peerIP, "tcp:443", mappings)
+
+	clock := tstest.NewClock(tstest.ClockOpts{Start: time.Now()})
+	c.connector.clock = clock
+
+	ports := views.SliceOf(must.Get(tailcfg.ParseProtoPortRanges([]string{"tcp:443"})))
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	start := func(f func()) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				f()
+			}
+		}()
+	}
+
+	// Readers. A packet to the granted port must come back allowed whatever
+	// the writers are doing: either the mapping is there and permits it, or
+	// it has just expired and the packet is passed for the datapath to answer
+	// with the re-registration TSMP.
+	for i := range 4 {
+		start(func() {
+			tip := transitIPAt(i % mappings)
+			allow, why := c.connector.ingressAllow(packet.Parsed{
+				IPVersion: 4,
+				IPProto:   ipproto.TCP,
+				TCPFlags:  packet.TCPSyn,
+				Src:       netip.AddrPortFrom(peerIP, 12345),
+				Dst:       netip.AddrPortFrom(tip, 443),
+			})
+			if !allow {
+				t.Errorf("ingressAllow(%v:443) = false, %q; want allowed", tip, why)
+			}
+		})
+	}
+
+	// Writers: re-registration, the expiry sweep, and the state API, which
+	// reads under the same lock and iterates everything.
+	start(func() {
+		c.connector.handleTransitIPRequest(node, peerIP, netip.Addr{}, TransitIPRequest{
+			TransitIP:     transitIPAt(mappings / 2),
+			DestinationIP: netip.MustParseAddr("203.0.113.2"),
+			App:           appName,
+		}, ports)
+	})
+	start(func() {
+		clock.Advance(time.Minute)
+		c.connector.expireTransitIPs(clock.Now())
+	})
+	start(func() { c.connector.getActiveState() })
+
+	time.Sleep(50 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+}
+
+// BenchmarkConnectorIngressAllow measures the per-packet cost of the filter
+// hook, which every packet a peer sends to a transit IP pays.
+func BenchmarkConnectorIngressAllow(b *testing.B) {
+	const mappings = 1024
+
+	peerIP := netip.MustParseAddr("100.64.0.1")
+	c := connectorForIngress(logger.Discard, peerIP, "tcp:443", mappings)
+
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		var i int
+		for pb.Next() {
+			i++
+			if allow, _ := c.connector.ingressAllow(packet.Parsed{
+				IPVersion: 4,
+				IPProto:   ipproto.TCP,
+				TCPFlags:  packet.TCPSyn,
+				Src:       netip.AddrPortFrom(peerIP, 12345),
+				Dst:       netip.AddrPortFrom(transitIPAt(i%mappings), 443),
+			}); !allow {
+				b.Fatal("not allowed")
+			}
+		}
+	})
 }

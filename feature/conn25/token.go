@@ -41,9 +41,9 @@ func (c *connector) mintToken(app string, dst netip.Addr) ([]byte, error) {
 		return nil, fmt.Errorf("conn25: app name too long to mint token: %d bytes", len(app))
 	}
 
-	c.mu.Lock()
+	c.mu.RLock()
 	secret := c.tokenSecret
-	c.mu.Unlock()
+	c.mu.RUnlock()
 
 	token := make([]byte, 0, 1+tokenMACLen)
 	token = append(token, tokenVersion1)
@@ -61,9 +61,9 @@ func (c *connector) verifyToken(token []byte, app string, dst netip.Addr) bool {
 		return false
 	}
 
-	c.mu.Lock()
+	c.mu.RLock()
 	secret := c.tokenSecret
-	c.mu.Unlock()
+	c.mu.RUnlock()
 
 	return hmac.Equal(token[1:], tokenMAC(secret, app, dst))
 }

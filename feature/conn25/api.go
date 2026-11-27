@@ -158,8 +158,8 @@ func (c *client) getActiveState() appctype.Conn25ClientState {
 // getActiveState gets active state from the connector.
 // See [appctype.Conn25ConnectorState] for structure.
 func (c *connector) getActiveState() appctype.Conn25ConnectorState {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 
 	var peers []appctype.Conn25ConnectorPeerState
 	// Sort peers by client IP.
