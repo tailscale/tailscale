@@ -161,8 +161,17 @@ func maybeStartLoginSessionLinux(dlogf logger.Logf, ia incubatorArgs) func() err
 		// https://www.freedesktop.org/software/systemd/man/org.freedesktop.login1.html
 		// For now best effort is fine.
 		dlogf("ssh: failed to CreateSession for user %q (%d) %v", ia.localUser, ia.uid, err)
+		// Even without a new logind session, the user may have a runtime
+		// dir from an existing session (e.g. a local login); export it.
+		if dir := fmt.Sprintf("/run/user/%d", ia.uid); fileExists(dir) {
+			os.Setenv("XDG_RUNTIME_DIR", dir)
+		}
 		return nil
 	}
+	os.Setenv("XDG_RUNTIME_DIR", resp.runtimePath)
+	os.Setenv("XDG_SESSION_ID", resp.sessionID)
+	os.Setenv("XDG_SESSION_CLASS", "user")
+	os.Setenv("XDG_SESSION_TYPE", "tty")
 	os.Setenv("DBUS_SESSION_BUS_ADDRESS", fmt.Sprintf("unix:path=%v/bus", resp.runtimePath))
 	if !resp.existing {
 		return func() error {
