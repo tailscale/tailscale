@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -215,9 +216,9 @@ func getToken() (string, error) {
 func initSameUserProofToken(sharedDir string, port int, token string) error {
 	var err error
 
-	// Guard against bad sharedDir
+	// Guard against bad sharedDir.
 	old, err := os.ReadDir(sharedDir)
-	if err == os.ErrNotExist {
+	if err != nil {
 		log.Printf("failed to read shared dir %s: %v", sharedDir, err)
 		return err
 	}
@@ -235,7 +236,7 @@ func initSameUserProofToken(sharedDir string, port int, token string) error {
 	var baseFile string
 	var perm fs.FileMode
 	if ssd.isMacSysExt() {
-		perm = 0640 // allow wheel to read
+		perm = 0640 // chowned to the admin group below, so only admins can read it
 		baseFile = fmt.Sprintf("sameuserproof-%d", port)
 		portFile := filepath.Join(sharedDir, "ipnport")
 		err := os.Remove(portFile)
@@ -254,17 +255,43 @@ func initSameUserProofToken(sharedDir string, port int, token string) error {
 	path := filepath.Join(sharedDir, baseFile)
 	ssd.sameuserproofFD, err = os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, perm)
 	log.Printf("initSameUserProofToken : done=%v", err == nil)
+	if err != nil {
+		return err
+	}
 
-	if ssd.isMacSysExt() && err == nil {
+	if ssd.isMacSysExt() {
 		fmt.Fprintf(ssd.sameuserproofFD, "%s\n", token)
+		if err := os.Chmod(path, perm); err != nil {
+			log.Printf("failed to chmod %s to %v: %v", path, perm, err)
+		}
 
 		// Macsys runs as root so ownership of this file will be
 		// root/wheel.  Change ownership to root/admin which will let all members
 		// of the admin group to read it.
-		unix.Fchown(int(ssd.sameuserproofFD.Fd()), 0, 80 /* admin */)
+		gid := adminGroupGID()
+		if err := unix.Fchown(int(ssd.sameuserproofFD.Fd()), 0, gid); err != nil {
+			// Not fatal, but the file stays root/wheel, so no administrator can
+			// read the token and the CLI will not find credentials.
+			log.Printf("failed to chown %s to root:%d: %v", path, gid, err)
+		}
 	}
 
-	return err
+	return nil
+}
+
+// adminGroupGID returns the gid of the macOS "admin" group.
+//
+// The group is resolved by name so that this matches how admin membership is
+// checked elsewhere (see ipnauth.isLocalAdmin, which resolves "admin" via
+// util/groupmember) and so it stays correct where "admin" is not gid 80. It
+// falls back to the gid used by a stock macOS install if the lookup fails.
+func adminGroupGID() int {
+	if g, err := user.LookupGroup("admin"); err == nil {
+		if gid, err := strconv.Atoi(g.Gid); err == nil {
+			return gid
+		}
+	}
+	return 80
 }
 
 // readMacsysSameuserproof returns the localhost TCP port number and auth token
