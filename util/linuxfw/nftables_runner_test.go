@@ -1258,6 +1258,9 @@ func TestNFTAddAndDelConnmarkRules(t *testing.T) {
 	if prerouting4After == nil || output4After == nil {
 		t.Fatal("IPv4 mangle chains not created")
 	}
+	if output4After.Type != nftables.ChainTypeRoute {
+		t.Errorf("IPv4 OUTPUT chain type = %q, want %q", output4After.Type, nftables.ChainTypeRoute)
+	}
 
 	prerouting4Rules, err := conn.GetRules(prerouting4After.Table, prerouting4After)
 	if err != nil {
@@ -1355,6 +1358,86 @@ func TestNFTAddAndDelConnmarkRules(t *testing.T) {
 		if len(rules) != output6RulesBefore {
 			t.Fatalf("IPv6 OUTPUT rules after delete: got %d, want %d", len(rules), output6RulesBefore)
 		}
+	}
+}
+
+func TestCleanupConnmarkRules(t *testing.T) {
+	conn := newSysConn(t)
+	runner := newFakeNftablesRunnerWithConn(t, conn, true)
+	if err := runner.AddConnmarkSaveRule(); err != nil {
+		t.Fatalf("AddConnmarkSaveRule() failed: %v", err)
+	}
+
+	for _, fam := range []nftables.TableFamily{nftables.TableFamilyIPv4, nftables.TableFamilyIPv6} {
+		cleanupConnmarkRules(t.Logf, conn, &nftables.Table{Family: fam, Name: "mangle"})
+
+		chains, err := conn.ListChainsOfTableFamily(fam)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ch := range chains {
+			if ch.Table.Name != "mangle" {
+				continue
+			}
+			rules, err := conn.GetRules(ch.Table, ch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rules) != 0 {
+				t.Errorf("family %v chain %s: got %d rules after cleanup, want 0", fam, ch.Name, len(rules))
+			}
+		}
+	}
+}
+
+// TestCleanupIncompatibleMangleOutputChain checks that the cleanup deletes a
+// mangle/OUTPUT chain of type filter as AddConnmarkSaveRule used to create it,
+// and keeps any other.
+func TestCleanupIncompatibleMangleOutputChain(t *testing.T) {
+	polAccept, polDrop := nftables.ChainPolicyAccept, nftables.ChainPolicyDrop
+	tests := []struct {
+		name        string
+		typ         nftables.ChainType
+		policy      *nftables.ChainPolicy
+		ourRule     bool
+		otherRule   bool
+		wantDeleted bool
+	}{
+		{"filter, empty", nftables.ChainTypeFilter, &polAccept, false, false, true},
+		{"filter with our rule", nftables.ChainTypeFilter, &polAccept, true, false, true},
+		{"filter with another rule", nftables.ChainTypeFilter, &polAccept, true, true, false},
+		{"filter with drop policy", nftables.ChainTypeFilter, &polDrop, true, false, false},
+		{"route", nftables.ChainTypeRoute, &polAccept, true, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn := newSysConn(t)
+			mangle := conn.AddTable(&nftables.Table{Family: nftables.TableFamilyIPv4, Name: "mangle"})
+			ch := conn.AddChain(&nftables.Chain{
+				Name:     "OUTPUT",
+				Table:    mangle,
+				Type:     tt.typ,
+				Hooknum:  nftables.ChainHookOutput,
+				Priority: nftables.ChainPriorityMangle,
+				Policy:   tt.policy,
+			})
+			if tt.ourRule {
+				conn.AddRule(&nftables.Rule{Table: mangle, Chain: ch, Exprs: makeConnmarkSaveExprs(), UserData: []byte("ts-connmark-save")})
+			}
+			if tt.otherRule {
+				conn.AddRule(&nftables.Rule{Table: mangle, Chain: ch, Exprs: []expr.Any{&expr.Verdict{Kind: expr.VerdictAccept}}})
+			}
+			if err := conn.Flush(); err != nil {
+				t.Fatal(err)
+			}
+
+			cleanupIncompatibleMangleOutputChain(t.Logf, conn, mangle)
+
+			_, err := getChainFromTable(conn, mangle, "OUTPUT")
+			if deleted := errors.Is(err, errorChainNotFound{"mangle", "OUTPUT"}); deleted != tt.wantDeleted {
+				t.Errorf("deleted = %v (err %v), want %v", deleted, err, tt.wantDeleted)
+			}
+		})
 	}
 }
 

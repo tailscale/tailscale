@@ -233,5 +233,9 @@ func clearRules(proto iptables.Protocol, logf logger.Logf) error {
 		errs = append(errs, err)
 	}
 
+	if err := delConnmarkRules(ipt); err != nil {
+		errs = append(errs, err)
+	}
+
 	return errors.Join(errs...)
 }
