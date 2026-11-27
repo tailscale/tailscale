@@ -31,6 +31,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/coreos/go-iptables v0.8.0
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
+	github.com/cpu/go-upki v0.0.0-20261112150031-bc582dfec684
 	github.com/creachadair/mds v0.31.0
 	github.com/creachadair/msync v0.10.1
 	github.com/creachadair/taskgroup v0.14.4
