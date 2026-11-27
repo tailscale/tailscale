@@ -139,6 +139,10 @@ func TestDoHIPsOfBase(t *testing.T) {
 			want: ips("45.90.28.0", "45.90.30.0"),
 		},
 		{
+			base: "https://dns.nextdns.io/1a2b3c4d",
+			want: ips("45.90.28.0", "45.90.30.0"),
+		},
+		{
 			base: "https://dns.nextdns.io/zzzzzzzzzz",
 			want: ips("45.90.28.0", "45.90.30.0"),
 		},

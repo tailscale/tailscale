@@ -124,12 +124,14 @@ func DoHIPsOfBase(dohBase string) []netip.Addr {
 		// preserve the IPv6 anycast addresses for them. Newer IDs can contain
 		// letters beyond 'f' and are not encoded into the IPv6 address, so only
 		// use the IPv4 anycast addresses for those.
-		if b, err := hex.DecodeString(profileID); err == nil && len(b) <= 12 && len(b) > 0 {
-			return []netip.Addr{
-				nextDNSv4One,
-				nextDNSv4Two,
-				nextDNSv6Gen(nextDNSv6RangeA.Addr(), b),
-				nextDNSv6Gen(nextDNSv6RangeB.Addr(), b),
+		if len(profileID) != 8 {
+			if b, err := hex.DecodeString(profileID); err == nil && len(b) <= 12 && len(b) > 0 {
+				return []netip.Addr{
+					nextDNSv4One,
+					nextDNSv4Two,
+					nextDNSv6Gen(nextDNSv6RangeA.Addr(), b),
+					nextDNSv6Gen(nextDNSv6RangeB.Addr(), b),
+				}
 			}
 		}
 		if nextDNSProfileIDRegexp.MatchString(profileID) {
