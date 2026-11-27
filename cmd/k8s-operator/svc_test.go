@@ -14,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -117,6 +118,80 @@ func TestService_DefaultProxyClassInitiallyNotReady(t *testing.T) {
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
+}
+
+// TestService_DualStackLoadBalancerIngressStatus is a regression test for
+// https://github.com/tailscale/tailscale/issues/19258. On a dual-stack
+// cluster a Service's Spec.ClusterIPs holds one address per IP family, and the
+// LoadBalancer ingress status must contain proxy addresses of every family the
+// Service exposes, not just the family of the single-valued Spec.ClusterIP.
+func TestService_DualStackLoadBalancerIngressStatus(t *testing.T) {
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		Build()
+	ft := &fakeTSClient{}
+	zl := zap.Must(zap.NewDevelopment())
+	clock := tstest.NewClock(tstest.ClockOpts{})
+	sr := &ServiceReconciler{
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			clients:           tsclient.NewProvider(ft),
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
+		clock:  clock,
+	}
+
+	mustCreate(t, fc, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP:         "10.20.30.40",
+			ClusterIPs:        []string{"10.20.30.40", "fd00::40"},
+			IPFamilies:        []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol},
+			Type:              corev1.ServiceTypeLoadBalancer,
+			LoadBalancerClass: new("tailscale"),
+		},
+	})
+
+	// First reconcile provisions the proxy and its state Secret.
+	expectReconciled(t, sr, "default", "test")
+	fullName, _ := findGenName(t, fc, "default", "test", "svc")
+
+	// Pretend the proxy has authenticated and reported both of its tailnet
+	// addresses, one per IP family.
+	mustUpdate(t, fc, "operator-ns", fullName, func(s *corev1.Secret) {
+		if s.Data == nil {
+			s.Data = make(map[string][]byte)
+		}
+		s.Data[kubetypes.KeyDeviceID] = []byte("n12345")
+		s.Data[kubetypes.KeyDeviceFQDN] = []byte("default-test.tailnetxyz.ts.net.")
+		s.Data[kubetypes.KeyDeviceIPs] = []byte(`["100.100.1.1","fd7a:115c:a1e0::1"]`)
+	})
+
+	expectReconciled(t, sr, "default", "test")
+
+	got := new(corev1.Service)
+	if err := fc.Get(t.Context(), client.ObjectKeyFromObject(&corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+	}), got); err != nil {
+		t.Fatalf("getting Service: %v", err)
+	}
+	var gotIPs []string
+	for _, ing := range got.Status.LoadBalancer.Ingress {
+		if ing.IP != "" {
+			gotIPs = append(gotIPs, ing.IP)
+		}
+	}
+	if want := []string{"100.100.1.1", "fd7a:115c:a1e0::1"}; !slices.Equal(gotIPs, want) {
+		t.Fatalf("LoadBalancer ingress addresses = %v, want %v", gotIPs, want)
+	}
 }
 
 func TestProxyClassHandlerForSvc(t *testing.T) {
