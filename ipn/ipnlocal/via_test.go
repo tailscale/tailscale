@@ -222,13 +222,20 @@ func TestGenerateViaTargetAdditions(t *testing.T) {
 	}
 }
 
-func mapViaPrefix(v4str string, siteID uint32) netip.Prefix {
-	v4 := netip.MustParsePrefix(v4str)
+func mapViaPrefix(v4Str string, siteID uint32) netip.Prefix {
+	v4 := netip.MustParsePrefix(v4Str)
 	return must.Get(tsaddr.MapVia(siteID, v4))
 }
-func mapViaAddr(v4str string, siteID uint32) netip.Addr {
-	v4 := netip.MustParseAddr(v4str)
+func mapViaAddr(v4Str string, siteID uint32) netip.Addr {
+	v4 := netip.MustParseAddr(v4Str)
 	return must.Get(tsaddr.MapVia(siteID, netip.PrefixFrom(v4, v4.BitLen()))).Addr()
+}
+func mapViaRange(rangeStr string, siteID uint32) netipx.IPRange {
+	v4Range := netipx.MustParseIPRange(rangeStr)
+	return netipx.IPRangeFrom(
+		must.Get(tsaddr.MapVia(siteID, netip.PrefixFrom(v4Range.From(), v4Range.From().BitLen()))).Addr(),
+		must.Get(tsaddr.MapVia(siteID, netip.PrefixFrom(v4Range.To(), v4Range.To().BitLen()))).Addr(),
+	)
 }
 
 func printMaybeViaAddr(a netip.Addr) string {
@@ -261,7 +268,7 @@ func TestGenerateViaAdvertisedAllowlist(t *testing.T) {
 				mapViaPrefix("169.254.169.254/32", 1),
 			},
 			want: []netipx.IPRange{
-				netipx.IPRangeFrom(mapViaAddr("169.254.169.254", 1), mapViaAddr("169.254.169.254", 1)),
+				mapViaRange("169.254.169.254-169.254.169.254", 1),
 			},
 		},
 		{
@@ -270,8 +277,8 @@ func TestGenerateViaAdvertisedAllowlist(t *testing.T) {
 				mapViaPrefix("169.254.169.0/24", 2),
 			},
 			want: []netipx.IPRange{
-				netipx.IPRangeFrom(mapViaAddr("169.254.169.0", 2), mapViaAddr("169.254.169.253", 2)),
-				netipx.IPRangeFrom(mapViaAddr("169.254.169.255", 2), mapViaAddr("169.254.169.255", 2)),
+				mapViaRange("169.254.169.0-169.254.169.253", 2),
+				mapViaRange("169.254.169.255-169.254.169.255", 2),
 			},
 		},
 		{
@@ -280,7 +287,7 @@ func TestGenerateViaAdvertisedAllowlist(t *testing.T) {
 				mapViaPrefix("127.0.0.0/8", 3),
 			},
 			want: []netipx.IPRange{
-				netipx.IPRangeFrom(mapViaAddr("127.0.0.0", 3), mapViaAddr("127.255.255.255", 3)),
+				mapViaRange("127.0.0.0-127.255.255.255", 3),
 			},
 		},
 		{
@@ -289,9 +296,9 @@ func TestGenerateViaAdvertisedAllowlist(t *testing.T) {
 				mapViaPrefix("169.254.0.0/16", 4),
 			},
 			want: []netipx.IPRange{
-				netipx.IPRangeFrom(mapViaAddr("169.254.0.0", 4), mapViaAddr("169.254.42.41", 4)),
-				netipx.IPRangeFrom(mapViaAddr("169.254.42.43", 4), mapViaAddr("169.254.169.253", 4)),
-				netipx.IPRangeFrom(mapViaAddr("169.254.169.255", 4), mapViaAddr("169.254.255.255", 4)),
+				mapViaRange("169.254.0.0-169.254.42.41", 4),
+				mapViaRange("169.254.42.43-169.254.169.253", 4),
+				mapViaRange("169.254.169.255-169.254.255.255", 4),
 			},
 		},
 		{
@@ -300,15 +307,42 @@ func TestGenerateViaAdvertisedAllowlist(t *testing.T) {
 				mapViaPrefix("100.64.0.0/10", 5),
 			},
 			want: []netipx.IPRange{
-				netipx.IPRangeFrom(mapViaAddr("100.64.0.0", 5), mapViaAddr("100.100.100.99", 5)),
-				netipx.IPRangeFrom(mapViaAddr("100.100.100.101", 5), mapViaAddr("100.100.100.199", 5)),
-				netipx.IPRangeFrom(mapViaAddr("100.100.100.201", 5), mapViaAddr("100.127.255.255", 5)),
+				mapViaRange("100.64.0.0-100.100.100.99", 5),
+				mapViaRange("100.100.100.101-100.100.100.199", 5),
+				mapViaRange("100.100.100.201-100.127.255.255", 5),
 			},
 		},
 		{
 			name: "non-via",
 			advertisedRoutes: []netip.Prefix{
 				netip.MustParsePrefix("8.0.0.0/8"),
+			},
+		},
+		{
+			name: "many-site-id",
+			advertisedRoutes: []netip.Prefix{
+				mapViaPrefix("169.0.0.0/8", 4),
+				mapViaPrefix("169.254.169.254/32", 4),
+				mapViaPrefix("100.100.0.0/16", 4),
+				mapViaPrefix("192.168.32.0/24", 4),
+				mapViaPrefix("169.254.0.0/16", 5),
+				mapViaPrefix("10.0.0.0/8", 5),
+				mapViaPrefix("169.254.169.254/32", 5),
+				mapViaPrefix("169.254.169.0/24", 6),
+				mapViaPrefix("100.0.0.0/8", 7),
+				mapViaPrefix("100.100.100.100/32", 7),
+				mapViaPrefix("192.0.2.0/24", 7),
+			},
+			want: []netipx.IPRange{
+				mapViaRange("100.100.0.0-100.100.100.99", 4),
+				mapViaRange("100.100.100.101-100.100.100.199", 4),
+				mapViaRange("100.100.100.201-100.100.255.255", 4),
+				mapViaRange("169.254.169.254-169.254.169.254", 4),
+				mapViaRange("169.254.0.0-169.254.42.41", 5),
+				mapViaRange("169.254.42.43-169.254.255.255", 5),
+				mapViaRange("169.254.169.0-169.254.169.253", 6),
+				mapViaRange("169.254.169.255-169.254.169.255", 6),
+				mapViaRange("100.100.100.100-100.100.100.100", 7),
 			},
 		},
 	}

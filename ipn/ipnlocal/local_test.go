@@ -11225,9 +11225,9 @@ func (f forwardTestOutcome) String() string {
 }
 
 func TestShouldForwardToVia(t *testing.T) {
-
 	tests := []struct {
 		name           string
+		envAdditions   string
 		advertisements []netip.Prefix
 		want           map[netip.Addr]forwardTestOutcome
 	}{
@@ -11243,6 +11243,103 @@ func TestShouldForwardToVia(t *testing.T) {
 				mapViaAddr("127.0.0.1", 1):       notAllowed,
 				mapViaAddr("169.254.1.1", 1):     notAllowed,
 				mapViaAddr("169.254.169.254", 1): notAllowed,
+			},
+		},
+		{
+			name: "cloudmeta-exact",
+			advertisements: []netip.Prefix{
+				mapViaPrefix("169.254.169.254/32", 1),
+			},
+			want: map[netip.Addr]forwardTestOutcome{
+				mapViaAddr("169.254.169.254", 1): shouldForward,
+				mapViaAddr("169.254.169.255", 1): notAllowed,
+				mapViaAddr("169.254.169.254", 2): notAllowed,
+			},
+		},
+		{
+			name: "cloudmeta-inexact",
+			advertisements: []netip.Prefix{
+				mapViaPrefix("169.254.169.0/24", 2),
+			},
+			want: map[netip.Addr]forwardTestOutcome{
+				mapViaAddr("169.254.1.1", 2):     notAllowed,
+				mapViaAddr("169.254.169.1", 2):   shouldForward,
+				mapViaAddr("169.254.169.254", 2): shouldHandle,
+				mapViaAddr("169.254.169.255", 2): shouldForward,
+				mapViaAddr("169.254.169.254", 3): notAllowed,
+				mapViaAddr("169.254.169.255", 3): notAllowed,
+				mapViaAddr("169.254.255.1", 2):   notAllowed,
+			},
+		},
+		{
+			name: "loopback",
+			advertisements: []netip.Prefix{
+				mapViaPrefix("127.0.0.0/8", 3),
+			},
+			want: map[netip.Addr]forwardTestOutcome{
+				mapViaAddr("127.0.0.1", 3):       shouldForward,
+				mapViaAddr("127.127.127.127", 3): shouldForward,
+				mapViaAddr("169.254.169.255", 3): notAllowed,
+				mapViaAddr("127.0.0.1", 1):       notAllowed,
+			},
+		},
+		{
+			name: "link-local",
+			advertisements: []netip.Prefix{
+				mapViaPrefix("169.254.0.0/16", 4),
+			},
+			want: map[netip.Addr]forwardTestOutcome{
+				mapViaAddr("169.254.1.1", 4):     shouldForward,
+				mapViaAddr("169.254.169.1", 4):   shouldForward,
+				mapViaAddr("169.254.169.254", 4): shouldHandle,
+				mapViaAddr("169.254.169.255", 4): shouldForward,
+				mapViaAddr("169.254.169.254", 3): notAllowed,
+				mapViaAddr("169.254.255.1", 4):   shouldForward,
+				mapViaAddr("169.254.255.1", 3):   notAllowed,
+			},
+		},
+		{
+			name: "cgnat",
+			advertisements: []netip.Prefix{
+				mapViaPrefix("100.64.0.0/10", 5),
+			},
+			want: []netipx.IPRange{
+				mapViaRange("100.64.0.0-100.100.100.99", 5),
+				mapViaRange("100.100.100.101-100.100.100.199", 5),
+				mapViaRange("100.100.100.201-100.127.255.255", 5),
+			},
+		},
+		{
+			name: "non-via",
+			advertisements: []netip.Prefix{
+				netip.MustParsePrefix("8.0.0.0/8"),
+			},
+		},
+		{
+			name: "many-site-id",
+			advertisements: []netip.Prefix{
+				mapViaPrefix("169.0.0.0/8", 4),
+				mapViaPrefix("169.254.169.254/32", 4),
+				mapViaPrefix("100.100.0.0/16", 4),
+				mapViaPrefix("192.168.32.0/24", 4),
+				mapViaPrefix("169.254.0.0/16", 5),
+				mapViaPrefix("10.0.0.0/8", 5),
+				mapViaPrefix("169.254.169.254/32", 5),
+				mapViaPrefix("169.254.169.0/24", 6),
+				mapViaPrefix("100.0.0.0/8", 7),
+				mapViaPrefix("100.100.100.100/32", 7),
+				mapViaPrefix("192.0.2.0/24", 7),
+			},
+			want: []netipx.IPRange{
+				mapViaRange("100.100.0.0-100.100.100.99", 4),
+				mapViaRange("100.100.100.101-100.100.100.199", 4),
+				mapViaRange("100.100.100.201-100.100.255.255", 4),
+				mapViaRange("169.254.169.254-169.254.169.254", 4),
+				mapViaRange("169.254.0.0-169.254.42.41", 5),
+				mapViaRange("169.254.42.43-169.254.255.255", 5),
+				mapViaRange("169.254.169.0-169.254.169.253", 6),
+				mapViaRange("169.254.169.255-169.254.169.255", 6),
+				mapViaRange("100.100.100.100-100.100.100.100", 7),
 			},
 		},
 	}
