@@ -904,9 +904,21 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 	}
 }
 
-// proxyHandlerForBackend creates a new HTTP reverse proxy for a particular backend that
-// we serve requests for. `backend` is a HTTPHandler.Proxy string (url, hostport or just port).
-func (b *LocalBackend) proxyHandlerForBackend(backend string) (http.Handler, error) {
+// serveProxyKey identifies a reverse proxy in LocalBackend.serveProxyHandlers.
+// Two handlers share a proxy only if they agree on both fields.
+type serveProxyKey struct {
+	backend string // HTTPHandler.Proxy
+	h2c     bool   // HTTPHandler.BackendHTTP is ipn.BackendHTTPH2C
+}
+
+func serveProxyKeyFor(h ipn.HTTPHandlerView) serveProxyKey {
+	return serveProxyKey{backend: h.Proxy(), h2c: h.BackendHTTP() == ipn.BackendHTTPH2C}
+}
+
+// proxyHandlerForBackend returns a reverse proxy to backend, which is an
+// HTTPHandler.Proxy value. If h2c is true, the proxy uses HTTP/2 over
+// cleartext for every request it can; see [ipn.HTTPHandler.BackendHTTP].
+func (b *LocalBackend) proxyHandlerForBackend(backend string, h2c bool) (http.Handler, error) {
 	targetURL, insecure := expandProxyArg(backend)
 
 	// Handle unix: scheme specially
@@ -926,6 +938,7 @@ func (b *LocalBackend) proxyHandlerForBackend(backend string) (http.Handler, err
 			backend:    backend,
 			lb:         b,
 			socketPath: socketPath,
+			h2c:        h2c,
 		}, nil
 	}
 
@@ -933,12 +946,18 @@ func (b *LocalBackend) proxyHandlerForBackend(backend string) (http.Handler, err
 	if err != nil {
 		return nil, fmt.Errorf("invalid url %s: %w", targetURL, err)
 	}
+	if h2c && u.Scheme != "http" {
+		// A TLS backend negotiates HTTP/2 with ALPN.
+		b.logf("serve: ignoring h2c for non-plaintext backend %s", backend)
+		h2c = false
+	}
 	p := &reverseProxy{
 		logf:     b.logf,
 		url:      u,
 		insecure: insecure,
 		backend:  backend,
 		lb:       b,
+		h2c:      h2c,
 	}
 	return p, nil
 }
@@ -962,8 +981,9 @@ func (b *LocalBackend) isTailscaledSocket(socketPath string) bool {
 // reverseProxy is a proxy that forwards a request to a backend host
 // (preconfigured via ipn.ServeConfig). If the host is configured with
 // http+insecure prefix, connection between proxy and backend will be over
-// insecure TLS. If the backend host has a http prefix and the incoming request
-// has application/grpc content type header, the connection will be over h2c.
+// insecure TLS. The connection will be over h2c if the handler declared an h2c
+// backend, or if the backend host has a http prefix and the incoming request
+// has application/grpc content type header.
 // Otherwise standard Go http transport will be used.
 type reverseProxy struct {
 	logf logger.Logf
@@ -974,6 +994,7 @@ type reverseProxy struct {
 	backend       string
 	lb            *LocalBackend
 	socketPath    string                          // path to unix socket, empty for TCP
+	h2c           bool                            // backend was declared to speak h2c
 	httpTransport lazy.SyncValue[*http.Transport] // transport for non-h2c backends
 	h2cTransport  lazy.SyncValue[*http.Transport] // transport for h2c backends
 	// closed tracks whether proxy is closed/currently closing.
@@ -1030,9 +1051,12 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// https://datatracker.ietf.org/doc/html/rfc9113#name-starting-http-2.
 	// However, we assume that http:// proxy prefix in combination with the
 	// protoccol being HTTP/2 is sufficient to detect h2c for our needs. Only use this for
-	// gRPC to fix a known problem of plaintext gRPC backends
+	// gRPC to fix a known problem of plaintext gRPC backends.
+	// A handler can also declare that its backend speaks h2c.
 	if rp.shouldProxyViaH2C(r) {
-		rp.logf("received a proxy request for plaintext gRPC")
+		if !rp.h2c {
+			rp.logf("received a proxy request for plaintext gRPC")
+		}
 		p.Transport = rp.getH2CTransport()
 	} else {
 		p.Transport = rp.getTransport()
@@ -1119,15 +1143,17 @@ func (rp *reverseProxy) getTransport() *http.Transport {
 	})
 }
 
-// getH2CTransport returns the Transport used for GRPC requests to the backend.
+// getH2CTransport returns the Transport used for h2c requests to the backend.
 // The Transport gets created lazily, at most once.
 func (rp *reverseProxy) getH2CTransport() http.RoundTripper {
 	return rp.h2cTransport.Get(func() *http.Transport {
 		var p http.Protocols
 		p.SetUnencryptedHTTP2(true)
+		// An h2c backend has an http:// URL, so the Transport dials it
+		// with DialContext and never with DialTLSContext.
 		tr := &http.Transport{
 			Protocols: &p,
-			DialTLSContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
+			DialContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
 				if rp.socketPath != "" {
 					return rp.lb.dialServeUnixSocket(ctx, rp.socketPath)
 				}
@@ -1138,9 +1164,14 @@ func (rp *reverseProxy) getH2CTransport() http.RoundTripper {
 	})
 }
 
-// This is not a generally reliable way how to determine whether a request is
-// for a h2c server, but sufficient for our particular use case.
+// shouldProxyViaH2C reports whether r goes to the backend over h2c. A backend
+// that was declared to speak h2c gets every request over h2c except an
+// HTTP/1.1 Upgrade request. Any other backend gets h2c only for an HTTP/2
+// request with a gRPC content type.
 func (rp *reverseProxy) shouldProxyViaH2C(r *http.Request) bool {
+	if rp.h2c {
+		return r.Header.Get("Upgrade") == ""
+	}
 	contentType := r.Header.Get(contentTypeHeader)
 	// For unix sockets, check if it's gRPC content to determine h2c
 	if rp.socketPath != "" {
@@ -1308,7 +1339,7 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if v := h.Proxy(); v != "" {
-		p, ok := b.serveProxyHandlers.Load(v)
+		p, ok := b.serveProxyHandlers.Load(serveProxyKeyFor(h))
 		if !ok {
 			http.Error(w, "unknown proxy destination", http.StatusInternalServerError)
 			return
@@ -1623,7 +1654,7 @@ func (b *LocalBackend) setServeProxyHandlersLocked() {
 	if !b.serveConfig.Valid() {
 		return
 	}
-	var backends map[string]bool
+	var backends map[serveProxyKey]bool
 	for _, conf := range b.serveConfig.Webs() {
 		for _, h := range conf.Handlers().All() {
 			backend := h.Proxy()
@@ -1631,30 +1662,31 @@ func (b *LocalBackend) setServeProxyHandlersLocked() {
 				// Only create proxy handlers for servers with a proxy backend.
 				continue
 			}
-			mak.Set(&backends, backend, true)
-			if _, ok := b.serveProxyHandlers.Load(backend); ok {
+			key := serveProxyKeyFor(h)
+			mak.Set(&backends, key, true)
+			if _, ok := b.serveProxyHandlers.Load(key); ok {
 				continue
 			}
 
 			b.logf("serve: creating a new proxy handler for %s", backend)
-			p, err := b.proxyHandlerForBackend(backend)
+			p, err := b.proxyHandlerForBackend(backend, key.h2c)
 			if err != nil {
 				// The backend endpoint (h.Proxy) should have been validated by expandProxyTarget
 				// in the CLI, so just log the error here.
 				b.logf("[unexpected] could not create proxy for %v: %s", backend, err)
 				continue
 			}
-			b.serveProxyHandlers.Store(backend, p)
+			b.serveProxyHandlers.Store(key, p)
 		}
 	}
 
 	// Clean up handlers for proxy backends that are no longer present
 	// in configuration.
 	b.serveProxyHandlers.Range(func(key, value any) bool {
-		backend := key.(string)
-		if !backends[backend] {
-			b.logf("serve: closing idle connections to %s", backend)
-			b.serveProxyHandlers.Delete(backend)
+		k := key.(serveProxyKey)
+		if !backends[k] {
+			b.logf("serve: closing idle connections to %s", k.backend)
+			b.serveProxyHandlers.Delete(k)
 			value.(*reverseProxy).close()
 		}
 		return true

@@ -178,6 +178,7 @@ type serveEnv struct {
 	tun              bool                // redirect traffic to OS for service
 	allServices      bool                // apply config file to all services
 	acceptAppCaps    []peercap.Cap       // app capabilities to forward
+	backendHTTP      string              // HTTP version to speak to a proxy back-end ("" or "h2c")
 
 	lc localServeClient // localClient interface, specific to serve
 	// optional stuff for tests:
@@ -738,7 +739,7 @@ func serveHandlerDesc(h *ipn.HTTPHandler) (string, string) {
 	case h.Path != "":
 		return "path", h.Path
 	case h.Proxy != "":
-		return "proxy", h.Proxy
+		return "proxy", proxyHandlerDesc(h)
 	case h.Text != "":
 		return "text", "\"" + elipticallyTruncate(h.Text, 20) + "\""
 	}

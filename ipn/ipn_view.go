@@ -960,6 +960,13 @@ func (v HTTPHandlerView) AcceptAppCaps() views.Slice[peercap.Cap] {
 	return views.SliceOf(v.ж.AcceptAppCaps)
 }
 
+// BackendHTTP is the HTTP version that tailscaled uses to reach a
+// plaintext Proxy backend. If empty, tailscaled uses HTTP/1.1, except
+// that an HTTP/2 request with a gRPC content type goes over h2c. If
+// [BackendHTTPH2C], every request goes over h2c except an HTTP/1.1
+// Upgrade request.
+func (v HTTPHandlerView) BackendHTTP() string { return v.ж.BackendHTTP }
+
 // Redirect, if not empty, is the target URL to redirect requests to.
 // By default, we redirect with HTTP 302 (Found) status.
 // If Redirect starts with '<httpcode>:', then we use that status instead.
@@ -975,6 +982,7 @@ var _HTTPHandlerViewNeedsRegeneration = HTTPHandler(struct {
 	Proxy         string
 	Text          string
 	AcceptAppCaps []peercap.Cap
+	BackendHTTP   string
 	Redirect      string
 }{})
 
