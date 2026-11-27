@@ -38,41 +38,9 @@ const (
 	connectorPortlessReason     = "app connector other-portless ok"
 )
 
-// appProtoPortRanges returns the protocol and port combinations peerCaps
-// permits the peer to reach through app, as granted by the "ip" field of the
-// grant that produced the peer's [peercap.Conn25Prefix] capability for it.
-//
-// It reports hasCap false if the peer holds no capability for app at all. A
-// capability that is present but carries no values permits no traffic, and
-// comes back as an empty slice with hasCap true: the app stays resolvable and
-// registrable, which keeps the misconfiguration diagnosable, but
-// [connector.ingressAllow] lets nothing through.
-func appProtoPortRanges(peerCaps tailcfg.PeerCapMap, app string) (
-	ranges views.Slice[tailcfg.ProtoPortRange],
-	hasCap bool,
-	err error,
-) {
-	cap := peercap.Conn25Prefix.ToAttribute(app)
-	if !peerCaps.HasCapability(cap) {
-		return ranges, false, nil
-	}
-	rs, err := tailcfg.UnmarshalCapJSON[tailcfg.ProtoPortRange](peerCaps, cap)
-	if err != nil {
-		return ranges, true, err
-	}
-	return views.SliceOf(rs), true, nil
-}
-
-// protoPortRangesAllow reports whether ranges, the protocol and port
-// combinations a peer was granted for an app, permit p, and if so the reason
-// to log alongside the allow verdict.
-//
-// It is modelled on [tailscale.com/wgengine/filter.Filter.RunIn], whose own
-// protocol switch a packet addressed to a transit IP never reaches: a
-// connector does not advertise its transit IPs, so runIn4 returns early at its
-// local4 check. Reproducing the switch here keeps a conn25 app grant behaving
-// like the equivalent packet filter rule, at the cost of inheriting RunIn's
-// leniency towards non-SYN TCP and ICMP responses.
+// protoPortRangesAllow reports whether ranges, the protocol and port combinations a peer was granted
+// for an app, permit p, and if so the reason to log alongside the allow verdict.
+// It is modelled on [tailscale.com/wgengine/filter.Filter.RunIn].
 func protoPortRangesAllow(ranges views.Slice[tailcfg.ProtoPortRange], p packet.Parsed) (bool, string) {
 	switch p.IPProto {
 	case ipproto.ICMPv4, ipproto.ICMPv6:
@@ -132,4 +100,29 @@ func protoPortRangesAllow(ranges views.Slice[tailcfg.ProtoPortRange], p packet.P
 		}
 	}
 	return false, ""
+}
+
+// appProtoPortRanges returns the protocol and port combinations peerCaps
+// permits the peer to reach through app, as granted by the "ip" field of the
+// grant that produced the peer's [peercap.Conn25Prefix] capability for it.
+//
+// It reports hasCap false if the peer holds no capability for app at all. A
+// capability that is present but carries no values permits no traffic, and
+// comes back as an empty slice with hasCap true: the app stays resolvable and
+// registrable, which keeps the misconfiguration diagnosable, but
+// [connector.ingressAllow] lets nothing through.
+func appProtoPortRanges(peerCaps tailcfg.PeerCapMap, app string) (
+	ranges views.Slice[tailcfg.ProtoPortRange],
+	hasCap bool,
+	err error,
+) {
+	cap := peercap.Conn25Prefix.ToAttribute(app)
+	if !peerCaps.HasCapability(cap) {
+		return ranges, false, nil
+	}
+	rs, err := tailcfg.UnmarshalCapJSON[tailcfg.ProtoPortRange](peerCaps, cap)
+	if err != nil {
+		return ranges, true, err
+	}
+	return views.SliceOf(rs), true, nil
 }

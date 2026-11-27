@@ -102,6 +102,7 @@ func TestProtoPortRangesAllow(t *testing.T) {
 		{"sctp-wrong-port", ppr("132:9"), sctp(10), false, ""},
 		// A range naming no protocol covers UDP but not SCTP.
 		{"sctp-protoless-denied", ppr("9"), sctp(9), false, ""},
+		{"udp-protoless-allowed", ppr("9"), udp(9), true, connectorPortReason},
 
 		{"icmp4-request-with-grant", ppr("tcp:443"), icmp4(packet.ICMP4EchoRequest), true, connectorICMPReason},
 		{"icmp4-request-empty-grant", ppr(), icmp4(packet.ICMP4EchoRequest), false, ""},
@@ -136,8 +137,7 @@ func TestProtoPortRangesAllow(t *testing.T) {
 // with the re-registration TSMP, and that addresses outside the transit pools
 // are refused outright.
 //
-// The per-protocol matching itself is covered in more detail by
-// [TestProtoPortRangesAllow].
+// The per-protocol matching itself is covered in more detail by [TestProtoPortRangesAllow].
 func TestConnectorIngressAllow(t *testing.T) {
 	const appName = "app"
 
