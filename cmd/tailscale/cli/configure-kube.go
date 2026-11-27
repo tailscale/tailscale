@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/netip"
 	"net/url"
 	"os"
@@ -27,7 +28,8 @@ import (
 )
 
 var configureKubeconfigArgs struct {
-	http bool // Use HTTP instead of HTTPS (default) for the auth proxy.
+	http   bool // Use HTTP instead of HTTPS (default) for the auth proxy.
+	stdout bool // Print a fresh kubeconfig to stdout instead of updating the file.
 }
 
 func configureKubeconfigCmd() *ffcli.Command {
@@ -40,11 +42,17 @@ Run this command to configure kubectl to connect to a Kubernetes cluster over Ta
 
 The hostname argument should be set to the Tailscale hostname of the peer running as an auth proxy in the cluster.
 
+To save the kubeconfig to a separate file, print it with --stdout and redirect the output, then point KUBECONFIG or 'kubectl --kubeconfig' at the file:
+
+  $ tailscale configure kubeconfig --stdout my-cluster > my-cluster.yaml
+  $ kubectl --kubeconfig my-cluster.yaml get pods
+
 See: https://tailscale.com/s/k8s-auth-proxy
 `),
 		FlagSet: (func() *flag.FlagSet {
 			fs := newFlagSet("kubeconfig")
 			fs.BoolVar(&configureKubeconfigArgs.http, "http", false, "use HTTP instead of HTTPS to connect to the auth proxy. Ignored if you include a scheme in the hostname argument.")
+			fs.BoolVar(&configureKubeconfigArgs.stdout, "stdout", false, "print a complete kubeconfig to stdout instead of updating your kubeconfig file. No files are read or written.")
 			return fs
 		})(),
 		Exec: runConfigureKubeconfig,
@@ -136,7 +144,7 @@ func isWritable(path string) error {
 // guidance when the process is sandboxed.
 func kubeconfigAccessErr(path string, err error) error {
 	if version.IsSandboxedMacOS() {
-		return fmt.Errorf("cannot write kubeconfig at %q: %w; GUI builds of the macOS client run in a sandbox and can only access files under your home directory, use the open-source tailscaled distribution for other locations", path, err)
+		return fmt.Errorf("cannot write kubeconfig at %q: %w; GUI builds of the macOS client run in a sandbox and can only access files under your home directory, use the open-source tailscaled distribution for other locations, or use --stdout to print the kubeconfig instead", path, err)
 	}
 	return fmt.Errorf("cannot write kubeconfig at %q: %w", path, err)
 }
@@ -167,18 +175,34 @@ func runConfigureKubeconfig(ctx context.Context, args []string) error {
 		return err
 	}
 	targetFQDN = strings.TrimSuffix(targetFQDN, ".")
-	kubeconfig := kubeconfigPath()
-	if err := checkKubeconfigWritable(kubeconfig); err != nil {
-		return err
-	}
 	scheme := "https://"
 	if http {
 		scheme = "http://"
 	}
-	if err = setKubeconfigForPeer(scheme, targetFQDN, kubeconfig); err != nil {
+	return writeKubeconfig(Stdout, configureKubeconfigArgs.stdout, scheme, targetFQDN)
+}
+
+// writeKubeconfig configures kubectl to use the auth proxy at scheme+fqdn.
+// If toStdout is true, it writes a fresh kubeconfig to w and does not touch
+// the filesystem. Otherwise, it updates the current user's kubeconfig file and
+// reports that to w.
+func writeKubeconfig(w io.Writer, toStdout bool, scheme, fqdn string) error {
+	if toStdout {
+		b, err := updateKubeconfig(nil, scheme, fqdn)
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(b)
 		return err
 	}
-	printf("kubeconfig configured for %q at URL %q\n", targetFQDN, scheme+targetFQDN)
+	kubeconfig := kubeconfigPath()
+	if err := checkKubeconfigWritable(kubeconfig); err != nil {
+		return err
+	}
+	if err := setKubeconfigForPeer(scheme, fqdn, kubeconfig); err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "kubeconfig configured for %q at URL %q\n", fqdn, scheme+fqdn)
 	return nil
 }
 
