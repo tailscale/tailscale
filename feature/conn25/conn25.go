@@ -252,16 +252,17 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 		if !e.conn25.isConfigured() {
 			return false, ""
 		}
-		return e.conn25.connector.packetFilterAllow(p)
+		return e.conn25.connector.linkLocalAllow(p)
 	})
 
 	// Allow the connector to receive packets with Transit IP destinations
-	// that are not "local" to it, and that it does not advertise.
+	// that are not "local" to it, and that it does not advertise, as long as
+	// the datapath can do something with them.
 	e.host.Hooks().Filter.IngressAllowHooks.Add(func(p packet.Parsed) (bool, string) {
 		if !e.conn25.isConfigured() {
 			return false, ""
 		}
-		return e.conn25.connector.packetFilterAllow(p)
+		return e.conn25.connector.ingressAllow(p)
 	})
 
 	// Route DNS queries for app domains to the connector that serves
@@ -1437,7 +1438,7 @@ func rewriteHTTPSResponse(hdr dnsmessage.Header, question dnsmessage.Question, p
 	return b.Finish()
 }
 
-const packetFilterAllowReason = "app connector transit IP"
+const transitIPAllowReason = "app connector transit IP"
 
 func (e *extension) getRouteCheckReport() ipnlocal.RouteCheckReport {
 	b, ok := e.backend.(*ipnlocal.LocalBackend)
