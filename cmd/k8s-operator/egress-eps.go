@@ -239,6 +239,11 @@ func (er *egressEpsReconciler) podIsReadyToRouteTraffic(ctx context.Context, pod
 		return false, nil
 	}
 
+	if len(st.TailnetTargetIPs) == 0 {
+		lg.Infof("proxy has not configured any tailnet target IPs for egress service (the target may not resolve yet), waiting...")
+		return false, nil
+	}
+
 	lg.Debug("proxy is ready to route traffic to egress service")
 	return true, nil
 }
