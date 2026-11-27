@@ -65,8 +65,9 @@ type Extension struct {
 	// captiveCtx will always be non-nil, though it might be a canceled
 	// context. captiveCancel is non-nil if checkCaptivePortalLoop is
 	// running, and is set to nil after being canceled.
-	captiveCtx    context.Context
-	captiveCancel context.CancelFunc
+	captiveCtx           context.Context
+	captiveCancel        context.CancelFunc
+	connectivityImpacted bool
 
 	// needsCaptiveDetection is a channel that is used to signal either
 	// that captive portal detection is required (sending true) or that the
@@ -106,6 +107,7 @@ func (e *Extension) Shutdown() error {
 		e.captiveCancel()
 		e.captiveCancel = nil
 	}
+	e.connectivityImpacted = false
 	e.mu.Unlock()
 	if e.ec != nil {
 		e.ec.Close()
@@ -124,6 +126,7 @@ func (e *Extension) onBackendStateChange(st ipn.State) {
 		// started.
 		if e.captiveCancel == nil {
 			e.captiveCtx, e.captiveCancel = context.WithCancel(context.Background())
+			e.connectivityImpacted = false
 			go e.checkCaptivePortalLoop(e.captiveCtx)
 		}
 	} else if e.captiveCancel != nil {
@@ -131,6 +134,7 @@ func (e *Extension) onBackendStateChange(st ipn.State) {
 		// portal detection loop.
 		e.captiveCancel()
 		e.captiveCancel = nil
+		e.connectivityImpacted = false
 
 		// NOTE: don't set captiveCtx to nil here, to ensure that we
 		// always have a (canceled) context to wait on in
@@ -158,30 +162,33 @@ func (e *Extension) onHealthChange(health.Change) {
 	// It is guaranteed to be non-nil.
 	e.mu.Lock()
 	ctx := e.captiveCtx
+	if ctx.Err() != nil {
+		e.mu.Unlock()
+		return
+	}
+	wasImpacted := e.connectivityImpacted
+	e.connectivityImpacted = isConnectivityImpacted
 	e.mu.Unlock()
 
-	// If the context is canceled, we don't need to do anything.
-	if ctx.Err() != nil {
+	if !isConnectivityImpacted {
+		// If connectivity is not impacted, we know for sure we're not behind a captive portal,
+		// so drop any warning.
+		e.health.SetHealthy(captivePortalWarnable)
+	}
+
+	if isConnectivityImpacted == wasImpacted {
 		return
 	}
 
 	if isConnectivityImpacted {
 		e.logf("health: connectivity impacted; triggering captive portal detection")
+	}
 
-		// Ensure that we select on captiveCtx so that we can time out
-		// triggering captive portal detection if the loop is shut down.
-		select {
-		case e.needsCaptiveDetection <- true:
-		case <-ctx.Done():
-		}
-	} else {
-		// If connectivity is not impacted, we know for sure we're not behind a captive portal,
-		// so drop any warning, and signal that we don't need captive portal detection.
-		e.health.SetHealthy(captivePortalWarnable)
-		select {
-		case e.needsCaptiveDetection <- false:
-		case <-ctx.Done():
-		}
+	// Ensure that we select on captiveCtx so that we can time out
+	// triggering captive portal detection if the loop is shut down.
+	select {
+	case e.needsCaptiveDetection <- isConnectivityImpacted:
+	case <-ctx.Done():
 	}
 }
 
