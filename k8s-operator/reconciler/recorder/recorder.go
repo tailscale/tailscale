@@ -132,7 +132,25 @@ func (r *Reconciler) Register(mgr manager.Manager) error {
 		Watches(&corev1.Secret{}, enqueue).
 		Watches(&rbacv1.Role{}, enqueue).
 		Watches(&rbacv1.RoleBinding{}, enqueue).
+		Watches(&tsapi.Tailnet{}, handler.EnqueueRequestsFromMapFunc(r.recordersForTailnet)).
 		Complete(r)
+}
+
+// recordersForTailnet maps a Tailnet event to the Recorders whose spec.tailnet refers to it, so that a Recorder
+// that was waiting on a not-yet-ready Tailnet is reconciled once the Tailnet changes.
+func (r *Reconciler) recordersForTailnet(ctx context.Context, o client.Object) []reconcile.Request {
+	var list tsapi.RecorderList
+	if err := r.List(ctx, &list); err != nil {
+		r.logger.Errorf("failed to list Recorders for Tailnet %q: %v", o.GetName(), err)
+		return nil
+	}
+	var reqs []reconcile.Request
+	for _, tsr := range list.Items {
+		if tsr.Spec.Tailnet != "" && tsr.Spec.Tailnet == o.GetName() {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&tsr)})
+		}
+	}
+	return reqs
 }
 
 // Reconcile is invoked when a change occurs to Recorder resources within the cluster. On create/update it ensures a
