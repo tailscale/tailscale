@@ -1902,3 +1902,44 @@ func buildTestDNSResponse(t *testing.T, domain string, ip netip.Addr) []byte {
 
 	return msg
 }
+
+// TestNoopManagerScopesWithoutBaseConfig checks that an embedded node (tsnet,
+// which uses the noop OS configurator) keeps split DNS routes when the tailnet
+// has no global resolvers, on every GOOS. The noop manager has no base config
+// by construction, so on Apple platforms there is nothing else to fall back to.
+func TestNoopManagerScopesWithoutBaseConfig(t *testing.T) {
+	tests := []struct {
+		name           string
+		goos           string
+		sandboxedMacOS bool
+	}{
+		{name: "linux", goos: "linux"},
+		{name: "windows", goos: "windows"},
+		{name: "darwin", goos: "darwin"},
+		{name: "darwin-sandboxed", goos: "darwin", sandboxedMacOS: true},
+		{name: "ios", goos: "ios"},
+	}
+	in := Config{
+		Routes:        upstreams("corp.example.", "100.64.0.53"),
+		SearchDomains: fqdns("corp.example"),
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tstest.Replace(t, &isSandboxedMacOS, func() bool { return test.sandboxedMacOS })
+			bus := eventbustest.NewBus(t)
+			dialer := tsdial.NewDialer(netmon.NewStatic())
+			dialer.SetBus(bus)
+			m := NewManager(t.Logf, noopManager{}, health.NewTracker(bus), dialer, nil, &controlknobs.Knobs{}, test.goos, bus)
+			var got resolver.Config
+			m.resolver.TestOnlySetHook(func(c resolver.Config) { got = c })
+
+			if err := m.Set(in); err != nil {
+				t.Fatalf("m.Set: %v", err)
+			}
+			want := resolver.Config{Routes: upstreams("corp.example.", "100.64.0.53")}
+			if diff := cmp.Diff(got, want, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("wrong resolver.Config (-got+want)\n%s", diff)
+			}
+		})
+	}
+}
