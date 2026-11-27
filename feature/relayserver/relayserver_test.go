@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"tailscale.com/ipn"
 	"tailscale.com/net/udprelay/endpoint"
@@ -244,8 +245,10 @@ func mockRelayServerNotZeroVal() *mockRelayServer {
 }
 
 type mockRelayServer struct {
-	set       bool
-	addrPorts views.Slice[netip.AddrPort]
+	set                 bool
+	addrPorts           views.Slice[netip.AddrPort]
+	bindLifetime        time.Duration
+	steadyStateLifetime time.Duration
 }
 
 func (m *mockRelayServer) Close() error { return nil }
@@ -257,6 +260,14 @@ func (m *mockRelayServer) SetDERPMapView(tailcfg.DERPMapView)  { return }
 func (m *mockRelayServer) SetStaticAddrPorts(aps views.Slice[netip.AddrPort]) {
 	m.addrPorts = aps
 }
+func (m *mockRelayServer) SetLifetimes(bind, steadyState time.Duration) error {
+	if bind <= 0 || steadyState <= 0 {
+		return errors.New("lifetimes must be positive")
+	}
+	m.bindLifetime = bind
+	m.steadyStateLifetime = steadyState
+	return nil
+}
 
 type mockSafeBackend struct {
 	sys *tsd.System
@@ -265,6 +276,52 @@ type mockSafeBackend struct {
 func (m mockSafeBackend) Sys() *tsd.System       { return m.sys }
 func (mockSafeBackend) Clock() tstime.Clock      { return nil }
 func (mockSafeBackend) TailscaleVarRoot() string { return "" }
+
+// Test_extension_setServerLifetimes verifies [extension.setServerLifetimes],
+// the plumbing behind the debug-peer-relay-server-lifetimes LocalAPI
+// endpoint, returns a clear error when the relay server is not running, and
+// otherwise passes the lifetimes through to the relay server.
+func Test_extension_setServerLifetimes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		rs          relayServer
+		bind        time.Duration
+		steadyState time.Duration
+		wantErr     error
+	}{
+		{
+			name:        "not-running",
+			rs:          nil,
+			bind:        time.Second,
+			steadyState: time.Second,
+			wantErr:     errServerNotRunning,
+		},
+		{
+			name:        "running",
+			rs:          &mockRelayServer{},
+			bind:        time.Second,
+			steadyState: 2 * time.Second,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			e := &extension{rs: tt.rs}
+			err := e.setServerLifetimes(tt.bind, tt.steadyState)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("setServerLifetimes(%v, %v) = %v; want %v", tt.bind, tt.steadyState, err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			mock := tt.rs.(*mockRelayServer)
+			if mock.bindLifetime != tt.bind || mock.steadyStateLifetime != tt.steadyState {
+				t.Fatalf("relay server lifetimes = %v/%v; want %v/%v", mock.bindLifetime, mock.steadyStateLifetime, tt.bind, tt.steadyState)
+			}
+		})
+	}
+}
 
 func Test_extension_handleRelayServerLifetimeLocked(t *testing.T) {
 	tests := []struct {
