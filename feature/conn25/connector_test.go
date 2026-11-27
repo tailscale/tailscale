@@ -276,14 +276,14 @@ func TestConnectorDisallowedDestinations(t *testing.T) {
 			if tt.wantCode == OK {
 				wantDst = unmapped
 			}
-			if got, _ := c.connector.lookupAddrBySrcIPAndTransitIPLocked(peerIP, transitIP); got != wantDst {
-				t.Errorf("lookup(%v, %v) = %v, want %v", peerIP, transitIP, got, wantDst)
+			if got, _ := c.connector.lookupAppAddrBySrcIPAndTransitIPLocked(peerIP, transitIP); got.addr != wantDst {
+				t.Errorf("lookup(%v, %v) = %v, want %v", peerIP, transitIP, got.addr, wantDst)
 			}
 		})
 	}
 }
 
-func TestConnectorPacketFilterAllow(t *testing.T) {
+func TestConnectorLinkLocalAllow(t *testing.T) {
 	src := netip.MustParseAddr("100.64.0.1")
 	knownTip := netip.MustParseAddr("192.0.2.1")
 	unknownTip := netip.MustParseAddr("100.64.0.42")
@@ -300,14 +300,14 @@ func TestConnectorPacketFilterAllow(t *testing.T) {
 		},
 	})
 
-	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
+	if allow, _ := c.connector.linkLocalAllow(packet.Parsed{
 		Src: netip.AddrPortFrom(src, 1234),
 		Dst: netip.AddrPortFrom(knownTip, 1234),
 	}); !allow {
 		t.Fatal("knownTip: should have been allowed")
 	}
 
-	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
+	if allow, _ := c.connector.linkLocalAllow(packet.Parsed{
 		Src: netip.AddrPortFrom(src, 1234),
 		Dst: netip.AddrPortFrom(unknownTip, 1234),
 	}); allow {

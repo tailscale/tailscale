@@ -658,7 +658,8 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 								i, j, len(wantLookup))
 						}
 						pip, tip, wantDip := wantLookup[0], wantLookup[1], wantLookup[2]
-						gotDip, _ := c.connector.lookupAddrBySrcIPAndTransitIPLocked(pip, tip)
+						gotAA, _ := c.connector.lookupAppAddrBySrcIPAndTransitIPLocked(pip, tip)
+						gotDip := gotAA.addr
 						if gotDip != wantDip {
 							t.Errorf("wrong result on lookup[%d][%d] ([%v], [%v]): got [%v] expected [%v]",
 								i, j, pip, tip, gotDip, wantDip)
@@ -3908,8 +3909,10 @@ func TestHandleHookReplyToDNSQueries(t *testing.T) {
 	exampleAppPeerCap := tailcfg.PeerCapMap{
 		peercap.Conn25Prefix.ToAttribute("example"): []tailcfg.RawMessage{`"*"`},
 	}
-	// This is to verify that it's not picky about which ports are allowed for
-	// the app.
+	// The presence of the capability is what grants DNS resolution for the
+	// app; its values restrict traffic, not queries. So even a grant that
+	// permits no traffic at all still resolves. See [connector.ingressAllow]
+	// for where the values are enforced.
 	exampleAppPeerCapRestrictive := tailcfg.PeerCapMap{
 		peercap.Conn25Prefix.ToAttribute("example"): []tailcfg.RawMessage{},
 	}
