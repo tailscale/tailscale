@@ -9,9 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
+	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -293,4 +296,239 @@ func TestEnsureAndClearFinalizer(t *testing.T) {
 			t.Errorf("ResourceVersion changed on idempotent ClearFinalizer: %q -> %q", firstRV, got.ResourceVersion)
 		}
 	})
+}
+
+func TestValidateService(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		annotations map[string]string
+		clusterIP   string
+		want        []string
+	}{
+		{
+			name: "valid-magicdns-name",
+			annotations: map[string]string{
+				reconciler.AnnotationTailnetTargetFQDN: "foo.tail4567.ts.net",
+			},
+		},
+		{
+			name: "valid-magicdns-name-with-trailing-dot",
+			annotations: map[string]string{
+				reconciler.AnnotationTailnetTargetFQDN: "foo.tail4567.ts.net.",
+			},
+		},
+		{
+			name: "invalid-magicdns-name",
+			annotations: map[string]string{
+				reconciler.AnnotationTailnetTargetFQDN: "foo.tail4567",
+			},
+			want: []string{`invalid value of annotation tailscale.com/tailnet-fqdn: "foo.tail4567" does not appear to be a valid MagicDNS name`},
+		},
+		{
+			name: "both-tailnet-targets",
+			annotations: map[string]string{
+				reconciler.AnnotationTailnetTargetFQDN: "foo.tail4567.ts.net",
+				reconciler.AnnotationTailnetTargetIP:   "100.64.0.1",
+			},
+			want: []string{"only one of annotations tailscale.com/tailnet-ip and tailscale.com/tailnet-fqdn can be set"},
+		},
+		{
+			name: "invalid-tailnet-ip",
+			annotations: map[string]string{
+				reconciler.AnnotationTailnetTargetIP: "not-an-ip",
+			},
+			want: []string{`invalid value of annotation tailscale.com/tailnet-ip: "not-an-ip" could not be parsed as a valid IP Address, error: ParseAddr("not-an-ip"): unable to parse IP`},
+		},
+		{
+			name:      "headless",
+			clusterIP: "None",
+			want:      []string{"headless Services are not supported."},
+		},
+		{
+			name: "invalid-hostname",
+			annotations: map[string]string{
+				reconciler.AnnotationHostname: "foo.bar",
+			},
+			want: []string{`invalid Tailscale hostname specified "foo.bar": "foo.bar" is not a valid DNS label: contains invalid character '.'`},
+		},
+		{
+			name: "invalid-tag",
+			annotations: map[string]string{
+				reconciler.AnnotationTags: "tag:ok,notatag",
+			},
+			want: []string{`invalid tag "notatag": tags must start with 'tag:'`},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			svc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "test",
+					Namespace:   "default",
+					Annotations: tc.annotations,
+				},
+				Spec: corev1.ServiceSpec{ClusterIP: tc.clusterIP},
+			}
+			got := reconciler.ValidateService(svc)
+			if len(got) == 0 && len(tc.want) == 0 {
+				return
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("ValidateService() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNameForService(t *testing.T) {
+	t.Parallel()
+
+	const (
+		longNS   = "tailscale-external-services"
+		longName = "harry1027133059-trefknee01-bee-oqggo-kinfe-0-g"
+	)
+	tests := []struct {
+		name        string
+		svcName     string
+		annotations map[string]string
+		want        string
+		wantValid   bool
+	}{
+		{
+			name:        "egress_fqdn_short_default_unchanged",
+			svcName:     "foo",
+			annotations: map[string]string{reconciler.AnnotationTailnetTargetFQDN: "foo.tailnet.ts.net"},
+			want:        longNS + "-foo",
+			wantValid:   true,
+		},
+		{
+			name:        "egress_fqdn_long_default_truncated",
+			svcName:     longName,
+			annotations: map[string]string{reconciler.AnnotationTailnetTargetFQDN: longName + ".tailnet.ts.net"},
+			want:        "tailscale-external-services-harry1027133059-trefknee01-0908ae76",
+			wantValid:   true,
+		},
+		{
+			name:        "egress_ip_long_default_truncated",
+			svcName:     longName,
+			annotations: map[string]string{reconciler.AnnotationTailnetTargetIP: "100.64.0.1"},
+			want:        "tailscale-external-services-harry1027133059-trefknee01-0908ae76",
+			wantValid:   true,
+		},
+		{
+			name: "egress_long_hostname_annotation_not_truncated",
+			annotations: map[string]string{
+				reconciler.AnnotationTailnetTargetFQDN: "foo.tailnet.ts.net",
+				reconciler.AnnotationHostname:          longNS + "-" + longName,
+			},
+			svcName:   "foo",
+			want:      longNS + "-" + longName,
+			wantValid: false,
+		},
+		{
+			name:        "ingress_long_default_not_truncated",
+			svcName:     longName,
+			annotations: map[string]string{"tailscale.com/expose": "true"},
+			want:        longNS + "-" + longName,
+			wantValid:   false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			svc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        tc.svcName,
+					Namespace:   longNS,
+					Annotations: tc.annotations,
+				},
+			}
+			got := reconciler.NameForService(svc)
+			if got != tc.want {
+				t.Errorf("NameForService() = %q, want %q", got, tc.want)
+			}
+			violations := reconciler.ValidateService(svc)
+			if valid := len(violations) == 0; valid != tc.wantValid {
+				t.Errorf("ValidateService() violations = %v, want valid %t", violations, tc.wantValid)
+			}
+		})
+	}
+}
+
+func TestClusterDomain(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// resolvConf is the content of the file that ClusterDomain parses. Empty means that the file does not exist.
+		resolvConf string
+		namespace  string
+		want       string
+	}{
+		{
+			name:       "success-custom-domain",
+			resolvConf: "search foo.svc.department.org.io svc.department.org.io department.org.io\n",
+			namespace:  "foo",
+			want:       "department.org.io",
+		},
+		{
+			name:       "success-default-domain",
+			resolvConf: "search foo.svc.cluster.local. svc.cluster.local. cluster.local.\n",
+			namespace:  "foo",
+			want:       "cluster.local",
+		},
+		{
+			name:       "only-two-search-domains",
+			resolvConf: "search svc.department.org.io department.org.io\n",
+			namespace:  "foo",
+			want:       "cluster.local",
+		},
+		{
+			name:       "first-search-domain-mismatch",
+			resolvConf: "search foo.bar.department.org.io svc.department.org.io some.other.fqdn\n",
+			namespace:  "foo",
+			want:       "cluster.local",
+		},
+		{
+			name:       "second-search-domain-mismatch",
+			resolvConf: "search foo.svc.department.org.io foo.department.org.io some.other.fqdn\n",
+			namespace:  "foo",
+			want:       "cluster.local",
+		},
+		{
+			name:       "third-search-domain-mismatch",
+			resolvConf: "search foo.svc.department.org.io svc.department.org.io some.other.fqdn\n",
+			namespace:  "foo",
+			want:       "cluster.local",
+		},
+		{
+			name:      "missing-resolv-conf",
+			namespace: "foo",
+			want:      "cluster.local",
+		},
+	}
+
+	logger := zap.Must(zap.NewDevelopment()).Sugar()
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "resolv.conf")
+			if tc.resolvConf != "" {
+				if err := os.WriteFile(path, []byte(tc.resolvConf), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := reconciler.ClusterDomain(tc.namespace, logger, reconciler.WithResolvConfPath(path)); got != tc.want {
+				t.Errorf("ClusterDomain() = %q, want %q", got, tc.want)
+			}
+		})
+	}
 }

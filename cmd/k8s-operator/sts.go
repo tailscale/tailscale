@@ -65,15 +65,7 @@ const (
 	FinalizerName = "tailscale.com/finalizer"
 
 	// Annotations settable by users on services.
-	AnnotationExpose             = "tailscale.com/expose"
-	AnnotationTags               = "tailscale.com/tags"
-	AnnotationHostname           = "tailscale.com/hostname"
-	annotationTailnetTargetIPOld = "tailscale.com/ts-tailnet-target-ip"
-	AnnotationTailnetTargetIP    = "tailscale.com/tailnet-ip"
-	// MagicDNS name of tailnet node.
-	AnnotationTailnetTargetFQDN = "tailscale.com/tailnet-fqdn"
-
-	AnnotationProxyGroup = "tailscale.com/proxy-group"
+	AnnotationExpose = "tailscale.com/expose"
 
 	// AnnotationShareACMEAccount opts a single ProxyGroup into ("true")
 	// or out of ("false") using the shared per-tailnet ACME account key.
@@ -118,10 +110,8 @@ const (
 	proxyTypeIngressService  = "ingress_service"
 	proxyTypeIngressResource = "ingress_resource"
 	proxyTypeConnector       = "connector"
-	proxyTypeProxyGroup      = "proxygroup"
 
 	envVarTSLocalAddrPort = "TS_LOCAL_ADDR_PORT"
-	defaultLocalAddrPort  = 9002 // metrics and health check port
 
 	letsEncryptStagingEndpoint = "https://acme-staging-v02.api.letsencrypt.org/directory"
 
@@ -1269,7 +1259,7 @@ func isMainContainer(c *corev1.Container) bool {
 // sets it. pc may be nil. It is a no-op if neither probe is set, or if the
 // container's env leaves the endpoints unreachable, see [healthzPort]. If
 // k8sProxy is set, the container runs k8s-proxy, which serves the endpoints on
-// defaultLocalAddrPort from its config file and ignores the env.
+// tailscaled.HealthCheckPort from its config file and ignores the env.
 func applyHealthzProbes(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, k8sProxy bool) {
 	var liveness, readiness *tsapi.Probe
 	if pc != nil && pc.Spec.StatefulSet != nil && pc.Spec.StatefulSet.Pod != nil && pc.Spec.StatefulSet.Pod.TailscaleContainer != nil {
@@ -1284,7 +1274,7 @@ func applyHealthzProbes(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, k8sProxy b
 		if !isMainContainer(&c) {
 			continue
 		}
-		port := defaultLocalAddrPort
+		port := tailscaled.HealthCheckPort
 		if !k8sProxy {
 			var ok bool
 			if port, ok = healthzPort(c.Env); !ok {
@@ -1322,7 +1312,7 @@ func healthzPort(env []corev1.EnvVar) (int, bool) {
 	}
 	v, ok := lookupEnv(env, envVarTSLocalAddrPort)
 	if !ok {
-		return defaultLocalAddrPort, true
+		return tailscaled.HealthCheckPort, true
 	}
 	// The host may be an env var reference such as $(POD_IP).
 	host, port, err := net.SplitHostPort(v)
@@ -1623,25 +1613,6 @@ func defaultEnv(envName, defVal string) string {
 		return defVal
 	}
 	return v
-}
-
-func nameForService(svc *corev1.Service) string {
-	if h, ok := svc.Annotations[AnnotationHostname]; ok {
-		return h
-	}
-	name := svc.Namespace + "-" + svc.Name
-	if isEgressService(svc) {
-		// The hostname of an egress proxy is not user facing, so instead of
-		// failing validation, shorten a default that is longer than a DNS
-		// label allows. Defaults that already fit are unchanged.
-		return tsoperator.TruncateWithHash(name)
-	}
-	return name
-}
-
-// isEgressService reports whether svc exposes a tailnet target to the cluster.
-func isEgressService(svc *corev1.Service) bool {
-	return tailnetTargetAnnotation(svc) != "" || svc.Annotations[AnnotationTailnetTargetFQDN] != ""
 }
 
 // markedForDeletion reports whether obj has a deletion timestamp, i.e. the API server is waiting on finalizers

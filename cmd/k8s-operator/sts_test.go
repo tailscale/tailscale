@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/yaml"
 	"tailscale.com/client/tailscale/v2"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/types/key"
@@ -337,15 +338,15 @@ func Test_applyHealthzProbes(t *testing.T) {
 	}{
 		"nil_proxyclass_defaults_off": {},
 		"unset_probes_default_off":    {pc: withProbes(nil, nil)},
-		"liveness_set":                {pc: withProbes(&tsapi.Probe{}, nil), wantLiveness: true, wantPort: defaultLocalAddrPort},
-		"readiness_set":               {pc: withProbes(nil, &tsapi.Probe{}), wantReadiness: true, wantPeriod: 10, wantPort: defaultLocalAddrPort},
-		"both_set":                    {pc: both, wantLiveness: true, wantReadiness: true, wantPeriod: 10, wantPort: defaultLocalAddrPort},
-		"custom_readiness_period":     {pc: withProbes(nil, &tsapi.Probe{PeriodSeconds: 30}), wantReadiness: true, wantPeriod: 30, wantPort: defaultLocalAddrPort},
+		"liveness_set":                {pc: withProbes(&tsapi.Probe{}, nil), wantLiveness: true, wantPort: tailscaled.HealthCheckPort},
+		"readiness_set":               {pc: withProbes(nil, &tsapi.Probe{}), wantReadiness: true, wantPeriod: 10, wantPort: tailscaled.HealthCheckPort},
+		"both_set":                    {pc: both, wantLiveness: true, wantReadiness: true, wantPeriod: 10, wantPort: tailscaled.HealthCheckPort},
+		"custom_readiness_period":     {pc: withProbes(nil, &tsapi.Probe{PeriodSeconds: 30}), wantReadiness: true, wantPeriod: 30, wantPort: tailscaled.HealthCheckPort},
 		"custom_local_addr_port":      {pc: both, env: []corev1.EnvVar{{Name: "TS_LOCAL_ADDR_PORT", Value: "$(POD_IP):9010"}}, wantLiveness: true, wantReadiness: true, wantPeriod: 10, wantPort: 9010},
 		"loopback_local_addr_port":    {pc: both, env: []corev1.EnvVar{{Name: "TS_LOCAL_ADDR_PORT", Value: "127.0.0.1:9002"}}},
 		"localhost_local_addr_port":   {pc: both, env: []corev1.EnvVar{{Name: "TS_LOCAL_ADDR_PORT", Value: "localhost:9002"}}},
 		"health_check_disabled":       {pc: both, env: []corev1.EnvVar{{Name: "TS_ENABLE_HEALTH_CHECK", Value: "false"}}},
-		"health_check_enabled":        {pc: both, env: []corev1.EnvVar{{Name: "TS_ENABLE_HEALTH_CHECK", Value: "true"}}, wantLiveness: true, wantReadiness: true, wantPeriod: 10, wantPort: defaultLocalAddrPort},
+		"health_check_enabled":        {pc: both, env: []corev1.EnvVar{{Name: "TS_ENABLE_HEALTH_CHECK", Value: "true"}}, wantLiveness: true, wantReadiness: true, wantPeriod: 10, wantPort: tailscaled.HealthCheckPort},
 		"deprecated_healthcheck":      {pc: both, env: []corev1.EnvVar{{Name: "TS_HEALTHCHECK_ADDR_PORT", Value: "[::]:8080"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
