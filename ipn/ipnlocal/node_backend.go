@@ -85,8 +85,9 @@ type nodeBackend struct {
 	filterAtomic atomic.Pointer[filter.Filter]
 
 	// initialized once and immutable
-	eventClient    *eventbus.Client
-	derpMapViewPub *eventbus.Publisher[tailcfg.DERPMapView]
+	eventClient        *eventbus.Client
+	derpMapViewPub     *eventbus.Publisher[tailcfg.DERPMapView]
+	collectServicesPub *eventbus.Publisher[CollectServicesChanged]
 
 	// homeDERP lives here temporarily. as long as mapSession is short lived, we
 	// don't have a location delivering netmaps to local backend that knows our
@@ -193,6 +194,7 @@ func newNodeBackend(ctx context.Context, logf logger.Logf, bus *eventbus.Bus) *n
 	noneFilter := filter.NewAllowNone(logger.Discard, &netipx.IPSet{})
 	nb.filterAtomic.Store(noneFilter)
 	nb.derpMapViewPub = eventbus.Publish[tailcfg.DERPMapView](nb.eventClient)
+	nb.collectServicesPub = eventbus.Publish[CollectServicesChanged](nb.eventClient)
 	return nb
 }
 
@@ -385,6 +387,19 @@ func (nb *nodeBackend) PeersForTest() []tailcfg.NodeView {
 	})
 	return ret
 }
+
+// CollectServicesChanged is an eventbus topic signalling that the netmap's
+// CollectServices value — whether the control plane wants this node's open
+// ports — may have changed. It is published for every netmap, so a subscriber
+// may be woken when nothing changed.
+//
+// It exists because CollectServices is netmap-level, so neither the
+// [ipnext.Hooks] OnSelfChange nor ProfileStateChange hook covers it.
+//
+// It carries no value: an event published by a [nodeBackend] can arrive after
+// [LocalBackend] has switched profiles to another, so subscribers read the
+// value from the active node backend instead.
+type CollectServicesChanged struct{}
 
 func (nb *nodeBackend) CollectServices() bool {
 	nb.mu.Lock()
@@ -692,11 +707,13 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) (res netmapResult) {
 		nb.packetFilterRules = nm.PacketFilterRules
 		nb.packetFilter = nm.PacketFilter
 		nb.derpMapViewPub.Publish(nm.DERPMap.View())
+		nb.collectServicesPub.Publish(CollectServicesChanged{})
 	} else {
 		nb.userProfiles = nil
 		nb.packetFilterRules = views.Slice[tailcfg.FilterRule]{}
 		nb.packetFilter = nil
 		nb.derpMapViewPub.Publish(tailcfg.DERPMapView{})
+		nb.collectServicesPub.Publish(CollectServicesChanged{})
 	}
 	return res
 }

@@ -53,10 +53,21 @@ type Extension struct {
 	pub        *eventbus.Publisher[ipnlocal.PortlistServices]
 	logf       logger.Logf
 	sb         ipnext.SafeBackend
-	host       ipnext.Host // from Init
 
-	shieldsUp                  atomic.Bool
-	shouldUploadServicesAtomic atomic.Bool
+	// collectServicesFn reports whether the active node backend's tailnet has
+	// service collection enabled. It is set in Init, and is a field so tests
+	// can drive the handlers without an [ipnext.Host].
+	collectServicesFn func() bool
+
+	// shieldsUp is the last value seen from prefs, which the hook delivers
+	// synchronously as the prefs change is applied.
+	shieldsUp atomic.Bool
+
+	// wokeFor is the decision this extension last woke the poller for. It is
+	// deliberately not authoritative — shouldUploadServices never consults it —
+	// so if it is wrong the cost is a missed or spurious wake, recovered by the
+	// next tick.
+	wokeFor atomic.Bool
 }
 
 func (e *Extension) Name() string { return "portlist" }
@@ -72,10 +83,15 @@ func (e *Extension) Init(h ipnext.Host) error {
 		return ipnext.SkipExtension
 	}
 
-	e.host = h
-	h.Hooks().ShouldUploadServices.Set(e.shouldUploadServicesAtomic.Load)
+	e.collectServicesFn = func() bool { return h.NodeBackend().CollectServices() }
+	h.Hooks().ShouldUploadServices.Set(e.shouldUploadServices)
 	h.Hooks().ProfileStateChange.Add(e.onChangeProfile)
 	h.Hooks().OnSelfChange.Add(e.onSelfChange)
+
+	// Subscribe after the skip check above, so an extension that skipped leaves
+	// no subscriber behind: [ipnext.ExtensionHost] only shuts down the
+	// extensions it activated.
+	eventbus.SubscribeFunc(e.busClient, e.onCollectServices)
 
 	// TODO(nickkhyl): remove this after the profileManager refactoring.
 	// See tailscale/tailscale#15974.
@@ -88,19 +104,42 @@ func (e *Extension) Init(h ipnext.Host) error {
 }
 
 func (e *Extension) onSelfChange(tailcfg.NodeView) {
-	e.updateShouldUploadServices()
+	e.wakePollerIfNowUploading()
 }
 
 func (e *Extension) onChangeProfile(_ ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) {
 	e.shieldsUp.Store(prefs.ShieldsUp())
-	e.updateShouldUploadServices()
+	e.wakePollerIfNowUploading()
 }
 
-func (e *Extension) updateShouldUploadServices() {
-	v := !e.shieldsUp.Load() && e.host.NodeBackend().CollectServices()
-	if e.shouldUploadServicesAtomic.CompareAndSwap(!v, v) && v {
-		// Upon transition from false to true (enabling service reporting), try
-		// to wake the poller to do an immediate poll if it's sleeping.
+// onCollectServices handles an [ipnlocal.CollectServicesChanged] event by
+// waking the poller, so a netmap change is noticed without waiting for the
+// next tick.
+func (e *Extension) onCollectServices(ipnlocal.CollectServicesChanged) {
+	e.wakePollerIfNowUploading()
+}
+
+// shouldUploadServices reports whether this node's open ports may be reported
+// to the control plane, reading both inputs at the point of use.
+//
+// Nothing derived from the netmap is stored: a stored copy can be written by
+// two goroutines at once, outlive the profile whose netmap set it, or go stale
+// while a tick reports ports the tailnet has stopped asking for.
+//
+// Safe to call from the [ipnext.Hooks] ShouldUploadServices hook, which runs
+// with [ipnlocal.LocalBackend]'s lock held: resolving the node backend reads an
+// atomic rather than taking that lock.
+func (e *Extension) shouldUploadServices() bool {
+	return !e.shieldsUp.Load() && e.collectServicesFn()
+}
+
+// wakePollerIfNowUploading wakes the poller if uploading just became allowed,
+// so reporting starts now rather than at the next tick. It wakes only on a
+// transition: a collecting node sees an event for every netmap, and waking each
+// time would run a full port scan each time.
+func (e *Extension) wakePollerIfNowUploading() {
+	v := e.shouldUploadServices()
+	if e.wokeFor.CompareAndSwap(!v, v) && v {
 		// It's not a big deal if we miss waking it. It'll get to it soon enough.
 		select {
 		case e.wakePoller <- struct{}{}:
@@ -129,18 +168,7 @@ func (e *Extension) runPollLoop() {
 
 		// Before we do potentially expensive work below (polling what might be
 		// a ton of ports), double check that we actually need to do it.
-		// TODO(bradfitz): the onSelfChange, and onChangeProfile hooks above are
-		// not enough, because CollectServices is a NetMap-level thing and not a
-		// change to the local self node. We should add an eventbus topic for
-		// when CollectServices changes probably, or move the CollectServices
-		// thing into a local node self cap (at least logically, if not on the
-		// wire) so then the onSelfChange hook would cover it. In the meantime,
-		// we'll just end up doing some extra checks every PollInterval, which
-		// is not the end of the world, and fixes the problem of picking up
-		// changes to CollectServices that come down in the netmap.
-		e.updateShouldUploadServices()
-
-		if !e.shouldUploadServicesAtomic.Load() {
+		if !e.shouldUploadServices() {
 			continue
 		}
 
