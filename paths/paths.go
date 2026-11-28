@@ -82,10 +82,29 @@ func DefaultTailscaledSocket() string {
 	case distro.QNAP:
 		return "/tmp/tailscale/tailscaled.sock"
 	}
-	if fi, err := os.Stat("/var/run"); err == nil && fi.IsDir() {
+	return unixTailscaledSocket(isDir)
+}
+
+// unixTailscaledSocket returns the default tailscaled socket path on Unix
+// systems that have no OS- or distro-specific default. isDir reports whether
+// the named directory exists.
+func unixTailscaledSocket(isDir func(string) bool) string {
+	if isDir("/var/run") {
 		return "/var/run/tailscale/tailscaled.sock"
 	}
+	// Some systems have /run but no /var/run compatibility symlink
+	// (see #18203). tailscaled.service already puts the socket under
+	// /run/tailscale, so look there before falling back to the
+	// current directory.
+	if isDir("/run") {
+		return "/run/tailscale/tailscaled.sock"
+	}
 	return "tailscaled.sock"
+}
+
+func isDir(name string) bool {
+	fi, err := os.Stat(name)
+	return err == nil && fi.IsDir()
 }
 
 // Overridden in init by OS-specific files.
