@@ -1430,8 +1430,24 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(rs *reportState, r *Report,
 	// Ignore the previous preferred DERP if it's since been removed from
 	// the DERP map, so the stickiness checks below can't pick it again.
 	var prevDERP tailcfg.DERPRegionID
+	candidates := r.RegionLatency
 	if c.last != nil && dm.Regions().Contains(c.last.PreferredDERP) {
 		prevDERP = c.last.PreferredDERP
+		// A single lost or slow probe round must not remove the current home
+		// from consideration, so if r has no measurement for it, carry
+		// forward what the previous report measured. The carried value is
+		// not written back to r, so a second consecutive miss finds nothing
+		// to carry and the home can move.
+		//
+		// The previous report must be recent enough to still count as proof
+		// of life. PreferredDERPKeepAliveTimeout is the same bound used by
+		// the fallback at the end of this function, so a stale measurement
+		// from before a long gap between netchecks is not carried.
+		_, measured := r.RegionLatency[prevDERP]
+		if d := c.last.RegionLatency[prevDERP]; !measured && d != 0 && now.Sub(c.last.Now) <= PreferredDERPKeepAliveTimeout {
+			candidates = maps.Clone(r.RegionLatency)
+			candidates[prevDERP] = d
+		}
 	}
 
 	// Add report to history, enforce retention window, then take the best (lowest)
@@ -1457,7 +1473,7 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(rs *reportState, r *Report,
 		bestAny             time.Duration // global minimum
 		oldRegionCurLatency time.Duration // latency of old PreferredDERP
 	)
-	for regionID, d := range r.RegionLatency {
+	for regionID, d := range candidates {
 		// Scale this report's latency by any scores provided by the
 		// server; we did this for the bestRecent map above, but we
 		// don't mutate the actual reports in-place (in case scores
