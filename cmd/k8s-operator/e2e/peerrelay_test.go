@@ -152,10 +152,13 @@ func verifyPeerRelayConfigSecret(t *testing.T, prName string, replica int32, wan
 	if *conf.RelayServerPort != wantPort {
 		t.Fatalf("config Secret %s: RelayServerPort = %d, want %d", s.Name, *conf.RelayServerPort, wantPort)
 	}
-	// The kind cluster's LoadBalancer Services never get an address, so the config's advertised endpoints must be
-	// exactly the spec's static endpoints.
-	if !slices.Equal(conf.RelayServerStaticEndpoints, wantStaticEndpoints) {
-		t.Fatalf("config Secret %s: RelayServerStaticEndpoints = %v, want %v", s.Name, conf.RelayServerStaticEndpoints, wantStaticEndpoints)
+	// On a real cloud cluster the replica's LoadBalancer Service is assigned public addresses that the reconciler
+	// advertises alongside the static endpoints, so the config must contain the static endpoints rather than list
+	// them exclusively.
+	for _, w := range wantStaticEndpoints {
+		if !slices.Contains(conf.RelayServerStaticEndpoints, w) {
+			t.Fatalf("config Secret %s: RelayServerStaticEndpoints = %v, missing static endpoint %v", s.Name, conf.RelayServerStaticEndpoints, w)
+		}
 	}
 }
 
@@ -188,8 +191,10 @@ func waitForPeerRelayReady(t *testing.T, prName string) {
 	}
 }
 
-// verifyPeerRelayStatusEndpoints asserts that every replica's status.endpoints entries are exactly the spec's
-// static endpoints. The kind cluster's LoadBalancer Services never get an address, so nothing else may appear.
+// verifyPeerRelayStatusEndpoints asserts that every replica's status.endpoints contains the spec's static
+// endpoints. On a real cloud cluster each replica's LoadBalancer Service is also assigned one or more public
+// addresses, which the reconciler advertises alongside the static endpoints, so we
+// require the static endpoints to be present rather than to be the only entries.
 func verifyPeerRelayStatusEndpoints(t *testing.T, prName string, replicas int32, want []netip.AddrPort) {
 	t.Helper()
 
@@ -213,9 +218,13 @@ func verifyPeerRelayStatusEndpoints(t *testing.T, prName string, replicas int32,
 			got = append(got, netip.AddrPortFrom(addr, uint16(ep.Port)))
 		}
 
-		if !slices.Equal(got, want) {
-			t.Errorf("PeerRelay %s replica %d: status.endpoints = %v, want %v", prName, i, got, want)
+		for _, w := range want {
+			if !slices.Contains(got, w) {
+				t.Errorf("PeerRelay %s replica %d: status.endpoints = %v, missing static endpoint %v", prName, i, got, w)
+			}
 		}
+
+		t.Logf("PeerRelay %s replica %d: status.endpoints = %v (static %v)", prName, i, got, want)
 	}
 }
 
