@@ -4,6 +4,8 @@
 package safediff
 
 import (
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -89,7 +91,7 @@ func TestLines(t *testing.T) {
 		t.Errorf("Lines: output unexpectedly not truncated")
 	}
 
-	wantDiff = "… 17 identical, 3 removed, and 3 inserted lines\n"
+	wantDiff = "… 22 identical, 3 removed, and 3 inserted lines\n"
 	gotDiff, gotTrunc = Lines(x, y, 0)
 	if d := cmp.Diff(gotDiff, wantDiff); d != "" {
 		t.Errorf("Lines mismatch (-got +want):\n%s\ngot:\n%s\nwant:\n%s", d, gotDiff, wantDiff)
@@ -177,4 +179,79 @@ func TestLines(t *testing.T) {
 	} else if gotTrunc == true {
 		t.Errorf("Lines: output unexpectedly truncated")
 	}
+}
+
+// TestLinesAccounting verifies that every input line is accounted for in the
+// output, whether printed individually or tallied in a "…" summary, at every
+// maxSize. Truncation must only ever hide lines, never lose track of them.
+func TestLinesAccounting(t *testing.T) {
+	x := strings.Repeat("identical\n", 50) + "before\n" + strings.Repeat("identical\n", 50)
+	y := strings.Repeat("identical\n", 50) + "after\n" + strings.Repeat("identical\n", 50)
+
+	// Tally the expected counts straight from the edit-script.
+	var want stats
+	for _, e := range diffStrings(strings.Split(x, "\n"), strings.Split(y, "\n")) {
+		switch e {
+		case identical:
+			want.numIdentical++
+		case modified:
+			want.numRemoved++
+			want.numInserted++
+		case removed:
+			want.numRemoved++
+		case inserted:
+			want.numInserted++
+		}
+	}
+
+	for _, maxSize := range append([]int{-1}, rangeInts(0, 400)...) {
+		out, _ := Lines(x, y, maxSize)
+		if got := tallyDiff(t, out); got != want {
+			t.Errorf("Lines(maxSize=%d) accounts for %+v lines, want %+v; output:\n%s", maxSize, got, want, out)
+		}
+	}
+}
+
+func rangeInts(lo, hi int) []int {
+	out := make([]int, 0, hi-lo)
+	for i := lo; i < hi; i++ {
+		out = append(out, i)
+	}
+	return out
+}
+
+var summaryRx = regexp.MustCompile(`(\d+) (identical|removed|inserted)`)
+
+// tallyDiff counts how many lines of each kind a [Lines] output accounts for,
+// summing both individually printed lines and "…" summary statements.
+func tallyDiff(t *testing.T, out string) (s stats) {
+	t.Helper()
+	for line := range strings.Lines(out) {
+		switch {
+		case strings.HasPrefix(line, "  "):
+			s.numIdentical++
+		case strings.HasPrefix(line, "- "):
+			s.numRemoved++
+		case strings.HasPrefix(line, "+ "):
+			s.numInserted++
+		case strings.HasPrefix(line, "… "):
+			for _, m := range summaryRx.FindAllStringSubmatch(line, -1) {
+				n, err := strconv.Atoi(m[1])
+				if err != nil {
+					t.Fatalf("bad summary line %q: %v", line, err)
+				}
+				switch m[2] {
+				case "identical":
+					s.numIdentical += n
+				case "removed":
+					s.numRemoved += n
+				case "inserted":
+					s.numInserted += n
+				}
+			}
+		default:
+			t.Fatalf("unexpected output line %q", line)
+		}
+	}
+	return s
 }
