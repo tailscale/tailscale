@@ -140,17 +140,17 @@ var netstackKeepaliveIdle = envknob.RegisterDuration("TS_NETSTACK_KEEPALIVE_IDLE
 var netstackKeepaliveInterval = envknob.RegisterDuration("TS_NETSTACK_KEEPALIVE_INTERVAL")
 
 // netstackEnableRACK overrides whether netstack's TCP uses RACK-TLP loss
-// detection (RFC 8985). RACK remains enabled by default; only explicitly
-// setting TS_NETSTACK_ENABLE_RACK=false disables it. When false, TCP falls
-// back to RFC 6675 SACK loss recovery, as netstack did from 1.82 through 1.102.
+// detection (RFC 8985). RACK is disabled by default; only explicitly
+// setting TS_NETSTACK_ENABLE_RACK=true enables it. When unset or false, TCP
+// uses RFC 6675 SACK loss recovery, as netstack did from 1.82 through 1.102.
 //
 // Why: until go.mod has google/gvisor#15432 and google/gvisor#16081, RACK's
 // loss marks do not reduce the SACK recovery pipe, and after an RTO, RACK
 // starts fast recovery for the same flight with a cwnd of 5. After a burst
 // loss the sender can then retransmit about two segments per RTO for seconds
 // to tens of seconds (tailscale/tailscale#21946). RACK off is in turn slower
-// on paths that reorder packets (tailscale/tailscale#20893), so unset keeps
-// gVisor's default.
+// on paths that reorder packets (tailscale/tailscale#20893), so setting true
+// remains available for such paths.
 var netstackEnableRACK = envknob.RegisterOptBool("TS_NETSTACK_ENABLE_RACK")
 
 var (
