@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -752,6 +753,71 @@ func TestServicePGReconciler_LoadBalancerAddressFamilies(t *testing.T) {
 			}
 			if len(got.Status.LoadBalancer.Ingress) != 0 {
 				t.Fatalf("unready proxy retained status: %v", got.Status.LoadBalancer.Ingress)
+			}
+		})
+	}
+}
+
+func TestServicePGReconciler_ServiceStatus(t *testing.T) {
+	for _, svcType := range []corev1.ServiceType{corev1.ServiceTypeLoadBalancer, corev1.ServiceTypeClusterIP, corev1.ServiceTypeNodePort} {
+		t.Run(string(svcType), func(t *testing.T) {
+			r, state, fc, _, _ := setupServiceTest(t)
+			svc, _ := setupTestService(t, "status-test", "", "10.0.0.1", fc, state)
+			mustUpdate(t, fc, svc.Namespace, svc.Name, func(s *corev1.Service) {
+				s.Spec.Type = svcType
+				if svcType != corev1.ServiceTypeLoadBalancer {
+					s.Spec.LoadBalancerClass = nil
+					mak.Set(&s.Annotations, AnnotationExpose, "true")
+				}
+			})
+			// The fake client does not validate Service status. Match the API
+			// server's rejection of load-balancer ingress on other Service types.
+			r.Client = interceptor.NewClient(fc.(client.WithWatch), interceptor.Funcs{
+				SubResourceUpdate: func(ctx context.Context, c client.Client, subresource string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+					if s, ok := obj.(*corev1.Service); ok && subresource == "status" && s.Spec.Type != corev1.ServiceTypeLoadBalancer && len(s.Status.LoadBalancer.Ingress) != 0 {
+						return apierrors.NewInvalid(corev1.SchemeGroupVersion.WithKind("Service").GroupKind(), s.Name, field.ErrorList{
+							field.Forbidden(field.NewPath("status", "loadBalancer", "ingress"), "may only be used when spec.type is LoadBalancer"),
+						})
+					}
+					return c.SubResource(subresource).Update(ctx, obj, opts...)
+				},
+			})
+			for _, advertising := range []bool{false, true, false} {
+				prefs := tailscaled.Prefs{}
+				prefs.Config.NodeID = "status-test"
+				prefs.Config.UserProfile.LoginName = "proxy.test.ts.net"
+				if advertising {
+					prefs.AdvertiseServices = []string{"svc:default-status-test"}
+				}
+				profile, err := json.Marshal(prefs)
+				if err != nil {
+					t.Fatal(err)
+				}
+				mustUpdate(t, fc, state.Namespace, state.Name, func(s *corev1.Secret) {
+					s.Labels = pgSecretLabels("test-pg", kubetypes.LabelSecretTypeState)
+					mak.Set(&s.Data, string(ipn.CurrentProfileStateKey), []byte("status-profile"))
+					mak.Set(&s.Data, "status-profile", profile)
+				})
+				expectReconciled(t, r, svc.Namespace, svc.Name)
+				got := new(corev1.Service)
+				if err := fc.Get(t.Context(), client.ObjectKeyFromObject(svc), got); err != nil {
+					t.Fatal(err)
+				}
+				wantStatus := metav1.ConditionFalse
+				if advertising {
+					wantStatus = metav1.ConditionTrue
+				}
+				cond := tsoperator.GetServiceCondition(got, tsapi.IngressSvcConfigured)
+				if cond == nil || cond.Status != wantStatus {
+					t.Fatalf("advertising=%v: configured condition = %v, want %s", advertising, cond, wantStatus)
+				}
+				if advertising && svcType == corev1.ServiceTypeLoadBalancer {
+					if len(got.Status.LoadBalancer.Ingress) != 1 || got.Status.LoadBalancer.Ingress[0].IP != vipTestIP || got.Status.LoadBalancer.Ingress[0].Hostname == "" {
+						t.Fatalf("advertising=%v: load-balancer ingress = %v, want hostname and IP %s", advertising, got.Status.LoadBalancer.Ingress, vipTestIP)
+					}
+				} else if len(got.Status.LoadBalancer.Ingress) != 0 {
+					t.Fatalf("advertising=%v: unexpected load-balancer ingress: %v", advertising, got.Status.LoadBalancer.Ingress)
+				}
 			}
 		})
 	}
