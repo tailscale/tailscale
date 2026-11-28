@@ -960,6 +960,10 @@ func (v HTTPHandlerView) AcceptAppCaps() views.Slice[peercap.Cap] {
 	return views.SliceOf(v.ж.AcceptAppCaps)
 }
 
+// RewriteHost, if true, sends the Proxy target's host as the Host header
+// instead of the incoming request's. X-Forwarded-Host carries the original.
+func (v HTTPHandlerView) RewriteHost() bool { return v.ж.RewriteHost }
+
 // Redirect, if not empty, is the target URL to redirect requests to.
 // By default, we redirect with HTTP 302 (Found) status.
 // If Redirect starts with '<httpcode>:', then we use that status instead.
@@ -975,6 +979,7 @@ var _HTTPHandlerViewNeedsRegeneration = HTTPHandler(struct {
 	Proxy         string
 	Text          string
 	AcceptAppCaps []peercap.Cap
+	RewriteHost   bool
 	Redirect      string
 }{})
 

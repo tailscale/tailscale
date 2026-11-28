@@ -97,6 +97,11 @@ var serveHTTPContextKey ctxkey.Key[*serveHTTPContext]
 // all streams of a connection, so mount state must not be stored on it.
 var appCapsContextKey = ctxkey.New("ipnlocal.appCapsContextKey", views.Slice[peercap.Cap]{})
 
+// rewriteHostContextKey holds the RewriteHost setting of the mount handling
+// the current request. One reverseProxy is shared by every mount with the same
+// Proxy string, so the setting has to travel with the request.
+var rewriteHostContextKey = ctxkey.New("ipnlocal.rewriteHostContextKey", false)
+
 // serveHTTPContext is connection-scoped: one value is shared by all requests on
 // the connection, including concurrent h2 streams. Do not add per-request state
 // to it, use a separate context key like appCapsContextKey instead.
@@ -1014,8 +1019,9 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			r.Out.URL.RawPath = rp.url.RawPath
 		}
 
-		// For Unix sockets, use the URL's host (localhost) instead of the incoming host
-		if rp.socketPath != "" {
+		// For Unix sockets, and mounts with RewriteHost set, use the URL's
+		// host instead of the incoming host.
+		if rp.socketPath != "" || rewriteHostContextKey.Value(r.Out.Context()) {
 			r.Out.Host = rp.url.Host
 		} else {
 			r.Out.Host = r.In.Host
@@ -1314,7 +1320,9 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Mount-accepted capabilities are per-request state
-		r = r.WithContext(appCapsContextKey.WithValue(r.Context(), h.AcceptAppCaps()))
+		ctx := appCapsContextKey.WithValue(r.Context(), h.AcceptAppCaps())
+		ctx = rewriteHostContextKey.WithValue(ctx, h.RewriteHost())
+		r = r.WithContext(ctx)
 		h := p.(http.Handler)
 		// Trim the mount point from the URL path before proxying. (#6571)
 		if r.URL.Path != "/" {

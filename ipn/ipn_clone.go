@@ -250,6 +250,7 @@ var _HTTPHandlerCloneNeedsRegeneration = HTTPHandler(struct {
 	Proxy         string
 	Text          string
 	AcceptAppCaps []peercap.Cap
+	RewriteHost   bool
 	Redirect      string
 }{})
 

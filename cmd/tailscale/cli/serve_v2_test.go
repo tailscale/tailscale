@@ -1089,6 +1089,39 @@ func TestServeDevConfigMutations(t *testing.T) {
 			},
 		},
 		{
+			name: "rewrite_host",
+			steps: []step{
+				{
+					command: cmd("serve --bg --rewrite-host 3000"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {
+									Proxy:       "http://127.0.0.1:3000",
+									RewriteHost: true,
+								},
+							}},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "rewrite_host_tcp",
+			steps: []step{{
+				command: cmd("serve --bg --tcp=443 --rewrite-host 3000"),
+				wantErr: anyErr(),
+			}},
+		},
+		{
+			name: "rewrite_host_text",
+			steps: []step{{
+				command: cmd("serve --bg --rewrite-host text:foo"),
+				wantErr: anyErr(),
+			}},
+		},
+		{
 			name: "invalid_accept_caps_invalid_app_cap",
 			steps: []step{
 				{
@@ -2254,7 +2287,7 @@ func TestSetServe(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := e.setServe(tt.cfg, tt.dnsName, tt.srvType, tt.srvPort, tt.mountPath, tt.target, tt.allowFunnel, magicDNSSuffix, nil, tt.proxyProtocol)
+			err := e.setServe(tt.cfg, tt.dnsName, tt.srvType, tt.srvPort, tt.mountPath, tt.target, tt.allowFunnel, magicDNSSuffix, nil, tt.proxyProtocol, false)
 			if err != nil && !tt.expectErr {
 				t.Fatalf("got error: %v; did not expect error.", err)
 			}

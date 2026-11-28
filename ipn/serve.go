@@ -187,6 +187,10 @@ type HTTPHandler struct {
 
 	AcceptAppCaps []peercap.Cap `json:",omitempty"` // peer capabilities to forward in grant header, e.g. example.com/cap/mon
 
+	// RewriteHost, if true, sends the Proxy target's host as the Host header
+	// instead of the incoming request's. X-Forwarded-Host carries the original.
+	RewriteHost bool `json:",omitempty"`
+
 	// Redirect, if not empty, is the target URL to redirect requests to.
 	// By default, we redirect with HTTP 302 (Found) status.
 	// If Redirect starts with '<httpcode>:', then we use that status instead.
