@@ -762,9 +762,22 @@ func (b *LocalBackend) tcpHandlerForServeTCP(tcph ipn.TCPPortHandlerView, dport 
 }
 
 // forwardTCPWithProxyProtocol forwards TCP traffic between conn and backConn,
-// optionally prepending a PROXY protocol header if proxyProtoVer > 0.
+// prepending a PROXY protocol header to the traffic sent to backConn if
+// proxyProtoVer is non-zero.
 // The srcAddr is the original client address used to build the PROXY header.
+//
+// proxyProtoVer is the PROXY protocol version to prepend. The value 0 is
+// the sentinel for "no PROXY header": PROXY is disabled for the handler
+// and traffic is forwarded as-is. Only versions 1 and 2 are supported;
+// any other version is an error.
 func (b *LocalBackend) forwardTCPWithProxyProtocol(conn, backConn net.Conn, proxyProtoVer int, srcAddr netip.AddrPort, dport uint16, backDst string) error {
+	switch proxyProtoVer {
+	case 0, 1, 2:
+		// Supported versions; 0 is the sentinel for no PROXY header.
+	default:
+		return fmt.Errorf("unsupported PROXY protocol version %d", proxyProtoVer)
+	}
+
 	var proxyHeader []byte
 	if proxyProtoVer > 0 {
 		// PROXY protocol requires a valid TCP destination address.
@@ -824,7 +837,7 @@ func (b *LocalBackend) forwardTCPWithProxyProtocol(conn, backConn net.Conn, prox
 		var err error
 		proxyHeader, err = header.Format()
 		if err != nil {
-			b.logf("localbackend: failed to format proxy protocol header for port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
+			return fmt.Errorf("formatting PROXY protocol header for port %v (from %v) to %s: %w", dport, srcAddr, backDst, err)
 		}
 	}
 
