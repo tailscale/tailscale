@@ -10331,6 +10331,72 @@ func TestRouteAllDisabled(t *testing.T) {
 	}
 }
 
+// TestRouterConfigServiceAddrs tests that the addresses of the Services
+// this node hosts reach the router as ServiceAddrs, for each address
+// family the node has.
+func TestRouterConfigServiceAddrs(t *testing.T) {
+	pp := netip.MustParsePrefix
+	svcIPMapJSON, err := json.Marshal(tailcfg.ServiceIPMappings{
+		"svc:foo": []netip.Addr{
+			netip.MustParseAddr("fd7a:115c:a1e0::2"),
+			netip.MustParseAddr("100.64.1.2"),
+		},
+		"svc:bar": []netip.Addr{
+			netip.MustParseAddr("100.64.1.3"),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name  string
+		addrs []netip.Prefix
+		want  []netip.Prefix
+	}{
+		{
+			name:  "dual_stack",
+			addrs: []netip.Prefix{pp("100.64.1.1/32"), pp("fd7a:115c:a1e0::1/128")},
+			want:  []netip.Prefix{pp("100.64.1.2/32"), pp("100.64.1.3/32"), pp("fd7a:115c:a1e0::2/128")},
+		},
+		{
+			name:  "ipv4_only",
+			addrs: []netip.Prefix{pp("100.64.1.1/32")},
+			want:  []netip.Prefix{pp("100.64.1.2/32"), pp("100.64.1.3/32")},
+		},
+		{
+			name: "no_addresses",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lb := newTestLocalBackend(t)
+			nm := &netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Name:      "test-node",
+					Addresses: tt.addrs,
+					CapMap: tailcfg.NodeCapMap{
+						nodecap.ServiceHost: []tailcfg.RawMessage{
+							tailcfg.RawMessage(svcIPMapJSON),
+						},
+					},
+				}).View(),
+			}
+			lb.currentNode().SetNetMap(nm)
+
+			rcfg := lb.routerConfigLocked(&wgcfg.Config{Addresses: tt.addrs}, new(ipn.Prefs).View(), nm)
+			if !slices.Equal(rcfg.ServiceAddrs, tt.want) {
+				t.Errorf("ServiceAddrs = %v; want %v", rcfg.ServiceAddrs, tt.want)
+			}
+			for _, p := range tt.want {
+				if !slices.Contains(rcfg.Routes, p) {
+					t.Errorf("Routes = %v; missing %v", rcfg.Routes, p)
+				}
+			}
+		})
+	}
+}
+
 // TestAdvertiseRoute_InvalidPrefix tests that AdvertiseRoute rejects routes
 // with non-address bits set in the prefix.
 func TestAdvertiseRoute_InvalidPrefix(t *testing.T) {

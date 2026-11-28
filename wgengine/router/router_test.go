@@ -14,7 +14,7 @@ import (
 func TestConfigEqual(t *testing.T) {
 	testedFields := []string{
 		"LocalAddrs", "Routes", "LocalRoutes", "NewMTU",
-		"SubnetRoutes", "SNATSubnetRoutes", "StatefulFiltering",
+		"SubnetRoutes", "ServiceAddrs", "SNATSubnetRoutes", "StatefulFiltering",
 		"NetfilterMode", "NetfilterKind", "RemoveCGNATDropRule",
 	}
 	configType := reflect.TypeFor[Config]()
@@ -77,6 +77,17 @@ func TestConfigEqual(t *testing.T) {
 			&Config{Routes: nets("100.1.27.0/24")},
 			&Config{Routes: nets("100.2.19.0/24")},
 			false,
+		},
+
+		{
+			&Config{ServiceAddrs: nets("100.1.27.82/32")},
+			&Config{ServiceAddrs: nets("100.2.19.82/32")},
+			false,
+		},
+		{
+			&Config{ServiceAddrs: nets("100.1.27.82/32")},
+			&Config{ServiceAddrs: nets("100.1.27.82/32")},
+			true,
 		},
 		{
 			&Config{Routes: nets("100.2.19.0/24")},

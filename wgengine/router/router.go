@@ -131,6 +131,14 @@ type Config struct {
 	// flow logging and is otherwise ignored.
 	SubnetRoutes []netip.Prefix
 
+	// ServiceAddrs are the addresses of the Tailscale Services (VIP
+	// services) this node hosts. Only Linux uses them: netfilter accepts
+	// loopback traffic from them, as it does for LocalAddrs. A Service
+	// served in TUN mode needs its addresses assigned to a local
+	// interface, so a connection from this node to its own Service runs
+	// over lo with a Service address as both source and destination.
+	ServiceAddrs []netip.Prefix
+
 	// SNATSubnetRoutes enables SNAT for traffic to local subnets.
 	// Implemented on Linux (iptables/nftables) and FreeBSD (PF).
 	SNATSubnetRoutes bool
@@ -161,5 +169,6 @@ func (c *Config) Clone() *Config {
 	c2.Routes = slices.Clone(c.Routes)
 	c2.LocalRoutes = slices.Clone(c.LocalRoutes)
 	c2.SubnetRoutes = slices.Clone(c.SubnetRoutes)
+	c2.ServiceAddrs = slices.Clone(c.ServiceAddrs)
 	return &c2
 }
