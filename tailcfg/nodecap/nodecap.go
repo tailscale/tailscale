@@ -165,6 +165,10 @@ const (
 	// peers. If it isn't set, it defaults to the client default.
 	PeerMTUEnable Cap = "peer-mtu-enable"
 
+	// DiscoFullSizeProbe makes the client require that a direct UDP path carry a full-size packet before using it.
+	// See https://github.com/tailscale/tailscale/issues/21951.
+	DiscoFullSizeProbe Cap = "disco-full-size-probe"
+
 	// DNSForwarderDisableTCPRetries disables retrying truncated
 	// DNS queries over TCP if the response is truncated.
 	DNSForwarderDisableTCPRetries Cap = "dns-forwarder-disable-tcp-retries"

@@ -48,6 +48,10 @@ type Knobs struct {
 	// Set by [nodecap.PeerMTUEnable].
 	PeerMTUEnable atomic.Bool
 
+	// DiscoFullSizeProbe is whether a direct UDP path must carry a full-size packet before magicsock uses it.
+	// Set by [nodecap.DiscoFullSizeProbe].
+	DiscoFullSizeProbe atomic.Bool
+
 	// DisableDNSForwarderTCPRetries is whether the DNS forwarder should
 	// skip retrying truncated queries over TCP.
 	// Set by [nodecap.DNSForwarderDisableTCPRetries].
@@ -199,6 +203,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	setBool(&k.ForceBackgroundSTUN, nodecap.DebugForceBackgroundSTUN)
 	setBool(&k.DisableDeltaUpdates, nodecap.DisableDeltaUpdates)
 	setBool(&k.PeerMTUEnable, nodecap.PeerMTUEnable)
+	setBool(&k.DiscoFullSizeProbe, nodecap.DiscoFullSizeProbe)
 	setBool(&k.DisableDNSForwarderTCPRetries, nodecap.DNSForwarderDisableTCPRetries)
 	setBool(&k.SilentDisco, nodecap.SilentDisco)
 	setBool(&k.LinuxForceIPTables, nodecap.LinuxMustUseIPTables)

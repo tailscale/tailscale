@@ -7,10 +7,34 @@ import (
 	"testing"
 
 	"tailscale.com/disco"
+	"tailscale.com/envknob"
+	"tailscale.com/net/tstun"
 	udprelay "tailscale.com/net/udprelay/endpoint"
 	"tailscale.com/types/key"
 	"tailscale.com/util/set"
 )
+
+func TestRelayFullSizePadding(t *testing.T) {
+	c := &Conn{}
+	envknob.SetenvForTest(t, "TS_DEBUG_DISCO_FULL_SIZE_PROBE", "false")
+	if bind, ping := c.relayFullSizePadding(); bind != 0 || ping != 0 {
+		t.Fatalf("padding with the knob off: bind %d, ping %d, want 0, 0", bind, ping)
+	}
+
+	envknob.SetenvForTest(t, "TS_DEBUG_DISCO_FULL_SIZE_PROBE", "true")
+	bindPadding, pingPadding := c.relayFullSizePadding()
+	// Both go out sealed and inside the same Geneve header as relayed WireGuard packets, so each should match a WireGuard packet carrying a full-size TUN packet.
+	want := int(tstun.DefaultTUNMTU()) + 32
+	sealedLen := func(m disco.Message) int {
+		return len(disco.Magic) + key.DiscoPublicRawLen + disco.NonceLen + poly1305AuthenticatorSize + len(m.AppendMarshal(nil))
+	}
+	if got := sealedLen(&disco.BindUDPRelayEndpoint{Padding: bindPadding}); got != want {
+		t.Errorf("padded bind is %d bytes, want %d", got, want)
+	}
+	if got := sealedLen(&disco.Ping{NodeKey: key.NewNode().Public(), Padding: pingPadding}); got != want {
+		t.Errorf("padded ping is %d bytes, want %d", got, want)
+	}
+}
 
 func TestRelayManagerInitAndIdle(t *testing.T) {
 	rm := relayManager{}
