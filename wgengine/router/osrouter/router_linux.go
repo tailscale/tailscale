@@ -102,6 +102,7 @@ type linuxRouter struct {
 	mu                sync.Mutex
 	addrs             map[netip.Prefix]bool
 	lastScanAddrs     set.Set[netip.Prefix] // desired addrs at the last successful orphan scan; nil until the first scan
+	serviceAddrs      map[netip.Prefix]bool // service addresses with a loopback rule
 	routes            map[netip.Prefix]bool
 	localRoutes       map[netip.Prefix]bool
 	snatSubnetRoutes  bool
@@ -485,6 +486,12 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 		errs = append(errs, err)
 	}
 	r.addrs = newAddrs
+
+	newServiceAddrs, err := cidrDiff("serviceAddr", r.serviceAddrs, cfg.ServiceAddrs, r.addServiceAddr, r.delServiceAddr, r.logf)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	r.serviceAddrs = newServiceAddrs
 
 	// r.addrs only tracks what this instance configured, so it misses
 	// Tailscale addresses a previous instance left on a persistent tailscale0.
@@ -890,6 +897,11 @@ func (r *linuxRouter) setNetfilterModeLocked(mode preftype.NetfilterMode) error 
 			return fmt.Errorf("error adding loopback rule: %w", err)
 		}
 	}
+	for cidr := range r.serviceAddrs {
+		if err := r.addLoopbackRule(cidr.Addr()); err != nil {
+			return fmt.Errorf("error adding service loopback rule: %w", err)
+		}
+	}
 
 	// Re-add the CGNAT rules if we had any set.
 	// This does not call [linuxRouter.setCGNATDropModeLocked] because that
@@ -1173,6 +1185,19 @@ func (r *linuxRouter) addLoopbackRule(addr netip.Addr) error {
 		return err
 	}
 	return nil
+}
+
+// addServiceAddr permits loopback traffic from the address of a
+// Tailscale Service this node hosts. Unlike [linuxRouter.addAddress],
+// it does not assign the address: in TUN mode the operator puts it on a
+// local interface, and in the default mode netstack terminates it.
+func (r *linuxRouter) addServiceAddr(addr netip.Prefix) error {
+	return r.addLoopbackRule(addr.Addr())
+}
+
+// delServiceAddr removes the rule added by [linuxRouter.addServiceAddr].
+func (r *linuxRouter) delServiceAddr(addr netip.Prefix) error {
+	return r.delLoopbackRule(addr.Addr())
 }
 
 // delLoopbackRule removes the firewall rule permitting loopback

@@ -28,6 +28,7 @@ import (
 	"tailscale.com/tsconst"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/preftype"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/linuxfw"
@@ -37,6 +38,66 @@ import (
 )
 
 type Config = router.Config
+
+// TestRouterServiceAddrs tests that the router permits loopback traffic
+// from the addresses of the Services the node hosts, keeps it across a
+// netfilter mode change, and removes it with the Service.
+func TestRouterServiceAddrs(t *testing.T) {
+	bus := eventbus.New()
+	defer bus.Close()
+	mon, err := netmon.New(bus, logger.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mon.Start()
+	defer mon.Close()
+
+	fake := NewFakeOS(t)
+	router, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", mon, fake, health.NewTracker(bus), bus)
+	if err != nil {
+		t.Fatalf("failed to create router: %v", err)
+	}
+	router.(*linuxRouter).nfr = fake.nfr
+	router.(*linuxRouter).interfaceV6Usable = func() bool { return true }
+	if err := router.Up(); err != nil {
+		t.Fatalf("failed to up router: %v", err)
+	}
+
+	const (
+		rule4 = "v4/filter/ts-input -i lo -s 100.101.102.105 -j ACCEPT"
+		rule6 = "v6/filter/ts-input -i lo -s fd7a:115c:a1e0::5 -j ACCEPT"
+	)
+	withServices := func(mode preftype.NetfilterMode) *Config {
+		return &Config{
+			LocalAddrs:    mustCIDRs("100.101.102.104/10"),
+			Routes:        mustCIDRs("100.101.102.105/32", "fd7a:115c:a1e0::5/128"),
+			ServiceAddrs:  mustCIDRs("100.101.102.105/32", "fd7a:115c:a1e0::5/128"),
+			NetfilterMode: mode,
+		}
+	}
+	check := func(step string, cfg *Config, want bool) {
+		t.Helper()
+		if err := router.Set(cfg); err != nil {
+			t.Fatalf("%s: failed to set router config: %v", step, err)
+		}
+		got := fake.String()
+		lines := strings.Split(got, "\n")
+		for _, rule := range []string{rule4, rule6} {
+			if has := slices.Contains(lines, rule); has != want {
+				t.Errorf("%s: has %q = %v; want %v\n%s", step, rule, has, want, got)
+			}
+		}
+	}
+
+	check("services", withServices(netfilterOn), true)
+	check("netfilter off", withServices(netfilterOff), false)
+	check("netfilter back on", withServices(netfilterOn), true)
+	check("nodivert", withServices(netfilterNoDivert), true)
+	check("services gone", &Config{
+		LocalAddrs:    mustCIDRs("100.101.102.104/10"),
+		NetfilterMode: netfilterOn,
+	}, false)
+}
 
 func TestRouterStates(t *testing.T) {
 	basic := `

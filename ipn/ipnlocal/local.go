@@ -7027,9 +7027,12 @@ func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView
 	}
 	for vip := range vipServiceIPs {
 		if (vip.Is4() && v4) || (vip.Is6() && v6) {
-			rs.Routes = append(rs.Routes, netip.PrefixFrom(vip, vip.BitLen()))
+			p := netip.PrefixFrom(vip, vip.BitLen())
+			rs.Routes = append(rs.Routes, p)
+			rs.ServiceAddrs = append(rs.ServiceAddrs, p)
 		}
 	}
+	slices.SortFunc(rs.ServiceAddrs, netipx.ComparePrefix)
 
 	// Get any extra Routes an extension may want installed.
 	if extensionRoutesFx, ok := b.extHost.hooks.ExtraRouterConfigRoutes.GetOk(); ok {
