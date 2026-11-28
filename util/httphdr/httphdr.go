@@ -7,6 +7,7 @@ package httphdr
 
 import (
 	"bytes"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -63,7 +64,7 @@ func ParseRange(hdr string) (ranges []Range, ok bool) {
 			prefix, suffix, hasDash := strings.Cut(elem, "-")
 			n, ok2 := parseNumber(prefix)
 			m, ok3 := parseNumber(suffix)
-			if !hasDash || !ok2 || !ok3 || m < n {
+			if !hasDash || !ok2 || !ok3 || m < n || m-n == math.MaxInt64 {
 				return ranges, false
 			}
 			ranges = append(ranges, Range{n, m - n + 1})
@@ -80,12 +81,12 @@ func FormatRange(ranges []Range) (hdr string, ok bool) {
 	for _, r := range ranges {
 		switch {
 		case r.Length > 0: // i.e., first-byte-pos "-" last-byte-pos
-			if r.Start < 0 {
+			if r.Start < 0 || r.Length-1 > math.MaxInt64-r.Start {
 				return string(b), false
 			}
 			b = strconv.AppendUint(b, uint64(r.Start), 10)
 			b = append(b, '-')
-			b = strconv.AppendUint(b, uint64(r.Start+r.Length-1), 10)
+			b = strconv.AppendUint(b, uint64(r.Start+(r.Length-1)), 10)
 			b = append(b, ',')
 		case r.Length == 0: // i.e., first-byte-pos "-"
 			if r.Start < 0 {
@@ -144,7 +145,7 @@ func ParseContentRange(hdr string) (start, length, completeLength int64, ok bool
 		if suffix == "*" {
 			o, ok2 = -1, true
 		}
-		if !hasDash || !hasSlash || !ok0 || !ok1 || !ok2 || m < n || (o >= 0 && o <= m) {
+		if !hasDash || !hasSlash || !ok0 || !ok1 || !ok2 || m < n || m-n == math.MaxInt64 || (o >= 0 && o <= m) {
 			return start, length, completeLength, false
 		}
 		start = n
@@ -171,14 +172,15 @@ func FormatContentRange(start, length, completeLength int64) (hdr string, ok boo
 		b = append(b, "*/"...)
 		b = strconv.AppendUint(b, uint64(completeLength), 10)
 		ok = true
-	case start >= 0 && length > 0: // i.e., byte-range "/" (complete-length | "*")
+	case start >= 0 && length > 0 && length-1 <= math.MaxInt64-start: // i.e., byte-range "/" (complete-length | "*")
+		end := start + (length - 1)
 		b = strconv.AppendUint(b, uint64(start), 10)
 		b = append(b, '-')
-		b = strconv.AppendUint(b, uint64(start+length-1), 10)
+		b = strconv.AppendUint(b, uint64(end), 10)
 		b = append(b, '/')
 		if completeLength >= 0 {
 			b = strconv.AppendUint(b, uint64(completeLength), 10)
-			ok = completeLength >= start+length && start+length > 0
+			ok = completeLength > end
 		} else {
 			b = append(b, '*')
 			ok = true

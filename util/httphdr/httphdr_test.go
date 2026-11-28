@@ -4,6 +4,7 @@
 package httphdr
 
 import (
+	"math"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -41,6 +42,10 @@ func TestRange(t *testing.T) {
 		{"bytes=0-5,2-3", []Range{{0, 6}, {2, 2}}, true, true},
 		{"bytes=2-3,0-5", []Range{{2, 2}, {0, 6}}, true, true},
 		{"bytes=0-5,2-,-5", []Range{{0, 6}, {2, 0}, {0, -5}}, true, true},
+		{"bytes=0-9223372036854775806", []Range{{0, math.MaxInt64}}, true, true},
+		{"bytes=1-9223372036854775807", []Range{{1, math.MaxInt64}}, true, true},
+		{"bytes=9223372036854775807-9223372036854775807", []Range{{math.MaxInt64, 1}}, true, true},
+		{"bytes=0-9223372036854775807", nil, false, false},
 	}
 
 	for _, tt := range tests {
@@ -78,6 +83,11 @@ func TestContentRange(t *testing.T) {
 		{"bytes #-5/6", contentRange{}, false, false},
 		{"bytes 5-#/6", contentRange{}, false, false},
 		{"bytes 5-5/#", contentRange{}, false, false},
+		{"bytes 0-9223372036854775806/*", contentRange{0, math.MaxInt64, -1}, true, true},
+		{"bytes 1-9223372036854775807/*", contentRange{1, math.MaxInt64, -1}, true, true},
+		{"bytes 9223372036854775807-9223372036854775807/*", contentRange{math.MaxInt64, 1, -1}, true, true},
+		{"bytes 0-9223372036854775806/9223372036854775807", contentRange{0, math.MaxInt64, math.MaxInt64}, true, true},
+		{"bytes 0-9223372036854775807/*", contentRange{}, false, false},
 	}
 
 	for _, tt := range tests {
@@ -91,6 +101,35 @@ func TestContentRange(t *testing.T) {
 			if d := cmp.Diff(valOk(got, gotOk), valOk(tt.in, tt.wantOk)); d != "" {
 				t.Errorf("FormatContentRange mismatch (-got +want):\n%s", d)
 			}
+		}
+	}
+}
+
+func TestFormatRangeOverflow(t *testing.T) {
+	for _, r := range []Range{
+		{math.MaxInt64, 2},
+		{2, math.MaxInt64},
+		{math.MaxInt64, math.MaxInt64},
+	} {
+		if got, ok := FormatRange([]Range{r}); ok {
+			t.Errorf("FormatRange(%v) = %q, true; want ok=false", r, got)
+		}
+	}
+	if got, ok := FormatRange([]Range{{0, math.MinInt64}}); !ok || got != "bytes=-9223372036854775808" {
+		t.Errorf("FormatRange with MinInt64 suffix = %q, %v", got, ok)
+	}
+}
+
+func TestFormatContentRangeOverflow(t *testing.T) {
+	for _, r := range []contentRange{
+		{math.MaxInt64, 2, -1},
+		{2, math.MaxInt64, -1},
+		{math.MaxInt64, math.MaxInt64, -1},
+		{math.MaxInt64, 2, math.MaxInt64},
+		{2, math.MaxInt64, math.MaxInt64},
+	} {
+		if got, ok := FormatContentRange(r.Start, r.Length, r.CompleteLength); ok {
+			t.Errorf("FormatContentRange(%v) = %q, true; want ok=false", r, got)
 		}
 	}
 }
