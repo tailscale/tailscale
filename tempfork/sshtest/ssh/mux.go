@@ -30,20 +30,30 @@ type chanList struct {
 	// amount. This helps distinguish otherwise identical
 	// server/client muxes
 	offset uint32
+
+	// closed is set by dropAll.
+	closed bool
 }
 
-// Assigns a channel ID to the given channel.
-func (c *chanList) add(ch *channel) uint32 {
+// add stores the given channel and assigns its localId while holding the
+// lock. Once dropAll has been called, add leaves the channel unregistered
+// and returns false.
+func (c *chanList) add(ch *channel) bool {
 	c.Lock()
 	defer c.Unlock()
+	if c.closed {
+		return false
+	}
 	for i := range c.chans {
 		if c.chans[i] == nil {
 			c.chans[i] = ch
-			return uint32(i) + c.offset
+			ch.localId = uint32(i) + c.offset
+			return true
 		}
 	}
 	c.chans = append(c.chans, ch)
-	return uint32(len(c.chans)-1) + c.offset
+	ch.localId = uint32(len(c.chans)-1) + c.offset
+	return true
 }
 
 // getChan returns the channel for the given ID.
@@ -67,7 +77,8 @@ func (c *chanList) remove(id uint32) {
 	c.Unlock()
 }
 
-// dropAll forgets all channels it knows, returning them in a slice.
+// dropAll forgets all channels it knows, returning them in a slice. No
+// channel can be added afterwards.
 func (c *chanList) dropAll() []*channel {
 	c.Lock()
 	defer c.Unlock()
@@ -80,7 +91,15 @@ func (c *chanList) dropAll() []*channel {
 		r = append(r, ch)
 	}
 	c.chans = nil
+	c.closed = true
 	return r
+}
+
+// isClosed reports whether dropAll has been called.
+func (c *chanList) isClosed() bool {
+	c.Lock()
+	defer c.Unlock()
+	return c.closed
 }
 
 // mux represents the state for the SSH connection protocol, which
@@ -311,6 +330,9 @@ func (m *mux) OpenChannel(chanType string, extra []byte) (Channel, <-chan *Reque
 
 func (m *mux) openChannel(chanType string, extra []byte) (*channel, error) {
 	ch := m.newChannel(chanType, channelOutbound, extra)
+	if m.chanList.isClosed() {
+		return nil, io.EOF
+	}
 
 	ch.maxIncomingPayload = channelMaxPacket
 
@@ -325,7 +347,11 @@ func (m *mux) openChannel(chanType string, extra []byte) (*channel, error) {
 		return nil, err
 	}
 
-	switch msg := (<-ch.msg).(type) {
+	msg, ok := <-ch.msg
+	if !ok {
+		return nil, io.EOF
+	}
+	switch msg := msg.(type) {
 	case *channelOpenConfirmMsg:
 		return ch, nil
 	case *channelOpenFailureMsg:
