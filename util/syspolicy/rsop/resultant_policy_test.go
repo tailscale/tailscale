@@ -1036,3 +1036,57 @@ func policyForTest(tb testing.TB, target setting.PolicyScope) (*Policy, error) {
 	})
 	return policy, nil
 }
+
+// TestReplacePolicySourceWithCallbackLockHeld verifies that a store can be
+// replaced while holding a lock that a policy change callback acquires.
+func TestReplacePolicySourceWithCallbackLockHeld(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		testSetting := setting.NewDefinition("TestSettingA", setting.DeviceSetting, setting.StringValue)
+		if err := setting.SetDefinitionsForTest(t, testSetting); err != nil {
+			t.Fatalf("SetDefinitionsForTest failed: %v", err)
+		}
+
+		reg, err := RegisterStoreForTest(t, "TestStore", setting.DeviceScope, source.NewTestStoreOf(t, source.TestSettingOf(testSetting.Key(), "0")))
+		if err != nil {
+			t.Fatalf("Failed to register the initial store: %v", err)
+		}
+		policy, err := policyForTest(t, setting.DeviceScope)
+		if err != nil {
+			t.Fatalf("Failed to get effective policy: %v", err)
+		}
+
+		var mu sync.Mutex
+		var got []any // values seen by the callback; guarded by mu
+		t.Cleanup(policy.RegisterChangeCallback(func(pc policyclient.PolicyChange) {
+			mu.Lock()
+			defer mu.Unlock()
+			got = append(got, pc.(*PolicyChange).New().Get(testSetting.Key()))
+		}))
+
+		var want []any
+		mu.Lock()
+		for i := range 3 {
+			value := strconv.Itoa(i + 1)
+			want = append(want, value)
+			reg, err = reg.ReplaceStore(source.NewTestStoreOf(t, source.TestSettingOf(testSetting.Key(), value)))
+			if err != nil {
+				mu.Unlock()
+				t.Fatalf("Failed to replace the policy store: %v", err)
+			}
+			t.Cleanup(func() { reg.Unregister() })
+			// The effective policy must be updated by the time ReplaceStore returns.
+			if got := policy.Get().Get(testSetting.Key()); got != value {
+				mu.Unlock()
+				t.Fatalf("Setting %q: got %q; want %q", testSetting.Key(), got, value)
+			}
+		}
+		mu.Unlock()
+
+		synctest.Wait()
+		mu.Lock()
+		defer mu.Unlock()
+		if !slices.Equal(got, want) {
+			t.Errorf("callback values: got %v; want %v", got, want)
+		}
+	})
+}
