@@ -47,7 +47,7 @@ func (h *Handler) serveDriveServerAddr(w http.ResponseWriter, r *http.Request) {
 // POST - renames an existing share
 func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 	if !h.b.DriveSharingEnabled() {
-		http.Error(w, `taildrive sharing not enabled, please add the attribute "drive:share" to this node in your ACLs' "nodeAttrs" section`, http.StatusForbidden)
+		http.Error(w, `taildrive sharing not enabled, please add the attribute "drive:share" to this node in your ACLs' "nodeAttrs" section`, http.StatusPreconditionFailed)
 		return
 	}
 	switch r.Method {

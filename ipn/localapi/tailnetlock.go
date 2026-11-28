@@ -102,7 +102,7 @@ func (h *Handler) serveTKAInit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !h.b.TailnetLockAllowed() {
-		http.Error(w, "Tailnet Lock is not supported on your pricing plan", http.StatusForbidden)
+		http.Error(w, "Tailnet Lock is not supported on your pricing plan", http.StatusPreconditionFailed)
 		return
 	}
 
