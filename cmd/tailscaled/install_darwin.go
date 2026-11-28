@@ -131,7 +131,7 @@ func installSystemDaemonDarwin(args []string) (err error) {
 			return err
 		}
 	}
-	if err := os.WriteFile(sysPlist, []byte(darwinLaunchdPlist), 0700); err != nil {
+	if err := os.WriteFile(sysPlist, []byte(darwinLaunchdPlist), 0644); err != nil {
 		return err
 	}
 
