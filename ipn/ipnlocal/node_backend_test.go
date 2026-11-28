@@ -11,6 +11,7 @@ import (
 	"maps"
 	"net/netip"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -899,4 +900,108 @@ func TestNodeBackendIndexReuseEviction(t *testing.T) {
 		wantAddr(t, nb, addr, 2)
 		wantAddr(t, nb, addr2, 1)
 	})
+}
+
+func TestNodeBackendPublishesCollectServices(t *testing.T) {
+	bus := eventbus.New()
+	t.Cleanup(bus.Close)
+	sub := eventbus.Subscribe[CollectServicesChanged](bus.Client("collectservicestest"))
+	t.Cleanup(sub.Close)
+
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), bus)
+
+	// want asserts that applying nm signals subscribers, and that the value
+	// they will then read back is wantCollect. The signal carries no value, so
+	// the pair is what matters: a signal without the state behind it would let
+	// a subscriber read a value the netmap never set.
+	want := func(t *testing.T, what string, nm *netmap.NetworkMap, wantCollect bool) {
+		t.Helper()
+		nb.SetNetMap(nm)
+		select {
+		case <-sub.Events():
+		case <-time.After(10 * time.Second):
+			t.Fatalf("timeout waiting for CollectServicesChanged after %s", what)
+		}
+		if got := nb.CollectServices(); got != wantCollect {
+			t.Errorf("CollectServices() after %s = %v; want %v", what, got, wantCollect)
+		}
+	}
+
+	want(t, "a netmap that collects services", &netmap.NetworkMap{CollectServices: true}, true)
+	// Signalled for every netmap, including one that changed nothing, since a
+	// subscriber has no payload to compare against.
+	want(t, "an unchanged netmap", &netmap.NetworkMap{CollectServices: true}, true)
+	want(t, "a netmap that stopped collecting", &netmap.NetworkMap{CollectServices: false}, false)
+	// Clearing the netmap signals too, so a subscriber re-reads and stops
+	// reporting services rather than keeping the logged-out node's answer.
+	want(t, "a nil netmap", nil, false)
+}
+
+// TestShouldUploadServicesHookMayReadNodeBackend exercises the lock claim
+// feature/portlist's ShouldUploadServices hook rests on: the hook is consulted
+// by hostInfoWithServicesLocked with b.mu held and reads the node backend from
+// there, which must not re-enter that lock.
+//
+// No test in feature/portlist can reach this; the hook only runs inside
+// LocalBackend.
+func TestShouldUploadServicesHookMayReadNodeBackend(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	var calls atomic.Int64
+	b.extHost.Hooks().ShouldUploadServices.Set(func() bool {
+		calls.Add(1)
+		// Exactly what feature/portlist's hook does.
+		return b.NodeBackend().CollectServices()
+	})
+
+	svc := []tailcfg.Service{{Proto: tailcfg.TCP, Port: 3300}}
+
+	// hostInfoWithServices runs the b.mu-held path in a goroutine so that a
+	// re-entrant hook shows up as a timeout rather than hanging the suite.
+	hostInfoWithServices := func(t *testing.T) *tailcfg.Hostinfo {
+		t.Helper()
+		type result struct{ hi *tailcfg.Hostinfo }
+		ch := make(chan result, 1)
+		go func() {
+			b.mu.Lock()
+			defer b.mu.Unlock()
+			b.hostinfo = &tailcfg.Hostinfo{Services: slices.Clone(svc)}
+			ch <- result{b.hostInfoWithServicesLocked()}
+		}()
+		select {
+		case r := <-ch:
+			return r.hi
+		case <-time.After(30 * time.Second):
+			t.Fatal("hostInfoWithServicesLocked did not return: the ShouldUploadServices hook re-entered b.mu")
+			return nil
+		}
+	}
+
+	// advertises reports whether the port this test advertises survived into
+	// hi. It is not a length check: hostInfoWithServicesLocked strips the
+	// portlist-sourced services and then appends the peerAPI meta-services, so
+	// Services is non-empty even when nothing is being advertised.
+	advertises := func(hi *tailcfg.Hostinfo) bool {
+		return slices.ContainsFunc(hi.Services, func(s tailcfg.Service) bool {
+			return s.Port == svc[0].Port && s.Proto == svc[0].Proto
+		})
+	}
+
+	// With collection enabled the advertised port survives, which also proves
+	// the hook was reached rather than skipped.
+	b.currentNode().SetNetMap(&netmap.NetworkMap{CollectServices: true})
+	before := calls.Load()
+	if hi := hostInfoWithServices(t); !advertises(hi) {
+		t.Errorf("Hostinfo.Services = %v with collection enabled; want it to carry port %d", hi.Services, svc[0].Port)
+	}
+	if got := calls.Load() - before; got == 0 {
+		t.Fatal("the ShouldUploadServices hook was never called; the test did not reach its subject")
+	}
+
+	// With it disabled the advertised port is stripped, reading the live netmap
+	// through the same b.mu-held path.
+	b.currentNode().SetNetMap(&netmap.NetworkMap{CollectServices: false})
+	if hi := hostInfoWithServices(t); advertises(hi) {
+		t.Errorf("Hostinfo.Services = %v with collection disabled; want port %d gone", hi.Services, svc[0].Port)
+	}
 }
