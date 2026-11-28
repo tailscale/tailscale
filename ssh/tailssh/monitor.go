@@ -197,10 +197,10 @@ func beMonitor(args []string) error {
 
 	// An external SIGHUP gets the same teardown as RPC EOF. The loop
 	// selects on it between events. Delivery waits for the current op
-	// to finish.
+	// to finish. The handler is never stopped: a SIGHUP arriving after
+	// the loop returns must not kill the exiting monitor.
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, unix.SIGHUP)
-	defer signal.Stop(hup)
 
 	m := &monitor{
 		conn:       newRPCConn(conn),
