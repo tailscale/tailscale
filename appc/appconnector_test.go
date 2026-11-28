@@ -164,6 +164,39 @@ func TestUpdateRoutesUnadvertisesContainedRoutes(t *testing.T) {
 	}
 }
 
+func TestUpdateRoutesCoalescesAllCoveredRoutes(t *testing.T) {
+	ctx := t.Context()
+	rc := &appctest.RouteCollector{}
+	a := NewAppConnector(Config{
+		Logf:            t.Logf,
+		EventBus:        eventbustest.NewBus(t),
+		RouteAdvertiser: rc,
+	})
+	t.Cleanup(a.Close)
+
+	discovered := prefixes("192.0.2.1/32", "192.0.2.2/32", "192.0.2.3/32")
+	a.domains = map[string][]netip.Addr{
+		"example.com": {
+			netip.MustParseAddr("192.0.2.1"),
+			netip.MustParseAddr("192.0.2.2"),
+			netip.MustParseAddr("192.0.2.3"),
+		},
+	}
+	rc.SetRoutes(slices.Clone(discovered))
+
+	want := prefixes("192.0.2.0/24")
+	a.updateRoutes(want)
+	a.Wait(ctx)
+
+	if got := rc.Routes(); !slices.Equal(got, want) {
+		t.Errorf("routes = %v, want %v", got, want)
+	}
+
+	if got := slices.Clone(rc.RemovedRoutes()); !slices.Equal(got, discovered) {
+		t.Errorf("removed routes = %v, want %v", got, discovered)
+	}
+}
+
 func TestDomainRoutes(t *testing.T) {
 	bus := eventbustest.NewBus(t)
 	for _, shouldStore := range []bool{false, true} {
