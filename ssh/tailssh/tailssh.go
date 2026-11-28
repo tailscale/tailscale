@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build (linux && !android) || (darwin && !ios) || freebsd || openbsd || plan9
+//go:build (linux && !android) || (darwin && !ios) || freebsd || openbsd || plan9 || windows
 
 // Package tailssh is an SSH server integrated into Tailscale.
 package tailssh
@@ -55,10 +55,7 @@ var (
 	sshVerboseLogging    = envknob.RegisterBool("TS_DEBUG_SSH_VLOG")
 	sshDisableSFTP       = envknob.RegisterBool("TS_SSH_DISABLE_SFTP")
 	sshDisableForwarding = envknob.RegisterBool("TS_SSH_DISABLE_FORWARDING")
-	// sshForwardGatewayPorts permits reverse TCP forwards to bind
-	// non-loopback addresses. It is the equivalent of sshd's GatewayPorts.
-	sshForwardGatewayPorts = envknob.RegisterBool("TS_SSH_FORWARD_GATEWAY_PORTS")
-	sshDisablePTY          = envknob.RegisterBool("TS_SSH_DISABLE_PTY")
+	sshDisablePTY        = envknob.RegisterBool("TS_SSH_DISABLE_PTY")
 
 	// Session teardown timeouts. Unset or non-positive values use the defaults.
 	sshShutdownTimeout = envknob.RegisterDuration("TS_SSH_SHUTDOWN_TIMEOUT")
@@ -1439,6 +1436,63 @@ func (c *conn) detachSession(ss *sshSession) {
 
 var errSessionDone = errors.New("session is done")
 
+// handleSSHAgentForwarding starts a Unix socket listener and in the background
+// forwards agent connections between the listener and the gliderssh.Session.
+// On success, it assigns ss.agentListener.
+//
+// The listener and its containing directory come from the platform's
+// conn.fwdListenAgent: on the monitor platforms a user-cred child creates
+// them, on plan9 tailscaled does, and on Windows it is refused. See the
+// docs there for the modes.
+func (ss *sshSession) handleSSHAgentForwarding(s gliderssh.Session, lu *userMeta) error {
+	if !gliderssh.AgentRequested(ss) || !ss.conn.finalAction.AllowAgentForwarding {
+		return nil
+	}
+	// The latched AllowAgentForwarding bit may be stale. See recheckPolicy.
+	if !ss.conn.recheckPolicy() {
+		return nil
+	}
+	if sshDisableForwarding() {
+		// TODO(bradfitz): or do we want to return an error here instead so the user
+		// gets an error if they ran with ssh -A? But for now we just silently
+		// don't work, like the condition above.
+		return nil
+	}
+	ss.logf("ssh: agent forwarding requested")
+	ln, socket, err := ss.conn.fwdListenAgent(s.Context(), lu)
+	if err != nil {
+		return err
+	}
+	// The listener's own address is the kernel's bound path; socket is
+	// the path the child reported and the monitor validated. They must
+	// agree: the cleanup removes the directory of the validated path, so
+	// a child whose report and actual bind disagree is refused.
+	if got := ln.Addr().String(); got != socket {
+		ln.Close()
+		return fmt.Errorf("agent forwarding socket path %q does not match the listener's bound path %q", socket, got)
+	}
+	ss.agentListener = ln
+	go gliderssh.ForwardAgentConnections(ln, s)
+	return nil
+}
+
+// closeAgentForwarding closes the agent forwarding listener and removes the
+// temporary directory that holds its socket, so neither outlives the
+// session. The removal rules are platform-specific: on the monitor
+// platforms the directory was created by a user-cred child while the
+// removal runs with the daemon's credentials; see
+// removeAgentForwardingDir in fwdmonitor.go, fwdplan9.go, and fwd_windows.go.
+func (ss *sshSession) closeAgentForwarding() {
+	ln := ss.agentListener
+	if ln == nil {
+		return
+	}
+	ss.agentListener = nil
+	dir := filepath.Dir(ln.Addr().String())
+	ln.Close()
+	removeAgentForwardingDir(dir, ss.conn.localUser, ss.logf)
+}
+
 // run is the entrypoint for a newly accepted SSH session.
 //
 // It handles ss once it's been accepted and determined
@@ -1676,10 +1730,6 @@ func (c *conn) ruleExpired(r *tailcfg.SSHRule) bool {
 	return r.RuleExpires.Before(c.srv.now())
 }
 
-func (c *conn) evalSSHPolicy(pol *tailcfg.SSHPolicy) (*tailcfg.SSHAction, string, []string, *tailcfg.SSHRule, evalResult) {
-	return c.evalSSHPolicyWithUserLookup(pol, userLookup)
-}
-
 func (c *conn) evalSSHPolicyWithUserLookup(pol *tailcfg.SSHPolicy, lookup func(string) (*userMeta, error)) (a *tailcfg.SSHAction, localUser string, acceptEnv []string, rule *tailcfg.SSHRule, result evalResult) {
 	failedOnUser := false
 	for _, r := range pol.Rules {
@@ -1705,10 +1755,6 @@ var (
 	errUserMatch      = errors.New("user didn't match")
 	errInvalidConn    = errors.New("invalid connection state")
 )
-
-func (c *conn) matchRule(r *tailcfg.SSHRule) (*tailcfg.SSHAction, string, []string, error) {
-	return c.matchRuleWithUserLookup(r, userLookup)
-}
 
 func (c *conn) matchRuleWithUserLookup(r *tailcfg.SSHRule, lookup func(string) (*userMeta, error)) (a *tailcfg.SSHAction, localUser string, acceptEnv []string, err error) {
 	defer func() {
@@ -1748,6 +1794,16 @@ func (c *conn) matchRuleWithUserLookup(r *tailcfg.SSHRule, lookup func(string) (
 
 func mapLocalUser(ruleSSHUsers map[string]string, reqSSHUser string, lookup func(string) (*userMeta, error)) (localUser string) {
 	v, ok := ruleSSHUsers[reqSSHUser]
+	if !ok && runtime.GOOS == "windows" {
+		// Windows account names are case-insensitive, so match the policy's
+		// spelling of the user regardless of how the client typed it.
+		for k, kv := range ruleSSHUsers {
+			if k != "*" && strings.EqualFold(k, reqSSHUser) {
+				v, ok = kv, true
+				break
+			}
+		}
+	}
 	if !ok {
 		v = ruleSSHUsers["*"]
 	}
@@ -2154,7 +2210,6 @@ func envValFromList(env []string, wantKey string) (v string) {
 // envEq reports whether environment variable a == b for the current
 // operating system.
 func envEq(a, b string) bool {
-	//lint:ignore SA4032 in case this func moves elsewhere, permit the GOOS check
 	if runtime.GOOS == "windows" {
 		return strings.EqualFold(a, b)
 	}
