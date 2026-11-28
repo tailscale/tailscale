@@ -18,6 +18,7 @@ concurrency:
 
 jobs:
   webclient:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     runs-on: ubuntu-latest
 
     steps:

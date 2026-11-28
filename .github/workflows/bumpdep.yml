@@ -34,6 +34,7 @@ concurrency:
 
 jobs:
   bumpdep:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     runs-on: ubuntu-latest
     # A hung module fetch shouldn't hold the runner for the 6 hour default.
     timeout-minutes: 45

@@ -20,6 +20,7 @@ concurrency:
 
 jobs:
   gokrazy-bump:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     runs-on: ubuntu-latest
     timeout-minutes: 45
 

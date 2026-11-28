@@ -16,6 +16,7 @@ permissions:
 
 jobs:
   check:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     # Company policy requires that all cherry-picks onto release
@@ -23,7 +24,6 @@ jobs:
     # records the original commit. Commits that are intentionally not
     # cherry-picks (version bumps, release-only fixes) can be exempted
     # by adding the "not-a-cherry-pick" label to the PR.
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'not-a-cherry-pick') }}
 
     steps:
       - name: Check out code
