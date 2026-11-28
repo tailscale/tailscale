@@ -54,6 +54,11 @@ const (
 	// On other platforms, it is the client's responsibility to restart tailscaled.
 	AllowTailscaledRestart Key = "AllowTailscaledRestart"
 
+	// AllowTailnetSysPolicy is a boolean key that controls whether policy settings
+	// received from the control plane for the current profile's tailnet are used.
+	// The default is false. See [tailscale.com/tailcfg/nodecap.TailnetSysPolicy].
+	AllowTailnetSysPolicy Key = "AllowTailnetSysPolicy"
+
 	// ExitNodeID is the exit node's node id. default ""; if blank, no exit node is forced.
 	// Exit node ID takes precedence over exit node IP.
 	// To find the node ID, go to /api.md#device.

@@ -106,6 +106,21 @@ const (
 	// e.g. https://tailscale.com/cap/funnel-ports?ports=80,443,8080-8090
 	FunnelPorts Cap = "https://tailscale.com/cap/funnel-ports"
 
+	// TailnetSysPolicy configures policy settings that apply while the profile
+	// of the node it is granted to is the current profile. Each CapMap value
+	// is a JSON object that maps policy setting keys, as defined in
+	// [tailscale.com/util/syspolicy/pkey], to their values, such as
+	// {"ExitNodeID": "auto:any", "ExitNode.AllowOverride": true}.
+	// If more than one value configures the same setting, the last one wins.
+	//
+	// Only profile and user settings are supported; the rest are ignored.
+	// A setting that is also configured for the device, such as via MDM,
+	// keeps its device value.
+	//
+	// The attribute is ignored unless the AllowTailnetSysPolicy device policy
+	// setting is enabled.
+	TailnetSysPolicy Cap = "https://tailscale.com/cap/tailnet-syspolicy"
+
 	// OnlyTCP443 specifies that the client should not attempt to generate
 	// any outbound traffic that isn't TCP on port 443 (HTTPS). This is used for
 	// clients in restricted environments where only HTTPS traffic is allowed
