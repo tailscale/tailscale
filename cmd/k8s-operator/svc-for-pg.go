@@ -430,7 +430,9 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 	}
 
 	tsoperator.SetServiceCondition(svc, conditionType, conditionStatus, conditionReason, conditionMessage, r.clock, logger)
-	svc.Status.LoadBalancer.Ingress = lbs
+	if svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
+		svc.Status.LoadBalancer.Ingress = lbs
+	}
 
 	return svcsChanged, nil
 }
