@@ -58,3 +58,32 @@ func TestApplyProxyClass_Env(t *testing.T) {
 		t.Errorf("container env mismatch (-want +got):\n%s", diff)
 	}
 }
+
+func TestApplyProxyClass_RuntimeClassName(t *testing.T) {
+	t.Parallel()
+
+	// Unset: no runtime class is applied.
+	ss := &appsv1.StatefulSet{}
+	pc := &tsapi.ProxyClass{
+		Spec: tsapi.ProxyClassSpec{
+			StatefulSet: &tsapi.StatefulSet{Pod: &tsapi.Pod{}},
+		},
+	}
+	if got := tailscaled.ApplyProxyClass(ss, pc, nil, nil).Spec.Template.Spec.RuntimeClassName; got != nil {
+		t.Errorf("RuntimeClassName = %v, want nil", *got)
+	}
+
+	// Set: the runtime class from ProxyClass is applied to the proxy Pod.
+	ss = &appsv1.StatefulSet{}
+	pc = &tsapi.ProxyClass{
+		Spec: tsapi.ProxyClassSpec{
+			StatefulSet: &tsapi.StatefulSet{
+				Pod: &tsapi.Pod{RuntimeClassName: new("some-runtime")},
+			},
+		},
+	}
+	got := tailscaled.ApplyProxyClass(ss, pc, nil, nil).Spec.Template.Spec.RuntimeClassName
+	if got == nil || *got != "some-runtime" {
+		t.Errorf("RuntimeClassName = %v, want %q", got, "some-runtime")
+	}
+}
