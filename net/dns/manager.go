@@ -653,9 +653,28 @@ func toIPsOnly(resolvers []*dnstype.Resolver) (ret []netip.Addr) {
 // The "family" parameter should indicate what type of DNS query this is:
 // either "tcp" or "udp".
 func (m *Manager) Query(ctx context.Context, bs []byte, family string, from netip.AddrPort) ([]byte, error) {
+	_, outbs, err := m.query(ctx, bs, family, from)
+	return outbs, err
+}
+
+// QueryWithMetadata is like Query, but also returns response metadata from the
+// resolver. The response bytes include any changes made by the response mapper.
+func (m *Manager) QueryWithMetadata(ctx context.Context, bs []byte, family string, from netip.AddrPort) (*resolver.Response, error) {
+	res, outbs, err := m.query(ctx, bs, family, from)
+	if err != nil {
+		return nil, err
+	}
+	mapped := *res
+	mapped.Bs = outbs
+	return &mapped, nil
+}
+
+// query returns the original response and its mapped bytes separately so Query
+// does not need to copy the response metadata on the packet-handling path.
+func (m *Manager) query(ctx context.Context, bs []byte, family string, from netip.AddrPort) (*resolver.Response, []byte, error) {
 	select {
 	case <-m.ctx.Done():
-		return nil, net.ErrClosed
+		return nil, nil, net.ErrClosed
 	default:
 		// continue
 	}
@@ -663,12 +682,12 @@ func (m *Manager) Query(ctx context.Context, bs []byte, family string, from neti
 	if n := atomic.AddInt32(&m.activeQueriesAtomic, 1); n > maxActiveQueries {
 		atomic.AddInt32(&m.activeQueriesAtomic, -1)
 		metricDNSQueryErrorQueue.Add(1)
-		return nil, errFullQueue
+		return nil, nil, errFullQueue
 	}
 	defer atomic.AddInt32(&m.activeQueriesAtomic, -1)
 	res, err := m.resolver.Query(ctx, bs, family, from)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -676,7 +695,7 @@ func (m *Manager) Query(ctx context.Context, bs []byte, family string, from neti
 	if m.queryResponseMapper != nil {
 		outbs = m.queryResponseMapper(res)
 	}
-	return outbs, nil
+	return res, outbs, nil
 }
 
 const (

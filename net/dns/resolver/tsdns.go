@@ -455,7 +455,7 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from net
 	}
 
 	out = checkResponseSizeAndSetTC(out, bs, family, r.logf)
-	return &Response{Bs: out}, nil
+	return &Response{Bs: out, IsLocal: true}, nil
 }
 
 // GetUpstreamResolvers returns the resolvers that would be used to resolve

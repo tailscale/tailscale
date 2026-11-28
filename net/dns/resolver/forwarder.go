@@ -1376,7 +1376,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("waiting to send NXDOMAIN: %w", ctx.Err())
-		case responseChan <- &Response{Bs: res.bs}:
+		case responseChan <- &Response{Bs: res.bs, IsLocal: true}:
 			return nil
 		}
 	}
@@ -1404,7 +1404,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			select {
 			case <-ctx.Done():
 				return fmt.Errorf("waiting to send SERVFAIL: %w", ctx.Err())
-			case responseChan <- &Response{Bs: res.bs}:
+			case responseChan <- &Response{Bs: res.bs, IsLocal: true}:
 				return nil
 			}
 		} else {
@@ -1747,6 +1747,9 @@ type DoHMetadata struct {
 type Response struct {
 	// Bs is the wire-encoded DNS response.
 	Bs []byte
+	// IsLocal reports whether the response was generated without consulting
+	// upstream resolvers, including local errors and blocked queries.
+	IsLocal bool
 	// DoHMeta is non-nil if the response came
 	// from a DoH server, and nil otherwise.
 	DoHMeta *DoHMetadata
