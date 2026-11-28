@@ -10,6 +10,7 @@ import (
 	"os"
 	"sync"
 
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/persist"
 )
@@ -40,6 +41,12 @@ var testAllowAutoUpdate = sync.OnceValue(func() bool {
 // CanAutoUpdate reports whether the current binary is built with auto-update
 // support and, if so, whether the current platform supports it.
 func CanAutoUpdate() bool {
+	if !buildfeatures.HasClientUpdate {
+		// The feature was omitted from this build. Something else may still
+		// link in the clientupdate package (and so set the hook), but
+		// auto-update is not supported.
+		return false
+	}
 	if testAllowAutoUpdate() {
 		return true
 	}
