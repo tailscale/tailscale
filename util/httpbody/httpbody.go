@@ -122,8 +122,10 @@ func (b *limitedBody) Read(p []byte) (n int, err error) {
 		// too large, callers only want the error.
 		var probe [1]byte
 		m, err := b.body.Read(probe[:])
-		if m == 0 && err != nil {
-			return 0, err // io.EOF, or the underlying error
+		if m == 0 {
+			// A read of no bytes with no error does not establish that the
+			// body is too large. Let the caller retry the probe.
+			return 0, err // io.EOF, the underlying error, or no progress
 		}
 		b.remain = -1
 		return 0, b.tooLarge()

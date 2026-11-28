@@ -119,6 +119,66 @@ func TestLimitSizeStickyError(t *testing.T) {
 	}
 }
 
+func TestLimitSizeEmptyProbeRead(t *testing.T) {
+	readErr := errors.New("read failed")
+	for _, tt := range []struct {
+		name    string
+		data    string
+		err     error
+		wantErr error
+	}{
+		{name: "exact-limit", err: io.EOF, wantErr: io.EOF},
+		{name: "over-limit", data: "!", wantErr: ErrTooLarge},
+		{name: "over-limit-with-EOF", data: "!", err: io.EOF, wantErr: ErrTooLarge},
+		{name: "underlying-error", err: readErr, wantErr: readErr},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			res := &http.Response{Body: io.NopCloser(readFunc(func(p []byte) (int, error) {
+				calls++
+				switch calls {
+				case 1:
+					return copy(p, "hello"), nil
+				case 2, 3:
+					return 0, nil // A Reader may return no bytes without an error.
+				default:
+					return copy(p, tt.data), tt.err
+				}
+			}))}
+			LimitSizeTo(res, 5)
+			buf := make([]byte, 5)
+			if n, err := res.Body.Read(buf); n != 5 || err != nil || string(buf) != "hello" {
+				t.Fatalf("initial Read = %d, %v, %q; want 5, nil, hello", n, err, buf)
+			}
+			for range 2 {
+				before := calls
+				if n, err := res.Body.Read(buf); n != 0 || err != nil {
+					t.Fatalf("empty probe Read = %d, %v; want 0, nil", n, err)
+				}
+				if calls != before+1 {
+					t.Fatalf("Read made %d underlying calls, want 1", calls-before)
+				}
+			}
+			if n, err := res.Body.Read(buf); n != 0 || !errors.Is(err, tt.wantErr) {
+				t.Fatalf("final Read = %d, %v; want 0, %v", n, err, tt.wantErr)
+			}
+			if errors.Is(tt.wantErr, ErrTooLarge) {
+				before := calls
+				if n, err := res.Body.Read(buf); n != 0 || !errors.Is(err, ErrTooLarge) {
+					t.Fatalf("sticky Read = %d, %v; want 0, ErrTooLarge", n, err)
+				}
+				if calls != before {
+					t.Fatal("sticky error read the underlying body")
+				}
+			}
+		})
+	}
+}
+
+type readFunc func([]byte) (int, error)
+
+func (f readFunc) Read(p []byte) (int, error) { return f(p) }
+
 func TestLimitSizeLargeRead(t *testing.T) {
 	// A single Read call with a buffer bigger than the limit must not
 	// over-read the underlying body.
