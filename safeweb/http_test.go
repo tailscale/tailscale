@@ -336,21 +336,21 @@ func TestCSRFCookieSecureMode(t *testing.T) {
 	}
 }
 
-func TestRefererPolicy(t *testing.T) {
+func TestReferrerPolicy(t *testing.T) {
 	tests := []struct {
-		name              string
-		browserRoute      bool
-		wantRefererPolicy bool
+		name               string
+		browserRoute       bool
+		wantReferrerPolicy bool
 	}{
 		{
-			name:              "BrowserMux-gets-Referer-Policy",
-			browserRoute:      true,
-			wantRefererPolicy: true,
+			name:               "BrowserMux-gets-Referrer-Policy",
+			browserRoute:       true,
+			wantReferrerPolicy: true,
 		},
 		{
-			name:              "APIMux-no-Referer-Policy",
-			browserRoute:      false,
-			wantRefererPolicy: false,
+			name:               "APIMux-no-Referrer-Policy",
+			browserRoute:       false,
+			wantReferrerPolicy: false,
 		},
 	}
 
@@ -377,8 +377,8 @@ func TestRefererPolicy(t *testing.T) {
 			s.h.Handler.ServeHTTP(w, req)
 			resp := w.Result()
 
-			if (resp.Header.Get("Referer-Policy") == "") == tt.wantRefererPolicy {
-				t.Fatalf("referer policy want: %v; got: %v", tt.wantRefererPolicy, resp.Header.Get("Referer-Policy"))
+			if (resp.Header.Get("Referrer-Policy") == "") == tt.wantReferrerPolicy {
+				t.Fatalf("referrer policy want: %v; got: %v", tt.wantReferrerPolicy, resp.Header.Get("Referrer-Policy"))
 			}
 		})
 	}
