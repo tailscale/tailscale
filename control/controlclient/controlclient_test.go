@@ -410,6 +410,13 @@ func testHTTPS(t *testing.T, withProxy bool) {
 // reach it.
 func newDirectForTestControl(t testing.TB, tc *testcontrol.Server) *Direct {
 	t.Helper()
+	return newDirectForTestControlWithConnHook(t, tc, nil)
+}
+
+// newDirectForTestControlWithConnHook is like newDirectForTestControl, but if
+// wrapConn is non-nil, every TCP connection to control is passed through it.
+func newDirectForTestControlWithConnHook(t testing.TB, tc *testcontrol.Server, wrapConn func(net.Conn) net.Conn) *Direct {
+	t.Helper()
 	bakedroots.ResetForTest(t, tlstest.TestRootCA())
 
 	bus := eventbustest.NewBus(t)
@@ -441,15 +448,20 @@ func newDirectForTestControl(t testing.TB, tc *testcontrol.Server) *Direct {
 		}
 		var d net.Dialer
 		if host == fakeControlIP {
-			return d.DialContext(ctx, network, controlLn.Addr().String())
+			c, err := d.DialContext(ctx, network, controlLn.Addr().String())
+			if err != nil || wrapConn == nil {
+				return c, err
+			}
+			return wrapConn(c), nil
 		}
 		return nil, fmt.Errorf("unexpected dial to %q", addr)
 	})
 
+	machineKey := key.NewMachine()
 	opts := Options{
 		Persist: persist.Persist{},
 		GetMachinePrivateKey: func() (key.MachinePrivate, error) {
-			return key.NewMachine(), nil
+			return machineKey, nil
 		},
 		ServerURL: "https://controlplane.tstest",
 		Clock:     tstime.StdClock{},
