@@ -9,8 +9,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"expvar"
 	"fmt"
+	"io"
 	"net/netip"
 	"reflect"
 	"slices"
@@ -32,6 +34,7 @@ import (
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/disco"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/packet/checksum"
@@ -208,6 +211,39 @@ func newFakeTUN(logf logger.Logf, bus *eventbus.Bus, secure bool) (*fakeTUN, *Wr
 func getSinglePacketReadArgs() (slab []byte, packets []wgtun.ReadPacket) {
 	return make([]byte, MaxPacketSize+(2*wgtun.ReadPacketSpacing)),
 		make([]wgtun.ReadPacket, 1)
+}
+
+func TestTUNDevStatsSkipsFakeTUN(t *testing.T) {
+	if !buildfeatures.HasTUNDevStats {
+		t.Skip("built without tundevstats")
+	}
+	var polled []string
+	restore := HookPollTUNDevStats.SetForTest(func(dev wgtun.Device) (io.Closer, error) {
+		name, err := dev.Name()
+		if err != nil {
+			t.Fatalf("Name: %v", err)
+		}
+		polled = append(polled, name)
+		return nil, errors.New("error getting ifIndex: no such device")
+	})
+	defer restore()
+
+	bus := eventbustest.NewBus(t)
+	_, fake := newFakeTUN(t.Logf, bus, false)
+	defer fake.Close()
+	if len(polled) != 0 {
+		t.Fatalf("polled TUN device stats for the fake TUN: %q", polled)
+	}
+
+	chtun, ch := newChannelTUN(t.Logf, bus, false)
+	defer ch.Close()
+	name, err := chtun.TUN().Name()
+	if err != nil {
+		t.Fatalf("Name: %v", err)
+	}
+	if want := []string{name}; !slices.Equal(polled, want) {
+		t.Errorf("polled %q, want %q", polled, want)
+	}
 }
 
 func TestReadAndInject(t *testing.T) {
