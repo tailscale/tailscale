@@ -62,7 +62,7 @@ func writeGz(path string, bs []byte) error {
 		return err
 	}
 
-	if err := g.Flush(); err != nil {
+	if err := g.Close(); err != nil {
 		return err
 	}
 	if err := f.Close(); err != nil {
