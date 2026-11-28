@@ -431,6 +431,31 @@ func TestRootExecEnvExcludesClientEnv(t *testing.T) {
 	}
 }
 
+// TestRootExecEnvKeepsOutdatedParentClientEnv verifies that an incubator
+// started by an outdated parent tailscaled, which passes the client's
+// TERM/LANG/LC_* in its own environment and sends no --env-fd, still hands
+// acceptable client values to login/su, while rejecting unacceptable ones.
+func TestRootExecEnvKeepsOutdatedParentClientEnv(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("LANG", "en_US.UTF-8")
+	t.Setenv("LC_ALL", "/etc/evil") // rejected by acceptEnvPair
+	ia := incubatorArgs{envFD: -1}
+	if err := ia.loadForwardedEnv(); err != nil {
+		t.Fatalf("loadForwardedEnv: %v", err)
+	}
+	root := ia.rootExecEnviron()
+	for _, want := range []string{"TERM=xterm-256color", "LANG=en_US.UTF-8"} {
+		if !slices.Contains(root, want) {
+			t.Errorf("%q missing from root-exec'd environment for an outdated parent: %q", want, root)
+		}
+	}
+	for _, kv := range root {
+		if strings.HasPrefix(kv, "LC_ALL=") {
+			t.Errorf("unacceptable pair %q present in root-exec'd environment", kv)
+		}
+	}
+}
+
 // TestDirectExecRootFallbackRefused verifies that the direct-exec fallback
 // (no tailscaledPath) refuses to run a non-root local user's session when
 // tailscaled runs as root, since without the be-child incubator there is no
