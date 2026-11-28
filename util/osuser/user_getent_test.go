@@ -8,8 +8,10 @@ package osuser
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"testing"
 
 	"tailscale.com/tstest"
@@ -64,5 +66,43 @@ func TestUserLookupGetentFallbackErrors(t *testing.T) {
 				t.Errorf("fallback user = %v", u)
 			}
 		})
+	}
+}
+
+func TestUserLookupGetentNotInstalledUsesPasswdShell(t *testing.T) {
+	passwd := filepath.Join(t.TempDir(), "passwd")
+	if err := os.WriteFile(passwd, []byte(`# comment
+root:x:0:0:root:/:/system/bin/sh
+bob:x:1002:1002::/home/bob:/bin/zsh
+alice:x:1001:1001:Alice:/home/alice:/bin/bash
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	tstest.Replace(t, &passwdFile, passwd)
+	tstest.Replace(t, &execGetent, func(context.Context, ...string) ([]byte, error) {
+		return nil, exec.ErrNotFound
+	})
+	tstest.Replace(t, &getentDoubleDashSupported, func() bool { return false })
+
+	for _, tt := range []struct {
+		u         *user.User
+		wantShell string
+	}{
+		{&user.User{Username: "root", Uid: "0", Gid: "0", HomeDir: "/"}, "/system/bin/sh"},
+		{&user.User{Username: "alice", Uid: "1001", Gid: "1001", HomeDir: "/home/alice"}, "/bin/bash"},
+		{&user.User{Username: "carol", Uid: "1003", Gid: "1003", HomeDir: "/home/carol"}, ""},
+	} {
+		u, shell, err := userLookupGetent(tt.u.Username, func(string) (*user.User, error) {
+			return tt.u, nil
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", tt.u.Username, err)
+		}
+		if u != tt.u {
+			t.Errorf("%s: user = %v, want %v", tt.u.Username, u, tt.u)
+		}
+		if shell != tt.wantShell {
+			t.Errorf("%s: shell = %q, want %q", tt.u.Username, shell, tt.wantShell)
+		}
 	}
 }
