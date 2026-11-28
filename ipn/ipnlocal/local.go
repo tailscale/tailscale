@@ -986,6 +986,7 @@ func (b *LocalBackend) GetDNSOSConfig() (dns.OSConfig, error) {
 
 // QueryDNS queries name and queryType using the built-in DNS resolver.
 // It returns the wire-format response and the resolvers handling the query.
+// The resolver list is empty when the query was answered locally.
 // ctx bounds the query duration. Truncated responses are retried over TCP.
 func (b *LocalBackend) QueryDNS(ctx context.Context, name string, queryType dnsmessage.Type) (res []byte, resolvers []*dnstype.Resolver, err error) {
 	if !buildfeatures.HasDNS {
@@ -1022,13 +1023,15 @@ func (b *LocalBackend) QueryDNS(ctx context.Context, name string, queryType dnsm
 		b.logf("DNSQuery: failed to build query: %v", err)
 		return nil, nil, err
 	}
-	res, err = manager.Query(ctx, q, "tcp", from)
+	response, err := manager.QueryWithMetadata(ctx, q, "tcp", from)
 	if err != nil {
 		b.logf("DNSQuery: failed to query %q: %v", name, err)
 		return nil, nil, err
 	}
-	rr := manager.Resolver().GetUpstreamResolvers(fqdn)
-	return res, rr, nil
+	if !response.IsLocal {
+		resolvers = manager.Resolver().GetUpstreamResolvers(fqdn)
+	}
+	return response.Bs, resolvers, nil
 }
 
 // GetComponentDebugLogging gets the time that component's debug logging is

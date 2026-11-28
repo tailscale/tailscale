@@ -126,9 +126,12 @@ func formatDNSQueryText(data *tsdnsjsonv0.QueryResponse) string {
 
 	fmt.Fprintf(&sb, "DNS query for %q (%s) using internal resolver:\n", data.Name, data.QueryType)
 	fmt.Fprintf(&sb, "\n")
-	if len(data.Resolvers) == 1 {
+	switch len(data.Resolvers) {
+	case 0:
+		fmt.Fprintf(&sb, "No upstream resolvers used.\n")
+	case 1:
 		fmt.Fprintf(&sb, "Forwarding to resolver: %v\n", formatResolverString(data.Resolvers[0]))
-	} else {
+	default:
 		fmt.Fprintf(&sb, "Multiple resolvers available:\n")
 		for _, r := range data.Resolvers {
 			fmt.Fprintf(&sb, "  - %v\n", formatResolverString(r))
