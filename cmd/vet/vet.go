@@ -7,6 +7,7 @@ package main
 import (
 	_ "embed"
 
+	"golang.org/x/tools/go/analysis/passes/copylock"
 	"golang.org/x/tools/go/analysis/unitchecker"
 	"tailscale.com/cmd/vet/jsontags"
 	"tailscale.com/cmd/vet/lowerell"
@@ -22,5 +23,5 @@ func init() {
 }
 
 func main() {
-	unitchecker.Main(jsontags.Analyzer, lowerell.Analyzer, subtestnames.Analyzer)
+	unitchecker.Main(copylock.Analyzer, jsontags.Analyzer, lowerell.Analyzer, subtestnames.Analyzer)
 }
