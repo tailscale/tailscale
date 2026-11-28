@@ -1642,6 +1642,64 @@ func TestForwarderHeldServfailPrefersUpstreamBytes(t *testing.T) {
 	}
 }
 
+// TestSendTCPDoneQueryNoReadError checks that a sendTCP whose query has ended
+// isn't counted in dns_query_fwd_tcp_error_read when the query's teardown
+// closes its conn.
+func TestSendTCPDoneQueryNoReadError(t *testing.T) {
+	const domain = "done-tcp.tailscale.com."
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+
+	port := runDNSServer(t, &testDNSServerOptions{SkipUDP: true, HangTCP: true},
+		makeTestResponse(t, domain, dns.RCodeSuccess), func(isTCP bool, gotRequest []byte) {})
+
+	fwd := newTestForwarder(t, nil)
+	fq := &forwardQuery{
+		txid:           getTxID(request),
+		packet:         request,
+		family:         "tcp",
+		closeOnCtxDone: new(closePool),
+	}
+	rr := resolverAndDelay{name: &dnstype.Resolver{Addr: fmt.Sprintf("127.0.0.1:%d", port)}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	beforeRead := metricDNSFwdTCPErrorRead.Value()
+	beforeWrote := metricDNSFwdTCPWrote.Value()
+	done := make(chan error, 1)
+	go func() {
+		_, err := fwd.sendTCP(ctx, fq, rr)
+		done <- err
+	}()
+	// The query is written, so sendTCP is about to block reading the answer
+	// that the upstream will never send.
+	if err := tstest.WaitFor(5*time.Second, func() error {
+		if metricDNSFwdTCPWrote.Value() == beforeWrote {
+			return errors.New("sendTCP hasn't written the query yet")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// End the query the way forwarder.forwardWithDestChan does: cancel the
+	// context, then close the conns blocked in a read.
+	cancel()
+	fq.closeOnCtxDone.Close()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("sendTCP err = %v; want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("sendTCP still running after its query ended")
+	}
+	if got := metricDNSFwdTCPErrorRead.Value() - beforeRead; got != 0 {
+		t.Errorf("dns_query_fwd_tcp_error_read rose by %d for a finished query; want 0", got)
+	}
+}
+
 // TestSendTCPReadTimeout checks that tcpQueryTimeout bounds the response read
 // against an upstream that accepts the connection and never answers.
 func TestSendTCPReadTimeout(t *testing.T) {

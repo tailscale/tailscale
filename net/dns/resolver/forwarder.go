@@ -43,6 +43,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/views"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
@@ -1125,11 +1126,18 @@ func (f *forwarder) sendTCP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	fq.closeOnCtxDone.Add(conn)
 	defer fq.closeOnCtxDone.Remove(conn)
 
-	ctxOrErr := func(err2 error) ([]byte, error) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+	// fail returns err, or ctx's error if ctx is done. It counts err in m
+	// unless the query was canceled: then its cleanup closed conn, so the
+	// failure isn't the upstream's. A deadline expiring still counts.
+	fail := func(m *clientmetric.Metric, err error) ([]byte, error) {
+		ctxErr := ctx.Err()
+		if !errors.Is(ctxErr, context.Canceled) {
+			m.Add(1)
 		}
-		return nil, err2
+		if ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, err
 	}
 
 	// Write the query to the server.
@@ -1137,8 +1145,7 @@ func (f *forwarder) sendTCP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	binary.BigEndian.PutUint16(query, uint16(len(fq.packet)))
 	copy(query[2:], fq.packet)
 	if _, err := conn.Write(query); err != nil {
-		metricDNSFwdTCPErrorWrite.Add(1)
-		return ctxOrErr(err)
+		return fail(metricDNSFwdTCPErrorWrite, err)
 	}
 
 	metricDNSFwdTCPWrote.Add(1)
@@ -1146,16 +1153,14 @@ func (f *forwarder) sendTCP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	// Read the header length back from the server
 	var length uint16
 	if err := binary.Read(conn, binary.BigEndian, &length); err != nil {
-		metricDNSFwdTCPErrorRead.Add(1)
-		return ctxOrErr(err)
+		return fail(metricDNSFwdTCPErrorRead, err)
 	}
 
 	// Now read the response
 	out := make([]byte, length)
 	n, err := io.ReadFull(conn, out)
 	if err != nil {
-		metricDNSFwdTCPErrorRead.Add(1)
-		return ctxOrErr(err)
+		return fail(metricDNSFwdTCPErrorRead, err)
 	}
 
 	if n < int(length) {
