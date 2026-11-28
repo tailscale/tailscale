@@ -506,7 +506,10 @@ func onClick(ctx context.Context, item *systray.MenuItem, fn func(ctx context.Co
 			select {
 			case <-ctx.Done():
 				return
-			case <-item.ClickedCh:
+			case _, ok := <-item.ClickedCh:
+				if !ok || ctx.Err() != nil {
+					return
+				}
 				fn(ctx)
 			}
 		}
