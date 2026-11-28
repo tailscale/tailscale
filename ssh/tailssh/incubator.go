@@ -327,6 +327,11 @@ type incubatorArgs struct {
 	envFD int
 	// forwardedEnv holds the pairs loaded by loadForwardedEnv.
 	forwardedEnv []string
+	// noEnvFD is set by loadForwardedEnv when no --env-fd was given. An
+	// outdated parent passes the client's TERM/LANG/LC_* in the incubator's
+	// own environment instead, so rootExecEnviron keeps those (validated by
+	// acceptEnvPair) rather than dropping them.
+	noEnvFD bool
 }
 
 func parseIncubatorArgs(args []string) (incubatorArgs, error) {
@@ -380,6 +385,7 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 // never this process's own environment.
 func (ia *incubatorArgs) loadForwardedEnv() error {
 	var pairs []string
+	ia.noEnvFD = ia.envFD < 0
 	switch {
 	case ia.envFD >= 0:
 		if ia.envFD < 3 {
@@ -414,11 +420,15 @@ func (ia *incubatorArgs) forwardedEnviron() []string {
 
 // rootExecEnviron copies the incubator environment without TERM or locale
 // variables. login and su receive forwardedEnv in addition to this base;
-// the capability probe receives only the base.
+// the capability probe receives only the base plus, when no --env-fd was
+// given (see noEnvFD), any client-derived pairs in the incubator's
+// environment that acceptEnvPair accepts. Those pairs are kept in the base
+// for both the probe and login/su, so an outdated parent's TERM and locale
+// reach the login shell.
 func (ia *incubatorArgs) rootExecEnviron() []string {
 	env := make([]string, 0, len(os.Environ()))
 	for _, kv := range os.Environ() {
-		if k, _, ok := strings.Cut(kv, "="); ok && clientDerivedEnvKey(k) {
+		if k, _, ok := strings.Cut(kv, "="); ok && clientDerivedEnvKey(k) && !(ia.noEnvFD && acceptEnvPair(kv)) {
 			continue
 		}
 		env = append(env, kv)
