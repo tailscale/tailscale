@@ -109,6 +109,9 @@ func Setenv(envVar, val string) {
 	if p := regDuration[envVar]; p != nil {
 		setDurationLocked(p, envVar, val)
 	}
+	if p := regInt[envVar]; p != nil {
+		setIntLocked(p, envVar, val)
+	}
 }
 
 // SetenvForTest safely changes an environment variable in a test.
