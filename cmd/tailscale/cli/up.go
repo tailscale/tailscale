@@ -448,9 +448,11 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 
 	// Do this after validations to avoid the 5s delay if we're going to error
 	// out anyway.
-	wantSSH, haveSSH := env.upArgs.runSSH, curPrefs.RunSSH
-	if err := presentSSHToggleRisk(wantSSH, haveSSH, env.upArgs.acceptedRisks); err != nil {
-		return false, nil, err
+	if !simpleUp {
+		wantSSH, haveSSH := env.upArgs.runSSH, curPrefs.RunSSH
+		if err := presentSSHToggleRisk(wantSSH, haveSSH, env.upArgs.acceptedRisks); err != nil {
+			return false, nil, err
+		}
 	}
 
 	if env.goos == "darwin" && env.upArgs.advertiseConnector {
